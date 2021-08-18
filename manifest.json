@@ -1,0 +1,24 @@
+{
+    "shaders": [
+        {
+            "name": "solid",
+            "vertex": "/shaders/direct.vert",
+            "fragment": "/shaders/solid.frag",
+            "attr": ["vertexPos"],
+            "unif": ["modelMatrix", "projectionMatrix", "color"]
+        },
+        {
+            "name": "image",
+            "vertex": "/shaders/direct_tex.vert",
+            "fragment": "/shaders/image.frag",
+            "attr": ["vertexPos", "texCoord"],
+            "unif": ["modelMatrix", "projectionMatrix", "texSampler"]
+        }
+    ],
+    "textures": [
+        {
+            "name": "coolSnake",
+            "src": "/res/cool_snek.png"
+        }
+    ]
+}

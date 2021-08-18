@@ -10,10 +10,19 @@ export function addEvent(element, eventName, fn) {
         element.attachEvent('on' + eventName, fn);
 }
 
-export async function fetchFile(url) {
+export async function fetchFile(url, config = {}) {
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, config);
         return await response.text(); 
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+export async function fetchObject(url, config = {}) {
+    try {
+        const response = await fetch(url, config);
+        return await response.json(); 
     } catch (err) {
         console.error(err);
     }
@@ -68,52 +77,86 @@ export function initShaderProgram(gl, vsSource, fsSource) {
 }
 
 
+export async function initShaders(gl, shaderManifest) {
+    var shaders = {};
+
+    for (const shaderInfo of shaderManifest) {
+        const name = shaderInfo.name;
+        const vertCode = await fetchFile(shaderInfo.vertex, {cache: "no-store"});
+        const fragCode = await fetchFile(shaderInfo.fragment, {cache: "no-store"});
+
+        shaders[name] = {
+            program: initShaderProgram(gl, vertCode, fragCode),
+            attr: {},
+            unif: {}
+        };
+
+        for (const attr of shaderInfo.attr)
+            shaders[name].attr[attr] = gl.getAttribLocation(
+                shaders[name].program, attr);
+        
+        for (const unif of shaderInfo.unif)
+            shaders[name].unif[unif] = gl.getUniformLocation(
+                shaders[name].program, unif);
+    }
+    return shaders;
+}
+
+
 /*
  *  Buffers
  */
 
 export function initBuffers(gl) {
 
-    const vertexBuffer = gl.createBuffer();
+    // Vertices
+    const vertBuffer = gl.createBuffer();
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertBuffer);
 
-    const points = [
-        0.0, 0.0,  1.0,
-        1.0, 0.0,  1.0,
-        0.0, 1.0,  1.0,
-        1.1, 1.0,  1.0,
+    const quadVerts = [
+        -1.0,  1.0,  0.0,
+         1.0,  1.0,  0.0,
+        -1.0, -1.0,  0.0,
+         1.0, -1.0,  0.0
     ];
 
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(points), gl.STATIC_DRAW);
+    gl.bufferData(
+        gl.ARRAY_BUFFER, new Float32Array(quadVerts), gl.STATIC_DRAW);
 
-    const texCoordBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
 
-    const texCoord = [
-        0.0,  0.0,
-        1.0,  0.0,
-        0.0,  1.0,
-        1.0,  1.0,
-    ]
-
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoord),
-        gl.STATIC_DRAW);
-
+    // Indices
     const indexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
 
     const indices = [
-        0,  1,  2,      1,  3,  2,    
+        0,  1,  2,
+        1,  2,  3
     ];
 
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,
         new Uint16Array(indices), gl.STATIC_DRAW);
 
+    // UVs
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+
+    const texCoords = [
+        0.0,  1.0,
+        1.0,  1.0,
+        0.0,  0.0,
+        1.0,  0.0
+    ];
+
+    gl.bufferData(gl.ARRAY_BUFFER,
+        new Float32Array(texCoords), gl.STATIC_DRAW);
+
     return {
-        vertex: vertexBuffer,
-        tex: texCoordBuffer,
-        indices: indexBuffer
+        quad: {
+            verts: vertBuffer,
+            indices: indexBuffer,
+            uvs: texCoordBuffer
+        }
     };
 }
 
@@ -143,4 +186,11 @@ export async function loadTexture(gl, url) {
     return texture;
 }
 
+export async function initTextures(gl, textureManifest) {
+    var textures = {};
 
+    for (const tex of textureManifest)
+        textures[tex.name] = await loadTexture(gl, tex.src);
+     
+    return textures;
+}

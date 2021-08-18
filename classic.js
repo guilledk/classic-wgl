@@ -1,7 +1,9 @@
 import {
-    addEvent, fetchFile, loadImage,
-    initShaderProgram,
+    addEvent,
+    fetchFile, fetchObject, loadImage,
+    initShaders,
     initBuffers,
+    initTextures,
     loadTexture
 } from '/utils.js';
 
@@ -9,11 +11,14 @@ import { mat4 } from '/lib/gl-matrix/index.js';
 
 
 var running = false;
-
 var projectionMatrix = mat4.create();
-var programInfo;
+
+var manifest;
+
+var shaders;
 var buffers;
-var texture;
+var textures;
+
 var canvas;
 var gl;
 
@@ -35,8 +40,7 @@ function loop(now) {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
    
-    gl.useProgram(programInfo.program);
-
+    // Verts
     {
         const numComponents = 3;  // pull out 3 values per iteration
         const type = gl.FLOAT;    // the data in the buffer is 32bit floats
@@ -44,54 +48,48 @@ function loop(now) {
         const stride = 0;         // how many bytes to get from one set of values to the next
                                 // 0 = use type and numComponents above
         const offset = 0;         // how many bytes inside the buffer to start from
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.vertex);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.quad.verts);
         gl.vertexAttribPointer(
-            programInfo.attribLocations.vertexPos,
-            numComponents,
-            type,
-            normalize,
-            stride,
-            offset);
+            shaders.image.attr.vertexPos,
+            numComponents, type, normalize, stride, offset);
         gl.enableVertexAttribArray(
-            programInfo.attribLocations.vertexPos);
+            shaders.image.attr.vertexPos);
     }
 
+    // UVs
     {
         const num = 2; // every coordinate composed of 2 values
         const type = gl.FLOAT; // the data in the buffer is 32 bit float
         const normalize = false; // don't normalize
         const stride = 0; // how many bytes to get from one set to the next
         const offset = 0; // how many bytes inside the buffer to start from
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.tex);
-        gl.vertexAttribPointer(programInfo.attribLocations.texCoord, num, type, normalize, stride, offset);
-        gl.enableVertexAttribArray(programInfo.attribLocations.texCoord);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.quad.uvs);
+        gl.vertexAttribPointer(
+            shaders.image.attr.texCoord,
+            num, type, normalize, stride, offset);
+        gl.enableVertexAttribArray(shaders.image.attr.texCoord);
     }
+    
+    // Indices
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.quad.indices);
+
+    gl.useProgram(shaders.image.program);
 
     gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, textures.coolSnake);
 
-    // Bind the texture to texture unit 0
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-
-    // Tell the shader we bound the texture to texture unit 0
-    gl.uniform1i(programInfo.uniformLocations.texSampler, 0);
-
+    gl.uniform1i(shaders.image.unif.texSampler, 0);
     gl.uniformMatrix4fv(
-        programInfo.uniformLocations.modelMatrix,
-        false,
-        modelMatrix);
-    gl.uniformMatrix4fv(
-        programInfo.uniformLocations.projectionMatrix,
+        shaders.image.unif.projectionMatrix,
         false,
         projectionMatrix);
     gl.uniformMatrix4fv(
-        programInfo.uniformLocations.modelViewMatrix,
+        shaders.image.unif.modelMatrix,
         false,
         modelMatrix);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.indices);
-
     {
-        const vertexCount = 4;
+        const vertexCount = 6;
         const type = gl.UNSIGNED_SHORT;
         const offset = 0;
         gl.drawElements(gl.TRIANGLES, vertexCount, type, offset);
@@ -128,7 +126,10 @@ function resizeCanvas() {
 async function initContext() {
     resizeCanvas()
 
-    gl = canvas.getContext("webgl");
+    gl = canvas.getContext("webgl", {
+        desynchronized: true,
+        preserveDrawingBuffer: true
+    });
 
     if (gl === null) {
         alert("Unable to initialize WebGL. Your browser or machine may not support it.");
@@ -138,24 +139,13 @@ async function initContext() {
     var vertCode = await fetchFile('/shaders/direct.vert');
     var fragCode = await fetchFile('/shaders/image.frag');
 
-    var program = initShaderProgram(gl, vertCode, fragCode);
+    manifest = await fetchObject('/manifest.json', {cache: "no-store"});
 
-    programInfo = {
-        program: program,
-        attribLocations: {
-            vertexPos: gl.getAttribLocation(program, 'vertexPos'),
-            texCoord: gl.getAttribLocation(program, 'texCoord'),
-        },
-        uniformLocations: {
-            projectionMatrix: gl.getUniformLocation(program, 'projectionMatrix'),
-            modelMatrix: gl.getUniformLocation(program, 'modelMatrix'),
-            texSampler: gl.getUniformLocation(program, 'texSampler'),
-        },
-    };
+    shaders = await initShaders(gl, manifest.shaders);
 
     buffers = initBuffers(gl);
 
-    texture = await loadTexture(gl, '/cool-snek.png');
+    textures = await initTextures(gl, manifest.textures);
 
     requestAnimationFrame(loop);
 }
