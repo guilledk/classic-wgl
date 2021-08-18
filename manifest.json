@@ -19,6 +19,10 @@
         {
             "name": "coolSnake",
             "src": "/res/cool_snek.png"
+        },
+        {
+            "name": "tile",
+            "src": "/res/tile.png"
         }
     ]
 }

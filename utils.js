@@ -77,27 +77,60 @@ export function initShaderProgram(gl, vsSource, fsSource) {
 }
 
 
+export let Shader = class {
+    constructor(
+        gl, name, vertexSrc, fragmentSrc, attributes, uniforms
+    ) {
+        this.gl = gl;
+        this.name = name;
+        this.vertexSrc = vertexSrc;
+        this.fragmentSrc = fragmentSrc;
+        this.attributes = attributes;
+        this.uniforms = uniforms;
+    }
+
+    async fetchCode() {
+        this.vertexCode = await fetchFile(this.vertexSrc, {cache: 'no-store'});
+        this.fragmentCode = await fetchFile(this.fragmentSrc, {cache: 'no-store'});
+    }
+
+    compile() {
+        this.program = initShaderProgram(
+            this.gl, this.vertexCode, this.fragmentCode);
+
+        this.attr = {};
+        for (const attr of this.attributes)
+            this.attr[attr] = this.gl.getAttribLocation(this.program, attr);
+       
+        this.unif = {};
+        for (const unif of this.uniforms)
+            this.unif[unif] = this.gl.getUniformLocation(this.program, unif);
+    }
+
+    bind() {
+        this.gl.useProgram(this.program);
+    }
+
+    unbind() {
+        this.gl.useProgram(null);
+    }
+}
+
+
 export async function initShaders(gl, shaderManifest) {
     var shaders = {};
 
     for (const shaderInfo of shaderManifest) {
         const name = shaderInfo.name;
-        const vertCode = await fetchFile(shaderInfo.vertex, {cache: "no-store"});
-        const fragCode = await fetchFile(shaderInfo.fragment, {cache: "no-store"});
 
-        shaders[name] = {
-            program: initShaderProgram(gl, vertCode, fragCode),
-            attr: {},
-            unif: {}
-        };
+        shaders[name] = new Shader(
+            gl, name,
+            shaderInfo.vertex, shaderInfo.fragment,
+            shaderInfo.attr, shaderInfo.unif
+        );
 
-        for (const attr of shaderInfo.attr)
-            shaders[name].attr[attr] = gl.getAttribLocation(
-                shaders[name].program, attr);
-        
-        for (const unif of shaderInfo.unif)
-            shaders[name].unif[unif] = gl.getUniformLocation(
-                shaders[name].program, unif);
+        await shaders[name].fetchCode();
+        shaders[name].compile();
     }
     return shaders;
 }
@@ -107,49 +140,69 @@ export async function initShaders(gl, shaderManifest) {
  *  Buffers
  */
 
+export let Buffer = class {
+    constructor(
+        gl, type, data, data_type, usage
+    ) {
+        this.gl = gl;
+        this.buffer = gl.createBuffer();
+        this.type = type;
+        this.data = data;
+        this.array = new data_type(data);
+        this.usage = usage;
+
+        gl.bindBuffer(type, this.buffer);
+        gl.bufferData(type, this.array, usage);
+        gl.bindBuffer(type, null);
+    }
+
+    bind() {
+        this.gl.bindBuffer(this.type, this.buffer);
+    }
+
+    unbind() {
+        this.gl.bindBuffer(this.type, null);
+    }
+};
+
 export function initBuffers(gl) {
 
-    // Vertices
-    const vertBuffer = gl.createBuffer();
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertBuffer);
-
-    const quadVerts = [
-        -1.0,  1.0,  0.0,
-         1.0,  1.0,  0.0,
-        -1.0, -1.0,  0.0,
-         1.0, -1.0,  0.0
-    ];
-
-    gl.bufferData(
-        gl.ARRAY_BUFFER, new Float32Array(quadVerts), gl.STATIC_DRAW);
-
+    // Verts
+    var vertBuffer = new Buffer(
+        gl, gl.ARRAY_BUFFER,
+        [
+            -1.0,  1.0,  0.0,
+            1.0,  1.0,  0.0,
+            -1.0, -1.0,  0.0,
+            1.0, -1.0,  0.0
+        ],
+        Float32Array,
+        gl.STATIC_DRAW
+    );
 
     // Indices
-    const indexBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-
-    const indices = [
-        0,  1,  2,
-        1,  2,  3
-    ];
-
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,
-        new Uint16Array(indices), gl.STATIC_DRAW);
+    var indexBuffer = new Buffer(
+        gl, gl.ELEMENT_ARRAY_BUFFER,
+        [
+            0,  1,  2,
+            1,  2,  3
+        ],
+        Uint16Array,
+        gl.STATIC_DRAW
+    );
 
     // UVs
-    const texCoordBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-
-    const texCoords = [
-        0.0,  1.0,
-        1.0,  1.0,
-        0.0,  0.0,
-        1.0,  0.0
-    ];
-
-    gl.bufferData(gl.ARRAY_BUFFER,
-        new Float32Array(texCoords), gl.STATIC_DRAW);
+    var texCoordBuffer = new Buffer(
+        gl, gl.ARRAY_BUFFER,
+        [
+            0.0,  1.0,
+            1.0,  1.0,
+            0.0,  0.0,
+            1.0,  0.0
+        ],
+        Float32Array,
+        gl.STATIC_DRAW
+    );
 
     return {
         quad: {
@@ -186,11 +239,31 @@ export async function loadTexture(gl, url) {
     return texture;
 }
 
+export let Texture = class {
+    constructor(
+        gl, name, src) {
+        this.gl = gl;
+        this.name = name;
+        this.src = src;
+    }
+
+    async load() {
+        this.texture = await loadTexture(this.gl, this.src);
+    }
+
+    bind(tex_core) {
+        this.gl.activeTexture(tex_core);
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
+    }
+};
+
 export async function initTextures(gl, textureManifest) {
     var textures = {};
 
-    for (const tex of textureManifest)
-        textures[tex.name] = await loadTexture(gl, tex.src);
+    for (const tex of textureManifest) {
+        textures[tex.name] = new Texture(gl, tex.name, tex.src);
+        await textures[tex.name].load();
+    }
      
     return textures;
 }

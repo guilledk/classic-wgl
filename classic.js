@@ -22,12 +22,130 @@ var textures;
 var canvas;
 var gl;
 
-var modelMatrix = mat4.create();
-mat4.translate(
-    modelMatrix, modelMatrix, [200, 200, 0]);
-mat4.scale(
-    modelMatrix, modelMatrix, [100, 100, 1]);
 
+let Transform = class {
+    constructor(
+        position, scale
+    ) {
+        this.position = position;
+        this.scale = scale;
+    }
+
+    modelMatrix() {
+        var modelMatrix = mat4.create();
+        mat4.translate(
+            modelMatrix, modelMatrix, this.position);
+        mat4.scale(
+            modelMatrix, modelMatrix, this.scale);
+        return modelMatrix;
+    }
+};
+
+class Rectangle extends Transform {
+    constructor(
+        position, scale, color
+    ) {
+        super(position, scale);
+        this.color = color;
+    }
+
+    draw() {
+        buffers.quad.verts.bind();
+        gl.vertexAttribPointer(
+            shaders.solid.attr.vertexPos,
+            3,         // num of values to pull from array per iteration
+            gl.FLOAT,  // type
+            false,     // perform normalization 
+            0,         // stride
+            0);        // start offset
+        gl.enableVertexAttribArray(
+            shaders.solid.attr.vertexPos);
+        
+        // Indices
+        buffers.quad.indices.bind();
+
+        shaders.solid.bind();
+
+        gl.uniformMatrix4fv(
+            shaders.solid.unif.projectionMatrix,
+            false,
+            projectionMatrix);
+        gl.uniformMatrix4fv(
+            shaders.solid.unif.modelMatrix,
+            false,
+            this.modelMatrix());
+        gl.uniform4fv(shaders.solid.unif.color, this.color);
+            
+        gl.drawElements(
+            gl.TRIANGLES,
+            6,                  // vertex count
+            gl.UNSIGNED_SHORT,  // type
+            0);                 //start offset
+
+    }
+};
+
+class Sprite extends Transform {
+    constructor(
+        position, scale, texture
+    ) {
+        super(position, scale);
+        this.texture = texture;
+    }
+
+    draw() {
+        // Verts
+        buffers.quad.verts.bind();
+        gl.vertexAttribPointer(
+            shaders.image.attr.vertexPos,
+            3,         // num of values to pull from array per iteration
+            gl.FLOAT,  // type
+            false,     // normalize,
+            0,         // stride
+            0);        // start offset
+        gl.enableVertexAttribArray(
+            shaders.image.attr.vertexPos);
+
+        // UVs
+        buffers.quad.uvs.bind();
+        gl.vertexAttribPointer(
+            shaders.image.attr.texCoord,
+            2,         // num of values to pull from array per iteration
+            gl.FLOAT,  // type
+            false,     // normalize,
+            0,         // stride
+            0);        // start offset
+        gl.enableVertexAttribArray(shaders.image.attr.texCoord);
+        
+        // Indices
+        buffers.quad.indices.bind();
+
+        shaders.image.bind();
+
+        this.texture.bind(gl.TEXTURE0);
+
+        gl.uniform1i(shaders.image.unif.texSampler, 0);
+        gl.uniformMatrix4fv(
+            shaders.image.unif.projectionMatrix,
+            false,
+            projectionMatrix);
+        gl.uniformMatrix4fv(
+            shaders.image.unif.modelMatrix,
+            false,
+            this.modelMatrix());
+
+        {
+            const vertexCount = 6;
+            const type = gl.UNSIGNED_SHORT;
+            const offset = 0;
+            gl.drawElements(gl.TRIANGLES, vertexCount, type, offset);
+        }
+    }
+};
+
+
+var rect = new Rectangle([200, 200, 0], [100, 100, 1], [1.0, 0.0, 0.0, .99]);
+var coolSnek;
 
 var prevTime = 0;
 function loop(now) {
@@ -39,61 +157,9 @@ function loop(now) {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-   
-    // Verts
-    {
-        const numComponents = 3;  // pull out 3 values per iteration
-        const type = gl.FLOAT;    // the data in the buffer is 32bit floats
-        const normalize = false;  // don't normalize
-        const stride = 0;         // how many bytes to get from one set of values to the next
-                                // 0 = use type and numComponents above
-        const offset = 0;         // how many bytes inside the buffer to start from
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.quad.verts);
-        gl.vertexAttribPointer(
-            shaders.image.attr.vertexPos,
-            numComponents, type, normalize, stride, offset);
-        gl.enableVertexAttribArray(
-            shaders.image.attr.vertexPos);
-    }
 
-    // UVs
-    {
-        const num = 2; // every coordinate composed of 2 values
-        const type = gl.FLOAT; // the data in the buffer is 32 bit float
-        const normalize = false; // don't normalize
-        const stride = 0; // how many bytes to get from one set to the next
-        const offset = 0; // how many bytes inside the buffer to start from
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffers.quad.uvs);
-        gl.vertexAttribPointer(
-            shaders.image.attr.texCoord,
-            num, type, normalize, stride, offset);
-        gl.enableVertexAttribArray(shaders.image.attr.texCoord);
-    }
-    
-    // Indices
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.quad.indices);
-
-    gl.useProgram(shaders.image.program);
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, textures.coolSnake);
-
-    gl.uniform1i(shaders.image.unif.texSampler, 0);
-    gl.uniformMatrix4fv(
-        shaders.image.unif.projectionMatrix,
-        false,
-        projectionMatrix);
-    gl.uniformMatrix4fv(
-        shaders.image.unif.modelMatrix,
-        false,
-        modelMatrix);
-
-    {
-        const vertexCount = 6;
-        const type = gl.UNSIGNED_SHORT;
-        const offset = 0;
-        gl.drawElements(gl.TRIANGLES, vertexCount, type, offset);
-    }
+    rect.draw();
+    coolSnek.draw();
 
     prevTime = now;
     requestAnimationFrame(loop);
@@ -116,7 +182,7 @@ function resizeCanvas() {
 
     const right = canvas.width;
     const bottom = canvas.height;
-    const far = 10000;
+    const far = 100;
     projectionMatrix = mat4.create();
     mat4.ortho(
         projectionMatrix,
@@ -146,6 +212,8 @@ async function initContext() {
     buffers = initBuffers(gl);
 
     textures = await initTextures(gl, manifest.textures);
+
+    coolSnek = new Sprite([200, 200, 0], [32, 16, 1], textures.tile);
 
     requestAnimationFrame(loop);
 }
