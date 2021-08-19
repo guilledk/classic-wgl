@@ -36,6 +36,14 @@ export function loadImage(src) {
     });
 }
 
+var loadingLabel = document.getElementById("loader");
+export function setLoaderLabel(msg) {
+    loadingLabel.innerHTML = msg;
+}
+
+export function deleteLoaderLabel() {
+    loadingLabel.remove();
+}
 
 /*
  *
@@ -50,7 +58,9 @@ export function loadShader(gl, type, source) {
     gl.compileShader(shader);
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        alert('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
+        setLoaderLabel(
+            'An error occurred compiling the shaders: ' +
+            gl.getShaderInfoLog(shader));
         gl.deleteShader(shader);
         return null;
     }
@@ -68,7 +78,9 @@ export function initShaderProgram(gl, vsSource, fsSource) {
     gl.linkProgram(shaderProgram);
 
     if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
-        alert('Unable to initialize the shader program: ' + gl.getProgramInfoLog(shaderProgram));
+        setLoaderLabel(
+            'Unable to initialize the shader program: ' +
+            gl.getProgramInfoLog(shaderProgram));
         return null;
     }
 
@@ -170,10 +182,10 @@ export function initBuffers(gl) {
     var vertBuffer = new Buffer(
         gl, gl.ARRAY_BUFFER,
         [
-            -1.0,  1.0,  0.0,
+            0.0,  1.0,  0.0,
             1.0,  1.0,  0.0,
-            -1.0, -1.0,  0.0,
-            1.0, -1.0,  0.0
+            0.0,  0.0,  0.0,
+            1.0,  0.0,  0.0
         ],
         Float32Array,
         gl.STATIC_DRAW
@@ -234,6 +246,8 @@ export async function loadTexture(gl, url) {
     
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     return texture;
 }
@@ -344,7 +358,7 @@ console.assert(
  */
 import '/lib/simplex-noise.js';
 
-const factor = 10.0;
+const factor = 30.0;
 
 export const noiseGen = new window.SimplexNoise();
 

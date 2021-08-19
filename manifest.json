@@ -31,7 +31,11 @@
                 "modelMatrix",
                 "projectionMatrix",
                 "mapData",
-                "mapTileSize"
+                "mapSize",
+                "mapTileSize",
+                "tileSet",
+                "tileSetSize",
+                "tilePixelSize"
             ]
         }
     ],
@@ -41,8 +45,12 @@
             "src": "/res/cool_snek.png"
         },
         {
-            "name": "tile",
-            "src": "/res/tile.png"
+            "name": "tileSet",
+            "src": "/res/tileset.png"
+        },
+        {
+            "name": "test",
+            "src": "/res/test.png"
         }
     ]
 }

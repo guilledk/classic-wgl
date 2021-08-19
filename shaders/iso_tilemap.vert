@@ -6,11 +6,15 @@ uniform mat4 modelMatrix;
 uniform mat4 projectionMatrix;
 
 uniform vec2 mapTileSize;
+uniform vec2 mapSize;
+
+uniform vec2 tilePixelSize;
 
 varying highp vec2 vMapCoord;
 
 void main(void) {
-    mat4 scaleMat = mat4(mat2(mapTileSize.x,0,0,mapTileSize.y));
+    vec2 tileScaling = mapSize * (mapTileSize / tilePixelSize);
+    mat4 scaleMat = mat4(mat2(tileScaling.x,0,0,tileScaling.y));
     gl_Position = projectionMatrix * modelMatrix * isoMatrix * scaleMat *  vertexPos;
     vMapCoord = mapCoord;
 }

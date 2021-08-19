@@ -2,6 +2,7 @@ import {
     Buffer, Texture,
     addEvent,
     fetchFile, fetchObject, loadImage,
+    deleteLoaderLabel,
     initShaders,
     initBuffers,
     initTextures,
@@ -148,27 +149,30 @@ class Sprite extends Transform {
 
 class Tilemap extends Transform {
     constructor(
-        position, scale, sizeX, sizeY, tileSize
+        position, scale, sizeX, sizeY, mapTileSize, tileSet
     ) {
         super(position, scale);
         this.sizeX = sizeX;
         this.sizeY = sizeY;
 
-        this.tileSize = tileSize;
-        this.mapTileSize = [sizeX, sizeY];
+        this.mapTileSize = mapTileSize;
+        this.mapSize = [sizeX, sizeY];
+
+        this.tileSet = tileSet;
+        this.tileSetSize = [3, 2];
+        this.tilePixelSize = [16, 16];
+
+        const maxTile = this.tileSetSize[0] * this.tileSetSize[1];
 
         this.data = Array(sizeX * sizeY);
         for (let y = 0; y < this.sizeY; y++)
             for (let x = 0; x < this.sizeX; x++)
                 this.data[x + (sizeX * y)] = Math.floor(
-                    getNoiseRange(x, y, 0, 255));
+                    getNoiseRange(x, y, 0, maxTile));
         
-        this.mapDataTexture = null;
+        console.log(this);
 
-        this.debugSprite = new Sprite(
-            [10, 10, 0], this.mapTileSize, null);
-        
-        console.log(this.data);
+        this.mapDataTexture = null;
     }
 
     uploadToGPU() {
@@ -183,8 +187,6 @@ class Tilemap extends Transform {
             pixelData[i + 2] = val;
             pixelData[i + 3] = 255;
         }
-
-        console.log(pixelData);
 
         this.mapDataTexture = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.mapDataTexture);
@@ -201,10 +203,6 @@ class Tilemap extends Transform {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-        this.debugSprite.texture = new Texture(
-            gl, "mapData");
-        this.debugSprite.texture.texture = this.mapDataTexture;
     }
 
     draw() {
@@ -239,7 +237,11 @@ class Tilemap extends Transform {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.mapDataTexture);
 
-        gl.uniform1i(shaders.isoTilemap.unif.texSampler, 0);
+        this.tileSet.bind(gl.TEXTURE1);
+
+        gl.uniform1i(shaders.isoTilemap.unif.mapData, 0);
+        gl.uniform1i(shaders.isoTilemap.unif.tileSet, 1);
+
         gl.uniformMatrix4fv(
             shaders.isoTilemap.unif.projectionMatrix,
             false,
@@ -254,25 +256,25 @@ class Tilemap extends Transform {
             isoToCartesian4);
 
         gl.uniform2fv(
-            shaders.isoTilemap.unif.mapTileSize, this.mapTileSize);
+            shaders.isoTilemap.unif.tileSetSize, this.tileSetSize);
+        gl.uniform2fv(
+            shaders.isoTilemap.unif.tilePixelSize, this.tilePixelSize);
 
+        gl.uniform2fv(
+            shaders.isoTilemap.unif.mapSize, this.mapSize);
+        gl.uniform2fv(
+            shaders.isoTilemap.unif.mapTileSize, this.mapTileSize);
 
         gl.drawElements(
             gl.TRIANGLES,
             6,                  // vertex count
             gl.UNSIGNED_SHORT,  // type
             0);
-
-        this.debugSprite.draw();
     }
 };
 
 
-var rect = new Rectangle([200, 200, 0], [100, 100, 1], [1.0, 1.0, 0.0, .99]);
-var coolSnek;
-
-var tileMap = new Tilemap(
-    [0, 0, 0], [1, 1, 1], 100, 100);
+var tileMap; 
 
 var prevTime = 0;
 function loop(now) {
@@ -280,15 +282,16 @@ function loop(now) {
     now /= 1000;
     const deltaTime = now - prevTime;
     const fps = 1 / deltaTime;
-    console.log(Math.floor(fps));
+    console.log(fps);
+
+    vec3.add(
+        tileMap.position, tileMap.position,
+        [-100 * deltaTime, 0, 0]);
 
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-    //rect.draw();
-    coolSnek.draw();
 
     tileMap.draw();
 
@@ -329,7 +332,8 @@ async function initContext() {
     });
 
     if (gl === null) {
-        alert("Unable to initialize WebGL. Your browser or machine may not support it.");
+        setLoaderLabel(
+            "Unable to initialize WebGL. Your browser or machine may not support it.");
         return;
     }
 
@@ -344,13 +348,11 @@ async function initContext() {
 
     textures = await initTextures(gl, manifest.textures);
 
-    coolSnek = new Sprite([200, 200, 0], [64, 64, 1], textures.coolSnake);
+    tileMap = new Tilemap(
+        [0, 400, 0], [1, 1, 1], 1000, 1000, [16, 16], textures.test);
     tileMap.uploadToGPU();
-    console.log(tileMap);
 
-    // Take out loading text
-    var loadingLabel = document.getElementById("loader");
-    loadingLabel.remove();
+    deleteLoaderLabel()
 
     requestAnimationFrame(loop);
 }
