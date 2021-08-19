@@ -349,7 +349,7 @@ async function initContext() {
     textures = await initTextures(gl, manifest.textures);
 
     tileMap = new Tilemap(
-        [0, 400, 0], [1, 1, 1], 1000, 1000, [16, 16], textures.test);
+        [0, 400, 0], [1, 1, 1], 1000, 1000, [16, 16], textures.tileSet);
     tileMap.uploadToGPU();
 
     deleteLoaderLabel()

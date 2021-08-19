@@ -47,10 +47,6 @@
         {
             "name": "tileSet",
             "src": "/res/tileset.png"
-        },
-        {
-            "name": "test",
-            "src": "/res/test.png"
         }
     ]
 }
