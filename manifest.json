@@ -20,6 +20,19 @@
             "fragment": "/shaders/image_colorized.frag",
             "attr": ["vertexPos", "texCoord"],
             "unif": ["modelMatrix", "projectionMatrix", "texSampler", "color"]
+        },
+        {
+            "name": "isoTilemap",
+            "vertex": "/shaders/iso_tilemap.vert",
+            "fragment": "/shaders/iso_tilemap.frag",
+            "attr": ["vertexPos", "mapCoord"],
+            "unif": [
+                "isoMatrix",
+                "modelMatrix",
+                "projectionMatrix",
+                "mapData",
+                "mapTileSize"
+            ]
         }
     ],
     "textures": [
