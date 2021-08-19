@@ -13,6 +13,13 @@
             "fragment": "/shaders/image.frag",
             "attr": ["vertexPos", "texCoord"],
             "unif": ["modelMatrix", "projectionMatrix", "texSampler"]
+        },
+        {
+            "name": "imageColorize",
+            "vertex": "/shaders/direct_tex.vert",
+            "fragment": "/shaders/image_colorized.frag",
+            "attr": ["vertexPos", "texCoord"],
+            "unif": ["modelMatrix", "projectionMatrix", "texSampler", "color"]
         }
     ],
     "textures": [

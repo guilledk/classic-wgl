@@ -1,4 +1,3 @@
-
 export function addEvent(element, eventName, fn) {
     /*
      * Cross browser attach callback to window event
@@ -266,4 +265,56 @@ export async function initTextures(gl, textureManifest) {
     }
      
     return textures;
+}
+
+
+/*
+ *  Isometric tools
+ */
+import { mat3, vec3 } from '/lib/gl-matrix/index.js';
+
+
+var _cartesianToIso = mat3.fromValues(
+    1, 1, 0,
+   -2, 2, 0,
+    0, 0, 1);
+const isoScaling = mat3.fromValues(
+    1/64, 0,    0,
+    0,    1/64, 0,
+    0,    0,    1);
+mat3.multiply(_cartesianToIso, _cartesianToIso, isoScaling);
+export const cartesianToIso = _cartesianToIso;
+
+
+var _isoToCartesian = mat3.fromValues(
+    0.5,-0.25, 0,
+    0.5, 0.25, 0,
+    0,   0,    1);
+const cartesianScaling = mat3.fromValues(
+    64,  0,  0,
+    0,  64,  0,
+    0,  0,  1);
+mat3.multiply(_isoToCartesian, _isoToCartesian, cartesianScaling);
+export const isoToCartesian = _isoToCartesian;
+
+var testIdentity = mat3.create();
+mat3.multiply(testIdentity, isoToCartesian, cartesianToIso);
+
+console.assert(
+    mat3.equals(testIdentity, mat3.create()),
+    "Isometric coord transformation mismatch");
+
+
+/*
+ *  Simplex Noise
+ */
+import '/lib/simplex-noise.js';
+
+const factor = 10.0;
+
+export const noiseGen = new window.SimplexNoise();
+
+export function getNoiseRange(x, y, from, to) {
+    return (((noiseGen.noise2D(
+        x / factor, y / factor) + 1) / 2) * (to - from)) + from;
 }
