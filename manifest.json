@@ -5,21 +5,36 @@
             "vertex": "/shaders/direct.vert",
             "fragment": "/shaders/solid.frag",
             "attr": ["vertexPos"],
-            "unif": ["modelMatrix", "projectionMatrix", "color"]
+            "unif": [
+                "modelMatrix",
+                "cameraMatrix",
+                "projectionMatrix",
+                "color"]
         },
         {
             "name": "image",
             "vertex": "/shaders/direct_tex.vert",
             "fragment": "/shaders/image.frag",
             "attr": ["vertexPos", "texCoord"],
-            "unif": ["modelMatrix", "projectionMatrix", "texSampler"]
+            "unif": [
+                "modelMatrix", 
+                "cameraMatrix",
+                "projectionMatrix",
+                "texSampler"
+            ]
         },
         {
             "name": "imageColorize",
             "vertex": "/shaders/direct_tex.vert",
             "fragment": "/shaders/image_colorized.frag",
             "attr": ["vertexPos", "texCoord"],
-            "unif": ["modelMatrix", "projectionMatrix", "texSampler", "color"]
+            "unif": [
+                "modelMatrix",
+                "cameraMatrix",
+                "projectionMatrix",
+                "texSampler",
+                "color"
+            ]
         },
         {
             "name": "isoTilemap",
@@ -29,6 +44,7 @@
             "unif": [
                 "isoMatrix",
                 "modelMatrix",
+                "cameraMatrix",
                 "projectionMatrix",
                 "mapData",
                 "mapSize",
@@ -47,6 +63,10 @@
         {
             "name": "tileSet",
             "src": "/res/tileset.png"
+        },
+        {
+            "name": "cursor",
+            "src": "/res/cursor.png"
         }
     ]
 }

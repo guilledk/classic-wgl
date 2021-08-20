@@ -249,7 +249,7 @@ export async function loadTexture(gl, url) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    return texture;
+    return [texture, image];
 }
 
 export let Texture = class {
@@ -261,7 +261,9 @@ export let Texture = class {
     }
 
     async load() {
-        this.texture = await loadTexture(this.gl, this.src);
+        var [tex, img] = await loadTexture(this.gl, this.src);
+        this.texture = tex;
+        this.image = img;
     }
 
     bind(tex_core) {

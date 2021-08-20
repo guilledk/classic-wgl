@@ -27,6 +27,28 @@ var canvas;
 var gl;
 
 
+let Camera = class {
+    constructor(position, scale) {
+        this.position = position;
+        this.scale = scale;
+    }
+
+    matrix() {
+        var camMatrix = mat4.create();
+        const invPos = vec3.fromValues(
+            -this.position[0],
+            -this.position[1],
+            -this.position[2]);
+        mat4.translate(
+            camMatrix, camMatrix, invPos);
+        mat4.scale(
+            camMatrix, camMatrix, this.scale);
+        return camMatrix;
+    }
+};
+
+var camera = new Camera([3000, 500, 0], [0.1, 0.1, 1]);
+
 let Transform = class {
     constructor(
         position, scale
@@ -75,6 +97,10 @@ class Rectangle extends Transform {
             false,
             projectionMatrix);
         gl.uniformMatrix4fv(
+            shaders.solid.unif.cameraMatrix,
+            false,
+            camera.matrix());
+        gl.uniformMatrix4fv(
             shaders.solid.unif.modelMatrix,
             false,
             this.modelMatrix());
@@ -91,10 +117,11 @@ class Rectangle extends Transform {
 
 class Sprite extends Transform {
     constructor(
-        position, scale, texture
+        position, scale, texture, ignoreCam = false
     ) {
         super(position, scale);
         this.texture = texture;
+        this.ignoreCam = ignoreCam;
     }
 
     draw() {
@@ -133,6 +160,17 @@ class Sprite extends Transform {
             shaders.image.unif.projectionMatrix,
             false,
             projectionMatrix);
+        if (!this.ignoreCam)
+            gl.uniformMatrix4fv(
+                shaders.image.unif.cameraMatrix,
+                false,
+                camera.matrix());
+        else
+            gl.uniformMatrix4fv(
+                shaders.image.unif.cameraMatrix,
+                false,
+                mat4.create());
+
         gl.uniformMatrix4fv(
             shaders.image.unif.modelMatrix,
             false,
@@ -149,7 +187,10 @@ class Sprite extends Transform {
 
 class Tilemap extends Transform {
     constructor(
-        position, scale, sizeX, sizeY, mapTileSize, tileSet
+        position, scale,
+        sizeX, sizeY,
+        mapTileSize,
+        tileSet, tilePixelSize
     ) {
         super(position, scale);
         this.sizeX = sizeX;
@@ -159,8 +200,11 @@ class Tilemap extends Transform {
         this.mapSize = [sizeX, sizeY];
 
         this.tileSet = tileSet;
-        this.tileSetSize = [3, 2];
-        this.tilePixelSize = [16, 16];
+        this.tilePixelSize = tilePixelSize;
+        this.tileSetSize = [
+            this.tileSet.image.width / tilePixelSize[0],
+            this.tileSet.image.height / tilePixelSize[1]
+        ];
 
         const maxTile = this.tileSetSize[0] * this.tileSetSize[1];
 
@@ -247,6 +291,10 @@ class Tilemap extends Transform {
             false,
             projectionMatrix);
         gl.uniformMatrix4fv(
+            shaders.isoTilemap.unif.cameraMatrix,
+            false,
+            camera.matrix());
+        gl.uniformMatrix4fv(
             shaders.isoTilemap.unif.modelMatrix,
             false,
             this.modelMatrix());
@@ -274,19 +322,54 @@ class Tilemap extends Transform {
 };
 
 
-var tileMap; 
+var tileMap;
+var cursor;
+
+var mouseAxis = vec3.fromValues(0, 0, 0);
+var mousePos = vec3.fromValues(-1, -1, 0);
+var scrollSpeed = 600;
+var scrollDeadZone = .8;
 
 var prevTime = 0;
+var deltaTime = 0;
 function loop(now) {
 
     now /= 1000;
-    const deltaTime = now - prevTime;
+    deltaTime = now - prevTime;
     const fps = 1 / deltaTime;
-    console.log(fps);
+    // console.log(fps);
+    
 
-    vec3.add(
-        tileMap.position, tileMap.position,
-        [-100 * deltaTime, 0, 0]);
+    if (vec3.length(mouseAxis) > scrollDeadZone) {
+
+        const absAxisX = Math.abs(mouseAxis[0]);
+        const absAxisY = Math.abs(mouseAxis[1]);
+
+        var scrollAxis = vec3.fromValues(
+            Math.min((absAxisX / 100) / -Math.log10(absAxisX), 1) * Math.sign(mouseAxis[0]),
+            Math.min((absAxisY / 100) / -Math.log10(absAxisY), 1) * Math.sign(mouseAxis[1]),
+            0);
+
+        if (scrollAxis[0] > 1)
+            scrollAxis[0] = -1;
+        if (scrollAxis[1] > 1)
+            scrollAxis[1] = -1;
+
+        if (scrollAxis[0] < -1)
+            scrollAxis[0] = 1;
+
+        if (scrollAxis[1] < -1)
+            scrollAxis[1] = 1;
+
+        var scrollDelta = vec3.clone(scrollAxis);
+        vec3.scale(scrollDelta, scrollDelta, scrollSpeed * deltaTime);
+
+        vec3.add(
+            camera.position,
+            camera.position,
+            scrollDelta);
+    }
+
 
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -294,6 +377,7 @@ function loop(now) {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     tileMap.draw();
+    cursor.draw();
 
     prevTime = now;
     requestAnimationFrame(loop);
@@ -325,7 +409,18 @@ function resizeCanvas() {
 
 async function initContext() {
     resizeCanvas()
-
+    window.addEventListener("keypress", keyPressHandler, false);
+    canvas.addEventListener("click", mouseClickHandler, false);
+    document.addEventListener('pointerlockchange', lockChangeAlert, false);
+    function lockChangeAlert() {
+        if(document.pointerLockElement === canvas) {
+            console.log('The pointer lock status is now locked');
+            canvas.addEventListener("mousemove", mouseMoveHandler, false);
+        } else {
+            console.log('The pointer lock status is now unlocked');  
+            canvas.removeEventListener("mousemove", mouseMoveHandler, false);
+        }
+    }
     gl = canvas.getContext("webgl", {
         desynchronized: true,
         preserveDrawingBuffer: true
@@ -349,14 +444,75 @@ async function initContext() {
     textures = await initTextures(gl, manifest.textures);
 
     tileMap = new Tilemap(
-        [0, 400, 0], [1, 1, 1], 1000, 1000, [16, 16], textures.tileSet);
+        [0, 0, 0], [4, 4, 1],
+        1000, 1000, [16, 16],
+        textures.tileSet, [16, 16]);
     tileMap.uploadToGPU();
+
+    cursor = new Sprite([0, 0, 0], [32, 32, 1], textures.cursor, true);
 
     deleteLoaderLabel()
 
     requestAnimationFrame(loop);
 }
 
-addEvent(window, 'load', initContext);
+window.addEventListener("load", initContext, false);
 //addEvent(window, 'resize', resizeCanvas);
+
+function mouseClickHandler(event) {
+
+    canvas.requestPointerLock = canvas.requestPointerLock ||
+        canvas.mozRequestPointerLock ||
+        canvas.webkitRequestPointerLock;
+    canvas.requestPointerLock();
+
+}
+
+
+function mouseMoveHandler(event) {
+
+    if (mousePos[0] == -1)
+        mousePos[0] = event.pageX;
+    if (mousePos[1] == -1)
+        mousePos[1] = event.pageY;
+
+    mousePos[0] += event.movementX;
+    mousePos[1] += event.movementY;
+
+    if (mousePos[0] < 0)
+        mousePos[0] = 0;
+    if (mousePos[0] > canvas.width)
+        mousePos[0] = canvas.width;
+
+    if (mousePos[1] < 0)
+        mousePos[1] = 0;
+    if (mousePos[1] > canvas.height)
+        mousePos[1] = canvas.height;
+
+    vec3.copy(cursor.position, mousePos);
+
+    mouseAxis[0] = ((mousePos[0] / canvas.width) - .5) * 2;
+    mouseAxis[1] = ((mousePos[1] / canvas.height) - .5) * 2;
+
+    if (mouseAxis[0] > 1)
+        mouseAxis[0] = 1;
+    if (mouseAxis[1] > 1)
+        mouseAxis[1] = 1;
+
+    if (mouseAxis[0] < -1)
+        mouseAxis[0] = -1;
+    if (mouseAxis[1] < -1)
+        mouseAxis[1] = -1;
+
+}
+
+
+function keyPressHandler(event) {
+    console.log(event);
+
+    if (event.key === ',')
+        vec3.add(camera.scale, camera.scale, [-0.1, -0.1, 0]);
+    if (event.key === '.')
+        vec3.add(camera.scale, camera.scale, [0.1, 0.1, 0]);
+}
 

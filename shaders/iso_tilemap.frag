@@ -12,7 +12,7 @@ uniform vec2 tilePixelSize;
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture2D(mapData, pos);
-    return rawData.r * 256.0;
+    return floor(rawData.r * 256.0);
 }
 
 vec4 getTilePixel(float tileIdFlat, vec2 mapCoord) {
@@ -21,9 +21,9 @@ vec4 getTilePixel(float tileIdFlat, vec2 mapCoord) {
         floor(tileIdFlat / tileSetSize.x));
 
     vec2 mapTileNormalSize = vec2(1, 1) / mapSize;
-    vec2 setNormalSize = tilePixelSize / (tileSetSize * tilePixelSize);
+    vec2 setNormalSize = vec2(1, 1) / tileSetSize;
 
-    vec2 tileCornerNorm = tileId / tileSetSize;
+    vec2 tileCornerNorm = tileId * setNormalSize;
 
     vec2 localTileCoord = fract(
         mapCoord / mapTileNormalSize) * setNormalSize;
@@ -33,11 +33,10 @@ vec4 getTilePixel(float tileIdFlat, vec2 mapCoord) {
 }
 
 void main(void) {
-    vec2 tileCoord = vec2(vMapCoord.x, vMapCoord.y);
-    float tileId = getMapData(tileCoord);
+    vec2 mapCoord = vec2(vMapCoord.x, vMapCoord.y);
     
     gl_FragColor = getTilePixel(
-        getMapData(tileCoord), tileCoord);
+        getMapData(mapCoord), mapCoord);
 
     // gl_FragColor = vec4(1.0 / float(tileId), 0.0, 0.0, 1.0);
 
