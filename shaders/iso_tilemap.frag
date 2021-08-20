@@ -1,6 +1,6 @@
-precision highp float;
+precision mediump float;
 
-varying highp vec2 vMapCoord;
+varying mediump vec2 vMapCoord;
 
 uniform sampler2D mapData;
 uniform vec2 mapSize;

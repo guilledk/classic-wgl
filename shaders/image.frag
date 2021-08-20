@@ -1,4 +1,4 @@
-varying highp vec2 vTexCoord;
+varying mediump vec2 vTexCoord;
 
 uniform sampler2D texSampler;
 

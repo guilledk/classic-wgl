@@ -1,12 +1,11 @@
-export function addEvent(element, eventName, fn) {
-    /*
-     * Cross browser attach callback to window event
-     */
-
-    if (element.addEventListener)
-        element.addEventListener(eventName, fn, false);
-    else if (element.attachEvent)
-        element.attachEvent('on' + eventName, fn);
+export function getVideoCardInfo(gl) {
+    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+    return debugInfo ? {
+        vendor: gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL),
+        renderer:  gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL),
+    } : {
+        error: "no WEBGL_debug_renderer_info",
+    };
 }
 
 export async function fetchFile(url, config = {}) {
@@ -106,6 +105,7 @@ export let Shader = class {
     }
 
     compile() {
+        console.log("Compilling", this.name, "...");
         this.program = initShaderProgram(
             this.gl, this.vertexCode, this.fragmentCode);
 

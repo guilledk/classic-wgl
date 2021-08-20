@@ -37,6 +37,20 @@
             ]
         },
         {
+            "name": "imageSheet",
+            "vertex": "/shaders/direct_tex.vert",
+            "fragment": "/shaders/sheet.frag",
+            "attr": ["vertexPos", "texCoord"],
+            "unif": [
+                "modelMatrix", 
+                "cameraMatrix",
+                "projectionMatrix",
+                "texSampler",
+                "tileIdFlat",
+                "tileSetSize"
+            ]
+        },
+        {
             "name": "isoTilemap",
             "vertex": "/shaders/iso_tilemap.vert",
             "fragment": "/shaders/iso_tilemap.frag",
@@ -67,6 +81,10 @@
         {
             "name": "cursor",
             "src": "/res/cursor.png"
+        },
+        {
+            "name": "font",
+            "src": "/res/font.png"
         }
     ]
 }

@@ -1,6 +1,6 @@
 import {
     Buffer, Texture,
-    addEvent,
+    getVideoCardInfo,
     fetchFile, fetchObject, loadImage,
     deleteLoaderLabel,
     initShaders,
@@ -11,8 +11,7 @@ import {
     getNoiseRange
 } from '/utils.js';
 
-import { mat4, vec3 } from '/lib/gl-matrix/index.js';
-
+import { mat4, vec3, vec2 } from '/lib/gl-matrix/index.js';
 
 var running = false;
 var projectionMatrix = mat4.create();
@@ -23,7 +22,7 @@ var shaders;
 var buffers;
 var textures;
 
-var canvas;
+var canvas = document.getElementById('glCanvas');
 var gl;
 
 
@@ -117,64 +116,73 @@ class Rectangle extends Transform {
 
 class Sprite extends Transform {
     constructor(
-        position, scale, texture, ignoreCam = false
+        position, scale, texture, ignoreCam
     ) {
         super(position, scale);
         this.texture = texture;
         this.ignoreCam = ignoreCam;
+        this.frame = 0;
+        this.tileSetSize = [1, 1];
     }
 
     draw() {
         // Verts
         buffers.quad.verts.bind();
         gl.vertexAttribPointer(
-            shaders.image.attr.vertexPos,
+            shaders.imageSheet.attr.vertexPos,
             3,         // num of values to pull from array per iteration
             gl.FLOAT,  // type
             false,     // normalize,
             0,         // stride
             0);        // start offset
         gl.enableVertexAttribArray(
-            shaders.image.attr.vertexPos);
+            shaders.imageSheet.attr.vertexPos);
 
         // UVs
         buffers.quad.uvs.bind();
         gl.vertexAttribPointer(
-            shaders.image.attr.texCoord,
+            shaders.imageSheet.attr.texCoord,
             2,         // num of values to pull from array per iteration
             gl.FLOAT,  // type
             false,     // normalize,
             0,         // stride
             0);        // start offset
-        gl.enableVertexAttribArray(shaders.image.attr.texCoord);
+        gl.enableVertexAttribArray(shaders.imageSheet.attr.texCoord);
         
         // Indices
         buffers.quad.indices.bind();
 
-        shaders.image.bind();
+        shaders.imageSheet.bind();
 
         this.texture.bind(gl.TEXTURE0);
 
-        gl.uniform1i(shaders.image.unif.texSampler, 0);
+        gl.uniform1i(shaders.imageSheet.unif.texSampler, 0);
         gl.uniformMatrix4fv(
-            shaders.image.unif.projectionMatrix,
+            shaders.imageSheet.unif.projectionMatrix,
             false,
             projectionMatrix);
         if (!this.ignoreCam)
             gl.uniformMatrix4fv(
-                shaders.image.unif.cameraMatrix,
+                shaders.imageSheet.unif.cameraMatrix,
                 false,
                 camera.matrix());
         else
             gl.uniformMatrix4fv(
-                shaders.image.unif.cameraMatrix,
+                shaders.imageSheet.unif.cameraMatrix,
                 false,
                 mat4.create());
 
         gl.uniformMatrix4fv(
-            shaders.image.unif.modelMatrix,
+            shaders.imageSheet.unif.modelMatrix,
             false,
             this.modelMatrix());
+
+        gl.uniform1f(
+            shaders.imageSheet.unif.tileIdFlat,
+            this.frame);
+        gl.uniform2fv(
+            shaders.imageSheet.unif.tileSetSize,
+            this.tileSetSize);
 
         gl.drawElements(
             gl.TRIANGLES,
@@ -190,7 +198,7 @@ class Tilemap extends Transform {
         position, scale,
         sizeX, sizeY,
         mapTileSize,
-        tileSet, tilePixelSize
+        tileSet, tilePixelSize, maxTile
     ) {
         super(position, scale);
         this.sizeX = sizeX;
@@ -205,8 +213,7 @@ class Tilemap extends Transform {
             this.tileSet.image.width / tilePixelSize[0],
             this.tileSet.image.height / tilePixelSize[1]
         ];
-
-        const maxTile = this.tileSetSize[0] * this.tileSetSize[1];
+        this.maxTile = maxTile;
 
         this.data = Array(sizeX * sizeY);
         for (let y = 0; y < this.sizeY; y++)
@@ -214,8 +221,6 @@ class Tilemap extends Transform {
                 this.data[x + (sizeX * y)] = Math.floor(
                     getNoiseRange(x, y, 0, maxTile));
         
-        console.log(this);
-
         this.mapDataTexture = null;
     }
 
@@ -322,8 +327,276 @@ class Tilemap extends Transform {
 };
 
 
+class Text extends Transform {
+    constructor(
+        position, scale, textureFont,
+        maxCharSize, fontSize, glyphSize, glyphStr,
+        color,
+        ignoreCam 
+    ) {
+        super(position, scale);
+        this.textureFont = textureFont;
+        this.ignoreCam = ignoreCam;
+
+        // max number of rows and columns of chars
+        this.maxCharSize = maxCharSize;
+
+        // number of glyphs in sheet
+        this.fontSize = fontSize;
+        // gylph size in pixels
+        this.glyphSize = glyphSize;
+        this.glyphStr = glyphStr;
+
+        this.cursorPos = vec2.create();
+        this.text = "";
+        this.color = color;
+
+        // init target texture
+        this.targetTextureWidth = glyphSize[0] * maxCharSize[0];
+        this.targetTextureHeight = glyphSize[1] * maxCharSize[1];
+
+        this.internalProjMatrix = mat4.create();
+        mat4.ortho(
+            this.internalProjMatrix,
+            0,  // left
+            this.targetTextureWidth,   // right
+            0,      // bottom
+            this.targetTextureHeight,  // top
+            0,      // near
+            10000); // far
+
+        this.targetTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.targetTexture);
+        gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,        // mipmap levels
+            gl.RGBA,  // internal format
+            this.targetTextureWidth,
+            this.targetTextureHeight,
+            0,                 // border
+            gl.RGBA,           // source format,
+            gl.UNSIGNED_BYTE,  // buffer type
+            null);             // data pointer
+        
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        this.frameBuffer = gl.createFramebuffer();
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+        gl.framebufferTexture2D(
+            gl.FRAMEBUFFER,
+            gl.COLOR_ATTACHMENT0,  // attatchment point
+            gl.TEXTURE_2D,
+            this.targetTexture,
+            0);  // level
+    }
+
+    modelMatrix() {
+        var modelMatrix = mat4.create();
+        var scale = vec3.clone(this.scale);
+        scale[0] *= this.maxCharSize[0] * this.glyphSize[0];
+        scale[1] *= this.maxCharSize[1] * this.glyphSize[1];
+        mat4.translate(
+            modelMatrix, modelMatrix, this.position);
+        mat4.scale(
+            modelMatrix, modelMatrix, scale);
+        return modelMatrix;
+    }
+
+    getChrIndex(chr) {
+        for (var i = 0; i < this.glyphStr.length; i++)
+            if (this.glyphStr[i] === chr)
+                return i;
+        return -1;
+    }
+
+    advanceCursor() {
+        this.cursorPos[0] += this.glyphSize[0];
+        if (this.cursorPos[0] >= (this.maxCharSize[0] * this.glyphSize[0])) {
+            this.cursorPos[0] = 0;
+            this.cursorPos[1] += this.glyphSize[1];
+        }
+
+        if (this.cursorPos[1] >= (this.maxCharSize[1] * this.glyphSize[1]))
+            this.cursorPos[1] = 0;
+    }
+
+    appendText(str) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.viewport(0, 0, this.targetTextureWidth, this.targetTextureHeight);
+        for (const chr of str) {
+            const glyphIndex = this.getChrIndex(chr);
+            if (glyphIndex < 0)
+                if (chr === " ") {
+                    this.advanceCursor();
+                    continue;
+                } else
+                    throw "Char \'" + chr + "\' not in font glyph string";
+
+            var modelMatrix = mat4.create();
+            mat4.translate(
+                modelMatrix, modelMatrix,
+                [this.cursorPos[0], this.cursorPos[1], 0]);
+            mat4.scale(
+                modelMatrix, modelMatrix,
+                [this.glyphSize[0], this.glyphSize[1], 1]);
+
+            // Verts
+            buffers.quad.verts.bind();
+            gl.vertexAttribPointer(
+                shaders.imageSheet.attr.vertexPos,
+                3,         // num of values to pull from array per iteration
+                gl.FLOAT,  // type
+                false,     // normalize,
+                0,         // stride
+                0);        // start offset
+            gl.enableVertexAttribArray(
+                shaders.imageSheet.attr.vertexPos);
+
+            // UVs
+            buffers.quad.uvs.bind();
+            gl.vertexAttribPointer(
+                shaders.imageSheet.attr.texCoord,
+                2,         // num of values to pull from array per iteration
+                gl.FLOAT,  // type
+                false,     // normalize,
+                0,         // stride
+                0);        // start offset
+            gl.enableVertexAttribArray(shaders.imageSheet.attr.texCoord);
+            
+            // Indices
+            buffers.quad.indices.bind();
+
+            shaders.imageSheet.bind();
+
+            this.textureFont.bind(gl.TEXTURE0);
+
+            gl.uniform1i(shaders.imageSheet.unif.texSampler, 0);
+            gl.uniformMatrix4fv(
+                shaders.imageSheet.unif.projectionMatrix,
+                false,
+                this.internalProjMatrix);
+            if (!this.ignoreCam)
+                gl.uniformMatrix4fv(
+                    shaders.imageSheet.unif.cameraMatrix,
+                    false,
+                    camera.matrix());
+            else
+                gl.uniformMatrix4fv(
+                    shaders.imageSheet.unif.cameraMatrix,
+                    false,
+                    mat4.create());
+
+            gl.uniformMatrix4fv(
+                shaders.imageSheet.unif.modelMatrix,
+                false,
+                modelMatrix);
+
+            gl.uniform1f(
+                shaders.imageSheet.unif.tileIdFlat,
+                glyphIndex);
+            gl.uniform2fv(
+                shaders.imageSheet.unif.tileSetSize,
+                this.fontSize);
+
+            gl.drawElements(
+                gl.TRIANGLES,
+                6,                  // vertex count
+                gl.UNSIGNED_SHORT,  // type
+                0);                 // start offset
+            
+            this.advanceCursor();
+        }
+    }
+
+    setText(str) {
+        this.cursorPos = [0, 0];
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.frameBuffer);
+        gl.clearColor(0.0, 0.0, 0.0, 0.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        this.appendText(str);
+    }
+
+    draw() {
+
+        // Verts
+        buffers.quad.verts.bind();
+        gl.vertexAttribPointer(
+            shaders.imageColorize.attr.vertexPos,
+            3,         // num of values to pull from array per iteration
+            gl.FLOAT,  // type
+            false,     // normalize,
+            0,         // stride
+            0);        // start offset
+        gl.enableVertexAttribArray(
+            shaders.imageColorize.attr.vertexPos);
+
+        // UVs
+        buffers.quad.uvs.bind();
+        gl.vertexAttribPointer(
+            shaders.imageColorize.attr.texCoord,
+            2,         // num of values to pull from array per iteration
+            gl.FLOAT,  // type
+            false,     // normalize,
+            0,         // stride
+            0);        // start offset
+        gl.enableVertexAttribArray(shaders.imageColorize.attr.texCoord);
+        
+        // Indices
+        buffers.quad.indices.bind();
+
+        shaders.imageColorize.bind();
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.targetTexture);
+
+        gl.uniform1i(shaders.imageColorize.unif.texSampler, 0);
+        gl.uniformMatrix4fv(
+            shaders.imageColorize.unif.projectionMatrix,
+            false,
+            projectionMatrix);
+        if (!this.ignoreCam)
+            gl.uniformMatrix4fv(
+                shaders.imageColorize.unif.cameraMatrix,
+                false,
+                camera.matrix());
+        else
+            gl.uniformMatrix4fv(
+                shaders.imageColorize.unif.cameraMatrix,
+                false,
+                mat4.create());
+
+        gl.uniformMatrix4fv(
+            shaders.imageColorize.unif.modelMatrix,
+            false,
+            this.modelMatrix());
+
+        gl.uniform4fv(
+            shaders.imageColorize.unif.color, this.color);
+
+        gl.drawElements(
+            gl.TRIANGLES,
+            6,                  // vertex count
+            gl.UNSIGNED_SHORT,  // type
+            0);                 // start offset
+
+        this.advanceCursor();
+    }
+
+};
+
+
 var tileMap;
 var cursor;
+var counter = 0;
+
+var font;
+var fpsCounter;
 
 var mouseAxis = vec3.fromValues(0, 0, 0);
 var mousePos = vec3.fromValues(-1, -1, 0);
@@ -336,10 +609,10 @@ function loop(now) {
 
     now /= 1000;
     deltaTime = now - prevTime;
-    const fps = 1 / deltaTime;
-    // console.log(fps);
+    counter += deltaTime;
+    const fps = Math.floor(1 / deltaTime);
+    fpsCounter.setText(fps.toString());
     
-
     if (vec3.length(mouseAxis) > scrollDeadZone) {
 
         const absAxisX = Math.abs(mouseAxis[0]);
@@ -370,7 +643,8 @@ function loop(now) {
             scrollDelta);
     }
 
-
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
@@ -378,6 +652,8 @@ function loop(now) {
 
     tileMap.draw();
     cursor.draw();
+    fpsCounter.draw();
+    font.draw();
 
     prevTime = now;
     requestAnimationFrame(loop);
@@ -394,7 +670,6 @@ function resizeCanvas() {
         window.innerHeight || 0
     )
 
-    canvas = document.getElementById('glCanvas');
     canvas.width = vw;
     canvas.height = vh;
 
@@ -405,22 +680,23 @@ function resizeCanvas() {
     mat4.ortho(
         projectionMatrix,
         0, right, bottom, 0, 0, far);
+
 }
 
 async function initContext() {
-    resizeCanvas()
-    window.addEventListener("keypress", keyPressHandler, false);
     canvas.addEventListener("click", mouseClickHandler, false);
-    document.addEventListener('pointerlockchange', lockChangeAlert, false);
-    function lockChangeAlert() {
-        if(document.pointerLockElement === canvas) {
-            console.log('The pointer lock status is now locked');
-            canvas.addEventListener("mousemove", mouseMoveHandler, false);
-        } else {
-            console.log('The pointer lock status is now unlocked');  
-            canvas.removeEventListener("mousemove", mouseMoveHandler, false);
-        }
-    }
+    document.addEventListener(
+        "pointerlockchange",
+        function () {
+            if(document.pointerLockElement === canvas) {
+                window.addEventListener("keypress", keyPressHandler, false);
+                canvas.addEventListener("mousemove", mouseMoveHandler, false);
+            } else {
+                canvas.removeEventListener("mousemove", mouseMoveHandler, false);
+                window.removeEventListener("keypress", keyPressHandler, false);
+            }
+        }, false);
+
     gl = canvas.getContext("webgl", {
         desynchronized: true,
         preserveDrawingBuffer: true
@@ -432,8 +708,9 @@ async function initContext() {
         return;
     }
 
-    var vertCode = await fetchFile('/shaders/direct.vert');
-    var fragCode = await fetchFile('/shaders/image.frag');
+    resizeCanvas()
+
+    console.log(getVideoCardInfo(gl));
 
     manifest = await fetchObject('/manifest.json', {cache: "no-store"});
 
@@ -444,12 +721,38 @@ async function initContext() {
     textures = await initTextures(gl, manifest.textures);
 
     tileMap = new Tilemap(
-        [0, 0, 0], [4, 4, 1],
-        1000, 1000, [16, 16],
-        textures.tileSet, [16, 16]);
+        [0, 0, -100], [1, 1, 1],
+        1000, 1000,  // size in tiles
+        [64, 64],    // map pixel size
+        textures.tileSet,
+        [16, 16],    // tileset tile pixel size
+        6);          // max tile flat id
     tileMap.uploadToGPU();
 
     cursor = new Sprite([0, 0, 0], [32, 32, 1], textures.cursor, true);
+
+    fpsCounter = new Text(
+        [0, 0, 0], [1, 1, 1],
+        textures.font,
+        [10, 3],  // max char size
+        [16, 16],   // font size
+        [32, 32],   // glyph pixel size
+        // glyph str
+        "!\"#$%&\'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~",
+        [1, 1, 1, 1],  // color
+        true);     // ignore cam
+
+    font = new Text(
+        [100, 0, 0], [.8, .8, 1],
+        textures.font,
+        [24, 1],  // max char size
+        [16, 16],   // font size
+        [32, 32],   // glyph pixel size
+        // glyph str
+        "!\"#$%&\'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~",
+        [0.03,0.02,0.27, 1],  // color
+        true);     // ignore cam
+    font.setText("CLASSIC ENGINE V0.1A0 ;)");
 
     deleteLoaderLabel()
 
@@ -457,7 +760,7 @@ async function initContext() {
 }
 
 window.addEventListener("load", initContext, false);
-//addEvent(window, 'resize', resizeCanvas);
+window.addEventListener("resize", resizeCanvas, false);
 
 function mouseClickHandler(event) {
 
@@ -476,7 +779,7 @@ function mouseMoveHandler(event) {
     if (mousePos[1] == -1)
         mousePos[1] = event.pageY;
 
-    mousePos[0] += event.movementX;
+    mousePos[0] += event.movementX + 2;
     mousePos[1] += event.movementY;
 
     if (mousePos[0] < 0)
@@ -508,11 +811,8 @@ function mouseMoveHandler(event) {
 
 
 function keyPressHandler(event) {
-    console.log(event);
-
-    if (event.key === ',')
+    if (event.key === ',' && camera.scale[0] > 0.2)
         vec3.add(camera.scale, camera.scale, [-0.1, -0.1, 0]);
     if (event.key === '.')
         vec3.add(camera.scale, camera.scale, [0.1, 0.1, 0]);
 }
-

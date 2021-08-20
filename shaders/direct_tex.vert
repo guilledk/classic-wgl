@@ -5,7 +5,7 @@ uniform mat4 modelMatrix;
 uniform mat4 cameraMatrix;
 uniform mat4 projectionMatrix;
 
-varying highp vec2 vTexCoord;
+varying mediump vec2 vTexCoord;
 
 void main(void) {
     gl_Position = projectionMatrix * cameraMatrix * modelMatrix * vertexPos;

@@ -1,3 +1,5 @@
+precision mediump float;
+
 attribute vec4 vertexPos;
 attribute vec2 mapCoord;
 
@@ -11,7 +13,7 @@ uniform vec2 mapSize;
 
 uniform vec2 tilePixelSize;
 
-varying highp vec2 vMapCoord;
+varying mediump vec2 vMapCoord;
 
 void main(void) {
     vec2 tileScaling = mapSize * (mapTileSize / tilePixelSize);
