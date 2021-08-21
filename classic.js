@@ -8,10 +8,11 @@ import {
     initTextures,
     loadTexture,
     isoToCartesian4,
+    cartesianToIso4,
     getNoiseRange
 } from '/utils.js';
 
-import { mat4, vec3, vec2 } from '/lib/gl-matrix/index.js';
+import { mat4, vec4, vec3, vec2 } from '/lib/gl-matrix/index.js';
 
 var running = false;
 var projectionMatrix = mat4.create();
@@ -46,7 +47,7 @@ let Camera = class {
     }
 };
 
-var camera = new Camera([3000, 500, 0], [0.1, 0.1, 1]);
+var camera = new Camera([3000, 0, 0], [0.3, 0.3, 1]);
 
 let Transform = class {
     constructor(
@@ -214,6 +215,10 @@ class Tilemap extends Transform {
             this.tileSet.image.height / tilePixelSize[1]
         ];
         this.maxTile = maxTile;
+        this.tileRatio = [
+            mapTileSize[0] / tilePixelSize[0],
+            mapTileSize[1] / tilePixelSize[1],
+        ]
 
         this.data = Array(sizeX * sizeY);
         for (let y = 0; y < this.sizeY; y++)
@@ -317,6 +322,19 @@ class Tilemap extends Transform {
             shaders.isoTilemap.unif.mapSize, this.mapSize);
         gl.uniform2fv(
             shaders.isoTilemap.unif.mapTileSize, this.mapTileSize);
+
+        gl.uniform2fv(
+            shaders.isoTilemap.unif.selectedTile,
+            [mouseIsoPos[0] / this.tileRatio[0] / camera.scale[0],
+            mouseIsoPos[1] / this.tileRatio[1] / camera.scale[1]]);
+
+        gl.uniform2fv(
+            shaders.isoTilemap.unif.selectionBegin,
+            [selectionBegin[0] / this.tileRatio[0] / camera.scale[0],
+            selectionBegin[1] / this.tileRatio[1] / camera.scale[1]]);
+    
+        gl.uniform1i(shaders.isoTilemap.unif.selectionMode, selectionMode);
+        gl.uniform4fv(shaders.isoTilemap.unif.selectionColor, selectionColor);
 
         gl.drawElements(
             gl.TRIANGLES,
@@ -600,6 +618,12 @@ var fpsCounter;
 
 var mouseAxis = vec3.fromValues(0, 0, 0);
 var mousePos = vec3.fromValues(-1, -1, 0);
+var mouseIsoPos = vec3.fromValues(-1, -1, 0);
+
+var selectionBegin = vec3.fromValues(-1, -1, -1);
+var selectionMode = -1;
+var selectionColor = [0, 1, 1, 1];
+
 var scrollSpeed = 600;
 var scrollDeadZone = .8;
 
@@ -691,8 +715,12 @@ async function initContext() {
             if(document.pointerLockElement === canvas) {
                 window.addEventListener("keypress", keyPressHandler, false);
                 canvas.addEventListener("mousemove", mouseMoveHandler, false);
+                canvas.addEventListener("mousedown", mouseDownHandler, false);
+                canvas.addEventListener("mouseup", mouseUpHandler, false);
             } else {
                 canvas.removeEventListener("mousemove", mouseMoveHandler, false);
+                canvas.removeEventListener("mousedown", mouseDownHandler, false);
+                canvas.removeEventListener("mouseup", mouseUpHandler, false);
                 window.removeEventListener("keypress", keyPressHandler, false);
             }
         }, false);
@@ -726,7 +754,7 @@ async function initContext() {
         [64, 64],    // map pixel size
         textures.tileSet,
         [16, 16],    // tileset tile pixel size
-        6);          // max tile flat id
+        10);          // max tile flat id
     tileMap.uploadToGPU();
 
     cursor = new Sprite([0, 0, 0], [32, 32, 1], textures.cursor, true);
@@ -750,7 +778,7 @@ async function initContext() {
         [32, 32],   // glyph pixel size
         // glyph str
         "!\"#$%&\'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~",
-        [0.03,0.02,0.27, 1],  // color
+        [1.00,0.53,0.30, 1],  // color
         true);     // ignore cam
     font.setText("CLASSIC ENGINE V0.1A0 ;)");
 
@@ -762,24 +790,38 @@ async function initContext() {
 window.addEventListener("load", initContext, false);
 window.addEventListener("resize", resizeCanvas, false);
 
+function mouseUpHandler(event) {
+    selectionMode = -1;
+}
+
+function mouseDownHandler(event) {
+    if (mousePos[0] == -1)
+        return;
+
+    selectionMode = 1;
+
+    vec3.copy(selectionBegin, mouseIsoPos);
+}
+
 function mouseClickHandler(event) {
 
     canvas.requestPointerLock = canvas.requestPointerLock ||
         canvas.mozRequestPointerLock ||
         canvas.webkitRequestPointerLock;
     canvas.requestPointerLock();
-
-}
-
-
-function mouseMoveHandler(event) {
-
     if (mousePos[0] == -1)
         mousePos[0] = event.pageX;
     if (mousePos[1] == -1)
         mousePos[1] = event.pageY;
 
-    mousePos[0] += event.movementX + 2;
+}
+var isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+
+function mouseMoveHandler(event) {
+
+    mousePos[0] += event.movementX;
+    if (isFirefox)
+        mousePos[0] += 2;
     mousePos[1] += event.movementY;
 
     if (mousePos[0] < 0)
@@ -791,6 +833,10 @@ function mouseMoveHandler(event) {
         mousePos[1] = 0;
     if (mousePos[1] > canvas.height)
         mousePos[1] = canvas.height;
+
+    var mouseGlobal = vec3.clone(mousePos);
+    vec3.add(mouseGlobal, mouseGlobal, camera.position);
+    vec3.transformMat4(mouseIsoPos, mouseGlobal, cartesianToIso4);
 
     vec3.copy(cursor.position, mousePos);
 
@@ -811,8 +857,8 @@ function mouseMoveHandler(event) {
 
 
 function keyPressHandler(event) {
-    if (event.key === ',' && camera.scale[0] > 0.2)
-        vec3.add(camera.scale, camera.scale, [-0.1, -0.1, 0]);
+    if (event.key === ',' && camera.scale[0] > 0.02)
+        vec3.add(camera.scale, camera.scale, [-0.01, -0.01, 0]);
     if (event.key === '.')
-        vec3.add(camera.scale, camera.scale, [0.1, 0.1, 0]);
+        vec3.add(camera.scale, camera.scale, [0.01, 0.01, 0]);
 }

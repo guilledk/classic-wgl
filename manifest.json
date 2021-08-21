@@ -65,7 +65,11 @@
                 "mapTileSize",
                 "tileSet",
                 "tileSetSize",
-                "tilePixelSize"
+                "tilePixelSize",
+                "selectedTile",
+                "selectionBegin",
+                "selectionMode",
+                "selectionColor"
             ]
         }
     ],

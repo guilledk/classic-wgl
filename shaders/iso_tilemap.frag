@@ -9,6 +9,11 @@ uniform sampler2D tileSet;
 uniform vec2 tileSetSize;
 uniform vec2 tilePixelSize;
 
+uniform vec2 selectedTile;
+uniform vec2 selectionBegin;
+uniform vec4 selectionColor;
+uniform int selectionMode;
+
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture2D(mapData, pos);
@@ -28,8 +33,36 @@ vec4 getTilePixel(float tileIdFlat, vec2 mapCoord) {
     vec2 localTileCoord = fract(
         mapCoord / mapTileNormalSize) * setNormalSize;
 
-    return texture2D(tileSet, tileCornerNorm + localTileCoord);
+    vec4 texColor = texture2D(tileSet, tileCornerNorm + localTileCoord);
+    
+    if (selectionMode != -1) {
+        vec2 selectedNormalStart = floor(min(selectionBegin, selectedTile)) * mapTileNormalSize;
+        vec2 selectedNormalEnd = ceil(max(selectionBegin, selectedTile)) * mapTileNormalSize;
 
+        bvec2 selectStart = greaterThanEqual(mapCoord, selectedNormalStart);
+        bvec2 selectEnd = lessThanEqual(mapCoord, selectedNormalEnd);
+
+        if (all(selectStart) && all(selectEnd)) {
+            if (selectionMode == 0)  // invert
+                return vec4(
+                    1.0 - texColor.r,
+                    1.0 - texColor.g,
+                    1.0 - texColor.b,
+                    1.0);
+
+            if (selectionMode == 1)  {  // colorized
+                float average = (texColor.r + texColor.g + texColor.b) / 3.0;
+                return vec4(average, average, average, texColor.a) * selectionColor;
+            }
+                
+            if (selectionMode == 2) {  // grayscale
+                float average = (texColor.r + texColor.g + texColor.b) / 3.0;
+                return vec4(average, average, average, texColor.a);
+            }
+        }
+    }
+    
+    return texColor;
 }
 
 void main(void) {

@@ -360,7 +360,7 @@ console.assert(
  */
 import '/lib/simplex-noise.js';
 
-const factor = 30.0;
+const factor = 50.0;
 
 export const noiseGen = new window.SimplexNoise();
 
