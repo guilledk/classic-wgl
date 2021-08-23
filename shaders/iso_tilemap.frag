@@ -54,11 +54,6 @@ vec4 getTilePixel(float tileIdFlat, vec2 mapCoord) {
                 float average = (texColor.r + texColor.g + texColor.b) / 3.0;
                 return vec4(average, average, average, texColor.a) * selectionColor;
             }
-                
-            if (selectionMode == 2) {  // grayscale
-                float average = (texColor.r + texColor.g + texColor.b) / 3.0;
-                return vec4(average, average, average, texColor.a);
-            }
         }
     }
     

@@ -100,8 +100,8 @@ export let Shader = class {
     }
 
     async fetchCode() {
-        this.vertexCode = await fetchFile(this.vertexSrc, {cache: 'no-store'});
-        this.fragmentCode = await fetchFile(this.fragmentSrc, {cache: 'no-store'});
+        this.vertexCode = await fetchFile(this.vertexSrc);
+        this.fragmentCode = await fetchFile(this.fragmentSrc);
     }
 
     compile() {
