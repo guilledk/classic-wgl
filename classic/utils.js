@@ -1,3 +1,12 @@
+export function getObjectValues(obj) {
+    let l = [];
+    for (let key in obj)
+        l.push(obj[key]);
+
+    return l;
+}
+
+
 export function getVideoCardInfo(gl) {
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
     return debugInfo ? {
@@ -281,6 +290,31 @@ export async function initTextures(gl, textureManifest) {
     }
      
     return textures;
+}
+
+
+/*
+ *  Animations
+ */
+
+export let Animation = class {
+    constructor(name, src, rate, sequence) {
+        this.name = name;
+        this.src = src;
+        this.rate = rate;
+        this.sequence = sequence;
+    }
+};
+
+export function initAnimations(animationManifest) {
+    var animations = {};
+    
+    for (const anim of animationManifest) {
+        animations[anim.name] = new Animation(
+            anim.name, anim.src, anim.rate, anim.sequence);
+    }
+
+    return animations;
 }
 
 

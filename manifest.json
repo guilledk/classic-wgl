@@ -80,7 +80,7 @@
         },
         {
             "name": "tileSet",
-            "src": "/res/tileset.png"
+            "src": "/res/road_tileset.png"
         },
         {
             "name": "cursor",
@@ -89,6 +89,108 @@
         {
             "name": "font",
             "src": "/res/font.png"
+        },
+        {
+            "name": "humanoid",
+            "src": "/res/humanoid.png"
+        },
+        {
+            "name": "semaphore01",
+            "src": "/res/semaphore01.png"
+        },
+        {
+            "name": "semaphore02",
+            "src": "/res/semaphore02.png"
+        }
+    ],
+    "animations": [
+        {
+            "name": "walkNorth",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                0, 1, 2, 3, 4,
+                5, 6, 7, 8, 9,
+                10, 11, 12, 13, 14,
+                15, 16, 17, 18, 19
+            ]
+        },
+        {
+            "name": "walkNorthWest",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                32, 33, 34, 35, 36, 
+                37, 38, 39, 40, 41,
+                42, 43, 44, 45, 46,
+                47, 48, 49, 50, 51
+            ]
+        },
+        {
+            "name": "walkWest",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                64, 65, 66, 67, 68,
+                69, 70, 71, 72, 73,
+                74, 75, 76, 77, 78,
+                79, 80, 81, 82, 83
+            ]
+        },
+        {
+            "name": "walkSouthWest",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                96, 97, 98, 99, 100,
+                101, 102, 103, 104, 105,
+                106, 107, 108, 109, 110,
+                111, 112, 113, 114, 115
+            ]
+        },
+        {
+            "name": "walkSouth",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                128, 129, 130, 131, 132,
+                133, 134, 135, 136, 137,
+                138, 139, 140, 141, 142,
+                143, 144, 145, 146, 147
+            ]
+        },
+        {
+            "name": "walkSouthEast",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                160, 161, 162, 163, 164,
+                165, 166, 167, 168, 169,
+                170, 171, 172, 173, 174,
+                175, 176, 177, 178, 179
+            ]
+        },
+        {
+            "name": "walkEast",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                192, 193, 194, 195, 196,
+                197, 198, 199, 200, 201,
+                202, 203, 204, 205, 206,
+                207, 208, 209, 210, 211
+            ]
+        },
+        {
+            "name": "walkNorthEast",
+            "src": "humanoid",
+            "rate": 24,
+            "sequence": [
+                224, 225, 226, 227, 228,
+                229, 230, 231, 232, 233,
+                234, 235, 236, 237, 238,
+                239, 240, 241, 242, 243
+            ]
         }
     ]
 }

@@ -1,12 +1,14 @@
 import { Camera } from "/classic/camera.js";
 import { mat4, vec3 } from "/lib/gl-matrix/index.js";
 import {
+    getObjectValues,
     getVideoCardInfo,
     fetchFile, fetchObject, loadImage,
     deleteLoaderLabel,
     initShaders,
     initBuffers,
     initTextures,
+    initAnimations,
     loadTexture,
     cartesianToIso4
 } from '/classic/utils.js';
@@ -19,11 +21,13 @@ export default {
     projectionMatrix: mat4.create(),
     calls: {},
     nextEntityId: 0,
+    nameToId: {},
 
     manifest: {},
     shaders: {},
     buffers: {},
     textures: {},
+    animations: {},
 
     entities: {},
 
@@ -38,7 +42,16 @@ export default {
     mouseIsoPos: vec3.fromValues(-1, -1, 0),
     mouseWheel: 0,
 
+    mouseDown: {},
+    mousePressed: {},
+    mouseReleased: {},
+
+    keysDown: {},
+    keysPressed: {},
+    keysReleased: {},
+
     selectionBegin: vec3.fromValues(-1, -1, -1),
+    selectionEnd: vec3.fromValues(-1, -1, -1),
     selectionMode: -1,
     selectionColor: [0, 1, 1, 1],
 
@@ -82,6 +95,60 @@ export default {
 
     },
 
+    getTexture(name) {
+        return this.textures[name];
+    },
+
+    download(url) {
+        const entities = {};
+        for (let entityId in this.entities) {
+            const entity = this.entities[entityId];
+            let components = [];
+            for (let component of entity.components)
+                components.push(component.dump());
+
+            entities[entity.name] = {
+                components: components
+            }
+        }
+
+        const minState = {
+            entities: entities
+        };
+
+        let link = document.createElement('a');
+        link.download = url;
+
+        const blob = new Blob(
+            [JSON.stringify(minState)],
+            {type: "text/plain;charset=utf-8"});
+
+        link.href = URL.createObjectURL(blob);
+
+        link.click();
+
+        URL.revokeObjectURL(link.href);
+    },
+
+    async load(url) {
+        const state = await fetchObject(url);
+
+        for (let entityName in state.entities) {
+            const entity = state.entities[entityName];
+            const instance = this.spawnEntity(entityName);
+
+            // TODO: sanitize evals
+            for (let component of entity.components) {
+                let args = getObjectValues(component);
+
+                args.splice(args.indexOf(component.type), 1);
+                instance.addComponent(
+                    eval("window.gameClasses." + component.type),
+                    ...args);
+            }
+        }
+    },
+
     registerCall(callName, entity, fn) {
         if (this.calls[callName] === undefined)
             this.calls[callName] = {};
@@ -106,9 +173,15 @@ export default {
 
     },
 
+    getEntity(name) {
+        return this.entities[this.nameToId[name]];
+    },
+
     spawnEntity(name) {
         var entity = new Entity(
             this, this.nextEntityId++, name);
+
+        this.nameToId[name] = entity.id;
 
         this.entities[entity.id] = entity;
         return entity;
@@ -118,6 +191,7 @@ export default {
         for (const callName of entity.callRegistry)
             delete this.calls[callName][entity.id];
 
+        delete this.nameToId[entity.name]
         delete this.entities[entity.id];
     },
 
@@ -141,7 +215,7 @@ export default {
             vw,    // right
             vh,    // bottom
             0,     // top
-            0,     // near
+            -10000,     // near
             10000);  // far
 
         this.camera.resize([vw, vh]);
@@ -149,7 +223,9 @@ export default {
 
     pushEventHandlers() {
         this.focused = true;
-        window.addEventListener("keypress", this.keyPressHandler.bind(this), false);
+        window.addEventListener("keydown", this.keyDownHandler.bind(this), false);
+        window.addEventListener("keyup", this.keyUpHandler.bind(this), false);
+
         this.canvas.addEventListener("mousemove", this.mouseMoveHandler.bind(this), false);
         this.canvas.addEventListener("mousedown", this.mouseDownHandler.bind(this), false);
         this.canvas.addEventListener("mouseup", this.mouseUpHandler.bind(this), false);
@@ -160,7 +236,9 @@ export default {
         this.canvas.removeEventListener("mousemove", this.mouseMoveHandler.bind(this), false);
         this.canvas.removeEventListener("mousedown", this.mouseDownHandler.bind(this), false);
         this.canvas.removeEventListener("mouseup", this.mouseUpHandler.bind(this), false);
-        window.removeEventListener("keypress", this.keyPressHandler.bind(this), false);
+
+        window.removeEventListener("keydown", this.keyDownHandler.bind(this), false);
+        window.removeEventListener("keyup", this.keyUpHandler.bind(this), false);
     },
 
     async loadResources() {
@@ -174,6 +252,8 @@ export default {
 
         this.textures = await initTextures(
             this.gl, this.manifest.textures);
+
+        this.animations = initAnimations(this.manifest.animations);
     },
 
     launch() {
@@ -194,45 +274,39 @@ export default {
         this.mouseWheel = Math.max(this.mouseWheel, -1);
         if (Math.abs(this.mouseWheel) < .01)
             this.mouseWheel = 0;
-        else {
-            this.camera.scale[0] += this.mouseWheel * this.deltaTime;
-            this.camera.scale[1] += this.mouseWheel * this.deltaTime;
 
-            vec3.max(this.camera.scale, this.camera.scale, [.01, .01, 1]);
-        }
+        // if (vec3.length(this.mouseAxis) > this.scrollDeadZone) {
 
-        if (vec3.length(this.mouseAxis) > this.scrollDeadZone) {
+        //     const absAxisX = Math.abs(this.mouseAxis[0]);
+        //     const absAxisY = Math.abs(this.mouseAxis[1]);
 
-            const absAxisX = Math.abs(this.mouseAxis[0]);
-            const absAxisY = Math.abs(this.mouseAxis[1]);
+        //     var scrollAxis = vec3.fromValues(
+        //         Math.min((absAxisX / 100) / -Math.log10(absAxisX), 1) * Math.sign(this.mouseAxis[0]),
+        //         Math.min((absAxisY / 100) / -Math.log10(absAxisY), 1) * Math.sign(this.mouseAxis[1]),
+        //         0);
 
-            var scrollAxis = vec3.fromValues(
-                Math.min((absAxisX / 100) / -Math.log10(absAxisX), 1) * Math.sign(this.mouseAxis[0]),
-                Math.min((absAxisY / 100) / -Math.log10(absAxisY), 1) * Math.sign(this.mouseAxis[1]),
-                0);
+        //     if (scrollAxis[0] > 1)
+        //         scrollAxis[0] = -1;
+        //     if (scrollAxis[1] > 1)
+        //         scrollAxis[1] = -1;
 
-            if (scrollAxis[0] > 1)
-                scrollAxis[0] = -1;
-            if (scrollAxis[1] > 1)
-                scrollAxis[1] = -1;
+        //     if (scrollAxis[0] < -1)
+        //         scrollAxis[0] = 1;
 
-            if (scrollAxis[0] < -1)
-                scrollAxis[0] = 1;
+        //     if (scrollAxis[1] < -1)
+        //         scrollAxis[1] = 1;
 
-            if (scrollAxis[1] < -1)
-                scrollAxis[1] = 1;
+        //     var scrollDelta = vec3.clone(scrollAxis);
+        //     vec3.scale(
+        //         scrollDelta,
+        //         scrollDelta,
+        //         this.scrollSpeed * this.deltaTime);
 
-            var scrollDelta = vec3.clone(scrollAxis);
-            vec3.scale(
-                scrollDelta,
-                scrollDelta,
-                this.scrollSpeed * this.deltaTime);
-
-            vec3.add(
-                this.camera.position,
-                this.camera.position,
-                scrollDelta);
-        }
+        //     vec3.add(
+        //         this.camera.position,
+        //         this.camera.position,
+        //         scrollDelta);
+        // }
 
         const gl = this.gl;
 
@@ -246,6 +320,8 @@ export default {
         this.performCall("draw"); 
 
         this.prevTime = now;
+        this.clearKeys();
+        this.clearMouseButtons();
         requestAnimationFrame(this.draw.bind(this));
     },
 
@@ -256,6 +332,31 @@ export default {
             this.pushEventHandlers();
         else
             this.popEventHandlers();
+    },
+
+    clearMouseButtons() {
+        this.mousePressed = {};
+        this.mouseReleased = {};
+    },
+
+    isMouseButtonDown(button) {
+        if (button in this.mouseDown)
+            return this.mouseDown[button];
+
+        return false;
+    },
+
+    wasMouseButtonPressed(button) {
+        if (button in this.mousePressed)
+            return this.mousePressed[button];
+
+        return false;
+    },
+    wasMouseButtonReleased(button) {
+        if (button in this.mouseReleased)
+            return this.mouseReleased[button];
+
+        return false;
     },
 
     mouseClickHandler(event) {
@@ -278,17 +379,53 @@ export default {
     },
 
     mouseUpHandler(event) {
-        this.selectionMode = -1;
+        this.mouseDown[event.button] = false;
+        this.mouseReleased[event.button] = true;
+
+        if (event.button == 0) {
+            this.selectionMode = -1;
+        
+            vec3.copy(this.selectionEnd, this.mouseIsoPos);
+            this.performCall("selectionEnd");
+        }
     },
 
     mouseDownHandler(event) {
+        this.mouseDown[event.button] = true;
+        this.mousePressed[event.button] = true;
+
         if (this.mousePos[0] == -1)
             return;
 
-        if (event.button == 0)
-            this.selectionMode = 0;
+        if (event.button == 0) {
+            this.selectionMode = 1;
 
-        vec3.copy(this.selectionBegin, this.mouseIsoPos);
+            vec3.copy(this.selectionBegin, this.mouseIsoPos);
+            this.performCall("selectionBegin");
+        }
+    },
+
+    mouseMoveHandler(event) {
+        let xFix = 0;
+        if (this.isFirefox)
+            xFix = 2;
+        this.mousePos[0] += ((event.movementX + xFix) * this.mouseSensibility);
+        this.mousePos[1] += (event.movementY * this.mouseSensibility);
+
+        if (this.mousePos[0] < 0)
+            this.mousePos[0] = 0;
+        if (this.mousePos[0] > this.canvas.width)
+            this.mousePos[0] = this.canvas.width;
+
+        if (this.mousePos[0] == -1)
+            return;
+
+        if (event.button == 0) {
+            this.selectionMode = 1;
+
+            vec3.copy(this.selectionBegin, this.mouseIsoPos);
+            this.performCall("selectionBegin");
+        }
     },
 
     mouseMoveHandler(event) {
@@ -309,13 +446,7 @@ export default {
             this.mousePos[1] = this.canvas.height;
 
         let mouseGlobal = vec3.clone(this.mousePos);
-        let camFixed = vec3.clone(this.camera.position);
-        camFixed[0] -= this.camera.size[0] / 2;
-        camFixed[1] -= this.camera.size[1] / 2;
-        vec3.add(
-            mouseGlobal,
-            mouseGlobal,
-            camFixed);
+        vec3.add(mouseGlobal, mouseGlobal, this.camera.getFix());
         vec3.transformMat4(this.mouseIsoPos, mouseGlobal, cartesianToIso4);
 
         this.mouseAxis[0] = ((this.mousePos[0] / this.canvas.width) - .5) * 2;
@@ -333,12 +464,39 @@ export default {
 
     },
 
-    keyPressHandler(event) {
-        console.log(event);
-        // if (event.key === ',' && camera.scale[0] > 0.02)
-        //     vec3.add(camera.scale, camera.scale, [-0.01, -0.01, 0]);
-        // if (event.key === '.')
-        //     vec3.add(camera.scale, camera.scale, [0.01, 0.01, 0]);
+    isKeyDown(code) {
+        if (code in this.keysDown)
+            return this.keysDown[code];
+
+        return false;
+    },
+
+    wasKeyPressed(code) {
+        if (code in this.keysPressed)
+            return this.keysPressed[code];
+
+        return false;
+    },
+    wasKeyReleased(code) {
+        if (code in this.keysReleased)
+            return this.keysReleased[code];
+
+        return false;
+    },
+
+    clearKeys() {
+        this.keysPressed = {};
+        this.keysReleased = {};
+    },
+
+    keyDownHandler(event) {
+        this.keysDown[event.code] = true;
+        this.keysPressed[event.code] = true;
+    },
+
+    keyUpHandler(event) {
+        this.keysDown[event.code] = false;
+        this.keysReleased[event.code] = true;
     }
     
 };

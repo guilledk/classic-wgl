@@ -1,4 +1,4 @@
-import { mat4 } from '/lib/gl-matrix/index.js';
+import { vec3, mat4 } from '/lib/gl-matrix/index.js';
 
 
 export let Camera = class {
@@ -10,6 +10,13 @@ export let Camera = class {
 
     resize(size) {
         this.size = size;
+    }
+
+    getFix() {
+        let camFixed = vec3.clone(this.position);
+        camFixed[0] -= this.size[0] / 2;
+        camFixed[1] -= this.size[1] / 2;
+        return camFixed;
     }
 
     matrix() {

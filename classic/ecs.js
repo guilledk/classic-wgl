@@ -4,6 +4,10 @@ export let Component = class {
         this.game = entity.game;
         this.gl = this.game.gl;
     }
+
+    dump() {
+        return { type: this.constructor.name };
+    }
 };
 
 export let Entity = class {
@@ -30,5 +34,13 @@ export let Entity = class {
         var component = new type(this, ...args);
         this.components.push(component);
         return component;
+    }
+
+    getComponent(type) {
+        for (let component of this.components)
+            if (component.constructor == type)
+                return component;
+
+        return null;
     }
 };

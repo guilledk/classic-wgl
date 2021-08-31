@@ -1,4 +1,3 @@
-import { getNoiseRange } from "/classic/utils.js";
 import { Component } from "/classic/ecs.js";
 import game from "/classic/state.js";
 
@@ -13,6 +12,13 @@ class Transform extends Component {
         super(entity);
         this.position = position;
         this.scale = scale;
+    }
+
+    dump() {
+        const minObj = super.dump();
+        minObj.position = this.position;
+        minObj.scale = this.scale;
+        return minObj;
     }
 
     modelMatrix() {
@@ -41,10 +47,18 @@ class Drawable extends Transform {
 
 class Rectangle extends Drawable {
     constructor(
-        entity, position, scale, color
+        entity, position, scale, color, ignoreCam
     ) {
         super(entity, position, scale);
         this.color = color;
+        this.ignoreCam = ignoreCam;
+    }
+
+    dump() {
+        const minObj = super.dump();
+        minObj.color = this.color;
+        minObj.ignoreCam = this.ignoreCam;
+        return minObj;
     }
 
     draw() {
@@ -68,10 +82,16 @@ class Rectangle extends Drawable {
             this.game.shaders.solid.unif.projectionMatrix,
             false,
             this.game.projectionMatrix);
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.solid.unif.cameraMatrix,
-            false,
-            this.game.camera.matrix());
+        if (!this.ignoreCam)
+            this.gl.uniformMatrix4fv(
+                this.game.shaders.solid.unif.cameraMatrix,
+                false,
+                this.game.camera.matrix());
+        else
+            this.gl.uniformMatrix4fv(
+                this.game.shaders.solid.unif.cameraMatrix,
+                false,
+                mat4.create());
         this.gl.uniformMatrix4fv(
             this.game.shaders.solid.unif.modelMatrix,
             false,
@@ -92,10 +112,40 @@ class Sprite extends Drawable {
         entity, position, scale, texture, ignoreCam
     ) {
         super(entity, position, scale);
-        this.texture = texture;
+        this.texture = this.game.getTexture(texture);
         this.ignoreCam = ignoreCam;
         this.frame = 0;
         this.tileSetSize = [1, 1];
+        this.anchor = [0, 0];
+    }
+
+    dump() {
+        const minObj = super.dump();
+        minObj.texture = this.texture.name;
+        minObj.ignoreCam = this.ignoreCam;
+        return minObj;
+    }
+
+    modelMatrix() {
+        var modelMatrix = mat4.create();
+        const texDimension = [
+            this.texture.image.width, this.texture.image.height];
+        const texAnchorDelta = [
+            texDimension[0] * this.anchor[0] * this.scale[0],
+            texDimension[1] * this.anchor[1] * this.scale[1]];
+        
+        var anchoredPos = vec3.clone(this.position);
+        anchoredPos[0] -= texAnchorDelta[0];
+        anchoredPos[1] -= texAnchorDelta[1];
+        mat4.translate(
+            modelMatrix, modelMatrix, anchoredPos);
+
+        var sizeInPixels = vec3.clone(this.scale);
+        sizeInPixels[0] *= texDimension[0];
+        sizeInPixels[1] *= texDimension[1];
+        mat4.scale(
+            modelMatrix, modelMatrix, sizeInPixels);
+        return modelMatrix;
     }
 
     draw() {
@@ -166,158 +216,6 @@ class Sprite extends Drawable {
 };
 
 
-class Tilemap extends Drawable {
-    constructor(
-        entity,
-        position, scale,
-        sizeX, sizeY,
-        mapTileSize,
-        tileSet, tilePixelSize, maxTile
-    ) {
-        super(entity, position, scale);
-        this.sizeX = sizeX;
-        this.sizeY = sizeY;
-
-        this.mapTileSize = mapTileSize;
-        this.mapSize = [sizeX, sizeY];
-
-        this.tileSet = tileSet;
-        this.tilePixelSize = tilePixelSize;
-        this.tileSetSize = [
-            this.tileSet.image.width / tilePixelSize[0],
-            this.tileSet.image.height / tilePixelSize[1]
-        ];
-        this.maxTile = maxTile;
-        this.tileRatio = [
-            mapTileSize[0] / tilePixelSize[0],
-            mapTileSize[1] / tilePixelSize[1],
-        ]
-
-        this.data = Array(sizeX * sizeY);
-        for (let y = 0; y < this.sizeY; y++)
-            for (let x = 0; x < this.sizeX; x++)
-                this.data[x + (sizeX * y)] = Math.floor(
-                    getNoiseRange(x, y, 0, maxTile));
-        
-        this.mapDataTexture = null;
-    }
-
-    uploadToGPU() {
-        if (this.mapDataTexture != null)
-            this.gl.deleteTexture(this.mapDataTexture);
-
-        var pixelData = new Uint8Array(this.sizeX * this.sizeY * 4);
-        for (let i = 0; i < (this.sizeX * this.sizeY * 4); i += 4) {
-            const val = this.data[Math.floor(i / 4)];
-            pixelData[i]     = val; 
-            pixelData[i + 1] = val;
-            pixelData[i + 2] = val;
-            pixelData[i + 3] = 255;
-        }
-
-        this.mapDataTexture = this.gl.createTexture();
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.mapDataTexture);
-        this.gl.texImage2D(
-            this.gl.TEXTURE_2D,
-            0,
-            this.gl.RGBA,
-            this.sizeX, this.sizeY, 0,
-            this.gl.RGBA,
-            this.gl.UNSIGNED_BYTE,
-            pixelData);
-        
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-    }
-
-    draw() {
-        // Verts
-        this.game.buffers.quad.verts.bind();
-        this.gl.vertexAttribPointer(
-            this.game.shaders.isoTilemap.attr.vertexPos,
-            3,         // num of values to pull from array per iteration
-            this.gl.FLOAT,  // type
-            false,     // normalize,
-            0,         // stride
-            0);        // start offset
-        this.gl.enableVertexAttribArray(
-            this.game.shaders.isoTilemap.attr.vertexPos);
-
-        // UVs
-        this.game.buffers.quad.uvs.bind();
-        this.gl.vertexAttribPointer(
-            this.game.shaders.isoTilemap.attr.mapCoord,
-            2,         // num of values to pull from array per iteration
-            this.gl.FLOAT,  // type
-            false,     // normalize,
-            0,         // stride
-            0);        // start offset
-        this.gl.enableVertexAttribArray(this.game.shaders.isoTilemap.attr.mapCoord);
-        
-        // Indices
-        this.game.buffers.quad.indices.bind();
-
-        this.game.shaders.isoTilemap.bind();
-
-        this.gl.activeTexture(this.gl.TEXTURE0);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.mapDataTexture);
-
-        this.tileSet.bind(this.gl.TEXTURE1);
-
-        this.gl.uniform1i(this.game.shaders.isoTilemap.unif.mapData, 0);
-        this.gl.uniform1i(this.game.shaders.isoTilemap.unif.tileSet, 1);
-
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.projectionMatrix,
-            false,
-            this.game.projectionMatrix);
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.cameraMatrix,
-            false,
-            this.game.camera.matrix());
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.modelMatrix,
-            false,
-            this.modelMatrix());
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.isoMatrix,
-            false,
-            isoToCartesian4);
-
-        this.gl.uniform2fv(
-            this.game.shaders.isoTilemap.unif.tileSetSize, this.tileSetSize);
-        this.gl.uniform2fv(
-            this.game.shaders.isoTilemap.unif.tilePixelSize, this.tilePixelSize);
-
-        this.gl.uniform2fv(
-            this.game.shaders.isoTilemap.unif.mapSize, this.mapSize);
-        this.gl.uniform2fv(
-            this.game.shaders.isoTilemap.unif.mapTileSize, this.mapTileSize);
-
-        this.gl.uniform2fv(
-            this.game.shaders.isoTilemap.unif.selectedTile,
-            [this.game.mouseIsoPos[0] / this.tileRatio[0] / this.game.camera.scale[0],
-            this.game.mouseIsoPos[1] / this.tileRatio[1] / this.game.camera.scale[1]]);
-
-        this.gl.uniform2fv(
-            this.game.shaders.isoTilemap.unif.selectionBegin,
-            [this.game.selectionBegin[0] / this.tileRatio[0] / this.game.camera.scale[0],
-            this.game.selectionBegin[1] / this.tileRatio[1] / this.game.camera.scale[1]]);
-    
-        this.gl.uniform1i(this.game.shaders.isoTilemap.unif.selectionMode, this.game.selectionMode);
-        this.gl.uniform4fv(this.game.shaders.isoTilemap.unif.selectionColor, this.game.selectionColor);
-
-        this.gl.drawElements(
-            this.gl.TRIANGLES,
-            6,                  // vertex count
-            this.gl.UNSIGNED_SHORT,  // type
-            0);
-    }
-};
-
-
 class Text extends Drawable {
     constructor(
         entity,
@@ -327,7 +225,7 @@ class Text extends Drawable {
         ignoreCam 
     ) {
         super(entity, position, scale);
-        this.textureFont = textureFont;
+        this.textureFont = this.game.getTexture(textureFont);
         this.ignoreCam = ignoreCam;
 
         // max number of rows and columns of chars
@@ -385,6 +283,19 @@ class Text extends Drawable {
             this.gl.TEXTURE_2D,
             this.targetTexture,
             0);  // level
+    }
+
+    dump() {
+        const minObj = super.dump();
+        minObj.textureFont = this.textureFont.name;
+        minObj.maxCharSize = this.maxCharSize;
+        minObj.fontSize = this.fontSize;
+        minObj.glyphSize = this.glyphSize;
+        minObj.glyphStr = this.glyphStr;
+        minObj.color = this.color;
+        minObj.bgcolor = this.bgcolor;
+        minObj.ignoreCam = this.ignoreCam;
+        return minObj;
     }
 
     modelMatrix() {
@@ -587,5 +498,13 @@ class Text extends Drawable {
 
 };
 
-export { Transform, Rectangle, Sprite, Tilemap, Text };
+export { Transform, Drawable, Rectangle, Sprite, Text };
 
+if (window.gameClasses === undefined)
+    window.gameClasses = {};
+
+window.gameClasses.Transform = Transform;
+window.gameClasses.Drawable = Drawable;
+window.gameClasses.Rectangle = Rectangle;
+window.gameClasses.Sprite = Sprite;
+window.gameClasses.Text = Text;
