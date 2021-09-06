@@ -83,6 +83,10 @@
             "src": "/res/road_tileset.png"
         },
         {
+            "name": "navTileset",
+            "src": "/res/nav_tileset.png"
+        },
+        {
             "name": "cursor",
             "src": "/res/cursor.png"
         },

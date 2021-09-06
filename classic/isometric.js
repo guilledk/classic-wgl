@@ -1,8 +1,24 @@
+import game from "/classic/state.js";
 import { fetchObject, getNoiseRange } from "/classic/utils.js";
+import { Component } from "/classic/ecs.js";
 import { Drawable } from "/classic/transforms.js";
-import { isoToCartesian4, isoToCartesian3 } from "/classic/utils.js";
+import { 
+    isoToCartesian4, isoToCartesian3,
+    cartesianToIso3
+} from "/classic/utils.js";
 
 import { mat4, vec2, vec3 } from "/lib/gl-matrix/index.js";
+
+
+function isoDistanceToCam(pos) {
+    const camPos = vec3.clone(game.camera.position);
+    vec3.add(
+        camPos,
+        camPos,
+        [game.camera.size[0] / 2, 0, 0]);
+    vec3.transformMat3(camPos, camPos, cartesianToIso3);
+    return vec3.distance(camPos, pos);
+}
 
 
 class Tilemap extends Drawable {
@@ -24,6 +40,12 @@ class Tilemap extends Drawable {
             this.tileSet.image.width / tilePixelSize[0],
             this.tileSet.image.height / tilePixelSize[1]
         ];
+
+        this.tileSetPixelSize = [
+            this.tileSetSize[0] * this.tilePixelSize[0],
+            this.tileSetSize[1] * this.tilePixelSize[1]
+        ];
+
         this.maxTile = maxTile;
 
         if (data == null) {
@@ -117,7 +139,7 @@ class Tilemap extends Drawable {
         this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
     }
 
-    draw() {
+    rawDraw() {
         // Verts
         this.game.buffers.quad.verts.bind();
         this.gl.vertexAttribPointer(
@@ -201,17 +223,122 @@ class Tilemap extends Drawable {
 };
 
 
+class IsometricNavMesh extends Tilemap {
+    constructor(
+        entity, map, sizeX, sizeY, data) {
+        map = entity.game.getEntity(map).getComponent(Tilemap);
+        super(
+            entity,
+            map.position, map.scale,
+            sizeX, sizeY,
+            "navTileset",
+            [8, 8], 2, data 
+        );
+        this.map = map;
+
+        this._msgId = 0;
+        this._resolves = {};
+        this._rejects = {};
+        this._worker = new Worker("/classic/pathfinder.js");
+        this._worker.onmessage = this.pathfinderMessageHandler.bind(this);
+    }
+
+    async init() {
+        console.assert(
+            await this.sendMsg(
+                "initmap",
+                { 
+                    name: this.entity.name,
+                    size: [this.sizeX, this.sizeY],
+                    data: this.data
+                }) == "ok",
+            "Isometric Nav Mesh initialization error");
+    }
+
+    updateMap(corner, size, data) {
+        return this.sendMsg(
+            "updatemap",
+            {
+                name: this.entity.name,
+                corner: corner,
+                size: size,
+                data: data
+            });
+    }
+
+    findPath(from, to) {
+        return this.sendMsg(
+            "findpath",
+            {
+                name: this.entity.name,
+                from: from,
+                to: to
+            });
+    }
+
+    dump() {
+        const minObj = {};
+        minObj.type = this.constructor.name;
+        minObj.map = this.map.name;
+        minObj.sizeX = this.sizeX;
+        minObj.sizeY = this.sizeY;
+        minObj.data = this.data;
+        return minObj;
+    }
+
+    sendMsg(op, args) {
+        const msgId = this._msgId++;
+        const msg = {
+            op: op,
+            args: args,
+            id: msgId
+        };
+
+        const promiseMachinery = function (resolve, reject) {
+            this._resolves[msgId] = resolve
+            this._rejects[msgId] = reject
+            this._worker.postMessage(msg)
+        };
+
+        return new Promise(promiseMachinery.bind(this));
+    }
+
+    pathfinderMessageHandler(msg) {
+
+        const {id, data} = msg.data;
+       
+        if (data) {
+            const resolve = this._resolves[id]
+            if (resolve)
+                resolve(data)
+    
+        } else {
+            const reject = this._rejects[id]
+            if (reject)
+                reject()
+        }
+        
+        // purge used callbacks
+        delete this._resolves[id]
+        delete this._rejects[id]
+    }
+    
+};
+
+
 class IsometricDrawable extends Drawable {
     constructor(
-        entity, position, scale
+        entity, position, scale, tilemap
     ) {
         super(entity, position, scale);
+        this.tilemap = this.game.getEntity(tilemap).getComponent(Tilemap);
         this.direction = 0;
     }
 
     modelMatrix() {
         let modelMatrix = mat4.create();
         let cartPos = vec3.clone(this.position);
+        vec3.add(cartPos, cartPos, this.tilemap.position);
         vec3.transformMat3(cartPos, cartPos, isoToCartesian3);
         mat4.translate(
             modelMatrix, modelMatrix, cartPos);
@@ -219,22 +346,37 @@ class IsometricDrawable extends Drawable {
             modelMatrix, modelMatrix, this.scale);
         return modelMatrix;
     }
+
+    order() {
+        return this.tilemap.order() - isoDistanceToCam(this.position); 
+    }
 };
 
 class IsoSprite extends IsometricDrawable {
     constructor(
-        entity, position, scale, texture
+        entity,
+        position, scale,
+        texture,
+        tilemap,
+        frame,
+        tileSetSize,
+        anchor
     ) {
-        super(entity, position, scale);
+        super(entity, position, scale, tilemap);
         this.texture = this.game.getTexture(texture);
-        this.frame = 0;
-        this.tileSetSize = [1, 1];
-        this.anchor = [0, 0];
+        this.frame = frame;
+        this.tileSetSize = tileSetSize;
+        this.anchor = anchor;
     }
 
     dump() {
         const minObj = super.dump();
         minObj.texture = this.texture.name;
+        minObj.tilemap = this.tilemap.entity.name;
+        minObj.ignoreCam = this.ignoreCam;
+        minObj.frame = this.frame;
+        minObj.tileSetSize = this.tileSetSize;
+        minObj.anchor = this.anchor;
         return minObj;
     }
 
@@ -260,7 +402,7 @@ class IsoSprite extends IsometricDrawable {
         return modelMatrix;
     }
 
-    draw() {
+    rawDraw() {
         // Verts
         this.game.buffers.quad.verts.bind();
         this.gl.vertexAttribPointer(
@@ -318,12 +460,98 @@ class IsoSprite extends IsometricDrawable {
             this.gl.UNSIGNED_SHORT,  // type
             0);                 // start offset
     }
+
 };
 
-export { Tilemap, IsoSprite };
+let AgentStates = {
+    idle: 0,
+    followPath: 1
+};
 
-if (window.gameClasses === undefined)
-    window.gameClasses = {};
+class IsoAgent extends IsoSprite {
+    constructor(
+        entity,
+        position, scale,
+        texture,
+        tilemap,
+        frame,
+        tileSetSize,
+        anchor
+    ) {
+        super(
+            entity,
+            position, scale,
+            texture, tilemap,
+            frame,
+            tileSetSize,
+            anchor);
 
-window.gameClasses.Tilemap = Tilemap;
-window.gameClasses.IsoSprite = IsoSprite;
+        this.idle();
+
+        this.speed = 1.6; // tiles / second
+
+        entity.registerCall("update", this.update.bind(this));
+    }
+
+    idle() {
+        this._state = AgentStates.idle;
+        this._path = [];
+        this._start_index = 0;
+        this._target_index = 1;
+        this._delta = 0;
+    }
+
+    followPath(path) {
+        this._path = path;
+        this._state = AgentStates.followPath;
+    }
+
+    nextTarget() {
+        this._start_index = this._target_index++;
+    }
+
+    update() {
+        switch(this._state) {
+            case AgentStates.idle :
+                break;
+
+            case AgentStates.followPath :
+
+                this._delta += this.speed * this.game.deltaTime;
+                if (this._delta >= 1) {
+                    this._delta = 0;
+                    this.nextTarget();
+
+                    if (this._target_index == this._path.length) {
+                        this.idle();
+                        return;
+                    }
+                }
+
+                
+                let dir = vec2.create();
+                vec2.sub(dir, this._path[this._target_index], this._path[this._start_index]);
+                vec2.normalize(dir, dir);
+                let directionRad = Math.acos(vec2.dot(dir, [1, 0]));
+                this.direction = directionRad * (180 / Math.PI);
+                console.log(this.direction);
+
+                vec3.lerp(
+                    this.position,
+                    [...this._path[this._start_index], this.position[2]],
+                    [...this._path[this._target_index], this.position[2]],
+                    this._delta
+                );
+                break;
+        }
+    }
+
+
+};
+
+export { Tilemap, IsometricNavMesh, IsoSprite, IsoAgent };
+
+window.Tilemap = Tilemap;
+window.IsometricNavMesh = IsometricNavMesh;
+window.IsoSprite = IsoSprite;
+window.IsoAgent = IsoAgent;

@@ -16,6 +16,7 @@ export let Entity = class {
         this.id = id;
         this.name = name;
 
+        this.enabled = true;
         this.nextCallId = 0;
 
         this.components = new Array();

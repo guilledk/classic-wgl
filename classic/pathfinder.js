@@ -20,8 +20,11 @@
  *          name: "{map name}",
  *          from: vec2,
  *          to: vec2
- *      }
+ *      },
+ *      id: {int id}
  *  }
+ *
+ *  response: { id: {int id}, status: {ok} }
  *
  */
 
@@ -140,7 +143,8 @@ function flattenIndex(size, x, y) {
     return x + (y * size[0]);
 }
 
-function aStarPath(map, from, to) {
+function aStarPath(mapName, from, to) {
+    const map = maps[mapName];
     let gCosts = new Map2D(map.size, Number.MAX_SAFE_INTEGER);
     let fCosts = new Map2D(map.size, Number.MAX_SAFE_INTEGER);
     let inOpen = new Map2D(map.size, false); 
@@ -229,12 +233,13 @@ onmessage = function(e) {
                 data: msg.args.data
             };
 
-            postMessage({});
+            postMessage({ id: msg.id, data: "ok" });
             break;
         }
 
         case "updatemap": {
             const map = maps[msg.args.name];
+            const corner = msg.args.corner;
 
             for (var y = 0; y < msg.args.size[1]; y++)
                 for (var x = 0; x < msg.args.size[0]; x++)
@@ -245,16 +250,16 @@ onmessage = function(e) {
                     ] = msg.args.data[
                         flattenIndex(msg.args.size, x, y)];
 
-            postMessage({});
+            postMessage({ id: msg.id, data: "ok" });
             break;
         }
 
         case "findpath": {
-            const map = maps[msg.args.name];
+            const map = msg.args.name;
             const from = msg.args.from;
             const to = msg.args.to;
 
-            postMessage({path: aStarPath(map, from, to)});
+            postMessage({ id: msg.id, data: aStarPath(map, from, to) });
             break;
         }
 

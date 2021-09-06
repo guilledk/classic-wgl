@@ -1,5 +1,6 @@
-import { Camera } from "/classic/camera.js";
 import { mat4, vec3 } from "/lib/gl-matrix/index.js";
+import { Entity } from "/classic/ecs.js";
+import { Camera } from "/classic/camera.js";
 import {
     getObjectValues,
     getVideoCardInfo,
@@ -13,7 +14,6 @@ import {
     cartesianToIso4
 } from '/classic/utils.js';
 
-import { Entity } from "/classic/ecs.js";
 
 
 export default {
@@ -38,7 +38,8 @@ export default {
 
     mouseSensibility: 0.8,
     mouseAxis: vec3.fromValues(0, 0, 0),
-    mousePos: vec3.fromValues(-1, -1, 0),
+    mousePos: vec3.fromValues(-1, -1, -10000),
+    
     mouseIsoPos: vec3.fromValues(-1, -1, 0),
     mouseWheel: 0,
 
@@ -60,6 +61,7 @@ export default {
 
     canvas: null,
     gl: null,
+    renderList: [],
 
     camera: new Camera([0, 0, 0], [.1, .1, 1]),
 
@@ -120,7 +122,7 @@ export default {
         link.download = url;
 
         const blob = new Blob(
-            [JSON.stringify(minState)],
+            [JSON.stringify(minState, null, 4)],
             {type: "text/plain;charset=utf-8"});
 
         link.href = URL.createObjectURL(blob);
@@ -143,7 +145,7 @@ export default {
 
                 args.splice(args.indexOf(component.type), 1);
                 instance.addComponent(
-                    eval("window.gameClasses." + component.type),
+                    eval("window." + component.type),
                     ...args);
             }
         }
@@ -168,13 +170,18 @@ export default {
             return;
 
         for (const entityId in this.calls[callName])
-            for (const fnId in this.calls[callName][entityId])
-                this.calls[callName][entityId][fnId]();
+            if (this.entities[entityId].enabled)
+                for (const fnId in this.calls[callName][entityId])
+                    this.calls[callName][entityId][fnId]();
 
     },
 
     getEntity(name) {
         return this.entities[this.nameToId[name]];
+    },
+
+    getEntityOrSpawn(name) {
+        return this.entities[this.nameToId[name]] || spawnEntity(name);
     },
 
     spawnEntity(name) {
@@ -317,7 +324,21 @@ export default {
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-        this.performCall("draw"); 
+        this.renderList.length = 0;
+        this.performCall("renderList");
+        this.renderList.sort((a, b) => {
+            const aOrder = a.order();
+            const bOrder = b.order();
+            if (aOrder > bOrder)
+                return -1;
+            else if (aOrder < bOrder)
+                return 1;
+            else
+                return 0;
+        });
+
+        for (const drawable of this.renderList)
+            drawable.rawDraw();
 
         this.prevTime = now;
         this.clearKeys();

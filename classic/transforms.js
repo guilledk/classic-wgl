@@ -37,11 +37,17 @@ class Drawable extends Transform {
     ) {
         super(entity, position, scale);
 
-        entity.registerCall("draw", this.draw.bind(this));
+        entity.registerCall("renderList", this.renderOrder.bind(this));
     }
 
-    draw() {
+    renderOrder() { this.game.renderList.push(this); }
+
+    rawDraw() {
         throw "Abstract method must be overwritten";
+    }
+
+    order() {
+        return this.position[2];
     }
 };
 
@@ -61,7 +67,7 @@ class Rectangle extends Drawable {
         return minObj;
     }
 
-    draw() {
+    rawDraw() {
         this.game.buffers.quad.verts.bind();
         this.gl.vertexAttribPointer(
             this.game.shaders.solid.attr.vertexPos,
@@ -109,20 +115,26 @@ class Rectangle extends Drawable {
 
 class Sprite extends Drawable {
     constructor(
-        entity, position, scale, texture, ignoreCam
+        entity, position, scale, texture, ignoreCam,
+        frame,
+        tileSetSize,
+        anchor
     ) {
         super(entity, position, scale);
         this.texture = this.game.getTexture(texture);
         this.ignoreCam = ignoreCam;
-        this.frame = 0;
-        this.tileSetSize = [1, 1];
-        this.anchor = [0, 0];
+        this.frame = frame;
+        this.tileSetSize = tileSetSize;
+        this.anchor = anchor;
     }
 
     dump() {
         const minObj = super.dump();
         minObj.texture = this.texture.name;
         minObj.ignoreCam = this.ignoreCam;
+        minObj.frame = this.frame;
+        minObj.tileSetSize = this.tileSetSize;
+        minObj.anchor = this.anchor;
         return minObj;
     }
 
@@ -148,7 +160,7 @@ class Sprite extends Drawable {
         return modelMatrix;
     }
 
-    draw() {
+    rawDraw() {
         // Verts
         this.game.buffers.quad.verts.bind();
         this.gl.vertexAttribPointer(
@@ -430,7 +442,7 @@ class Text extends Drawable {
         this.appendText(str);
     }
 
-    draw() {
+    rawDraw() {
 
         // Verts
         this.game.buffers.quad.verts.bind();
@@ -500,11 +512,8 @@ class Text extends Drawable {
 
 export { Transform, Drawable, Rectangle, Sprite, Text };
 
-if (window.gameClasses === undefined)
-    window.gameClasses = {};
-
-window.gameClasses.Transform = Transform;
-window.gameClasses.Drawable = Drawable;
-window.gameClasses.Rectangle = Rectangle;
-window.gameClasses.Sprite = Sprite;
-window.gameClasses.Text = Text;
+window.Transform = Transform;
+window.Drawable = Drawable;
+window.Rectangle = Rectangle;
+window.Sprite = Sprite;
+window.Text = Text;
