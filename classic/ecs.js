@@ -8,6 +8,10 @@ export let Component = class {
     dump() {
         return { type: this.constructor.name };
     }
+
+    toGameObjectString() {
+        return this.entity.name + "." + this.constructor.name;
+    }
 };
 
 export let Entity = class {

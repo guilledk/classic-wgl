@@ -33,6 +33,11 @@ async function initContext() {
 
     initAgent();
 
+    game.camera.scale[0] = .7;
+    game.camera.scale[1] = .7;
+
+    game.camera.position[0] += 550;
+
     game.launch();
 
 }

@@ -84,7 +84,7 @@ export function initTilemap() {
 
 export function initSelectionMonitor() {
 
-    game.editorTarget = "tilemap";
+    game.editorTarget = "navMesh";
 
     let tilemap = game.getEntity("tilemap");
     let tileSelector = game.getEntity("tilemapTileSelector");
@@ -315,41 +315,3 @@ export function initAgent() {
         [0, 0], [20, 20]).then((p) => agent.followPath(p))
 
 }
-
-
-    // var humanoid = game.getEntity("humanoid");
-    // var compHumanSprite = humanoid.addComponent(
-    //     Sprite,
-    //     [0, 0, -10], [.25, .5, 1],
-    //     game.textures.humanoid,
-    //     false);
-    // compHumanSprite.tileSetSize = [32, 16];
-    // compHumanSprite.anchor = [.5, .875];
-
-    // var compHumanAnimator = humanoid.addComponent(Animator, compHumanSprite);
-    // const anims = [
-    //     "walkSouth",
-    //     "walkSouthEast",
-    //     "walkEast",
-    //     "walkNorthEast",
-    //     "walkNorth",
-    //     "walkNorthWest",
-    //     "walkWest",
-    //     "walkSouthWest"
-    // ];
-
-    // humanoid.registerCall(
-    //     "update",
-    //     function() {
-    //         let isoPos = vec3.clone(compHumanSprite.position);
-    //         vec3.transformMat3(isoPos, isoPos, cartesianToIso3);
-
-    //         let deltaX = isoPos[0] - game.mouseIsoPos[0];
-    //         let deltaY = isoPos[1] - game.mouseIsoPos[1];
-    //         let radians = Math.atan2(deltaX,  deltaY);
-    //         let angle = ((radians * 180) / Math.PI) + 180;
-
-    //         let index = Math.floor(angle / 45.0);
-    //          
-    //         compHumanAnimator.play(game.animations[anims[index]], true);
-    //     });

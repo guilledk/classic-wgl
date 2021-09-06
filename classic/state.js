@@ -1,4 +1,5 @@
 import { mat4, vec3 } from "/lib/gl-matrix/index.js";
+
 import { Entity } from "/classic/ecs.js";
 import { Camera } from "/classic/camera.js";
 import {
@@ -181,7 +182,7 @@ export default {
     },
 
     getEntityOrSpawn(name) {
-        return this.entities[this.nameToId[name]] || spawnEntity(name);
+        return this.entities[this.nameToId[name]] || this.spawnEntity(name);
     },
 
     spawnEntity(name) {
@@ -200,6 +201,24 @@ export default {
 
         delete this.nameToId[entity.name]
         delete this.entities[entity.id];
+    },
+
+    /*
+     *
+     * Takes a string with the formats:
+     *  - {entity.name} => return entity
+     *  - {entity.name}.{component type} => return component
+     *
+     */
+    getGameObject(cmd) {
+        if (typeof cmd === "string") {
+            const words = cmd.split('.');
+            if (words.length == 1)
+                return this.getEntity(cmd);
+            else
+                return this.getEntity(words[0]).getComponent(window[words[1]]);
+        } else
+            return cmd;
     },
 
     resizeCanvas() {

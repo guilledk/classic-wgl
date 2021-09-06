@@ -2,7 +2,7 @@ import { Component } from "/classic/ecs.js"
 
 
 class Animator extends Component {
-    constructor(entity, target = null) {
+    constructor(entity, target) {
         super(entity);
         this.animation = null;
         this.counter = 0.0;
@@ -10,9 +10,15 @@ class Animator extends Component {
         this.repeat = false;
         this._playing = false;
 
-        this.target = target;
+        this.target = entity.game.getGameObject(target);
 
         entity.registerCall("update", this.update.bind(this));
+    }
+
+    dump() {
+        const minObj = super.dump();
+        minObj.target = this.target.toGameObjectString();
+        return minObj;
     }
 
     update() {
@@ -41,6 +47,13 @@ class Animator extends Component {
         this.animation = animation;
     }
 
+    stop() {
+        this._playing = false;
+        this.repeat = false;
+    }
+
 };
 
 export { Animator };
+
+window.Animator = Animator;

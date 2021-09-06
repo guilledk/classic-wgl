@@ -7,6 +7,8 @@ import {
     cartesianToIso3
 } from "/classic/utils.js";
 
+import { Animator } from "/classic/animator.js";
+
 import { mat4, vec2, vec3 } from "/lib/gl-matrix/index.js";
 
 
@@ -463,6 +465,18 @@ class IsoSprite extends IsometricDrawable {
 
 };
 
+
+const animDirs = [
+    "walkSouth",
+    "walkSouthEast",
+    "walkEast",
+    "walkNorthEast",
+    "walkNorth",
+    "walkNorthWest",
+    "walkWest",
+    "walkSouthWest"
+];
+
 let AgentStates = {
     idle: 0,
     followPath: 1
@@ -486,6 +500,7 @@ class IsoAgent extends IsoSprite {
             tileSetSize,
             anchor);
 
+        this.anim = entity.addComponent(Animator, this);
         this.idle();
 
         this.speed = 1.6; // tiles / second
@@ -513,6 +528,7 @@ class IsoAgent extends IsoSprite {
     update() {
         switch(this._state) {
             case AgentStates.idle :
+                this.anim.stop();
                 break;
 
             case AgentStates.followPath :
@@ -529,12 +545,14 @@ class IsoAgent extends IsoSprite {
                 }
 
                 
-                let dir = vec2.create();
-                vec2.sub(dir, this._path[this._target_index], this._path[this._start_index]);
-                vec2.normalize(dir, dir);
-                let directionRad = Math.acos(vec2.dot(dir, [1, 0]));
-                this.direction = directionRad * (180 / Math.PI);
-                console.log(this.direction);
+                let delta = vec2.create();
+                vec2.sub(delta, this._path[this._target_index], this._path[this._start_index]);
+                let radians = Math.atan2(...delta);
+                
+                this.direction = radians * (180 / Math.PI);
+                let index = Math.floor(this.direction / 45);
+
+                this.anim.play(this.game.animations[animDirs[index]], true); 
 
                 vec3.lerp(
                     this.position,
