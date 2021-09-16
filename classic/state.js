@@ -2,6 +2,7 @@ import { mat4, vec3 } from "/lib/gl-matrix/index.js";
 
 import { Entity } from "/classic/ecs.js";
 import { Camera } from "/classic/camera.js";
+import { PhysicsProvider } from "/classic/collision.js";
 import {
     getObjectValues,
     getVideoCardInfo,
@@ -14,7 +15,6 @@ import {
     loadTexture,
     cartesianToIso4
 } from '/classic/utils.js';
-
 
 
 export default {
@@ -66,6 +66,8 @@ export default {
 
     camera: new Camera([0, 0, 0], [.1, .1, 1]),
 
+    physics: null,
+
     init() {
 
         document.addEventListener(
@@ -93,9 +95,10 @@ export default {
 
         console.log(getVideoCardInfo(this.gl));
 
+        this.physics = new PhysicsProvider(this);
+
         this.resizeCanvas();
         window.addEventListener("resize", this.resizeCanvas.bind(this), false);
-
     },
 
     getTexture(name) {
@@ -196,7 +199,7 @@ export default {
     },
 
     destroyEntity(entity) {
-        for (const callName of entity.callRegistry)
+        for (const callName of entity._callRegistry)
             delete this.calls[callName][entity.id];
 
         delete this.nameToId[entity.name]
@@ -245,6 +248,7 @@ export default {
             10000);  // far
 
         this.camera.resize([vw, vh]);
+        this.physics.resizeScreen();
     },
 
     pushEventHandlers() {
@@ -292,6 +296,9 @@ export default {
         now /= 1000;
         this.deltaTime = now - this.prevTime;
         this.fps = Math.floor(1 / this.deltaTime);
+
+        this.physics.beginFrame();
+        this.physics.performCalls(); 
 
         this.performCall("update");
 
@@ -358,6 +365,8 @@ export default {
 
         for (const drawable of this.renderList)
             drawable.rawDraw();
+
+        this.physics.debugDraw();
 
         this.prevTime = now;
         this.clearKeys();

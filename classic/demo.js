@@ -9,7 +9,8 @@ import {
     initTilemap,
     initTilemapEditor,
     initNavMeshEditor,
-    initAgent
+    initAgent,
+    initDEVButtons
 } from "/classic/prefabs.js";
 
 
@@ -32,6 +33,8 @@ async function initContext() {
     await initNavMeshEditor();
 
     initAgent();
+
+    initDEVButtons();
 
     game.camera.scale[0] = .7;
     game.camera.scale[1] = .7;

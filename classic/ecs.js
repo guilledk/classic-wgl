@@ -24,7 +24,8 @@ export let Entity = class {
         this.nextCallId = 0;
 
         this.components = new Array();
-        this.callRegistry = new Set();
+        this._callRegistry = new Set();
+        this._toCleanup = new Array();
     }
 
     registerCall(callName, fn) {
@@ -32,7 +33,7 @@ export let Entity = class {
             fn.id = this.nextCallId++;
 
         this.game.registerCall(callName, this, fn);
-        this.callRegistry.add(callName);
+        this._callRegistry.add(callName);
     }
 
     addComponent(type, ...args) {
@@ -47,5 +48,14 @@ export let Entity = class {
                 return component;
 
         return null;
+    }
+
+    registerForCleanup(fn) {
+        this._toCleanup.push(fn);
+    }
+
+    cleanup() {
+        for (const fn of this._toCleanup)
+            fn()
     }
 };

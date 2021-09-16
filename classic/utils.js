@@ -402,3 +402,15 @@ export function getNoiseRange(x, y, from, to) {
     return (((noiseGen.noise2D(
         x / factor, y / factor) + 1) / 2) * (to - from)) + from;
 }
+
+/*
+ * Math
+ */
+
+export function degreeToRadian(deg) {
+    return deg * (Math.PI / 180);
+}
+
+export function radianToDegree(rad) {
+    return rad * (180 / Math.PI);
+}

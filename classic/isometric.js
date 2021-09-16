@@ -236,6 +236,14 @@ class IsometricNavMesh extends Tilemap {
             "navTileset",
             [8, 8], 2, data 
         );
+
+        if (data == null) {
+            this.data = Array(sizeX * sizeY);
+            for (let y = 0; y < this.sizeY; y++)
+                for (let x = 0; x < this.sizeX; x++)
+                    this.data[x + (sizeX * y)] = 1;
+        }
+
         this.map = map;
 
         this._msgId = 0;
@@ -369,6 +377,11 @@ class IsoSprite extends IsometricDrawable {
         this.frame = frame;
         this.tileSetSize = tileSetSize;
         this.anchor = anchor;
+
+        this.tilePixelSize = [
+            this.texture.image.width / tileSetSize[0],
+            this.texture.image.height / tileSetSize[1]
+        ];
     }
 
     dump() {

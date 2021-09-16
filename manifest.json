@@ -95,6 +95,10 @@
             "src": "/res/font.png"
         },
         {
+            "name": "editorIcons",
+            "src": "/res/editor_icons.png"
+        },
+        {
             "name": "humanoid",
             "src": "/res/humanoid.png"
         },
