@@ -260,6 +260,17 @@ class Collider extends Component  {
         this.scale = this.shape.scale;
         this.updateRect();
 
+        this._handlerNames = [
+            "enter",
+            "exit",
+            "click",
+            "selection",
+            "selectionTemp"
+        ];
+        this._handlers = {};
+        for (const name of this._handlerNames)
+            this._handlers[name] = [];
+
         this.game.physics.registerCollider(this);
         entity.registerForCleanup(this.cleanup.bind(this));
     }
@@ -269,6 +280,23 @@ class Collider extends Component  {
             this,
             this.shape.rectangle());
     }
+
+    addHandler(name, fn) {
+        console.assert(this._handlerNames.indexOf(name) > -1, "handler not found " + name);
+        this._handlers[name].push(fn);
+    }
+
+    callHandler(name, ...params) {
+        let result = false;
+        for (const fn of this._handlers[name]) {
+            result = fn(...params);
+            if (result)
+                break;
+        }
+        return result;
+    }
+
+    hasHandlers(name) { return this._handlers[name].length > 0; }
 
     intersects(other) {
         return (
@@ -378,9 +406,9 @@ class PhysicsProvider {
 
     endSelection() {
         for (const c of this.screen.retrieve(this.selection)) {
-            if (c._pid == 0) continue;
-            if (c.selectionHandler != null && this.gjk(this.selection, c))
-                c.selectionHandler();
+            if (c._pid == 0 || !c.entity.enabled) continue;
+            if (c.hasHandlers("selection") && this.gjk(this.selection, c))
+                c.callHandler("selection");
         }
 
         vec3.set(this.selection.position, -1, -1, 0);
@@ -439,9 +467,9 @@ class PhysicsProvider {
 
         if (game.wasMouseButtonPressed(0)) {
             for (const c of this.screen.retrieve(this.mouse)) {
-                if (c._pid == 0) continue;
-                if (c.clickHandler != null && this.gjk(this.mouse, c))
-                    if (c.clickHandler()) break;
+                if (c._pid == 0 || !c.entity.enabled) continue;
+                if (c.hasHandlers("click") && this.gjk(this.mouse, c))
+                    if (c.callHandler("click")) break;
             }
         }
         
@@ -449,11 +477,11 @@ class PhysicsProvider {
         // frame and if so call handleEnter
         for (const id in this.colliding) {
             const c = this._registry[id];
-            if (c.handleEnter != null) {
+            if (c.hasHandlers("enter")) {
                 for (const otherId in this.colliding[id]) {
                     const other = this._registry[otherId];
                     if (!(id in this.collided))
-                        c.handleEnter(other);
+                        c.callHandler("enter", other);
                 }
             }
         }
@@ -462,20 +490,20 @@ class PhysicsProvider {
         // and if so call handleExit
         for (const id in this.collided) {
             const c = this._registry[id];
-            if (c.handleExit != null) {
+            if (c.hasHandlers("exit")) {
                 for (const otherId in this.collided[id]) {
                     const other = this._registry[otherId];
                     if (!(id in this.colliding))
-                        c.handleExit(other);
+                        c.callHandler("exit", other);
                 }
             }
         }
 
         // Selection temporal calls
         for (const c of this.screen.retrieve(this.selection)) {
-            if (c._pid == 0) continue;
-            if (c.selectionTempHandler != null && this.gjk(this.selection, c))
-                c.selectionTempHandler();
+            if (c._pid == 0 || !c.entity.enabled) continue;
+            if (c.hasHandlers("selectionTemp") && this.gjk(this.selection, c))
+                c.callHandler("selectionTemp");
         }
     }
 

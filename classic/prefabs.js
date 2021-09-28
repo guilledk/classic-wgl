@@ -175,7 +175,7 @@ export function initTilemapEditor() {
             0,
             rectVerts));
 
-    editorCollider.clickHandler = function() {
+    editorCollider.addHandler("click", function() {
         localPos = vec3.clone(game.mousePos);
         vec3.sub(localPos, localPos, compTilemapSprite.position);
         
@@ -188,7 +188,7 @@ export function initTilemapEditor() {
             localPos[0] + (localPos[1] * compTilemap.tileSetSize[0]));
 
         return true;
-    }
+    });
 
     tilemapEditor.registerCall(
         "update",
@@ -217,7 +217,7 @@ export function initTilemapEditor() {
         });
 
     // Actual tilemap editing logic
-    compTilemapCollider.selectionHandler = function() {
+    compTilemapCollider.addHandler("selection", function() {
         if (game.editorTarget != "tilemap") return;
         const [begin, end] = compTilemap.getSelection();
 
@@ -226,7 +226,7 @@ export function initTilemapEditor() {
        
         compTilemap.fillRegion(begin, end, selectedTile);
         compTilemap.uploadToGPU();
-    }
+    });
 }
 
 
@@ -273,7 +273,8 @@ export async function initNavMeshEditor() {
             0,
             rectVerts));
 
-    editorCollider.clickHandler = function() {
+    editorCollider.addHandler("click", function() {
+        console.log("click");
         localPos = vec3.clone(game.mousePos);
         vec3.sub(localPos, localPos, compTilemapSprite.position);
         
@@ -286,7 +287,7 @@ export async function initNavMeshEditor() {
             localPos[0] + (localPos[1] * (compNavMesh.tileSetSize[0] * uiScale)));
 
         return true;
-    }
+    });
 
     navMeshEditor.registerCall(
         "update",
@@ -320,7 +321,7 @@ export async function initNavMeshEditor() {
         });
 
     // Actual tilemap editing logic
-    compTilemapCollider.selectionHandler = function() {
+    compTilemapCollider.addHandler("selection", function() {
         if (game.editorTarget != "navMesh") return;
         const [begin, end] = compNavMesh.getSelection();
 
@@ -334,7 +335,7 @@ export async function initNavMeshEditor() {
             [0, 0],
             [compNavMesh.sizeX, compNavMesh.sizeY],
             compNavMesh.data)
-    }
+    });
 }
 
 
@@ -422,10 +423,10 @@ export function initDEVButtons() {
             0,
             centeredRectVerts));
 
-    btnTilemapCollider.clickHandler = function() {
+    btnTilemapCollider.addHandler("click", function() {
         game.editorTarget = "tilemap";
         return true;
-    };
+    });
 
     let btnToolNavMesh = game.spawnEntity("btnNavMesh");
     let btnNavMesh = btnToolNavMesh.addComponent(
@@ -440,10 +441,10 @@ export function initDEVButtons() {
             0,
             centeredRectVerts));
 
-    btnNavMeshCollider.clickHandler = function() {
+    btnNavMeshCollider.addHandler("click", function() {
         game.editorTarget = "navMesh";
         return true;
-    };
+    });
 
     let btnDEVEntity = game.spawnEntity("btnDEV");
     let btnDEV = btnDEVEntity.addComponent(
@@ -478,7 +479,7 @@ export function initDEVButtons() {
     let targetTools = btnDEV.position[0] - 300;
     let startPos = btnDEV.position[0];
 
-    btnDEVCollider.clickHandler = function() {
+    btnDEVCollider.addHandler("click", function() {
         timeSinceClick = 0;
         if (targetTools == btnDEV.position[0]) {
             targetTools = btnDEV.position[0] - 300;
@@ -489,7 +490,7 @@ export function initDEVButtons() {
             startPos = btnDEV.position[0] - 300;
         }
         return true;
-    };
+    });
 
     btnDEVEntity.registerCall(
         "update",
