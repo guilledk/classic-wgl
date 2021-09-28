@@ -294,6 +294,12 @@ class PhysicsProvider {
         this.game = game;
         this.gl = game.gl;
 
+        this._rectVerts = [
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0]
+        ];
         this._rawRectVerts = [
             0, 0, 0,
             1, 0, 0,
@@ -303,15 +309,28 @@ class PhysicsProvider {
         this._vertBuffer = new Buffer(
             this.gl, this.gl.ARRAY_BUFFER,
             this._rawRectVerts, Float32Array, this.gl.STATIC_DRAW);
+
         this.mouse = new VirtualCollider(
             0, new Circle(game, [0, 0, 0], 1));
+
+        this.selection = new VirtualCollider(
+            1,
+            new Polygon(
+                game,
+                [-1, -1, 0],
+                [1, 1, 1],
+                0,
+                this._rectVerts
+            ));
 
         this.collided = {}; 
         this.colliding = {};
 
-        this._nextId = 1;
+        this._autoIdBegin = 2;
+        this._nextId = this._autoIdBegin;
         this._registry = {
-            0: this.mouse
+            0: this.mouse,
+            1: this.selection
         };
     }
 
@@ -329,9 +348,49 @@ class PhysicsProvider {
         return (new GJKContext(a.shape, b.shape).performTest());
     }
 
+    beginSelection() {
+        vec3.set(
+            this.selection.position,
+            this.game.mousePos[0],
+            this.game.mousePos[1],
+            0);
+        this.selection.updateRect()
+    }
+
+    updateSelection() {
+        let min = vec3.create();
+        let max = vec3.create();
+        vec3.min(min, this.game.selectionBegin, this.game.mousePos);
+        vec3.max(max, this.game.mousePos, this.game.selectionBegin);
+        let delta = vec3.create();
+        vec3.sub(delta, max, min);
+
+        vec3.set(
+            this.selection.position,
+            ...min);
+        vec3.set(
+            this.selection.scale,
+            delta[0],
+            delta[1],
+            1);
+        this.selection.updateRect()
+    }
+
+    endSelection() {
+        for (const c of this.screen.retrieve(this.selection)) {
+            if (c._pid == 0) continue;
+            if (c.selectionHandler != null && this.gjk(this.selection, c))
+                c.selectionHandler();
+        }
+
+        vec3.set(this.selection.position, -1, -1, 0);
+        vec3.set(this.selection.scale, 1, 1, 1);
+        this.selection.updateRect()
+    }
+
     beginFrame() {
         this.screen.clear();
-        for (let id = 1; id < this._nextId; id++) {
+        for (let id = this._autoIdBegin; id < this._nextId; id++) {
             const c = this._registry[id];
             if (c.intersects(this.screenCollider))
                 this.screen.insert(c);
@@ -360,7 +419,7 @@ class PhysicsProvider {
         Object.assign(this.collided, this.colliding);
 
         this.colliding = {};
-        for (let id = 1; id < this._nextId; id++) {
+        for (let id = this._autoIdBegin; id < this._nextId; id++) {
             const c = this._registry[id];
             if (!c.entity.enabled)
                 continue;
@@ -410,6 +469,13 @@ class PhysicsProvider {
                         c.handleExit(other);
                 }
             }
+        }
+
+        // Selection temporal calls
+        for (const c of this.screen.retrieve(this.selection)) {
+            if (c._pid == 0) continue;
+            if (c.selectionTempHandler != null && this.gjk(this.selection, c))
+                c.selectionTempHandler();
         }
     }
 
@@ -464,7 +530,7 @@ class PhysicsProvider {
     }
 
     debugDraw() {
-        for (let id = 0; id < this._nextId; id++)
+        for (let id = this._autoIdBegin - 1; id < this._nextId; id++)
             this._registry[id].rawDebugDraw();
 
         this.rawDebugQuadtreeDraw(this.screen);

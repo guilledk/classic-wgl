@@ -2,7 +2,6 @@ import game from "/classic/state.js";
 import { Tilemap, IsometricNavMesh, IsoAgent } from "/classic/isometric.js";
 import { Rectangle, Sprite, Text } from "/classic/transforms.js";
 import { Collider, Polygon } from "/classic/collision.js";
-import { isoToCartesian3 } from "/classic/utils.js";
 
 import { vec2, vec3 } from "/lib/gl-matrix/index.js";
 
@@ -82,6 +81,40 @@ export function initTilemap() {
     let compTilemap = tilemap.getComponent(Tilemap);
     compTilemap.uploadToGPU();
 
+    const tilemapVerts = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [1, 1, 0],
+        [0, 1, 0]
+    ];
+    for (let i = 0; i < tilemapVerts.length; i++)
+        compTilemap.isoToCartesian(tilemapVerts[i])
+
+    let compTilemapCollider = tilemap.addComponent(
+        Collider,
+        new Polygon(
+            game,
+            [0, 0, 0],
+            [1, 1, 1],
+            0,
+            tilemapVerts));
+
+    tilemap.registerCall(
+        "update",
+        function() {
+            let camDelta = game.camera.getFix();
+            vec3.negate(camDelta, camDelta);
+            vec3.copy(compTilemapCollider.position, camDelta);
+
+            vec3.copy(
+                compTilemapCollider.scale,
+                [
+                    compTilemap.mapSize[0] * game.camera.scale[0],
+                    compTilemap.mapSize[1] * game.camera.scale[1],
+                    1
+                ]);
+            compTilemapCollider.updateRect();
+        });
 }
 
 export function initSelectionMonitor() {
@@ -122,6 +155,7 @@ export function initTilemapEditor() {
     let tilemapEditor = game.getEntity("tilemapEditor");
 
     let compTilemap = tilemap.getComponent(Tilemap);
+    let compTilemapCollider = tilemap.getComponent(Collider);
 
     const uiBorder = 10;
     let selectedTile = 0;
@@ -142,7 +176,6 @@ export function initTilemapEditor() {
             rectVerts));
 
     editorCollider.clickHandler = function() {
-        console.log("test");
         localPos = vec3.clone(game.mousePos);
         vec3.sub(localPos, localPos, compTilemapSprite.position);
         
@@ -184,28 +217,16 @@ export function initTilemapEditor() {
         });
 
     // Actual tilemap editing logic
-    // tilemapEditor.registerCall(
-    //     "selectionEnd",
-    //     function() {
-    //         if (editorCollider.containsPoint(game.mousePos))
-    //             return;
+    compTilemapCollider.selectionHandler = function() {
+        if (game.editorTarget != "tilemap") return;
+        const [begin, end] = compTilemap.getSelection();
 
-    //         const [begin, end] = compTilemap.getSelection();
-    //         if (begin[0] < 0)
-    //             begin[0] = 0;
-
-    //         if (begin[1] < 0)
-    //             begin[1] = 0;
-
-    //         if (end[0] > compTilemap.sizeX - 1)
-    //             end[0] = compTilemap.sizeX - 1;
-
-    //         if (end[1] > compTilemap.sizeY)
-    //             end[1] = compTilemap.sizeY - 1;
-
-    //         compTilemap.fillRegion(begin, end, selectedTile);
-    //         compTilemap.uploadToGPU();
-    //     });
+        vec2.max(begin, begin, [0, 0]);
+        vec2.min(end, end, compTilemap.mapSize);
+       
+        compTilemap.fillRegion(begin, end, selectedTile);
+        compTilemap.uploadToGPU();
+    }
 }
 
 
@@ -215,6 +236,9 @@ export async function initNavMeshEditor() {
     let compNavMesh = navMesh.getComponent(IsometricNavMesh);
     await compNavMesh.init();
     compNavMesh.uploadToGPU();
+
+    let tilemap = game.getEntity("tilemap");
+    let compTilemapCollider = tilemap.getComponent(Collider);
 
     let navMeshSelector = game.getEntity("navMeshTileSelector");
     let navMeshEditor = game.getEntity("navMeshEditor");
@@ -296,39 +320,27 @@ export async function initNavMeshEditor() {
         });
 
     // Actual tilemap editing logic
-    // navMeshEditor.registerCall(
-    //     "selectionEnd",
-    //     function() {
-    //         if (editorCollider.containsPoint(game.mousePos))
-    //             return;
+    compTilemapCollider.selectionHandler = function() {
+        if (game.editorTarget != "navMesh") return;
+        const [begin, end] = compNavMesh.getSelection();
 
-    //         const [begin, end] = compNavMesh.getSelection();
-    //         if (begin[0] < 0)
-    //             begin[0] = 0;
+        vec2.max(begin, begin, [0, 0]);
+        vec2.min(end, end, compNavMesh.mapSize);
+       
+        compNavMesh.fillRegion(begin, end, selectedTile);
+        compNavMesh.uploadToGPU();
 
-    //         if (begin[1] < 0)
-    //             begin[1] = 0;
-
-    //         if (end[0] > compNavMesh.sizeX - 1)
-    //             end[0] = compNavMesh.sizeX - 1;
-
-    //         if (end[1] > compNavMesh.sizeY)
-    //             end[1] = compNavMesh.sizeY - 1;
-
-    //         compNavMesh.fillRegion(begin, end, selectedTile);
-    //         compNavMesh.uploadToGPU();
-
-    //         compNavMesh.updateMap(
-    //             [0, 0],
-    //             [compNavMesh.sizeX, compNavMesh.sizeY],
-    //             compNavMesh.data)
-    //     });
-
+        compNavMesh.updateMap(
+            [0, 0],
+            [compNavMesh.sizeX, compNavMesh.sizeY],
+            compNavMesh.data)
+    }
 }
 
 
 export function initAgent() {
 
+    const tilemap = game.getEntity("tilemap").getComponent(Tilemap);
     let navAgent = game.getEntity("navAgent");
     let agent = navAgent.getComponent(IsoAgent);
     let pathfinder = game.getEntity("tilemapNavigation").getComponent(IsometricNavMesh);
@@ -355,14 +367,13 @@ export function initAgent() {
         "update",
         function() {
             const cPos = vec3.clone(agent.position);
-            const camFix = game.camera.getFix();
-            vec3.transformMat3(cPos, cPos, isoToCartesian3);
-    
+            tilemap.isoToCartesian(cPos);
+
             cPos[0] -= agent.tilePixelSize[0] * agent.anchor[0];
             cPos[1] -= agent.tilePixelSize[1] * agent.anchor[1];
             cPos[0] *= game.camera.scale[0];
             cPos[1] *= game.camera.scale[1];
-            vec3.sub(cPos, cPos, camFix);
+            vec3.sub(cPos, cPos, game.camera.getFix());
 
             let scale = [
                 agent.tilePixelSize[0] * game.camera.scale[0],
@@ -374,7 +385,7 @@ export function initAgent() {
         });
 
     pathfinder.findPath(
-        [1, 14], [25, 25]).then((p) => agent.followPath(p))
+        [1, 13], [23, 12]).then((p) => agent.followPath(p))
 
 
 }
@@ -465,7 +476,6 @@ export function initDEVButtons() {
     let startPos = btnDEV.position[0];
 
     btnDEVCollider.clickHandler = function() {
-        console.log("click");
         timeSinceClick = 0;
         if (targetTools == btnDEV.position[0]) {
             targetTools = btnDEV.position[0] - 300;

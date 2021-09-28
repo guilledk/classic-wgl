@@ -18,7 +18,7 @@ import {
 
 
 export default {
-    isFirefox: navigator.userAgent.toLowerCase().indexOf('firefox') > -1,
+    isFirefox: navigator.userAgent.includes('Firefox'),
     projectionMatrix: mat4.create(),
     calls: {},
     nextEntityId: 0,
@@ -41,7 +41,6 @@ export default {
     mouseAxis: vec3.fromValues(0, 0, 0),
     mousePos: vec3.fromValues(-1, -1, -10000),
     
-    mouseIsoPos: vec3.fromValues(-1, -1, 0),
     mouseWheel: 0,
 
     mouseDown: {},
@@ -54,6 +53,9 @@ export default {
 
     selectionBegin: vec3.fromValues(-1, -1, -1),
     selectionEnd: vec3.fromValues(-1, -1, -1),
+
+    selectionIsoBegin: vec3.fromValues(-1, -1, -1),
+    selectionIsoEnd: vec3.fromValues(-1, -1, -1),
     selectionMode: -1,
     selectionColor: [0, 1, 1, 1],
 
@@ -64,7 +66,7 @@ export default {
     gl: null,
     renderList: [],
 
-    camera: new Camera([0, 0, 0], [.1, .1, 1]),
+    camera: new Camera([0, 0, 0], [1, 1, 1]),
 
     physics: null,
 
@@ -84,6 +86,13 @@ export default {
             "wheel",
             this.mouseWheelHandler.bind(this),
             false);
+
+        window.addEventListener("keydown", this.keyDownHandler.bind(this), false);
+        window.addEventListener("keyup", this.keyUpHandler.bind(this), false);
+
+        this.canvas.addEventListener("mousemove", this.mouseMoveHandler.bind(this), false);
+        this.canvas.addEventListener("mousedown", this.mouseDownHandler.bind(this), false);
+        this.canvas.addEventListener("mouseup", this.mouseUpHandler.bind(this), false);
 
         this.gl = this.canvas.getContext("webgl", {
             desynchronized: true,
@@ -247,28 +256,8 @@ export default {
             -10000,     // near
             10000);  // far
 
-        this.camera.resize([vw, vh]);
+        this.camera.resize([vw, vh, 0]);
         this.physics.resizeScreen();
-    },
-
-    pushEventHandlers() {
-        this.focused = true;
-        window.addEventListener("keydown", this.keyDownHandler.bind(this), false);
-        window.addEventListener("keyup", this.keyUpHandler.bind(this), false);
-
-        this.canvas.addEventListener("mousemove", this.mouseMoveHandler.bind(this), false);
-        this.canvas.addEventListener("mousedown", this.mouseDownHandler.bind(this), false);
-        this.canvas.addEventListener("mouseup", this.mouseUpHandler.bind(this), false);
-    },
-
-    popEventHandlers() {
-        this.focused = false;
-        this.canvas.removeEventListener("mousemove", this.mouseMoveHandler.bind(this), false);
-        this.canvas.removeEventListener("mousedown", this.mouseDownHandler.bind(this), false);
-        this.canvas.removeEventListener("mouseup", this.mouseUpHandler.bind(this), false);
-
-        window.removeEventListener("keydown", this.keyDownHandler.bind(this), false);
-        window.removeEventListener("keyup", this.keyUpHandler.bind(this), false);
     },
 
     async loadResources() {
@@ -377,10 +366,11 @@ export default {
     // EVENT HANDLERS
 
     pointerLockChangeHandler (event) {
-        if(document.pointerLockElement === this.canvas && !this.focused)
-            this.pushEventHandlers();
-        else
-            this.popEventHandlers();
+        if(!this.focused && document.pointerLockElement == this.canvas)
+            this.focused = true;
+        
+        if (this.focused && document.pointerLockElement == null)
+            this.focused = false;
     },
 
     clearMouseButtons() {
@@ -422,24 +412,28 @@ export default {
     },
 
     mouseWheelHandler(event) {
+        if (!this.focused) return;
         event.preventDefault();
 
-        this.mouseWheel -= event.deltaY / this.canvas.height;
+        this.mouseWheel -= ((event.deltaY * 2) / this.canvas.height);
     },
 
     mouseUpHandler(event) {
+        if (!this.focused) return;
         this.mouseDown[event.button] = false;
         this.mouseReleased[event.button] = true;
 
         if (event.button == 0) {
             this.selectionMode = -1;
         
-            vec3.copy(this.selectionEnd, this.mouseIsoPos);
+            vec3.copy(this.selectionEnd, this.mousePos);
             this.performCall("selectionEnd");
+            this.physics.endSelection();
         }
     },
 
     mouseDownHandler(event) {
+        if (!this.focused) return;
         this.mouseDown[event.button] = true;
         this.mousePressed[event.button] = true;
 
@@ -449,39 +443,15 @@ export default {
         if (event.button == 0) {
             this.selectionMode = 1;
 
-            vec3.copy(this.selectionBegin, this.mouseIsoPos);
+            vec3.copy(this.selectionBegin, this.mousePos);
             this.performCall("selectionBegin");
+            this.physics.beginSelection();
         }
     },
 
     mouseMoveHandler(event) {
-        let xFix = 0;
-        if (this.isFirefox)
-            xFix = 2;
-        this.mousePos[0] += ((event.movementX + xFix) * this.mouseSensibility);
-        this.mousePos[1] += (event.movementY * this.mouseSensibility);
-
-        if (this.mousePos[0] < 0)
-            this.mousePos[0] = 0;
-        if (this.mousePos[0] > this.canvas.width)
-            this.mousePos[0] = this.canvas.width;
-
-        if (this.mousePos[0] == -1)
-            return;
-
-        if (event.button == 0) {
-            this.selectionMode = 1;
-
-            vec3.copy(this.selectionBegin, this.mouseIsoPos);
-            this.performCall("selectionBegin");
-        }
-    },
-
-    mouseMoveHandler(event) {
-        let xFix = 0;
-        if (this.isFirefox)
-            xFix = 2;
-        this.mousePos[0] += ((event.movementX + xFix) * this.mouseSensibility);
+        if (!this.focused) return;
+        this.mousePos[0] += (event.movementX * this.mouseSensibility);
         this.mousePos[1] += (event.movementY * this.mouseSensibility);
 
         if (this.mousePos[0] < 0)
@@ -493,10 +463,6 @@ export default {
             this.mousePos[1] = 0;
         if (this.mousePos[1] > this.canvas.height)
             this.mousePos[1] = this.canvas.height;
-
-        let mouseGlobal = vec3.clone(this.mousePos);
-        vec3.add(mouseGlobal, mouseGlobal, this.camera.getFix());
-        vec3.transformMat4(this.mouseIsoPos, mouseGlobal, cartesianToIso4);
 
         this.mouseAxis[0] = ((this.mousePos[0] / this.canvas.width) - .5) * 2;
         this.mouseAxis[1] = ((this.mousePos[1] / this.canvas.height) - .5) * 2;
@@ -511,6 +477,9 @@ export default {
         if (this.mouseAxis[1] < -1)
             this.mouseAxis[1] = -1;
 
+        if (this.selectionMode == 1)
+            this.physics.updateSelection();
+        
     },
 
     isKeyDown(code) {
@@ -539,11 +508,13 @@ export default {
     },
 
     keyDownHandler(event) {
+        if (!this.focused) return;
         this.keysDown[event.code] = true;
         this.keysPressed[event.code] = true;
     },
 
     keyUpHandler(event) {
+        if (!this.focused) return;
         this.keysDown[event.code] = false;
         this.keysReleased[event.code] = true;
     }

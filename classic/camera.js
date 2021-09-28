@@ -5,7 +5,7 @@ export let Camera = class {
     constructor(position, scale) {
         this.position = position;
         this.scale = scale;
-        this.size = [0, 0];
+        this.size = vec3.create();
     }
 
     resize(size) {
@@ -21,12 +21,12 @@ export let Camera = class {
 
     matrix() {
         var camMatrix = mat4.create();
-        const invPos = [
-            -(this.position[0] - ((this.size[0]) / 2)),
-            -(this.position[1] - ((this.size[1]) / 2)),
-            -this.position[2]];
+        const pos = vec3.clone(this.position);
+        vec3.negate(pos, pos);
+        vec3.add(pos, pos, [this.size[0] / 2, this.size[1] / 2, 0]);
+        
         mat4.translate(
-            camMatrix, camMatrix, invPos);
+            camMatrix, camMatrix, pos);
         mat4.scale(
             camMatrix, camMatrix, this.scale);
         return camMatrix;

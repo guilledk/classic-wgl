@@ -3,24 +3,13 @@ import { fetchObject, getNoiseRange } from "/classic/utils.js";
 import { Component } from "/classic/ecs.js";
 import { Drawable } from "/classic/transforms.js";
 import { 
-    isoToCartesian4, isoToCartesian3,
-    cartesianToIso3
+    isoToCartesian4,
+    cartesianToIso4
 } from "/classic/utils.js";
 
 import { Animator } from "/classic/animator.js";
 
 import { mat4, vec2, vec3 } from "/lib/gl-matrix/index.js";
-
-
-function isoDistanceToCam(pos) {
-    const camPos = vec3.clone(game.camera.position);
-    vec3.add(
-        camPos,
-        camPos,
-        [game.camera.size[0] / 2, 0, 0]);
-    vec3.transformMat3(camPos, camPos, cartesianToIso3);
-    return vec3.distance(camPos, pos);
-}
 
 
 class Tilemap extends Drawable {
@@ -38,14 +27,17 @@ class Tilemap extends Drawable {
 
         this.tileSet = this.game.getTexture(tileSet);
         this.tilePixelSize = tilePixelSize;
+
+        this.setScale(scale);
+
         this.tileSetSize = [
             this.tileSet.image.width / tilePixelSize[0],
             this.tileSet.image.height / tilePixelSize[1]
         ];
 
         this.tileSetPixelSize = [
-            this.tileSetSize[0] * this.tilePixelSize[0],
-            this.tileSetSize[1] * this.tilePixelSize[1]
+            this.tileSet.image.width,
+            this.tileSet.image.height
         ];
 
         this.maxTile = maxTile;
@@ -59,6 +51,37 @@ class Tilemap extends Drawable {
             this.data = data;
         
         this.mapDataTexture = null;
+
+        this.mouseIsoPos = vec3.fromValues(-1, -1, -1);
+        this.selectionIsoBegin = vec3.fromValues(-1, -1, -1);
+        this.selectionIsoEnd = vec3.fromValues(-1, -1, -1);
+
+        entity.registerCall("update", this.updateMousePos.bind(this));
+        entity.registerCall("selectionBegin", this.selectionBegin.bind(this));
+        entity.registerCall("selectionEnd", this.selectionEnd.bind(this));
+    }
+
+    selectionBegin() {
+        this.selectionIsoBegin = vec3.clone(this.mouseIsoPos);
+    }
+    
+    selectionEnd() {
+        this.selectionIsoEnd = vec3.clone(this.mouseIsoPos);
+    }
+
+    updateMousePos() {
+        this.mouseIsoPos = vec3.clone(this.game.mousePos);
+        vec3.add(this.mouseIsoPos, this.mouseIsoPos, this.game.camera.getFix());
+        this.cartesianToIso(this.mouseIsoPos);
+    }
+
+    modelMatrix() {
+        var modelMatrix = mat4.create();
+        mat4.translate(
+            modelMatrix, modelMatrix, this.position);
+        mat4.scale(
+             modelMatrix, modelMatrix, [...this.mapSize, 1]);
+        return modelMatrix;
     }
 
     async loadMap(url) {
@@ -78,6 +101,44 @@ class Tilemap extends Drawable {
         return minObj;
     }
 
+    setScale(scale) {
+
+        this.scale = scale;
+        this.invScale = vec3.create();
+        vec3.inverse(this.invScale, scale);
+
+        this._isoToCartesian = mat4.clone(isoToCartesian4);
+        mat4.scale(
+            this._isoToCartesian,
+            this._isoToCartesian,
+            this.scale);
+
+        this._cartesianToIso = mat4.clone(cartesianToIso4);
+        mat4.scale(
+            this._cartesianToIso,
+            this._cartesianToIso,
+            this.invScale);
+
+    }
+
+    cartesianToIso(v) {
+        vec3.transformMat4(v, v, this._cartesianToIso);
+    }
+
+    isoToCartesian(v) {
+        vec3.transformMat4(v, v, this._isoToCartesian);
+    }
+
+    isoDistanceToCam(pos) {
+        const camPos = vec3.clone(game.camera.position);
+        vec3.add(
+            camPos,
+            camPos,
+            [game.camera.size[0] / 2, 0, 0]);
+        this.cartesianToIso(camPos);
+        return vec3.distance(camPos, pos);
+    }
+
     generateNoiseMap() {
         for (let y = 0; y < this.sizeY; y++)
             for (let x = 0; x < this.sizeX; x++)
@@ -87,11 +148,11 @@ class Tilemap extends Drawable {
 
     getSelection() {
         var begin = vec2.fromValues(
-            this.game.selectionBegin[0] / this.game.camera.scale[0],
-            this.game.selectionBegin[1] / this.game.camera.scale[1]);
+            this.selectionIsoBegin[0] / this.game.camera.scale[0],
+            this.selectionIsoBegin[1] / this.game.camera.scale[1]);
         var end = vec2.fromValues(
-            this.game.selectionEnd[0] / this.game.camera.scale[0],
-            this.game.selectionEnd[1] / this.game.camera.scale[1]);
+            this.selectionIsoEnd[0] / this.game.camera.scale[0],
+            this.selectionIsoEnd[1] / this.game.camera.scale[1]);
 
         var from = vec2.create();
         var to = vec2.create();
@@ -193,7 +254,7 @@ class Tilemap extends Drawable {
         this.gl.uniformMatrix4fv(
             this.game.shaders.isoTilemap.unif.isoMatrix,
             false,
-            isoToCartesian4);
+            this._isoToCartesian);
 
         this.gl.uniform2fv(
             this.game.shaders.isoTilemap.unif.tileSetSize, this.tileSetSize);
@@ -205,13 +266,13 @@ class Tilemap extends Drawable {
 
         this.gl.uniform2fv(
             this.game.shaders.isoTilemap.unif.selectedTile,
-            [this.game.mouseIsoPos[0] / this.game.camera.scale[0],
-            this.game.mouseIsoPos[1] / this.game.camera.scale[1]]);
+            [this.mouseIsoPos[0] / this.game.camera.scale[0],
+            this.mouseIsoPos[1] / this.game.camera.scale[1]]);
 
         this.gl.uniform2fv(
             this.game.shaders.isoTilemap.unif.selectionBegin,
-            [this.game.selectionBegin[0] / this.game.camera.scale[0],
-            this.game.selectionBegin[1] / this.game.camera.scale[1]]);
+            [this.selectionIsoBegin[0] / this.game.camera.scale[0],
+            this.selectionIsoBegin[1] / this.game.camera.scale[1]]);
     
         this.gl.uniform1i(this.game.shaders.isoTilemap.unif.selectionMode, this.game.selectionMode);
         this.gl.uniform4fv(this.game.shaders.isoTilemap.unif.selectionColor, this.game.selectionColor);
@@ -348,8 +409,8 @@ class IsometricDrawable extends Drawable {
     modelMatrix() {
         let modelMatrix = mat4.create();
         let cartPos = vec3.clone(this.position);
+        this.tilemap.isoToCartesian(cartPos);
         vec3.add(cartPos, cartPos, this.tilemap.position);
-        vec3.transformMat3(cartPos, cartPos, isoToCartesian3);
         mat4.translate(
             modelMatrix, modelMatrix, cartPos);
         mat4.scale(
@@ -358,7 +419,7 @@ class IsometricDrawable extends Drawable {
     }
 
     order() {
-        return this.tilemap.order() - isoDistanceToCam(this.position); 
+        return this.tilemap.order() - this.tilemap.isoDistanceToCam(this.position); 
     }
 };
 
@@ -397,21 +458,18 @@ class IsoSprite extends IsometricDrawable {
 
     modelMatrix() {
         var modelMatrix = super.modelMatrix();
-        const texDimension = [
-            this.texture.image.width, this.texture.image.height];
+        const texDimension = vec3.clone(this.tilePixelSize); 
         const texAnchorDelta = [
-            texDimension[0] * this.anchor[0] * this.scale[0],
-            texDimension[1] * this.anchor[1] * this.scale[1]];
+            texDimension[0] * this.anchor[0],
+            texDimension[1] * this.anchor[1]];
         
-        var anchoredPos = vec3.fromValues(0, 0, 0);
+        var anchoredPos = vec3.create();
         anchoredPos[0] -= texAnchorDelta[0];
         anchoredPos[1] -= texAnchorDelta[1];
         mat4.translate(
             modelMatrix, modelMatrix, anchoredPos);
 
-        var sizeInPixels = vec3.clone(this.scale);
-        sizeInPixels[0] *= texDimension[0];
-        sizeInPixels[1] *= texDimension[1];
+        var sizeInPixels = [texDimension[0], texDimension[1], 1];
         mat4.scale(
             modelMatrix, modelMatrix, sizeInPixels);
         return modelMatrix;

@@ -324,70 +324,35 @@ export function initAnimations(animationManifest) {
 import { mat3, vec3, mat4, vec4 } from '/lib/gl-matrix/index.js';
 
 
-var _cartesianToIso3 = mat3.fromValues(
-    1, 1, 0,
-   -2, 2, 0,
-    0, 0, 1);
-const isoScaling3 = mat3.fromValues(
-    1/64, 0,    0,
-    0,    1/64, 0,
-    0,    0,    1);
-mat3.multiply(_cartesianToIso3, _cartesianToIso3, isoScaling3);
+var _cartesianToIso3 = mat3.create();
+
+mat3.rotate(_cartesianToIso3, Math.PI / 4);
+mat3.scale(_cartesianToIso3, _cartesianToIso3, [1, 2]);
+
 export const cartesianToIso3 = _cartesianToIso3;
 
 
-var _isoToCartesian3 = mat3.fromValues(
-    0.5,-0.25, 0,
-    0.5, 0.25, 0,
-    0,   0,    1);
-const cartesianScaling3 = mat3.fromValues(
-    64,  0,  0,
-    0,  64,  0,
-    0,  0,  1);
-mat3.multiply(_isoToCartesian3, _isoToCartesian3, cartesianScaling3);
+var _isoToCartesian3 = mat3.create();
+mat3.invert(_isoToCartesian3, _cartesianToIso3);
+
 export const isoToCartesian3 = _isoToCartesian3;
 
-var testIdentity3 = mat3.create();
-mat3.multiply(testIdentity3, isoToCartesian3, cartesianToIso3);
 
-console.assert(
-    mat3.equals(testIdentity3, mat3.create()),
-    "Isometric coord transformation mismatch");
+var _cartesianToIso4 = mat4.create();
 
+mat4.rotateZ(_cartesianToIso4, _cartesianToIso4, Math.PI / 4);
+mat4.scale(_cartesianToIso4, _cartesianToIso4, [1, 2, 1]);
 
-var _cartesianToIso4 = mat4.fromValues(
-    1, 1, 0, 0,
-   -2, 2, 0, 0,
-    0, 0, 1, 0,
-    0, 0, 0, 1);
-const isoScaling4 = mat4.fromValues(
-    1/64, 0,    0, 0,
-    0,    1/64, 0, 0,
-    0,    0,    1, 0,
-    0,    0,    0, 1);
-mat4.multiply(_cartesianToIso4, _cartesianToIso4, isoScaling4);
 export const cartesianToIso4 = _cartesianToIso4;
 
 
-var _isoToCartesian4 = mat4.fromValues(
-    0.5,-0.25, 0, 0,
-    0.5, 0.25, 0, 0,
-    0,   0,    1, 0,
-    0,   0,    0, 1);
-const cartesianScaling4 = mat4.fromValues(
-    64,  0,  0, 0,
-    0,  64,  0, 0,
-    0,  0,   1, 0,
-    0,  0,   0, 1);
-mat4.multiply(_isoToCartesian4, _isoToCartesian4, cartesianScaling4);
+var _isoToCartesian4 = mat4.create();
+mat4.invert(_isoToCartesian4, _cartesianToIso4);
+
 export const isoToCartesian4 = _isoToCartesian4;
 
-var testIdentity4 = mat4.create();
-mat4.multiply(testIdentity4, isoToCartesian4, cartesianToIso4);
 
-console.assert(
-    mat4.equals(testIdentity4, mat4.create()),
-    "Isometric coord transformation mismatch");
+
 
 /*
  *  Simplex Noise
