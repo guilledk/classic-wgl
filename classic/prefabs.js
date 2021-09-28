@@ -369,6 +369,9 @@ export function initAgent() {
             const cPos = vec3.clone(agent.position);
             tilemap.isoToCartesian(cPos);
 
+            // Make Camera follow agent
+            //vec3.copy(game.camera.position, cPos);
+
             cPos[0] -= agent.tilePixelSize[0] * agent.anchor[0];
             cPos[1] -= agent.tilePixelSize[1] * agent.anchor[1];
             cPos[0] *= game.camera.scale[0];

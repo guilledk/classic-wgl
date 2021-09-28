@@ -13,18 +13,22 @@ export let Camera = class {
     }
 
     getFix() {
-        let camFixed = vec3.clone(this.position);
-        camFixed[0] -= this.size[0] / 2;
-        camFixed[1] -= this.size[1] / 2;
+        const camFixed = vec3.clone(this.position);
+        const size = vec3.clone(this.size);
+
+        vec3.mul(camFixed, camFixed, this.scale);
+
+        vec3.div(size, size, [2, 2, 1]);
+
+        vec3.sub(camFixed, camFixed, size);
+
         return camFixed;
     }
 
     matrix() {
-        var camMatrix = mat4.create();
-        const pos = vec3.clone(this.position);
+        const pos = this.getFix();
         vec3.negate(pos, pos);
-        vec3.add(pos, pos, [this.size[0] / 2, this.size[1] / 2, 0]);
-        
+        var camMatrix = mat4.create();
         mat4.translate(
             camMatrix, camMatrix, pos);
         mat4.scale(
