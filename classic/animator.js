@@ -2,8 +2,10 @@ import { Component } from "/classic/ecs.js"
 
 
 class Animator extends Component {
-    constructor(entity, target) {
+    constructor(entity, target, speed) {
         super(entity);
+        this.speed = speed;
+
         this.animation = null;
         this.counter = 0.0;
         this.frame = 0;
@@ -18,12 +20,18 @@ class Animator extends Component {
     dump() {
         const minObj = super.dump();
         minObj.target = this.target.toGameObjectString();
+        minObj.speed = this.speed;
         return minObj;
     }
 
     update() {
         if (this._playing || this.repeat) {
-            this.counter += this.game.deltaTime * (this.animation.rate);
+
+            this.counter += 
+                this.game.deltaTime *
+                this.animation.rate *
+                this.speed;
+
             let intCounter = Math.floor(this.counter);
             if (intCounter >= this.animation.sequence.length) {
                 intCounter = 0;

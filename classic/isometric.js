@@ -72,6 +72,7 @@ class Tilemap extends Drawable {
     updateMousePos() {
         this.mouseIsoPos = vec3.clone(this.game.mousePos);
         vec3.add(this.mouseIsoPos, this.mouseIsoPos, this.game.camera.getFix());
+        vec3.div(this.mouseIsoPos, this.mouseIsoPos, this.game.camera.scale);
         this.cartesianToIso(this.mouseIsoPos);
     }
 
@@ -134,7 +135,7 @@ class Tilemap extends Drawable {
         vec3.add(
             camPos,
             camPos,
-            [game.camera.size[0] / 2, 0, 0]);
+            [0, -game.camera.size[1] / 2, 0]);
         this.cartesianToIso(camPos);
         return vec3.distance(camPos, pos);
     }
@@ -147,17 +148,10 @@ class Tilemap extends Drawable {
     }
 
     getSelection() {
-        var begin = vec2.fromValues(
-            this.selectionIsoBegin[0] / this.game.camera.scale[0],
-            this.selectionIsoBegin[1] / this.game.camera.scale[1]);
-        var end = vec2.fromValues(
-            this.selectionIsoEnd[0] / this.game.camera.scale[0],
-            this.selectionIsoEnd[1] / this.game.camera.scale[1]);
-
         var from = vec2.create();
         var to = vec2.create();
-        vec2.min(from, begin, end);
-        vec2.max(to, begin, end);
+        vec2.min(from, this.selectionIsoBegin, this.selectionIsoEnd);
+        vec2.max(to, this.selectionIsoBegin, this.selectionIsoEnd);
         vec2.floor(from, from);
         vec2.ceil(to, to);
         return [from, to];
@@ -266,13 +260,12 @@ class Tilemap extends Drawable {
 
         this.gl.uniform2fv(
             this.game.shaders.isoTilemap.unif.selectedTile,
-            [this.mouseIsoPos[0] / this.game.camera.scale[0],
-            this.mouseIsoPos[1] / this.game.camera.scale[1]]);
+            [this.mouseIsoPos[0], this.mouseIsoPos[1]]);
 
         this.gl.uniform2fv(
             this.game.shaders.isoTilemap.unif.selectionBegin,
-            [this.selectionIsoBegin[0] / this.game.camera.scale[0],
-            this.selectionIsoBegin[1] / this.game.camera.scale[1]]);
+            [this.selectionIsoBegin[0],
+             this.selectionIsoBegin[1]]);
     
         this.gl.uniform1i(this.game.shaders.isoTilemap.unif.selectionMode, this.game.selectionMode);
         this.gl.uniform4fv(this.game.shaders.isoTilemap.unif.selectionColor, this.game.selectionColor);
@@ -538,14 +531,14 @@ class IsoSprite extends IsometricDrawable {
 
 
 const animDirs = [
-    "walkSouth",
-    "walkSouthEast",
-    "walkEast",
-    "walkNorthEast",
-    "walkNorth",
-    "walkNorthWest",
-    "walkWest",
-    "walkSouthWest"
+    "South",
+    "SouthEast",
+    "East",
+    "NorthEast",
+    "North",
+    "NorthWest",
+    "West",
+    "SouthWest"
 ];
 
 let AgentStates = {
@@ -561,7 +554,9 @@ class IsoAgent extends IsoSprite {
         tilemap,
         frame,
         tileSetSize,
-        anchor
+        anchor,
+        speed,
+        animSpeed
     ) {
         super(
             entity,
@@ -571,12 +566,21 @@ class IsoAgent extends IsoSprite {
             tileSetSize,
             anchor);
 
-        this.anim = entity.addComponent(Animator, this);
+        this.anim = entity.addComponent(Animator, this, animSpeed);
         this.idle();
 
-        this.speed = 1.6; // tiles / second
+        this.speed = speed; // tiles per second
+
+        this.animIndex = 0;
 
         entity.registerCall("update", this.update.bind(this));
+    }
+
+    dump() {
+        const minObj = super.dump();
+        minObj.speed = this.speed;
+        minObj.animSpeed = this.anim.speed;
+        return minObj;
     }
 
     idle() {
@@ -589,7 +593,15 @@ class IsoAgent extends IsoSprite {
 
     followPath(path) {
         this._path = path;
+
+        this._init_dist = vec2.distance(
+            this.position, this._path[1]);
+
+        this._path[0] = [this.position[0], this.position[1]];
         this._state = AgentStates.followPath;
+        this._start_index = 0;
+        this._target_index = 1;
+        this._delta = 0; 
     }
 
     nextTarget() {
@@ -597,33 +609,44 @@ class IsoAgent extends IsoSprite {
     }
 
     update() {
+
         switch(this._state) {
             case AgentStates.idle :
-                this.anim.stop();
+                this.anim.play(
+                    this.game.animations["idle" + animDirs[this.animIndex]],
+                    true); 
                 break;
 
             case AgentStates.followPath :
 
-                this._delta += this.speed * this.game.deltaTime;
+                this._delta += (this.speed * this.game.deltaTime) / this._init_dist;
                 if (this._delta >= 1) {
-                    this._delta = 0;
                     this.nextTarget();
+                    this._delta = 0;
 
                     if (this._target_index == this._path.length) {
                         this.idle();
                         return;
                     }
+
+                    this._init_dist = vec2.distance(
+                        this.position, this._path[this._target_index]);
                 }
 
                 
                 let delta = vec2.create();
                 vec2.sub(delta, this._path[this._target_index], this._path[this._start_index]);
                 let radians = Math.atan2(...delta);
-                
-                this.direction = radians * (180 / Math.PI);
-                let index = Math.floor(this.direction / 45);
 
-                this.anim.play(this.game.animations[animDirs[index]], true); 
+                this.direction = radians * (180 / Math.PI);
+                this.animIndex = Math.floor(this.direction / 45);
+
+                if (this.animIndex < 0)
+                    this.animIndex = 8 + this.animIndex;
+
+                this.anim.play(
+                    this.game.animations["walk" + animDirs[this.animIndex]],
+                    true); 
 
                 vec3.lerp(
                     this.position,

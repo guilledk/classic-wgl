@@ -32,6 +32,11 @@ function vecAdd(a, b) {
     return [a[0] + b[0], a[1] + b[1]];
 }
 
+function vecFloor(v) {
+    v[0] = Math.floor(v[0]);
+    v[1] = Math.floor(v[1]);
+}
+
 function vecDistance(a, b) {
     const deltaX = a[0] - b[0];
     const deltaY = a[1] - b[1];
@@ -149,6 +154,9 @@ function aStarPath(mapName, from, to) {
     let fCosts = new Map2D(map.size, Number.MAX_SAFE_INTEGER);
     let inOpen = new Map2D(map.size, false); 
     let cameFrom = new Map2D(map.size, false);
+
+    vecFloor(from);
+    vecFloor(to);
 
     const neighbours = [
         [-1, -1],

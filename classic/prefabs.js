@@ -274,7 +274,6 @@ export async function initNavMeshEditor() {
             rectVerts));
 
     editorCollider.addHandler("click", function() {
-        console.log("click");
         localPos = vec3.clone(game.mousePos);
         vec3.sub(localPos, localPos, compTilemapSprite.position);
         
@@ -352,17 +351,13 @@ export function initAgent() {
             game,
             [0, 0, 0], [1, 1, 1], 0, rectVerts));
 
-    collider.clickHandler = function() {
-        console.log("clicked agent");
-    }
-
-    collider.handleEnter = function(other) {
+    collider.addHandler("enter", function(other) {
         collider.debugColor = [1, 1, 1, .2];
-    }
+    });
 
-    collider.handleExit = function(other) {
+    collider.addHandler("exit", function(other) {
         collider.debugColor = [.1, .1, .1, .2];
-    }
+    });
 
     navAgent.registerCall(
         "update",
@@ -388,8 +383,18 @@ export function initAgent() {
             collider.updateRect();
         });
 
-    pathfinder.findPath(
-        [1, 13], [23, 12]).then((p) => agent.followPath(p))
+    let compTilemapCollider = tilemap.entity.getComponent(Collider);
+
+    compTilemapCollider.addHandler("click", function() {
+
+        const start = [agent.position[0], agent.position[1]];
+        const end = [tilemap.mouseIsoPos[0], tilemap.mouseIsoPos[1]];
+
+        if (vec2.dist(start, end) > 2)
+            pathfinder.findPath(start, end).then((p) =>
+                agent.followPath(p));
+    });
+
 
 
 }
