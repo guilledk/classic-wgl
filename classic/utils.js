@@ -35,6 +35,15 @@ export async function fetchObject(url, config = {}) {
     }
 }
 
+export async function fetchBase64Object(url, config = {}) {
+    try {
+        const response = await fetch(url, config);
+        return JSON.parse(atob(await response.text()));
+    } catch (err) {
+        console.error(err);
+    }
+}
+
 export function loadImage(src) {
     return new Promise((resolve, reject) => {
         let img = new Image()

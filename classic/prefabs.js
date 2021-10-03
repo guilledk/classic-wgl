@@ -79,7 +79,6 @@ export function initTilemap() {
     let tilemap = game.getEntity("tilemap");
 
     let compTilemap = tilemap.getComponent(Tilemap);
-    compTilemap.uploadToGPU();
 
     const tilemapVerts = [
         [0, 0, 0],
@@ -234,8 +233,6 @@ export async function initNavMeshEditor() {
 
     let navMesh = game.getEntity("tilemapNavigation");
     let compNavMesh = navMesh.getComponent(IsometricNavMesh);
-    await compNavMesh.init();
-    compNavMesh.uploadToGPU();
 
     let tilemap = game.getEntity("tilemap");
     let compTilemapCollider = tilemap.getComponent(Collider);
@@ -391,8 +388,9 @@ export function initAgent() {
         const end = [tilemap.mouseIsoPos[0], tilemap.mouseIsoPos[1]];
 
         if (vec2.dist(start, end) > 2)
-            pathfinder.findPath(start, end).then((p) =>
-                agent.followPath(p));
+            pathfinder.findPath(start, end).then((p) => {
+                if (p != null) agent.followPath(p)
+            });
     });
 
 
@@ -415,10 +413,10 @@ export function initDEVButtons() {
     const btnPixelSize = [64, 64]
     const margin = 30;
 
-    let btnToolTilemap = game.spawnEntity("btnTilemap");
-    let btnTilemap = btnToolTilemap.addComponent(
-        Sprite, [-400, 0, -10], [btnTilemapScale, btnTilemapScale, 1],
-        game.textures.editorIcons.name, true, 1, [4, 4], [.5, .5]);
+    let btnToolTilemap = game.getEntity("btnTilemap");
+    let btnTilemap = btnToolTilemap.getComponent(Sprite);
+        // Sprite, [-400, 0, -10], [btnTilemapScale, btnTilemapScale, 1],
+        // game.textures.editorIcons.name, true, 1, [4, 4], [.5, .5]);
     let btnTilemapCollider = btnToolTilemap.addComponent(
         Collider,
         new Polygon(
@@ -433,10 +431,10 @@ export function initDEVButtons() {
         return true;
     });
 
-    let btnToolNavMesh = game.spawnEntity("btnNavMesh");
-    let btnNavMesh = btnToolNavMesh.addComponent(
-        Sprite, [-400, 0, -10], [btnNavMeshScale, btnNavMeshScale, 1],
-        game.textures.editorIcons.name, true, 2, [4, 4], [.5, .5]);
+    let btnToolNavMesh = game.getEntity("btnNavMesh");
+    let btnNavMesh = btnToolNavMesh.getComponent(Sprite);
+        // Sprite, [-400, 0, -10], [btnNavMeshScale, btnNavMeshScale, 1],
+        // game.textures.editorIcons.name, true, 2, [4, 4], [.5, .5]);
     let btnNavMeshCollider = btnToolNavMesh.addComponent(
         Collider,
         new Polygon(
@@ -451,10 +449,10 @@ export function initDEVButtons() {
         return true;
     });
 
-    let btnDEVEntity = game.spawnEntity("btnDEV");
-    let btnDEV = btnDEVEntity.addComponent(
-        Sprite, [0, 0, -10], [btnDEVScale, btnDEVScale, 1],
-        game.textures.editorIcons.name, true, 0, [4, 4], [0.5, 0.5]);
+    let btnDEVEntity = game.getEntity("btnDEV");
+    let btnDEV = btnDEVEntity.getComponent(Sprite);
+        // Sprite, [0, 0, -10], [btnDEVScale, btnDEVScale, 1],
+        // game.textures.editorIcons.name, true, 0, [4, 4], [0.5, 0.5]);
 
     let verts = [
         [.1,  .15, 0],

@@ -109,6 +109,14 @@
         {
             "name": "semaphore02",
             "src": "/res/semaphore02.png"
+        },
+        {
+            "name": "tree",
+            "src": "/res/tree.png"
+        },
+        {
+            "name": "house",
+            "src": "/res/house01.png"
         }
     ],
     "animations": [

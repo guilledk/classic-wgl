@@ -241,6 +241,8 @@ onmessage = function(e) {
                 data: msg.args.data
             };
 
+            console.log("Init nav mesh \'" + msg.args.name + "\' of size " + msg.args.size);
+
             postMessage({ id: msg.id, data: "ok" });
             break;
         }

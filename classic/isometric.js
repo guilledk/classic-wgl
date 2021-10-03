@@ -1,5 +1,5 @@
 import game from "/classic/state.js";
-import { fetchObject, getNoiseRange } from "/classic/utils.js";
+import { fetchBase64Object, getNoiseRange } from "/classic/utils.js";
 import { Component } from "/classic/ecs.js";
 import { Drawable } from "/classic/transforms.js";
 import { 
@@ -17,7 +17,7 @@ class Tilemap extends Drawable {
         entity,
         position, scale,
         sizeX, sizeY,
-        tileSet, tilePixelSize, maxTile, data
+        tileSet, tilePixelSize, maxTile, dataUrl
     ) {
         super(entity, position, scale);
         this.sizeX = sizeX;
@@ -42,13 +42,17 @@ class Tilemap extends Drawable {
 
         this.maxTile = maxTile;
 
-        if (data == null) {
+        this.dataUrl = dataUrl;
+
+        if (dataUrl != null)
+            this.loadMap(dataUrl);
+        else {
             this.data = Array(sizeX * sizeY);
             for (let y = 0; y < this.sizeY; y++)
                 for (let x = 0; x < this.sizeX; x++)
                     this.data[x + (sizeX * y)] = 0;
-        } else
-            this.data = data;
+        }
+
         
         this.mapDataTexture = null;
 
@@ -85,10 +89,28 @@ class Tilemap extends Drawable {
         return modelMatrix;
     }
 
-    async loadMap(url) {
-        const data = await fetchObject(url);
-        this.data = data;
-        this.uploadToGPU();
+    downloadMap(url) {
+        let link = document.createElement('a');
+        link.download = url;
+
+        const blob = new Blob(
+            [btoa(JSON.stringify(this.data))],
+            {type: "text/plain;charset=utf-8"});
+
+        link.href = URL.createObjectURL(blob);
+
+        link.click();
+
+        URL.revokeObjectURL(link.href);
+    }
+
+    loadMap(url) {
+        fetch(url)
+            .then(res => res.text())
+            .then(text => {
+                this.data = JSON.parse(atob(text));
+                this.uploadToGPU();
+            });
     }
 
     dump() {
@@ -98,7 +120,7 @@ class Tilemap extends Drawable {
         minObj.tileSet = this.tileSet.name;
         minObj.tilePixelSize = this.tilePixelSize;
         minObj.maxTile = this.maxTile;
-        minObj.data = this.data;
+        minObj.data = this.dataUrl;
         return minObj;
     }
 
@@ -281,22 +303,15 @@ class Tilemap extends Drawable {
 
 class IsometricNavMesh extends Tilemap {
     constructor(
-        entity, map, sizeX, sizeY, data) {
+        entity, map, sizeX, sizeY, dataUrl) {
         map = entity.game.getEntity(map).getComponent(Tilemap);
         super(
             entity,
             map.position, map.scale,
             sizeX, sizeY,
             "navTileset",
-            [8, 8], 2, data 
+            [8, 8], 2, dataUrl
         );
-
-        if (data == null) {
-            this.data = Array(sizeX * sizeY);
-            for (let y = 0; y < this.sizeY; y++)
-                for (let x = 0; x < this.sizeX; x++)
-                    this.data[x + (sizeX * y)] = 1;
-        }
 
         this.map = map;
 
@@ -307,16 +322,25 @@ class IsometricNavMesh extends Tilemap {
         this._worker.onmessage = this.pathfinderMessageHandler.bind(this);
     }
 
-    async init() {
-        console.assert(
-            await this.sendMsg(
-                "initmap",
-                { 
-                    name: this.entity.name,
-                    size: [this.sizeX, this.sizeY],
-                    data: this.data
-                }) == "ok",
-            "Isometric Nav Mesh initialization error");
+    loadMap(url) {
+        var self = this;
+        fetch(url)
+            .then(res => res.text())
+            .then(function(text) {
+                self.data = JSON.parse(atob(text));
+                self.uploadToGPU();
+                self.sendMsg(
+                    "initmap",
+                    { 
+                        name: self.entity.name,
+                        size: [self.sizeX, self.sizeY],
+                        data: self.data
+                    }).then(ret => {
+                    console.assert(
+                        ret == "ok",
+                        "Isometric Nav Mesh initialization error")
+                });
+            });
     }
 
     updateMap(corner, size, data) {
@@ -346,7 +370,7 @@ class IsometricNavMesh extends Tilemap {
         minObj.map = this.map.name;
         minObj.sizeX = this.sizeX;
         minObj.sizeY = this.sizeY;
-        minObj.data = this.data;
+        minObj.data = this.dataUrl;
         return minObj;
     }
 
@@ -371,16 +395,16 @@ class IsometricNavMesh extends Tilemap {
 
         const {id, data} = msg.data;
        
-        if (data) {
-            const resolve = this._resolves[id]
-            if (resolve)
-                resolve(data)
+        // if (data) {
+        const resolve = this._resolves[id]
+        if (resolve)
+            resolve(data)
     
-        } else {
-            const reject = this._rejects[id]
-            if (reject)
-                reject()
-        }
+        // } else {
+        //     const reject = this._rejects[id]
+        //     if (reject)
+        //         reject()
+        // }
         
         // purge used callbacks
         delete this._resolves[id]

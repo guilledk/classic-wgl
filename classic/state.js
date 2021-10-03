@@ -355,7 +355,7 @@ export default {
         for (const drawable of this.renderList)
             drawable.rawDraw();
 
-        this.physics.debugDraw();
+        //this.physics.debugDraw();
 
         this.prevTime = now;
         this.clearKeys();
