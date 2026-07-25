@@ -119,6 +119,16 @@ function initSideMenu(UIManager) {
     // Dynamic comp
     let overlayCollider = UI.addColliderToElem(overlay);
 
+    // clicking the overlay closes the menu, dispatched by the
+    // physics collider system
+    overlayCollider.addHandler("click", () => {
+        if (sideMenuIsOpen == true) {
+            toggleSideMenu();
+            return true; // stop propagation
+        }
+        return false;
+    });
+
     UI.root.entity.registerCall("update", () => {
         // in open state
         if (sideMenuIsOpen == true) {
@@ -130,10 +140,6 @@ function initSideMenu(UIManager) {
             overlay.setColor([0,0.05,0,0.92]);
             if (game.physics.gjk(overlayCollider, game.physics.mouse)) {
                 overlay.setColor([0.05, 0, 0, 0.92]);
-            }
-            // click
-            if (game.wasMouseButtonReleased(0) && game.physics.gjk(overlayCollider, game.physics.mouse)) {
-                toggleSideMenu();
             }
         }
         // in close state
@@ -401,6 +407,16 @@ function initBtn(UIManager, txt = "btn", txtSize = tMid, onClick = null) {
     let container2Collider = UI.addColliderToElem(container);
     let speed = 150;
 
+    // click, dispatched by the physics collider system
+    container2Collider.addHandler("click", () => {
+        if (onClick) {
+            onClick();   // run custom action
+        } else {
+            console.log("clicked!!!");
+        }
+        return true; // stop propagation
+    });
+
     container.entity.registerCall("update", () => {
         // idle
         text.setTextColor([UI.newSine(0, 0.4, speed), UI.newSine(0.6, 0.9, speed), 0, 1]);
@@ -410,14 +426,6 @@ function initBtn(UIManager, txt = "btn", txtSize = tMid, onClick = null) {
         if (game.physics.gjk(container2Collider, game.physics.mouse)) {
             container.setColor([0, UI.newSine(0.5, 0.8, speed), 0, 1]);
             text.setTextColor([0, 0.1, 0, 1]);
-        }
-        // click
-        if (game.wasMouseButtonReleased(0) && game.physics.gjk(container2Collider, game.physics.mouse)) {
-            if (onClick) {
-                onClick();   // run custom action
-            } else {
-                console.log("clicked!!!");
-            }
         }
     });
 
@@ -436,6 +444,16 @@ function initLink(UIManager, txt = "link", txtSize = tSmall, onClick = null) {
     let container2Collider = UI.addColliderToElem(container);
     let speed = 10;
 
+    // click, dispatched by the physics collider system
+    container2Collider.addHandler("click", () => {
+        if (onClick) {
+            onClick();   // run custom action
+        } else {
+            console.log("clicked!!!");
+        }
+        return true; // stop propagation
+    });
+
     container.entity.registerCall("update", () => {
         // idle
         text.setTextColor([UI.newSine(0.6, 0.8, speed), 0.45, 0, 1]);
@@ -445,14 +463,6 @@ function initLink(UIManager, txt = "link", txtSize = tSmall, onClick = null) {
         if (game.physics.gjk(container2Collider, game.physics.mouse)) {
             container.setColor([UI.newSine(0.7, 0.9, speed), 0.45, 0, 1]);
             text.setTextColor([0, 0.1, 0, 1]);
-        }
-        // click
-        if (game.wasMouseButtonReleased(0) && game.physics.gjk(container2Collider, game.physics.mouse)) {
-            if (onClick) {
-                onClick();   // run custom action
-            } else {
-                console.log("clicked!!!");
-            }
         }
     });
     
