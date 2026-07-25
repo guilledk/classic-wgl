@@ -9,7 +9,7 @@ import {
     UIContainer,
     UIPadding,
 } from '/classic/ui.js';
-import type { ICollider } from './types.js';
+import type { ICollider } from '/classic/types.js';
 
 type Color = [number, number, number, number];
 
