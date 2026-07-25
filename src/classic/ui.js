@@ -71,24 +71,21 @@ class UIElement extends Rectangle {
         return this;
     }
 
+    // Container subclasses override this to expose their children with a
+    // uniform interface, regardless of how they store them internally.
+    getChildren() {
+        return [];
+    }
+
     setEnabled(flag) { // Desactivates the element's entity(render & collider) and ocupied space in the ui layout.
         if (this.entity.enabled !== flag)
             markUIDirty(this);
         this.entity.enabled = flag;
 
         // cascade to children
-        // (UIContainer keeps {child, selfAnchor, childAnchor} entries,
-        //  other containers keep the child directly)
-        if (this.children) {
-            for (const entry of this.children) {
-                const child = entry.child || entry;
-                if (child.setEnabled) {
-                    child.setEnabled(flag);
-                }
-            }
-        }
-        if (this.child && this.child.setEnabled) {
-            this.child.setEnabled(flag);
+        for (const child of this.getChildren()) {
+            if (child.setEnabled)
+                child.setEnabled(flag);
         }
 
         return this;
@@ -317,6 +314,11 @@ class UIContainer extends UIElement {
         return this;
     }
 
+    getChildren() {
+        // children are stored as {child, selfAnchor, childAnchor} entries
+        return this.children.map(entry => entry.child);
+    }
+
     getAnchorOffset(anchor, w, h) {
         const map = {
             'top-left': { x: 0, y: 0 },
@@ -376,6 +378,11 @@ class UIArray extends UIElement {
         this.setChildrenPos();
         markUIDirty(this);
         return this;
+    }
+
+    getChildren() {
+        // children are stored directly
+        return this.children;
     }
 
     setVertical(flag) {
@@ -472,6 +479,11 @@ class UIPadding extends UIElement {
         return this;
     }
 
+    getChildren() {
+        // single child container
+        return this.child ? [this.child] : [];
+    }
+
     setPadding(padding) {
         this.padding = padding;
         markUIDirty(this);
@@ -560,12 +572,9 @@ export class UIManager {
         if (!element.entity.enabled)
             return;
 
-        if (element.children)
-            for (const entry of element.children)
-                this._measure(entry.child || entry);
-
-        if (element.child)
-            this._measure(element.child);
+        if (typeof element.getChildren === "function")
+            for (const child of element.getChildren())
+                this._measure(child);
 
         if (typeof element.setChildrenPos === "function")
             element.setChildrenPos();
@@ -648,16 +657,10 @@ export class UIManager {
 
     destroyElement(element) {
         // Recursively destroy children if any
-        if (element.children) {
-            for (const child of element.children) {
-                // UIContainer keeps {child, selfAnchor, childAnchor}, others keep child directly
-                this.destroyElement(child.child || child);
-            }
-        }
-        if (element.child) { // UIPadding has a single child
-            this.destroyElement(element.child);
-        }
-    
+        if (typeof element.getChildren === "function")
+            for (const child of element.getChildren())
+                this.destroyElement(child);
+
         this.elements.delete(element.entity.name);
         this.game.destroyEntity(element.entity);
     }    
