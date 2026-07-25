@@ -294,7 +294,7 @@ function init02(UIManager) {
     let UI = UIManager
     let array = UI.spawnArray(true, "left", 10, [1,0,0,0])
     let arrayH = UI.spawnArray(false, "center", 8, [1,0,0,0])
-    let iso = UI.spawnSprite("skynetLogo", 110, 110, 0, [1,1], [0,0.2,0,0])
+    let iso = UI.spawnSprite("skynetLogo", 110, 110, 0, [1,1])
     let title = UI.spawnText("SKYGPU.NET", tHuge, 1000, undefined, [0,0,0,0])
     let desc = UI.spawnText("", tMid, 500, undefined, [0,0,0,0])
     typeWriterFx(desc, "decentralized compute layer", 60)

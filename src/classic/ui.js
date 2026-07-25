@@ -81,31 +81,42 @@ class UIElement extends Rectangle {
     }   
 }
 
-class UIText extends UIElement {
+// UIText extends the engine Text component directly, adding word wrap and
+// layout behaviour on top of it. Wrapped lines live on the internal glyph
+// grid of the Text component (maxCharSize = [cols, rows]), so a single
+// component handles multi-line text.
+class UIText extends Text {
     constructor(entity, text, textScale, maxWidth, color, bgColor, zlayer) {
         const fontSize = [16, 16];
         const glyphSize = [32, 32];
         const glyphStr = "!\"#$%&'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~";
 
-        super(entity, bgColor, 0, 0, zlayer);
-
-        // Core data
-        this.fontSize = fontSize;
-        this.glyphSize = glyphSize;
-        this.glyphStr = glyphStr;
-        this.textComps = [];
+        super(
+            entity,
+            [0, 0, zlayer], // pos
+            [textScale, textScale, 1], // scale
+            "font", // texture font
+            [1, 1], // initial capacity (cols, rows)
+            fontSize,
+            glyphSize,
+            glyphStr,
+            color,
+            bgColor,
+            true // ignoreCam
+        );
 
         this.rawText = text;
-        this.textScale = textScale;
         this.maxWidth = maxWidth;
-        this.textColor = color;
-        this.lineHeight = 1.3;
 
         // Initialize
         this._recalculateTextElement();
-
-        this.entity.registerCall("refreshUI", () => this._refreshPositions());
     }
+
+    // element size in pixels comes from the glyph grid and the scale
+    get width() { return this.maxCharSize[0] * this.glyphSize[0] * this.scale[0]; }
+    get height() { return this.maxCharSize[1] * this.glyphSize[1] * this.scale[1]; }
+
+    get textScale() { return this.scale[0]; }
 
     static wrapText(str, maxCharPerLine) {
         const words = str.split(' ');
@@ -132,13 +143,20 @@ class UIText extends UIElement {
     }
 
     setTextScale(newScale) {
-        this.textScale = newScale;
+        this.scale = [newScale, newScale, 1];
         this._recalculateTextElement();
         return this;
     }
 
     setTextColor(rgba) {
-        this.textColor = rgba; // array [r,g,b,a]
+        // Text.rawDraw colorizes with this.color, no glyph redraw needed
+        this.color = rgba; // array [r,g,b,a]
+        return this;
+    }
+
+    setColor(rgba) {
+        // background color, applied when the glyph buffer is cleared
+        this.bgcolor = rgba; // array [r,g,b,a]
         this._recalculateTextElement();
         return this;
     }
@@ -150,67 +168,19 @@ class UIText extends UIElement {
     }
 
     _recalculateTextElement() {
-        const scaledGlyphSize = [
-            this.glyphSize[0] * this.textScale,
-            this.glyphSize[1] * this.textScale
-        ];
-        this.maxCharPerLine = Math.max(1, Math.floor(this.maxWidth / scaledGlyphSize[0]));
-        const lines = UIText.wrapText(this.rawText || "", this.maxCharPerLine);
-    
-        // Recycle existing components
-        for (let i = 0; i < this.textComps.length; i++) {
-            if (i < lines.length) {
-                const lineText = lines[i].toUpperCase();
-    
-                // 1) ensure capacity (only if needed)
-                if (this.textComps[i].maxCharSize[0] < lineText.length) {
-                    this.textComps[i].setMaxCharSize(lineText.length, 1);
-                }
-    
-                // 2) make visible BEFORE setText so setText actually updates the FBO
-                this.textComps[i].visible = true;
-    
-                // 3) update content & appearance
-                this.textComps[i].setText(lineText);
-                this.textComps[i].scale = [this.textScale, this.textScale, 1];
-                this.textComps[i].color = this.textColor;
-    
-            } else {
-                this.textComps[i].visible = false;
-            }
-        }
-    
-        // Add new components if needed
-        for (let i = this.textComps.length; i < lines.length; i++) {
-            const lineText = lines[i].toUpperCase();
-            const textComp = this.entity.addComponent(
-                Text,
-                [0, 0, this.position[2]],
-                [this.textScale, this.textScale, 1],
-                "font",
-                [lineText.length, 1],     // initial capacity
-                this.fontSize,
-                this.glyphSize,
-                this.glyphStr,
-                this.textColor,
-                [0, 0, 0, 0],
-                true
-            );
-    
-            // visible BEFORE setText
-            textComp.visible = true;
-            textComp.setText(lineText);
-    
-            this.textComps.push(textComp);
-        }
-    
-        // Update background size from the *actual* content lengths
-        const maxLineLength = Math.max(1, ...lines.map(l => l.length));
-        const lineCount = lines.length;
-        this.width  = scaledGlyphSize[0] * maxLineLength;
-        this.height = scaledGlyphSize[1] + (scaledGlyphSize[1] * this.lineHeight * (lineCount - 1));
-    
-        this._refreshPositions();
+        const scaledGlyphWidth = this.glyphSize[0] * this.scale[0];
+        this.maxCharPerLine = Math.max(1, Math.floor(this.maxWidth / scaledGlyphWidth));
+        const lines = UIText.wrapText(
+            (this.rawText || "").toUpperCase(), this.maxCharPerLine);
+
+        // resize the glyph grid to fit the wrapped content
+        const cols = Math.max(1, ...lines.map(l => l.length));
+        const rows = Math.max(1, lines.length);
+        this.setMaxCharSize(cols, rows);
+
+        // pad every line with spaces so each one fills a full row
+        // of the glyph grid (the cursor wraps at maxCharSize[0])
+        super.setText(lines.map(l => l.padEnd(cols, ' ')).join(''));
     }
     
     setSize() {
@@ -218,17 +188,21 @@ class UIText extends UIElement {
         
     }
 
-    _refreshPositions() {
-        const [x, y] = this.position;
-        const lineHeight = this.glyphSize[1] * this.textScale * this.lineHeight;
+    setPosition(x, y) {
+        this.position[0] = x;
+        this.position[1] = y;
+        return this;
+    }
 
-        for (let i = 0; i < this.textComps.length; i++) {
-            this.textComps[i].position = [x, y + i * lineHeight, this.position[2]];
-        }
+    setEnabled(flag) {
+        this.entity.enabled = flag;
+        return this;
     }
 }
 
-class UISprite extends UIElement {
+// UISprite extends the engine Sprite component directly, exposing the same
+// pixel based width/height layout interface as the other UI elements.
+class UISprite extends Sprite {
     constructor(
         entity, //: Entity
         texture,       //: string -> texture name from manifest.json
@@ -236,16 +210,12 @@ class UISprite extends UIElement {
         height,        //: number -> pixels
         frame,     //: number -> sprite sheet frame
         tileSetSize, //: number -> tiles in texture
-        color, //: [r,g,b,a]
         zlayer //: number
     ) {
-        super(entity, color, width, height, zlayer);
-
-        // Add Sprite component
-        this.spriteComp = this.entity.addComponent(
-            Sprite,
-            [this.position[0], this.position[1], zlayer],
-            [width / (64 * tileSetSize[0]) , height / (64 * tileSetSize[1]), 1], // scale in terms of pixels / texture? adjust if needed
+        super(
+            entity,
+            [0, 0, zlayer], // pos
+            [1, 1, 1], // scale, set right after through setSize
             texture,
             true,             // ignoreCam → screen-space
             frame,
@@ -253,34 +223,35 @@ class UISprite extends UIElement {
             [0, 0] // dont change this anchor, use container element instead (e.g. UIContainer)
         );
 
-        this.tileSetSize = tileSetSize
-
-        // Optional: update position on refresh
-        this.entity.registerCall("refreshUI", () => {
-            this._refreshPosition();
-        });
+        this.setSize(width, height);
     }
 
-    _refreshPosition() {
-        const [x, y] = this.position;
-        this.spriteComp.position = [x, y, this.spriteComp.position[2]];
-    }
+    // width/height in pixels map onto the texture relative Sprite scale
+    get width() { return this.scale[0] * this.texture.image.width; }
+    set width(value) { this.scale[0] = value / this.texture.image.width; }
+
+    get height() { return this.scale[1] * this.texture.image.height; }
+    set height(value) { this.scale[1] = value / this.texture.image.height; }
 
     setPosition(x, y) {
-        super.setPosition(x, y);
-        this._refreshPosition();
+        this.position[0] = x;
+        this.position[1] = y;
         return this;
     }
 
     setSize(width, height) {
-        super.setSize(width, height);
-        // Update scale accordingly
-        this.spriteComp.scale = [width / (64 * this.tileSetSize[0]), height / (64 * this.tileSetSize[1]), 1]; // adjust 64 if needed
+        this.width = width;
+        this.height = height;
         return this;
     }
 
     setFrame(frame) {
-        this.spriteComp.frame = frame;
+        this.frame = frame;
+        return this;
+    }
+
+    setEnabled(flag) {
+        this.entity.enabled = flag;
         return this;
     }
 }
@@ -553,10 +524,9 @@ export class UIManager {
         height = 64,               // height in pixels
         frame = 0,                 // sprite sheet frame
         tileSetSize = [1, 1],      // tiles in texture
-        color = [1,1,1,0.2]
     ) {
         return this._spawnUIComponent(
-            "sprite", UISprite, texture, width, height, frame, tileSetSize, color, this.zlayer);
+            "sprite", UISprite, texture, width, height, frame, tileSetSize, this.zlayer);
     }    
 
     spawnArray(
