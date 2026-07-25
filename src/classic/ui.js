@@ -23,7 +23,7 @@ class UIElement {
         this.height = height;
         this.position = [0, 0];
         this.color = color;
-        this.enebled = true
+        this.enabled = true
 
         // Spawn the entity
         this.entity = game.spawnEntity(name);
