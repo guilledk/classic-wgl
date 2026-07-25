@@ -17,26 +17,26 @@ import type { IGameState, IPhysicsProvider } from '/classic/types.js';
  * (Circle, Polygon, PhysicsProvider).
  */
 export function createMockGL(): WebGLRenderingContext {
-  const gl = {
-    ARRAY_BUFFER: 0x8892,
-    ELEMENT_ARRAY_BUFFER: 0x8893,
-    STATIC_DRAW: 0x88e4,
-    FLOAT: 0x1406,
-    UNSIGNED_SHORT: 0x1403,
-    LINE_LOOP: 0x0002,
-    TRIANGLES: 0x0004,
-    createBuffer: vi.fn(() => ({})),
-    bindBuffer: vi.fn(),
-    bufferData: vi.fn(),
-    vertexAttribPointer: vi.fn(),
-    enableVertexAttribArray: vi.fn(),
-    uniformMatrix4fv: vi.fn(),
-    uniform4fv: vi.fn(),
-    drawElements: vi.fn(),
-    drawArrays: vi.fn(),
-  };
+    const gl = {
+        ARRAY_BUFFER: 0x8892,
+        ELEMENT_ARRAY_BUFFER: 0x8893,
+        STATIC_DRAW: 0x88e4,
+        FLOAT: 0x1406,
+        UNSIGNED_SHORT: 0x1403,
+        LINE_LOOP: 0x0002,
+        TRIANGLES: 0x0004,
+        createBuffer: vi.fn(() => ({})),
+        bindBuffer: vi.fn(),
+        bufferData: vi.fn(),
+        vertexAttribPointer: vi.fn(),
+        enableVertexAttribArray: vi.fn(),
+        uniformMatrix4fv: vi.fn(),
+        uniform4fv: vi.fn(),
+        drawElements: vi.fn(),
+        drawArrays: vi.fn(),
+    };
 
-  return gl as unknown as WebGLRenderingContext;
+    return gl as unknown as WebGLRenderingContext;
 }
 
 /**
@@ -45,10 +45,10 @@ export function createMockGL(): WebGLRenderingContext {
  * constructed and cleaned up without a real PhysicsProvider.
  */
 export function createMockPhysics(): IPhysicsProvider {
-  return {
-    registerCollider: vi.fn(),
-    unregisterCollider: vi.fn(),
-  } as unknown as IPhysicsProvider;
+    return {
+        registerCollider: vi.fn(),
+        unregisterCollider: vi.fn(),
+    } as unknown as IPhysicsProvider;
 }
 
 /**
@@ -56,22 +56,20 @@ export function createMockPhysics(): IPhysicsProvider {
  * Entities/Components/Shapes in tests. Pass `overrides` to customize
  * specific fields (e.g. `canvas` for PhysicsProvider.resizeScreen tests).
  */
-export function createMockGame(
-  overrides: Partial<IGameState> = {}
-): IGameState {
-  const gl = createMockGL();
+export function createMockGame(overrides: Partial<IGameState> = {}): IGameState {
+    const gl = createMockGL();
 
-  const base = {
-    gl,
-    physics: createMockPhysics(),
-    entities: {},
-    calls: {},
-    canvas: { width: 800, height: 600 } as unknown as HTMLCanvasElement,
-    mousePos: vec3.create(),
-    registerCall: vi.fn(),
-    unregisterCall: vi.fn(),
-    ...overrides,
-  };
+    const base = {
+        gl,
+        physics: createMockPhysics(),
+        entities: {},
+        calls: {},
+        canvas: { width: 800, height: 600 } as unknown as HTMLCanvasElement,
+        mousePos: vec3.create(),
+        registerCall: vi.fn(),
+        unregisterCall: vi.fn(),
+        ...overrides,
+    };
 
-  return base as unknown as IGameState;
+    return base as unknown as IGameState;
 }

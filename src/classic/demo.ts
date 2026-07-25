@@ -1,46 +1,46 @@
 import game from '/classic/state.js';
 
 import {
-  initCursor,
-  initFPSCounter,
-  initInfoText,
-  initCameraControllerWASD,
-  initSelectionMonitor,
-  initTilemap,
-  initTilemapEditor,
-  initNavMeshEditor,
-  initAgent,
-  initDEVButtons,
+    initCursor,
+    initFPSCounter,
+    initInfoText,
+    initCameraControllerWASD,
+    initSelectionMonitor,
+    initTilemap,
+    initTilemapEditor,
+    initNavMeshEditor,
+    initAgent,
+    initDEVButtons,
 } from './prefabs.js';
 import { initUI } from './uiPrefabs.js';
 
 async function initContext(): Promise<void> {
-  window.game = game;
+    window.game = game;
 
-  game.init();
-  await game.loadResources();
+    game.init();
+    await game.loadResources();
 
-  await game.load('/state.json');
+    await game.load('/state.json');
 
-  initCursor();
-  initFPSCounter();
-  initInfoText();
-  initCameraControllerWASD();
-  initSelectionMonitor();
-  initTilemap();
-  initTilemapEditor();
-  await initNavMeshEditor();
+    initCursor();
+    initFPSCounter();
+    initInfoText();
+    initCameraControllerWASD();
+    initSelectionMonitor();
+    initTilemap();
+    initTilemapEditor();
+    await initNavMeshEditor();
 
-  initAgent();
+    initAgent();
 
-  initDEVButtons();
+    initDEVButtons();
 
-  // main ui
-  initUI();
+    // main ui
+    initUI();
 
-  game.camera.position[0] += 800;
+    game.camera.position[0] += 800;
 
-  game.launch();
+    game.launch();
 }
 
 window.addEventListener('load', initContext, false);

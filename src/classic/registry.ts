@@ -18,13 +18,13 @@ const componentRegistry = new Map<string, ComponentConstructor>();
  * @param ctor - The component constructor class
  */
 export function registerComponent<T extends IComponent>(
-  name: string,
-  ctor: ComponentConstructor<T>
+    name: string,
+    ctor: ComponentConstructor<T>,
 ): void {
-  if (componentRegistry.has(name)) {
-    console.warn(`Component "${name}" is already registered. Overwriting.`);
-  }
-  componentRegistry.set(name, ctor as ComponentConstructor);
+    if (componentRegistry.has(name)) {
+        console.warn(`Component "${name}" is already registered. Overwriting.`);
+    }
+    componentRegistry.set(name, ctor as ComponentConstructor);
 }
 
 /**
@@ -32,10 +32,8 @@ export function registerComponent<T extends IComponent>(
  * @param name - The string name of the component
  * @returns The component constructor or undefined if not found
  */
-export function getComponentConstructor(
-  name: string
-): ComponentConstructor | undefined {
-  return componentRegistry.get(name);
+export function getComponentConstructor(name: string): ComponentConstructor | undefined {
+    return componentRegistry.get(name);
 }
 
 /**
@@ -43,7 +41,7 @@ export function getComponentConstructor(
  * @param name - The string name of the component
  */
 export function hasComponent(name: string): boolean {
-  return componentRegistry.has(name);
+    return componentRegistry.has(name);
 }
 
 /**
@@ -55,30 +53,30 @@ export function hasComponent(name: string): boolean {
  * @throws Error if the component type is not registered
  */
 export function createComponent<T extends IComponent>(
-  name: string,
-  entity: IEntity,
-  ...args: unknown[]
+    name: string,
+    entity: IEntity,
+    ...args: unknown[]
 ): T {
-  const ctor = componentRegistry.get(name);
-  if (!ctor) {
-    throw new Error(
-      `Unknown component type: "${name}". ` +
-        `Make sure the component is imported and registered before loading state.`
-    );
-  }
-  return new ctor(entity, ...args) as T;
+    const ctor = componentRegistry.get(name);
+    if (!ctor) {
+        throw new Error(
+            `Unknown component type: "${name}". ` +
+                `Make sure the component is imported and registered before loading state.`,
+        );
+    }
+    return new ctor(entity, ...args) as T;
 }
 
 /**
  * Get all registered component names (useful for debugging)
  */
 export function getRegisteredComponents(): string[] {
-  return Array.from(componentRegistry.keys());
+    return Array.from(componentRegistry.keys());
 }
 
 /**
  * Clear all registered components (useful for testing)
  */
 export function clearRegistry(): void {
-  componentRegistry.clear();
+    componentRegistry.clear();
 }

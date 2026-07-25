@@ -1,26 +1,29 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: ['**']
+    push:
+        branches: [master]
+    pull_request:
+        branches: ['**']
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
 
-      - run: npm ci
+            - run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
+            - name: Typecheck
+              run: npm run typecheck
 
-      - name: Test with coverage
-        run: npm run test:coverage
+            - name: Check formatting
+              run: npm run format:check
+
+            - name: Test with coverage
+              run: npm run test:coverage
