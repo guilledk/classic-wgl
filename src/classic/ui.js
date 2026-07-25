@@ -9,40 +9,39 @@ import { vec3 } from "/lib/gl-matrix/index.js";
 // --- Most basic UI element of the system is UIElement,
 //     from this other elements can be extended ---
 
-// A UIElement is just an entity with a rectangle component,
-// its just an object that ocupies some 2d space in the screen
-class UIElement {
+// A UIElement is a Rectangle component (Component -> Transform -> Drawable
+// -> Rectangle), following the standard component inheritance model: it gets
+// this.game and this.entity automatically when added with addComponent.
+// Its just an object that ocupies some 2d space in the screen.
+// Entities are spawned by the UIManager system, never by constructors.
+class UIElement extends Rectangle {
     constructor(
-        name, //: string
+        entity, //: Entity
         color, //: [r, g, b, a] -> number between 0-1
         width, //: number -> pixels
         height, //: number -> pixels
         zlayer //: number
-    ) { 
-        this.width = width;
-        this.height = height;
-        this.position = [0, 0];
-        this.color = color;
-        this.enabled = true
-
-        // Spawn the entity
-        this.entity = game.spawnEntity(name);
-
-        // Add Rectangle component
-        const [x, y] = this.position;
-        this.rectangle = this.entity.addComponent(
-            Rectangle,
-            [x, y, zlayer], // pos
-            [this.width, this.height, 1], // scale
+    ) {
+        super(
+            entity,
+            [0, 0, zlayer], // pos
+            [width, height, 1], // scale
             color, // color
             true // ignoreCam
         );
     }
-    
+
+    // width/height in pixels map directly onto the Transform scale
+    get width() { return this.scale[0]; }
+    set width(value) { this.scale[0] = value; }
+
+    get height() { return this.scale[1]; }
+    set height(value) { this.scale[1] = value; }
+
     setPosition(x, y) {
-        this.position = [x, y];
-        this.rectangle.position = [x, y, this.rectangle.position[2]];
-        
+        this.position[0] = x;
+        this.position[1] = y;
+
         if (typeof this.setChildrenPos === "function") {
             this.setChildrenPos();
         }
@@ -52,13 +51,11 @@ class UIElement {
     setSize(width, height) {
         this.width = width;
         this.height = height;
-        this.rectangle.scale = [this.width, this.height, 1];
         return this;
     }
 
     setColor(rgba) {
         this.color = rgba;  // array [r,g,b,a]
-        this.rectangle.color = this.color;
         return this;
     }
 
@@ -66,10 +63,11 @@ class UIElement {
         this.entity.enabled = flag;
 
         // cascade to children
-        // !!! Something is not working right, padding container seems tu be the fuck up
+        // (UIContainer keeps {child, selfAnchor, childAnchor} entries,
+        //  other containers keep the child directly)
         if (this.children) {
             for (const entry of this.children) {
-                const child = entry[0] || entry;
+                const child = entry.child || entry;
                 if (child.setEnabled) {
                     child.setEnabled(flag);
                 }
@@ -84,12 +82,12 @@ class UIElement {
 }
 
 class UIText extends UIElement {
-    constructor(name, text, textScale, maxWidth, color, bgColor, zlayer) {
+    constructor(entity, text, textScale, maxWidth, color, bgColor, zlayer) {
         const fontSize = [16, 16];
         const glyphSize = [32, 32];
         const glyphStr = "!\"#$%&'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~";
 
-        super(name, bgColor, 0, 0, zlayer);
+        super(entity, bgColor, 0, 0, zlayer);
 
         // Core data
         this.fontSize = fontSize;
@@ -100,7 +98,7 @@ class UIText extends UIElement {
         this.rawText = text;
         this.textScale = textScale;
         this.maxWidth = maxWidth;
-        this.color = color;
+        this.textColor = color;
         this.lineHeight = 1.3;
 
         // Initialize
@@ -140,7 +138,7 @@ class UIText extends UIElement {
     }
 
     setTextColor(rgba) {
-        this.color = rgba; // array [r,g,b,a]
+        this.textColor = rgba; // array [r,g,b,a]
         this._recalculateTextElement();
         return this;
     }
@@ -175,7 +173,7 @@ class UIText extends UIElement {
                 // 3) update content & appearance
                 this.textComps[i].setText(lineText);
                 this.textComps[i].scale = [this.textScale, this.textScale, 1];
-                this.textComps[i].color = this.color;
+                this.textComps[i].color = this.textColor;
     
             } else {
                 this.textComps[i].visible = false;
@@ -187,14 +185,14 @@ class UIText extends UIElement {
             const lineText = lines[i].toUpperCase();
             const textComp = this.entity.addComponent(
                 Text,
-                [0, 0, this.rectangle.position[2]],
+                [0, 0, this.position[2]],
                 [this.textScale, this.textScale, 1],
                 "font",
                 [lineText.length, 1],     // initial capacity
                 this.fontSize,
                 this.glyphSize,
                 this.glyphStr,
-                this.color,
+                this.textColor,
                 [0, 0, 0, 0],
                 true
             );
@@ -211,7 +209,6 @@ class UIText extends UIElement {
         const lineCount = lines.length;
         this.width  = scaledGlyphSize[0] * maxLineLength;
         this.height = scaledGlyphSize[1] + (scaledGlyphSize[1] * this.lineHeight * (lineCount - 1));
-        this.rectangle.scale = [this.width, this.height, 1];
     
         this._refreshPositions();
     }
@@ -226,14 +223,14 @@ class UIText extends UIElement {
         const lineHeight = this.glyphSize[1] * this.textScale * this.lineHeight;
 
         for (let i = 0; i < this.textComps.length; i++) {
-            this.textComps[i].position = [x, y + i * lineHeight, this.rectangle.position[2]];
+            this.textComps[i].position = [x, y + i * lineHeight, this.position[2]];
         }
     }
 }
 
 class UISprite extends UIElement {
     constructor(
-        name,   //: string
+        entity, //: Entity
         texture,       //: string -> texture name from manifest.json
         width,         //: number -> pixels
         height,        //: number -> pixels
@@ -242,7 +239,7 @@ class UISprite extends UIElement {
         color, //: [r,g,b,a]
         zlayer //: number
     ) {
-        super(name, color, width, height, zlayer);
+        super(entity, color, width, height, zlayer);
 
         // Add Sprite component
         this.spriteComp = this.entity.addComponent(
@@ -298,13 +295,13 @@ class UISprite extends UIElement {
 //              pair that can be overridden per child on addChild).
 class UIContainer extends UIElement {
     constructor(
-        name, //: string
+        entity, //: Entity
         color, //: [n, n, n, n] -> number between 0-1
         width, //: number -> pixels
         height, //: number -> pixels
         zlayer //: number
     ) {
-        super(name, color, width, height, zlayer);
+        super(entity, color, width, height, zlayer);
         this.children = [];
         this.anchor = "mid-center"; // default anchor used for self & children
 
@@ -356,14 +353,14 @@ class UIContainer extends UIElement {
 //          height of the total size of its children and gaps
 class UIArray extends UIElement {
     constructor(
-        name, //: string
+        entity, //: Entity
         vertical, //: bool
         align, //: left" | "center" | "right"
         spacing, //: number -> pixels
         color, //: [r, g, b, a] -> number between 0-1
         zlayer //: number
     ) {
-        super(name, color, 10, 10, zlayer);
+        super(entity, color, 10, 10, zlayer);
         this.vertical = vertical;
         this.align = align;
         this.spacing = spacing;
@@ -412,7 +409,6 @@ class UIArray extends UIElement {
         // Step 2: Resize self
         this.width = isVertical ? maxCross : totalMain;
         this.height = isVertical ? totalMain : maxCross;
-        this.rectangle.scale = [this.width, this.height, 1];
     
         // Step 3: Position each child
         const [startX, startY] = this.position;
@@ -444,13 +440,13 @@ class UIArray extends UIElement {
 //            considering a padding size for each side.
 class UIPadding extends UIElement {
     constructor(
-        name, //: string
+        entity, //: Entity
         padding, //: [top, right, bottom, left]
         color, //: [r, g, b, a]
         zlayer, //: number
     ) {
         // Start with dummy size; will be recalculated later
-        super(name, color, 10, 10, zlayer);
+        super(entity, color, 10, 10, zlayer);
 
         this.padding = padding;
         this.child = null;
@@ -476,29 +472,19 @@ class UIPadding extends UIElement {
     }
 
     setChildrenPos() {        
-        if (!this.child && this.child.entity.enabled) return;
+        if (!this.child || !this.child.entity.enabled) return;
 
         const [top, right, bottom, left] = this.padding;
 
         // Recalculate self size: child size + padding
         this.width = this.child.width + left + right;
         this.height = this.child.height + top + bottom;
-        this.rectangle.scale = [this.width, this.height, 1];
 
         // Reposition child inside
         const [x, y] = this.position;
         const childX = x + left;
         const childY = y + top;
         this.child.setPosition(childX, childY);
-    }
-
-    setPosition(x, y) {
-        this.position = [x, y];
-        this.rectangle.position = [x, y, this.rectangle.position[2]];
-
-        // Update child pos too
-        this.setChildrenPos();
-        return this;
     }
 }
 
@@ -511,6 +497,9 @@ class UIPadding extends UIElement {
 
 // --- OKAY!!!
 // --- How to use all this elements above? ---
+// UIManager is a "system": a piece of code that operates on a set of
+// entities / components in a specific way (like PhysicsProvider does for
+// Collider components). It owns entity spawning for all UI elements.
 export class UIManager {
     constructor(gameInstance) {
         this.game = gameInstance;
@@ -519,11 +508,22 @@ export class UIManager {
         this.zlayer = -1000;
 
         // Root element (screen)
-        this.root = this.spawnContainer(game.canvas.width, game.canvas.height, [0,0.06,0,0.94 ])
+        this.root = this.spawnContainer(this.game.canvas.width, this.game.canvas.height, [0,0.06,0,0.94 ])
         this.root.entity.registerCall("refreshUI", () => {
-            this.root.setSize(game.canvas.width, game.canvas.height)
+            this.root.setSize(this.game.canvas.width, this.game.canvas.height)
         });
 
+    }
+
+    // Generic spawner: creates the entity and attaches the UI component
+    // to it, following the same pattern used by the rest of the engine
+    // (spawnEntity + addComponent), instead of spawning inside constructors.
+    _spawnUIComponent(type, componentClass, ...args) {
+        const name = this._generateName(type);
+        const entity = this.game.spawnEntity(name);
+        const element = entity.addComponent(componentClass, ...args);
+        this.elements.set(name, element);
+        return element;
     }
 
     // spawn methods
@@ -532,10 +532,8 @@ export class UIManager {
         height = 100,
         color = [1, 1, 1, 0.1],
     ) {
-        const name = this._generateName("element");
-        const element = new UIElement(name, color, width, height, this.zlayer);
-        this.elements.set(name, element);
-        return element;
+        return this._spawnUIComponent(
+            "element", UIElement, color, width, height, this.zlayer);
     }
 
     spawnText(
@@ -545,10 +543,8 @@ export class UIManager {
         color = [0, 0.7, 0, 1],
         bgColor = [0, 0.1, 0, 1],
     ) {
-        const name = this._generateName("text");
-        const textElement = new UIText(name, text, textScale, maxWidth, color, bgColor, this.zlayer);
-        this.elements.set(name, textElement);
-        return textElement;
+        return this._spawnUIComponent(
+            "text", UIText, text, textScale, maxWidth, color, bgColor, this.zlayer);
     }    
 
     spawnSprite(
@@ -559,10 +555,8 @@ export class UIManager {
         tileSetSize = [1, 1],      // tiles in texture
         color = [1,1,1,0.2]
     ) {
-        const name = this._generateName("sprite");
-        const sprite = new UISprite(name, texture, width, height, frame, tileSetSize, color, this.zlayer);
-        this.elements.set(name, sprite);
-        return sprite;
+        return this._spawnUIComponent(
+            "sprite", UISprite, texture, width, height, frame, tileSetSize, color, this.zlayer);
     }    
 
     spawnArray(
@@ -571,10 +565,8 @@ export class UIManager {
         spacing = 5,
         color = [0.1, 0.2, 0.1, 0.8],
     ) {
-        const name = this._generateName("array");
-        const array = new UIArray(name, vertical, align, spacing, color, this.zlayer);
-        this.elements.set(name, array);
-        return array;
+        return this._spawnUIComponent(
+            "array", UIArray, vertical, align, spacing, color, this.zlayer);
     }
 
     spawnContainer(
@@ -582,20 +574,16 @@ export class UIManager {
         height = 200,
         color = [0.06, 0.15, 0.06, 1],
     ) {
-        const name = this._generateName("container");
-        const container = new UIContainer(name, color, width, height, this.zlayer);
-        this.elements.set(name, container);
-        return container;
+        return this._spawnUIComponent(
+            "container", UIContainer, color, width, height, this.zlayer);
     }
 
     spawnPadding(
         padding = [10, 10, 10, 10],
         color = [0.1, 0.1, 0.1, 0.1],
     ) {
-        const name = this._generateName("padding");
-        const pad = new UIPadding(name, padding, color, this.zlayer);
-        this.elements.set(name, pad);
-        return pad;
+        return this._spawnUIComponent(
+            "padding", UIPadding, padding, color, this.zlayer);
     }
 
     // other methods
@@ -615,7 +603,7 @@ export class UIManager {
             this.destroyElement(element.child);
         }
     
-        this.elements.delete(element.name);
+        this.elements.delete(element.entity.name);
         this.game.destroyEntity(element.entity);
     }    
 
