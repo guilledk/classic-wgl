@@ -56,18 +56,20 @@ function initTopBar(UIManager) {
     topBarContainer.addChild(MenuBtn, "mid-right", "mid-right")
     topBarContainer.addChild(title, "mid-center", "mid-center")
     
-    // make reactive based on screen breakpoints
-    UI.root.entity.registerCall("refreshUI", () => {
-        topBarContainer.setSize(UI.root.width, FPS.height);
+    // make reactive based on screen breakpoints,
+    // only reevaluated when the browser canvas resizes
+    const applyBreakpoints = () => {
         // mobile
         if (UI.root.width < 700) {
             title.setTextScale(tSmall);
             title.setText("classic + UI");
+            topBarContainer.setSize(UI.root.width, FPS.height);
         } 
         // desktop
         else if (UI.root.width < 1100) {
             title.setTextScale(tMid);
             title.setText("Classic Engine + UI");
+            topBarContainer.setSize(UI.root.width, FPS.height);
         } 
         // wide desktop
         else {
@@ -75,7 +77,9 @@ function initTopBar(UIManager) {
             title.setText("Classic Engine + UI");
             topBarContainer.setSize(UI.root.width, FPS.height + 15);
         }
-    });  
+    };
+    UI.root.entity.registerCall("canvasResize", applyBreakpoints);
+    applyBreakpoints();
 }
 
 function initFPS(UIManager) {
@@ -88,7 +92,7 @@ function initFPS(UIManager) {
     // Dynamic comp
     let lastFPS = 0
     let timeAccumulator = 0
-    UI.root.entity.registerCall("refreshUI", () => {
+    UI.root.entity.registerCall("update", () => {
         timeAccumulator += game.deltaTime;
         if (timeAccumulator >= 0.1) {
             lastFPS = game.fps;
@@ -115,27 +119,22 @@ function initSideMenu(UIManager) {
     // Dynamic comp
     let overlayCollider = UI.addColliderToElem(overlay);
 
-    UI.root.entity.registerCall("refreshUI", () => {
-        // idle
-        overlay.setSize(UI.root.width-sideContainer.width, UI.root.height)
-        sideContainer.setSize(sideContainer.width, UI.root.height)
-        overlay.setColor([0,0.05,0,0.92]);
-        // hover
-        if (game.physics.gjk(overlayCollider, game.physics.mouse)) {
-            overlay.setColor([0.05, 0, 0, 0.92]);
-        }
-        // click
-        if (game.wasMouseButtonReleased(0) && game.physics.gjk(overlayCollider, game.physics.mouse)) {
-            if (sideMenuIsOpen==true) {
-                toggleSideMenu();
-            }
-        }
-    });
-    UI.root.entity.registerCall("refreshUI", () => {
+    UI.root.entity.registerCall("update", () => {
         // in open state
-        if (sideMenuIsOpen==true) {
+        if (sideMenuIsOpen == true) {
             sideContainer.setColor([0,0.1,0,1])
             sideContainer.setSize(UI.interpolation(sideContainer.width, 200), UI.root.height)
+            overlay.setSize(UI.root.width - sideContainer.width, UI.root.height)
+
+            // idle / hover
+            overlay.setColor([0,0.05,0,0.92]);
+            if (game.physics.gjk(overlayCollider, game.physics.mouse)) {
+                overlay.setColor([0.05, 0, 0, 0.92]);
+            }
+            // click
+            if (game.wasMouseButtonReleased(0) && game.physics.gjk(overlayCollider, game.physics.mouse)) {
+                toggleSideMenu();
+            }
         }
         // in close state
         else {
@@ -200,14 +199,13 @@ function initMainView(UIManager) {
     let v3 = init03(UI).setEnabled(false)
     array.addChild(v3)
 
+    const views = [v0, v1, v2, v3]
     let prevView = v0
-    UI.root.entity.registerCall("refreshUI", () => {
+    UI.root.entity.registerCall("update", () => {
         container.setSize(pad.width, pad.height + 40)
 
-        if (viewState == 0) {vSet(v0)}
-        if (viewState == 1) {vSet(v1)}
-        if (viewState == 2) {vSet(v2)}
-        if (viewState == 3) {vSet(v3)}
+        const v = views[viewState] || v0
+        if (v !== prevView) vSet(v)
     })
 
     function vSet(v){
@@ -268,7 +266,7 @@ function init01(UIManager) {
 
     let text2Collider = UI.addColliderToElem(text2)
     // test animation
-    UI.root.entity.registerCall("refreshUI", () => {
+    UI.root.entity.registerCall("update", () => {
         // idle
         text1.setTextColor([UI.newSine(0.7, 0.9, 400), 0, 0, 1]);
         text2.setColor([0, 0, 0, UI.newSine(0, 0.2, 200)]);
@@ -303,7 +301,8 @@ function init02(UIManager) {
     arrayH.addChild(iso)
     arrayH.addChild(array)
 
-    UI.root.entity.registerCall("refreshUI", () => {
+    // reevaluated only when the browser canvas resizes
+    const applyBreakpoints = () => {
         // mobile
         if (UI.root.width < 700) {
             arrayH.setVertical(true)
@@ -318,7 +317,9 @@ function init02(UIManager) {
             title.setTextScale(tHuge)
             desc.setTextScale(tMid)
         }
-    })
+    }
+    UI.root.entity.registerCall("canvasResize", applyBreakpoints)
+    applyBreakpoints()
 
     return arrayH
 }
@@ -358,7 +359,7 @@ function init03(UIManager) {
 
         const box = UI.spawnContainer(size, size, colorFar);
 
-        box.entity.registerCall("refreshUI", () => {
+        box.entity.registerCall("update", () => {
             const centerX = box.position[0] + box.width * 0.5;
             const centerY = box.position[1] + box.height * 0.5;
             const mx = game.mousePos[0];
@@ -400,7 +401,7 @@ function initBtn(UIManager, txt = "btn", txtSize = tMid, onClick = null) {
     let container2Collider = UI.addColliderToElem(container);
     let speed = 150;
 
-    container.entity.registerCall("refreshUI", () => {
+    container.entity.registerCall("update", () => {
         // idle
         text.setTextColor([UI.newSine(0, 0.4, speed), UI.newSine(0.6, 0.9, speed), 0, 1]);
         container.setColor([0, 0.15, 0, 0]);
@@ -435,7 +436,7 @@ function initLink(UIManager, txt = "link", txtSize = tSmall, onClick = null) {
     let container2Collider = UI.addColliderToElem(container);
     let speed = 10;
 
-    container.entity.registerCall("refreshUI", () => {
+    container.entity.registerCall("update", () => {
         // idle
         text.setTextColor([UI.newSine(0.6, 0.8, speed), 0.45, 0, 1]);
         container.setColor([0, 0, 0, 0]);
@@ -463,7 +464,7 @@ function typeWriterFx(textElement, fullText, speed = 100) {
     let index = 0;
     let lastTime = Date.now();
 
-    textElement.entity.registerCall("refreshUI", () => {
+    textElement.entity.registerCall("update", () => {
         const now = Date.now();
         if (index < fullText.length && now - lastTime > speed) {
             index++;

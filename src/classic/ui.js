@@ -6,6 +6,14 @@ import { vec3 } from "/lib/gl-matrix/index.js";
 
 // // Objective: Final API based on UIManager class,
 
+// Flag the UI system (game.ui, a UIManager) so it performs a single
+// layout pass on the next frame. Called by UI components whenever a
+// mutation affects the layout (sizes, children, enabled state, ...).
+function markUIDirty(component) {
+    if (component.game.ui)
+        component.game.ui.markDirty();
+}
+
 // --- Most basic UI element of the system is UIElement,
 //     from this other elements can be extended ---
 
@@ -49,8 +57,12 @@ class UIElement extends Rectangle {
     }
 
     setSize(width, height) {
+        if (this.width === width && this.height === height)
+            return this;
+
         this.width = width;
         this.height = height;
+        markUIDirty(this);
         return this;
     }
 
@@ -60,6 +72,8 @@ class UIElement extends Rectangle {
     }
 
     setEnabled(flag) { // Desactivates the element's entity(render & collider) and ocupied space in the ui layout.
+        if (this.entity.enabled !== flag)
+            markUIDirty(this);
         this.entity.enabled = flag;
 
         // cascade to children
@@ -137,14 +151,22 @@ class UIText extends Text {
     }
 
     setText(str) {
+        if (str === this.rawText)
+            return this;
+
         this.rawText = str;
         this._recalculateTextElement();
+        markUIDirty(this);
         return this;
     }
 
     setTextScale(newScale) {
+        if (newScale === this.scale[0])
+            return this;
+
         this.scale = [newScale, newScale, 1];
         this._recalculateTextElement();
+        markUIDirty(this);
         return this;
     }
 
@@ -162,8 +184,12 @@ class UIText extends Text {
     }
 
     setMaxWidth(number) {
+        if (number === this.maxWidth)
+            return this;
+
         this.maxWidth = number
         this._recalculateTextElement();
+        markUIDirty(this);
         return this;
     }
 
@@ -195,6 +221,8 @@ class UIText extends Text {
     }
 
     setEnabled(flag) {
+        if (this.entity.enabled !== flag)
+            markUIDirty(this);
         this.entity.enabled = flag;
         return this;
     }
@@ -240,8 +268,12 @@ class UISprite extends Sprite {
     }
 
     setSize(width, height) {
+        if (this.width === width && this.height === height)
+            return this;
+
         this.width = width;
         this.height = height;
+        markUIDirty(this);
         return this;
     }
 
@@ -251,6 +283,8 @@ class UISprite extends Sprite {
     }
 
     setEnabled(flag) {
+        if (this.entity.enabled !== flag)
+            markUIDirty(this);
         this.entity.enabled = flag;
         return this;
     }
@@ -275,14 +309,11 @@ class UIContainer extends UIElement {
         super(entity, color, width, height, zlayer);
         this.children = [];
         this.anchor = "mid-center"; // default anchor used for self & children
-
-        this.entity.registerCall("refreshUI", () => {
-            this.setChildrenPos();
-        });
     }
 
     addChild(child, selfAnchor = this.anchor, childAnchor = this.anchor) {
         this.children.push({ child, selfAnchor, childAnchor });
+        markUIDirty(this);
         return this;
     }
 
@@ -336,26 +367,32 @@ class UIArray extends UIElement {
         this.align = align;
         this.spacing = spacing;
         this.children = [];
-
-        this.entity.registerCall("refreshUI", () => {
-            this.setChildrenPos();
-        });
     }
 
     addChild(child) {
         this.children.push(child);
+        // recompute own size right away so it can be queried during init,
+        // final positions get resolved on the next layout pass
+        this.setChildrenPos();
+        markUIDirty(this);
         return this;
     }
 
     setVertical(flag) {
+        if (this.vertical === !!flag)
+            return this;
+
         this.vertical = !!flag;
-        this.setChildrenPos();
+        markUIDirty(this);
         return this;
     }
 
     setAlign(option) {
+        if (this.align === option)
+            return this;
+
         this.align = option //: left" | "center" | "right"
-        this.setChildrenPos();
+        markUIDirty(this);
         return this;
     }
 
@@ -421,10 +458,6 @@ class UIPadding extends UIElement {
 
         this.padding = padding;
         this.child = null;
-
-        this.entity.registerCall("refreshUI", () => {
-            this.setChildrenPos();
-        });
     }
 
     addChild(child) {
@@ -432,13 +465,16 @@ class UIPadding extends UIElement {
             throw new Error("UIPadding can only have one child!");
         }
         this.child = child;
+        // recompute own size right away so it can be queried during init,
+        // final positions get resolved on the next layout pass
         this.setChildrenPos();
+        markUIDirty(this);
         return this;
     }
 
     setPadding(padding) {
         this.padding = padding;
-        this.setChildrenPos();
+        markUIDirty(this);
         return this;
     }
 
@@ -474,16 +510,65 @@ class UIPadding extends UIElement {
 export class UIManager {
     constructor(gameInstance) {
         this.game = gameInstance;
+        this.game.ui = this; // expose the system, like game.physics
+
         this.elements = new Map(); // name -> UIElement
         this.indexCounter = 0;
         this.zlayer = -1000;
 
+        this.dirty = true;
+        this._elementColliders = [];
+
         // Root element (screen)
         this.root = this.spawnContainer(this.game.canvas.width, this.game.canvas.height, [0,0.06,0,0.94 ])
-        this.root.entity.registerCall("refreshUI", () => {
-            this.root.setSize(this.game.canvas.width, this.game.canvas.height)
+
+        // The UI only refreshes positions and sizes / scaling after the
+        // canvas resize event we get from the browser...
+        this.root.entity.registerCall("canvasResize", () => {
+            this.root.setSize(this.game.canvas.width, this.game.canvas.height);
         });
 
+        // ...or when a mutation marked the layout dirty: a single layout
+        // pass runs on the next frame (elements that need per frame logic
+        // just use the normal "update" call).
+        this.root.entity.registerCall("update", () => {
+            if (this.dirty)
+                this.refreshLayout();
+        });
+    }
+
+    markDirty() {
+        this.dirty = true;
+    }
+
+    refreshLayout() {
+        // 1) measure bottom-up: containers that size to content
+        //    (UIArray, UIPadding) get correct sizes from the leaves up
+        this._measure(this.root);
+
+        // 2) position top-down: setChildrenPos cascades through
+        //    setPosition recursively from the root
+        this.root.setChildrenPos();
+
+        // 3) keep collider shapes in sync with the new layout
+        this._syncColliders();
+
+        this.dirty = false;
+    }
+
+    _measure(element) {
+        if (!element.entity.enabled)
+            return;
+
+        if (element.children)
+            for (const entry of element.children)
+                this._measure(entry.child || entry);
+
+        if (element.child)
+            this._measure(element.child);
+
+        if (typeof element.setChildrenPos === "function")
+            element.setChildrenPos();
     }
 
     // Generic spawner: creates the entity and attaches the UI component
@@ -594,7 +679,7 @@ export class UIManager {
         ];
 
         const elemShape = new Polygon(
-            game,
+            this.game,
             [elem.position[0], elem.position[1], 0],
             [1, 1, 1],
             0,
@@ -604,29 +689,42 @@ export class UIManager {
         // 2. Add collider component
         const elemCollider = elem.entity.addComponent(Collider, elemShape);
 
-        // 3. Update collider position automatically on UI refresh
-        elem.entity.registerCall("refreshUI", () => {
-            elemShape.position = [elem.position[0], elem.position[1], 0];
-            elemCollider.updateRect();
+        // 3. Keep it in sync with the element after every layout pass
+        //    (see _syncColliders, called from refreshLayout)
+        this._elementColliders.push({
+            elem: elem,
+            shape: elemShape,
+            collider: elemCollider
         });
 
-        // update polygon verts if element size changes
-        elem.entity.registerCall("refreshUI", () => {
+        return elemCollider;
+    }
+
+    _syncColliders() {
+        for (const { elem, shape, collider } of this._elementColliders) {
+            // position
+            shape.position = [elem.position[0], elem.position[1], 0];
+
+            // verts (element size may have changed)
             const newVerts = [
                 [0, 0, 0],
                 [elem.width, 0, 0],
                 [elem.width, elem.height, 0],
                 [0, elem.height, 0]
             ];
-            elemShape.rawVerts = newVerts;
-            elemShape._flatVertArray = newVerts.flat();
-            elemShape._rawCenter = vec3.create();
-            for (const vert of newVerts) vec3.add(elemShape._rawCenter, elemShape._rawCenter, vert);
-            vec3.scale(elemShape._rawCenter, elemShape._rawCenter, 1 / newVerts.length);
-            elemCollider.updateRect();
-        });
+            shape.rawVerts = newVerts;
+            shape._flatVertArray = newVerts.flat();
+            shape._rawCenter = vec3.create();
+            for (const vert of newVerts)
+                vec3.add(shape._rawCenter, shape._rawCenter, vert);
+            vec3.scale(shape._rawCenter, shape._rawCenter, 1 / newVerts.length);
 
-        return elemCollider;
+            // keep the aabb used by the quadtree in sync too
+            shape._rawMin = vec3.create();
+            shape._rawMax = vec3.fromValues(elem.width, elem.height, 0);
+
+            collider.updateRect();
+        }
     }
 
     newSine(min, max, speed = 1000, offset = 0) {
