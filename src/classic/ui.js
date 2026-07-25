@@ -253,7 +253,7 @@ class UISprite extends UIElement {
             true,             // ignoreCam → screen-space
             frame,
             tileSetSize,
-            [0, 0] // dont change this anchor, use container element instead (e.g. UIAnchor)
+            [0, 0] // dont change this anchor, use container element instead (e.g. UIContainer)
         );
 
         this.tileSetSize = tileSetSize
@@ -291,11 +291,12 @@ class UISprite extends UIElement {
 // --- There are also "container elements" that recalculate their
 //     children screen position based on some parameters
 //     and logics -> with addChild(params) & setChildrenPos(params) ---
-//     Should we create a base class UIContainer extending UIElement ???
 
-// UIAnchor: Container element that repositions its children in the global pos
-//          based on its own position, a self anchor, and a child anchor.
-class UIAnchor extends UIElement {
+// UIContainer: Container element that repositions its children in the global
+//              pos based on its own position and the anchor concept, which is
+//              just a property of the container (a default self/child anchor
+//              pair that can be overridden per child on addChild).
+class UIContainer extends UIElement {
     constructor(
         name, //: string
         color, //: [n, n, n, n] -> number between 0-1
@@ -305,13 +306,14 @@ class UIAnchor extends UIElement {
     ) {
         super(name, color, width, height, zlayer);
         this.children = [];
+        this.anchor = "mid-center"; // default anchor used for self & children
 
         this.entity.registerCall("refreshUI", () => {
             this.setChildrenPos();
         });
     }
 
-    addChild(child, selfAnchor = "mid-center", childAnchor = "mid-center") {
+    addChild(child, selfAnchor = this.anchor, childAnchor = this.anchor) {
         this.children.push({ child, selfAnchor, childAnchor });
         return this;
     }
@@ -517,7 +519,7 @@ export class UIManager {
         this.zlayer = -1000;
 
         // Root element (screen)
-        this.root = this.spawnAnchor(game.canvas.width, game.canvas.height, [0,0.06,0,0.94 ])
+        this.root = this.spawnContainer(game.canvas.width, game.canvas.height, [0,0.06,0,0.94 ])
         this.root.entity.registerCall("refreshUI", () => {
             this.root.setSize(game.canvas.width, game.canvas.height)
         });
@@ -575,15 +577,15 @@ export class UIManager {
         return array;
     }
 
-    spawnAnchor(
+    spawnContainer(
         width = 300,
         height = 200,
         color = [0.06, 0.15, 0.06, 1],
     ) {
-        const name = this._generateName("panel");
-        const panel = new UIAnchor(name, color, width, height, this.zlayer);
-        this.elements.set(name, panel);
-        return panel;
+        const name = this._generateName("container");
+        const container = new UIContainer(name, color, width, height, this.zlayer);
+        this.elements.set(name, container);
+        return container;
     }
 
     spawnPadding(
@@ -605,7 +607,7 @@ export class UIManager {
         // Recursively destroy children if any
         if (element.children) {
             for (const child of element.children) {
-                // UIAnchor keeps {child, selfAnchor, childAnchor}, others keep child directly
+                // UIContainer keeps {child, selfAnchor, childAnchor}, others keep child directly
                 this.destroyElement(child.child || child);
             }
         }

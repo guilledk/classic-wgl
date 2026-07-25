@@ -41,7 +41,7 @@ export function initUI() {
 function initTopBar(UIManager) {
     let UI = UIManager
 
-    let topBarContainer = UI.spawnAnchor(undefined, undefined, [0,0.08,0,1])
+    let topBarContainer = UI.spawnContainer(undefined, undefined, [0,0.08,0,1])
     UI.root.addChild(topBarContainer, "top-center", "top-center")
     // instantiate sub-parts
     let FPS = initFPS(UI)
@@ -105,9 +105,9 @@ function initFPS(UIManager) {
 function initSideMenu(UIManager) {
     // Static comp
     let UI = UIManager
-    let overlay = UI.spawnAnchor(UI.root.width, UI.root.height, [0,0.05,0,0.92])
+    let overlay = UI.spawnContainer(UI.root.width, UI.root.height, [0,0.05,0,0.92])
     UI.root.addChild(overlay, "top-left", "top-left")
-    let sideContainer = UI.spawnAnchor(200, UI.root.height)
+    let sideContainer = UI.spawnContainer(200, UI.root.height)
     UI.root.addChild(sideContainer, "top-right", "top-right")
     let content = initMenuContent(UI)
     sideContainer.addChild(content, "top-left", "top-left")
@@ -177,7 +177,7 @@ function initMenuContent(UIManager) {
 
 function initMainView(UIManager) {
     let UI = UIManager
-    let container = UI.spawnAnchor(1, 1, [1,1,1,0])
+    let container = UI.spawnContainer(1, 1, [1,1,1,0])
     let pad = UI.spawnPadding([20,20,20,20], [0,0.08,0,0.98])
     let array = UI.spawnArray(true, "center", 0, [0,0,0,0])
     let btn = initBtn(UI, "next", tMid, () => {
@@ -356,7 +356,7 @@ function init03(UIManager) {
         const colorNear = opts.colorNear || [0, 0.1, 0, 1];
         const colorFar  = opts.colorFar  || [0, 0.5, 0, 1];
 
-        const box = UI.spawnAnchor(size, size, colorFar);
+        const box = UI.spawnContainer(size, size, colorFar);
 
         box.entity.registerCall("refreshUI", () => {
             const centerX = box.position[0] + box.width * 0.5;
