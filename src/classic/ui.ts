@@ -536,7 +536,7 @@ export class UIManager {
         this.root = this.spawnContainer(
             this.game.canvas!.width,
             this.game.canvas!.height,
-            [0, 0.06, 0, 0.94],
+            [0, 0, 0, 0],
         );
 
         this.root.entity.registerCall('canvasResize', () => {
