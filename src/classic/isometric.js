@@ -319,7 +319,8 @@ class IsometricNavMesh extends Tilemap {
         this._msgId = 0;
         this._resolves = {};
         this._rejects = {};
-        this._worker = new Worker("/classic/pathfinder.js");
+        // new URL(..., import.meta.url) lets vite bundle the worker on build
+        this._worker = new Worker(new URL("./pathfinder.js", import.meta.url));
         this._worker.onmessage = this.pathfinderMessageHandler.bind(this);
     }
 
