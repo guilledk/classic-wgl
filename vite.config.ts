@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { fileURLToPath, URL } from 'node:url';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { Plugin } from 'vite';
 
 const shadersDir = fileURLToPath(new URL('./src/shaders', import.meta.url));
 
@@ -9,16 +10,20 @@ const shadersDir = fileURLToPath(new URL('./src/shaders', import.meta.url));
 // them at runtime through /shaders/* urls (see public/manifest.json).
 // This plugin serves them from src during dev and copies them into
 // dist/shaders on build.
-function shaderAssets() {
+function shaderAssets(): Plugin {
   return {
     name: 'shader-assets',
 
     // dev: serve /shaders/* straight from src/shaders
     configureServer(server) {
       server.middlewares.use('/shaders', (req, res, next) => {
-        const name = path.normalize(req.url.split('?')[0]).replace(/^[/\\]+/, '');
+        const url = req.url ?? '';
+        const name = path.normalize(url.split('?')[0]).replace(/^[/\\]+/, '');
         const file = path.join(shadersDir, name);
-        if (!file.startsWith(shadersDir)) return next();
+        if (!file.startsWith(shadersDir)) {
+          next();
+          return;
+        }
         try {
           const source = readFileSync(file);
           res.setHeader('Content-Type', 'text/plain');
