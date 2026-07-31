@@ -75,6 +75,10 @@
     ],
     "textures": [
         {
+            "name": "skynetLogo",
+            "src": "/res/skynet_logo.png"
+        },
+        {
             "name": "coolSnake",
             "src": "/res/cool_snek.png"
         },

@@ -1,0 +1,7 @@
+TODO:
+- [ ] New readible font for paragraph and small text
+- [ ] Border and border radius for rectangle component
+- [ ] CRT shader
+
+- [ ] New branch with well organized commits
+- [ ] Update links with final files

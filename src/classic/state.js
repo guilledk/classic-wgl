@@ -258,6 +258,10 @@ export default {
 
         this.camera.resize([vw, vh, 0]);
         this.physics.resizeScreen();
+
+        // notify entities that registered for canvas resize
+        // (e.g. the UI system root, to refresh positions and sizes)
+        this.performCall("canvasResize");
     },
 
     async loadResources() {

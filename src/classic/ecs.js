@@ -48,7 +48,7 @@ export let Entity = class {
                 return component;
 
         return null;
-    }
+    }  
 
     registerForCleanup(fn) {
         this._toCleanup.push(fn);

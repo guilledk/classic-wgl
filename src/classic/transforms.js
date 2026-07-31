@@ -36,7 +36,6 @@ class Drawable extends Transform {
         entity, position, scale
     ) {
         super(entity, position, scale);
-
         entity.registerCall("renderList", this.renderOrder.bind(this));
     }
 
@@ -228,7 +227,7 @@ class Sprite extends Drawable {
 };
 
 
-class Text extends Drawable {
+class Text extends Drawable { 
     constructor(
         entity,
         position, scale, textureFont,
@@ -441,6 +440,35 @@ class Text extends Drawable {
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
         this.appendText(str);
     }
+
+    setMaxCharSize(cols, rows = 1) {
+        cols = Math.max(1, cols);
+        rows = Math.max(1, rows);
+        if (this.maxCharSize[0] === cols && this.maxCharSize[1] === rows) return;
+
+        this.maxCharSize = [cols, rows];
+
+        // recompute target size
+        this.targetTextureWidth  = this.glyphSize[0] * cols;
+        this.targetTextureHeight = this.glyphSize[1] * rows;
+
+        // resize existing texture storage
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.targetTexture);
+        this.gl.texImage2D(
+            this.gl.TEXTURE_2D, 0, this.gl.RGBA,
+            this.targetTextureWidth, this.targetTextureHeight,
+            0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, null
+        );
+
+        // update internal projection
+        mat4.ortho(
+            this.internalProjMatrix,
+            0, this.targetTextureWidth,
+            0, this.targetTextureHeight,
+            0, 10000
+        );
+    }
+
 
     rawDraw() {
 

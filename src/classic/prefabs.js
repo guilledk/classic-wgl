@@ -21,17 +21,24 @@ export function initCursor() {
 }
 
 export function initFPSCounter() {
-
     let fpsCounter = game.getEntity("fpsCounter");
     let compFPSText = fpsCounter.getComponent(Text);
+
+    let timeAccumulator = 0;
+    let lastFPS = 0;
 
     fpsCounter.registerCall(
         "update",
         function() {
-            compFPSText.setText(game.fps.toString());
+            timeAccumulator += game.deltaTime;
+            if (timeAccumulator >= 0.2) {
+                lastFPS = game.fps;
+                compFPSText.setText(lastFPS.toString());
+                timeAccumulator = 0;
+            }
         });
-
 }
+
 
 export function initInfoText() {
 
@@ -495,99 +502,69 @@ export function initDEVButtons() {
         return true;
     });
 
-    btnDEVEntity.registerCall(
-        "update",
-        function() {
-            btnDEV.position = [
-                btnPixelSize[0],
-                game.canvas.height - (btnPixelSize[1]),
-                btnDEV.position[2]
-            ];
-
-            if (timeSinceClick <= 1) {
-                vec3.lerp(
-                    btnTilemap.position,
-                    [
-                        startPos,
-                        game.canvas.height - (btnPixelSize[1] * 3),
-                        btnTilemap.position[2]
-                    ],
-                    [
-                        targetTools,
-                        game.canvas.height - (btnPixelSize[1] * 3),
-                        btnTilemap.position[2]
-                    ], timeSinceClick);
-
-                btnTilemapCollider.updateRect();
-
-                vec3.lerp(
-                    btnNavMesh.position,
-                    [
-                        startPos,
-                        game.canvas.height - (btnPixelSize[1] * 4),
-                        btnNavMesh.position[2]
-                    ],
-                    [
-                        targetTools,
-                        game.canvas.height - (btnPixelSize[1] * 4),
-                        btnNavMesh.position[2]
-                    ], timeSinceClick);
-
-                btnNavMeshCollider.updateRect();
+    btnDEVEntity.registerCall("update", function () {
+        const canvasHeight = game.canvas.height;
+        const wiggle = Math.sin(Math.PI * sineCounter) / wiggleFactor;
+        const clickPulse = (timeSinceClick < 0.8)
+            ? Math.sin((timeSinceClick + (Math.PI / 4)) * 2) / 8
+            : 0;
+    
+        // Update button positions
+        btnDEV.position = [
+            btnPixelSize[0],
+            canvasHeight - btnPixelSize[1],
+            btnDEV.position[2]
+        ];
+    
+        const yTilemap = canvasHeight - btnPixelSize[1] * 3;
+        const yNavMesh = canvasHeight - btnPixelSize[1] * 4;
+    
+        if (timeSinceClick <= 1) {
+            vec3.lerp(
+                btnTilemap.position,
+                [startPos, yTilemap, btnTilemap.position[2]],
+                [targetTools, yTilemap, btnTilemap.position[2]],
+                timeSinceClick
+            );
+            vec3.lerp(
+                btnNavMesh.position,
+                [startPos, yNavMesh, btnNavMesh.position[2]],
+                [targetTools, yNavMesh, btnNavMesh.position[2]],
+                timeSinceClick
+            );
+        } else {
+            btnTilemap.position = [targetTools, yTilemap, btnTilemap.position[2]];
+            btnNavMesh.position = [targetTools, yNavMesh, btnNavMesh.position[2]];
+        }
+    
+        // Update collider positions
+        for (const [btn, collider] of [
+            [btnDEV, btnDEVCollider],
+            [btnTilemap, btnTilemapCollider],
+            [btnNavMesh, btnNavMeshCollider]
+        ]) {
+            vec3.copy(collider.position, btn.position);
+            collider.updateRect();
+        }
+    
+        // Button interactivity
+        const applyScale = (btn, collider, baseScale) => {
+            if (game.physics.gjk(collider, game.physics.mouse)) {
+                btn.scale[0] = baseScale + wiggle + clickPulse;
+                btn.scale[1] = baseScale + wiggle + clickPulse;
+            } else {
+                btn.scale[0] = baseScale;
+                btn.scale[1] = baseScale;
             }
-
-            vec3.copy(btnDEVCollider.position, btnDEV.position);
-            btnDEVCollider.updateRect();
-
-            vec3.copy(btnTilemapCollider.position, btnTilemap.position);
-            btnTilemapCollider.updateRect();
-
-            vec3.copy(btnNavMeshCollider.position, btnNavMesh.position);
-            btnNavMeshCollider.updateRect();
-
-            sineCounter += game.deltaTime;
-            timeSinceClick += game.deltaTime * 3;
-            if (sineCounter > 1)
-                sineCounter = 0;
-
-            if (game.physics.gjk(btnDEVCollider, game.physics.mouse)) {
-                let clickScale = 0;
-                if (timeSinceClick < .8)
-                    clickScale = Math.sin((timeSinceClick + (Math.PI / 4)) * 2) / 8;
-                btnDEV.scale[0] = 
-                    btnDEVScale +
-                    (Math.sin(Math.PI * sineCounter) / wiggleFactor) +
-                    clickScale;
-                btnDEV.scale[1] = btnDEVScale + 
-                    (Math.sin(Math.PI * sineCounter) / wiggleFactor) + clickScale;
-            } else
-                btnDEV.scale[0] = btnDEVScale;
-
-            if (game.physics.gjk(btnTilemapCollider, game.physics.mouse)) {
-                let clickScale = 0;
-                if (timeSinceClick < .8)
-                    clickScale = Math.sin((timeSinceClick + (Math.PI / 4)) * 2) / 8;
-                btnTilemap.scale[0] = 
-                    btnTilemapScale +
-                    (Math.sin(Math.PI * sineCounter) / wiggleFactor) +
-                    clickScale;
-                btnTilemap.scale[1] = btnTilemapScale + 
-                    (Math.sin(Math.PI * sineCounter) / wiggleFactor) + clickScale;
-            } else
-                btnTilemap.scale[0] = btnTilemapScale;
-
-            if (game.physics.gjk(btnNavMeshCollider, game.physics.mouse)) {
-                let clickScale = 0;
-                if (timeSinceClick < .8)
-                    clickScale = Math.sin((timeSinceClick + (Math.PI / 4)) * 2) / 8;
-                btnNavMesh.scale[0] = 
-                    btnNavMeshScale +
-                    (Math.sin(Math.PI * sineCounter) / wiggleFactor) +
-                    clickScale;
-                btnNavMesh.scale[1] = btnNavMeshScale + 
-                    (Math.sin(Math.PI * sineCounter) / wiggleFactor) + clickScale;
-            } else
-                btnNavMesh.scale[0] = btnNavMeshScale;
-        });
-
+        };
+    
+        applyScale(btnDEV, btnDEVCollider, btnDEVScale);
+        applyScale(btnTilemap, btnTilemapCollider, btnTilemapScale);
+        applyScale(btnNavMesh, btnNavMeshCollider, btnNavMeshScale);
+    
+        // Advance timers
+        sineCounter = (sineCounter + game.deltaTime) % 1;
+        timeSinceClick += game.deltaTime * 3;
+    });
+    
 }

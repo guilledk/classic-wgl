@@ -1,0 +1,40 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Logs
+logs
+*.log
+
+# Build output
+dist/
+build/
+
+# Vite cache
+.vite/
+
+# IDEs/editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Nix
+result/
+.shellcheckrc
+.cache/
+*.drv
+*.gcno
+
+# Env files (if you ever use them)
+.env
+.env.*
+
