@@ -387,7 +387,58 @@ grid position.
 
 ---
 
-## 7. COMMON BUG PATTERNS
+## 7. SPRITE HEIGHT TRACKING
+
+### Bilinear interpolation in `modelMatrix()`
+
+`IsometricDrawable.modelMatrix()` subtracts terrain height from `cartPos[1]`
+to create the visual Y‑offset matching the vertex shader. This MUST use
+bilinear interpolation — reading all four corners at the exact float
+position — not `Math.floor` of a single corner:
+
+```typescript
+// CORRECT: bilinear at exact position
+const px = this.position[0],
+    py = this.position[1];
+const ftx = Math.floor(px),
+    fty = Math.floor(py);
+const fx = px - ftx,
+    fy = py - fty;
+const hNW = at(ftx, fty);
+const hNE = at(ftx + 1, fty);
+const hSW = at(ftx, fty + 1);
+const hSE = at(ftx + 1, fty + 1);
+const h = hNW + (hNE - hNW) * fx + (hSW - hNW) * fy + (hNW - hNE - hSW + hSE) * fx * fy;
+cartPos[1] -= h * this.tilemap.heightScale;
+
+// WRONG: single-corner snapshot
+// const tx = Math.floor(this.position[0]);
+// const ty = Math.floor(this.position[1]);
+// const h = heightData[tx + ty * sizeX] ?? 0;
+```
+
+A `Math.floor` read can lag one tile behind the actual terrain surface
+when the sprite is between two tiles of different heights — the visual
+offset doesn't match the GPU‑interpolated surface.
+
+This applies to ALL `IsometricDrawable` instances (IsoSprite, IsoAgent,
+trees, houses, semaphores) — not just the agent.
+
+### Initialise `position[2]` to terrain height
+
+```typescript
+const aTx = Math.floor(agent.position[0]);
+const aTy = Math.floor(agent.position[1]);
+agent.position[2] = (heightData[aTx + aTy * sizeX] ?? 0) * heightScale;
+```
+
+`IsoAgent.position[2]` feeds into the `isoDepth` formula for the sprite
+depth test. If it starts at 0, there's a ~0.5 s lag while the `update()`
+lerp catches up — the agent renders behind the terrain surface.
+
+---
+
+## 8. COMMON BUG PATTERNS
 
 | Symptom                                                            | Likely cause                                                                 |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
@@ -398,10 +449,12 @@ grid position.
 | Selection works on flat but not slopes                             | `Math.round` instead of bilinear height read                                 |
 | Camera centres on wrong tile                                       | Added `+size/2` to camera position (double-counting)                         |
 | NW corner of map appears at viewport center instead of target tile | Camera position was set incorrectly (see §5)                                 |
+| Agent visually lagging ~1 tile behind terrain on slopes            | `modelMatrix()` uses `Math.floor` NW-corner read instead of bilinear         |
+| Agent rendering behind terrain for first ~0.5 s after spawn        | `position[2]` not initialised to terrain height (starts at 0)                |
 
 ---
 
-## 8. QUICK REFERENCE
+## 9. QUICK REFERENCE
 
 ```
                       ISO ↔ WORLD                    DEPTH
