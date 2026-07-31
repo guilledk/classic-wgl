@@ -62,7 +62,9 @@ tests/                mirrors src/ 1:1 (tests/classic/*, tests/lib/*)
   helpers/mockGame.ts   createMockGL / createMockPhysics / createMockGame
 public/               static assets + manifest.json (shaders/textures/
                         animations) + state.json (persisted demo entities)
-                        + style.css
+                        + style.css; public/res/ is GENERATED (see Assets below)
+assets/               git submodule -> guilledk/classic-assets (source assets)
+scripts/copy-assets.mjs  copies assets/ into public/res/ (npm run assets)
 .prettierrc            Prettier config (4-space indent, single quotes, semicolons, 100-char width)
 ```
 
@@ -166,6 +168,21 @@ Error('Abstract method must be overridden')` rather than using the
   `beforeEach` for isolation.
 - Run `npm run typecheck && npm test` (or `npm run test:coverage` to match
   CI) before considering a change complete.
+
+## Assets
+
+- Source game assets live in the `assets/` git submodule, pointing at
+  `guilledk/classic-assets`. See that repo's `AGENTS.md` for layout.
+- `public/res/` is GENERATED and gitignored. Regenerate it with:
+  `npm run assets` (also chained into `npm run dev` and `npm run build`).
+- `scripts/copy-assets.mjs` maps:
+    - `assets/demo/*.png` -> `public/res/<same name>.png`
+    - `assets/buildings/*/spritesheet.png` -> `public/res/<name>.png`
+- To update assets: bump/refresh the `assets/` submodule (`git submodule
+update --remote` or pin a tag), run `npm run assets`, and re-verify the demo.
+- `deploy.yml` checks out the submodule with `GH_PAT` (a repo-scoped token that
+  can read the private `classic-assets` repo) and runs `npm run assets` before
+  `vite build`.
 
 ## Git / PR notes
 
