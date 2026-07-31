@@ -733,13 +733,22 @@ class IsometricDrawable extends Drawable {
         this.tilemap.isoToCartesian(cartPos);
         vec3.add(cartPos, cartPos, this.tilemap.position);
 
-        const tx = Math.floor(this.position[0]);
-        const ty = Math.floor(this.position[1]);
-        const h =
-            this.tilemap.heightData?.[
-                Math.min(tx, this.tilemap.sizeX - 1) +
-                    Math.min(ty, this.tilemap.sizeY - 1) * this.tilemap.sizeX
-            ] ?? 0;
+        const px = this.position[0];
+        const py = this.position[1];
+        const ftx = Math.floor(px);
+        const fty = Math.floor(py);
+        const fx = px - ftx;
+        const fy = py - fty;
+        const hd = this.tilemap.heightData;
+        const sX = this.tilemap.sizeX;
+        const sY = this.tilemap.sizeY;
+        const at = (tx: number, ty: number) =>
+            hd[Math.min(Math.max(tx, 0), sX - 1) + Math.min(Math.max(ty, 0), sY - 1) * sX] ?? 0;
+        const hNW = at(ftx, fty);
+        const hNE = at(ftx + 1, fty);
+        const hSW = at(ftx, fty + 1);
+        const hSE = at(ftx + 1, fty + 1);
+        const h = hNW + (hNE - hNW) * fx + (hSW - hNW) * fy + (hNW - hNE - hSW + hSE) * fx * fy;
         cartPos[1] -= h * this.tilemap.heightScale;
 
         mat4.translate(modelMatrix, modelMatrix, cartPos);
