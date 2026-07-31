@@ -9,11 +9,16 @@ declare module '/classic/types.js' {
         editorTarget?: string;
         editorTile?: number;
         editorNavTile?: number;
+        editorHeight?: number;
+        heightScaleMultiplier?: number;
+        heightEditMode?: string;
+        agentSelected?: boolean;
     }
 }
 
 let _tilePalette: UIContainer | null = null;
 let _navPalette: UIContainer | null = null;
+let _heightWidget: UIContainer | null = null;
 let _uiScale = 1;
 
 /**
@@ -28,11 +33,15 @@ export function initUI(): void {
     game.editorTarget = 'none';
     game.editorTile = 0;
     game.editorNavTile = 0;
+    game.editorHeight = 0;
+    game.heightScaleMultiplier = 1;
+    game.heightEditMode = 'blend';
 
     initTopBar(UI);
     initToolButtons(UI);
     _tilePalette = initTilePalette(UI);
     _navPalette = initNavPalette(UI);
+    _heightWidget = initHeightWidget(UI);
     initEditorModeControl(UI);
 }
 
@@ -109,6 +118,13 @@ function initToolButtons(UI: UIManager): void {
     const tile = makeBtn('editorIcons', btnPixel, btnPixel, 1, [4, 4]);
     const nav = makeBtn('editorIcons', btnPixel, btnPixel, 2, [4, 4]);
 
+    // Height button: uses a coloured container + text label instead of
+    // editorIcons sprite because frame 3 of that spritesheet is blank.
+    const heightContainer = UI.spawnContainer(btnPixel, btnPixel, [0.2, 0.4, 0.8, 1]);
+    const heightLabel = UI.spawnText('H', 0.6 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
+    heightContainer.addChild(heightLabel, 'mid-center', 'mid-center');
+    const heightCollider = UI.addColliderToElem(heightContainer);
+
     let sineCounter = 0;
     let timeSinceClick = 10;
     let isOpen = false;
@@ -130,6 +146,23 @@ function initToolButtons(UI: UIManager): void {
         return true;
     });
 
+    heightCollider.addHandler('click', () => {
+        game.editorTarget = 'height';
+        return true;
+    });
+
+    // Agent selection indicator: small [A] button, always visible
+    const agentInd = Math.round(48 * _uiScale);
+    const agentBox = UI.spawnContainer(agentInd, agentInd, [0.1, 0.6, 0.1, 0.8]);
+    const agentTxt = UI.spawnText('A', 0.55 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
+    agentBox.addChild(agentTxt, 'mid-center', 'mid-center');
+    const agentCol = UI.addColliderToElem(agentBox);
+
+    agentCol.addHandler('click', () => {
+        game.agentSelected = !(game.agentSelected ?? true);
+        return true;
+    });
+
     UI.root.entity.registerCall('update', () => {
         const ch = game.canvas!.height;
         const wiggle = Math.sin(Math.PI * sineCounter) / wiggleFactor;
@@ -141,6 +174,7 @@ function initToolButtons(UI: UIManager): void {
         const closedX = btnPixel - slideDist - half;
         const tileY = ch - btnPixel * 3 - half;
         const navY = ch - btnPixel * 4 - half;
+        const heightY = ch - btnPixel * 5 - half;
 
         dev.container.setPosition(btnPixel - half, ch - btnPixel - half);
 
@@ -149,26 +183,39 @@ function initToolButtons(UI: UIManager): void {
 
         const tileCur = tile.container.position[0];
         const navCur = nav.container.position[0];
+        const heightCur = heightContainer.position[0];
         if (timeSinceClick <= 1) {
             tile.container.setPosition(tileCur + (targetX - tileCur) * t, tileY);
             nav.container.setPosition(navCur + (targetX - navCur) * t, navY);
+            heightContainer.setPosition(heightCur + (targetX - heightCur) * t, heightY);
         } else {
             tile.container.setPosition(targetX, tileY);
             nav.container.setPosition(targetX, navY);
+            heightContainer.setPosition(targetX, heightY);
         }
 
-        const applyHover = (sprite: UISprite, collider: Collider) => {
+        const applyHover = (sprite: UISprite | null, collider: Collider) => {
             if (game.physics!.gjk(collider, game.physics!.mouse)) {
-                const s = btnPixel + (wiggle + clickPulse) * btnPixel;
-                sprite.setSize(s, s);
+                if (sprite != null) {
+                    const s = btnPixel + (wiggle + clickPulse) * btnPixel;
+                    sprite.setSize(s, s);
+                }
             } else {
-                sprite.setSize(btnPixel, btnPixel);
+                if (sprite != null) {
+                    sprite.setSize(btnPixel, btnPixel);
+                }
             }
         };
 
         applyHover(dev.sprite, dev.collider);
         applyHover(tile.sprite, tile.collider);
         applyHover(nav.sprite, nav.collider);
+        applyHover(null, heightCollider);
+
+        // Agent indicator: bottom-left, below dev button
+        const selected = game.agentSelected ?? true;
+        agentBox.color = selected ? [0.1, 0.7, 0.1, 0.8] : [0.3, 0.3, 0.3, 0.6];
+        agentBox.setPosition(agentInd / 2, ch - btnPixel * 2 - agentInd / 2);
 
         sineCounter = (sineCounter + game.deltaTime) % 1;
         timeSinceClick += game.deltaTime * 3;
@@ -290,13 +337,130 @@ function initNavPalette(UI: UIManager): UIContainer {
     return container;
 }
 
-/** Toggles palette/nav-mesh visibility each frame based on game.editorTarget. */
+/** Height editing tool widget: value row + scale row + set/blend toggle. */
+function initHeightWidget(UI: UIManager): UIContainer {
+    const btnSize = Math.round(32 * _uiScale);
+    const labelW = Math.round(50 * _uiScale);
+    const gap = Math.round(4 * _uiScale);
+    const widgetW = btnSize * 2 + labelW + Math.round(12 * _uiScale);
+    const rowH = btnSize;
+    const widgetH = rowH * 3 + gap * 4;
+    const uiBorder = Math.round(10 * _uiScale);
+
+    function updateHeightScale(): void {
+        const tm = game.getEntity('tilemap')?.getComponent(Tilemap);
+        if (tm) {
+            tm.heightScale = tm.tilePixelSize[0] * (game.heightScaleMultiplier ?? 1);
+            tm._meshDirty = true;
+        }
+    }
+
+    const container = UI.spawnContainer(widgetW, widgetH, [0, 0, 0, 0.4]);
+
+    // Row 1: height delta value
+    const hMinus = UI.spawnContainer(btnSize, btnSize, [0.6, 0.1, 0.1, 1]);
+    const hMinusTxt = UI.spawnText('-', 0.6 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
+    hMinus.addChild(hMinusTxt, 'mid-center', 'mid-center');
+    container.addChild(hMinus, 'top-left', 'top-left');
+
+    const hLabel = UI.spawnText('0', 0.5 * _uiScale, 60, [1, 1, 1, 1], [0, 0, 0, 0]);
+    container.addChild(hLabel, 'top-left', 'top-left');
+
+    const hPlus = UI.spawnContainer(btnSize, btnSize, [0.1, 0.6, 0.1, 1]);
+    const hPlusTxt = UI.spawnText('+', 0.6 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
+    hPlus.addChild(hPlusTxt, 'mid-center', 'mid-center');
+    container.addChild(hPlus, 'top-left', 'top-left');
+
+    // Row 2: height scale multiplier
+    const sMinus = UI.spawnContainer(btnSize, btnSize, [0.1, 0.1, 0.6, 1]);
+    const sMinusTxt = UI.spawnText('s-', 0.45 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
+    sMinus.addChild(sMinusTxt, 'mid-center', 'mid-center');
+    container.addChild(sMinus, 'top-left', 'top-left');
+
+    const sLabel = UI.spawnText('x1', 0.45 * _uiScale, 60, [1, 1, 1, 1], [0, 0, 0, 0]);
+    container.addChild(sLabel, 'top-left', 'top-left');
+
+    const sPlus = UI.spawnContainer(btnSize, btnSize, [0.1, 0.1, 0.6, 1]);
+    const sPlusTxt = UI.spawnText('s+', 0.45 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
+    sPlus.addChild(sPlusTxt, 'mid-center', 'mid-center');
+    container.addChild(sPlus, 'top-left', 'top-left');
+
+    // Row 3: set / blend mode toggle
+    const modeBtn = UI.spawnContainer(widgetW, rowH, [0.2, 0.2, 0.2, 1]);
+    const modeTxt = UI.spawnText('blend', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
+    modeBtn.addChild(modeTxt, 'mid-center', 'mid-center');
+    container.addChild(modeBtn, 'top-left', 'top-left');
+
+    // Colliders
+    const hMinusCol = UI.addColliderToElem(hMinus);
+    const hPlusCol = UI.addColliderToElem(hPlus);
+    const sMinusCol = UI.addColliderToElem(sMinus);
+    const sPlusCol = UI.addColliderToElem(sPlus);
+    const modeCol = UI.addColliderToElem(modeBtn);
+
+    hMinusCol.addHandler('click', () => {
+        game.editorHeight = (game.editorHeight ?? 0) - 1;
+        return true;
+    });
+    hPlusCol.addHandler('click', () => {
+        game.editorHeight = (game.editorHeight ?? 0) + 1;
+        return true;
+    });
+    sMinusCol.addHandler('click', () => {
+        game.heightScaleMultiplier = Math.max(1, (game.heightScaleMultiplier ?? 1) - 1);
+        updateHeightScale();
+        return true;
+    });
+    sPlusCol.addHandler('click', () => {
+        game.heightScaleMultiplier = (game.heightScaleMultiplier ?? 1) + 1;
+        updateHeightScale();
+        return true;
+    });
+    modeCol.addHandler('click', () => {
+        game.heightEditMode = game.heightEditMode === 'set' ? 'blend' : 'set';
+        return true;
+    });
+
+    // Manual positioning each frame
+    UI.root.entity.registerCall('update', () => {
+        const cw = game.canvas!.width;
+        const ch = game.canvas!.height;
+        const x0 = cw - uiBorder - widgetW;
+        const y0 = ch - uiBorder - widgetH;
+        const cx = gap;
+        const cy1 = gap;
+        const cy2 = rowH + gap * 2;
+        const cy3 = rowH * 2 + gap * 3;
+
+        container.setPosition(x0 + widgetW / 2, y0 + widgetH / 2);
+
+        hMinus.setPosition(x0 + cx, y0 + cy1);
+        hLabel.setPosition(x0 + cx + btnSize + gap, y0 + cy1);
+        hPlus.setPosition(x0 + cx + btnSize + gap + labelW, y0 + cy1);
+
+        sMinus.setPosition(x0 + cx, y0 + cy2);
+        sLabel.setPosition(x0 + cx + btnSize + gap, y0 + cy2);
+        sPlus.setPosition(x0 + cx + btnSize + gap + labelW, y0 + cy2);
+
+        modeBtn.setPosition(x0 + cx, y0 + cy3);
+
+        hLabel.setText((game.editorHeight ?? 0).toString());
+        sLabel.setText('x' + (game.heightScaleMultiplier ?? 1).toString());
+        modeTxt.setText(game.heightEditMode ?? 'blend');
+    });
+
+    container.setEnabled(false);
+    return container;
+}
+
+/** Toggles palette/nav-mesh/height-widget visibility each frame based on game.editorTarget. */
 function initEditorModeControl(UI: UIManager): void {
     const navMeshEntity = game.getEntity('tilemapNavigation')!;
 
     UI.root.entity.registerCall('update', () => {
         if (_tilePalette) _tilePalette.setEnabled(game.editorTarget === 'tilemap');
         if (_navPalette) _navPalette.setEnabled(game.editorTarget === 'navMesh');
+        if (_heightWidget) _heightWidget.setEnabled(game.editorTarget === 'height');
         navMeshEntity.enabled = game.editorTarget === 'navMesh';
     });
 }

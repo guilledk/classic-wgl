@@ -10,6 +10,11 @@ declare module '/classic/types.js' {
         editorTarget?: string;
         editorTile?: number;
         editorNavTile?: number;
+        editorHeight?: number;
+        heightScaleMultiplier?: number;
+        heightEditMode?: string;
+        agentEnabled?: boolean;
+        agentSelected?: boolean;
     }
 }
 
@@ -130,6 +135,88 @@ export function initNavMeshEditorLogic(): void {
     });
 }
 
+/**
+ * Registers the height-fill-on-selection handler.
+ * The height value widget (UISprite +/- buttons + label) lives in
+ * uiPrefabs.ts `initHeightWidget`.
+ */
+export function initHeightEditorLogic(): void {
+    const tilemap = game.getEntity('tilemap')!;
+    const compTilemap = tilemap.getComponent(Tilemap)!;
+    const compTilemapCollider = tilemap.getComponent(Collider)!;
+
+    compTilemapCollider.addHandler('selection', function () {
+        if (game.editorTarget !== 'height') return;
+        const [begin, end] = compTilemap.getSelection();
+
+        vec2.max(begin, begin, [0, 0]);
+        vec2.min(end, end, compTilemap.mapSize as vec2);
+
+        const val = game.editorHeight ?? 0;
+        const isSet = game.heightEditMode === 'set';
+
+        console.log(
+            '[height]',
+            isSet ? 'set' : 'blend',
+            [begin[0], begin[1]],
+            'to',
+            [end[0], end[1]],
+            'value',
+            val,
+        );
+
+        for (let y = begin[1]; y < end[1]; y++) {
+            for (let x = begin[0]; x < end[0]; x++) {
+                if (isSet) {
+                    compTilemap.setHeight(x, y, Math.max(0, val));
+                } else {
+                    const idx = x + compTilemap.sizeX * y;
+                    const cur = compTilemap.heightData[idx] ?? 0;
+                    compTilemap.setHeight(x, y, Math.max(0, cur + val));
+                }
+            }
+        }
+    });
+}
+
+/** Generates demo slope patterns in the centre of the tilemap to showcase height features. */
+export function generateDemoSlopes(): void {
+    const tm = game.getEntity('tilemap')?.getComponent(Tilemap);
+    if (!tm) return;
+
+    const cx = 80;
+    const cy = 80;
+
+    // Flat platform (height 3)
+    for (let y = cy; y < cy + 10; y++) for (let x = cx; x < cx + 10; x++) tm.setHeight(x, y, 3);
+
+    // Pyramid steps (1→5→1)
+    for (let y = cy - 5; y < cy + 15; y++) {
+        for (let x = cx + 12; x < cx + 22; x++) {
+            const dx = x - (cx + 17);
+            const dy = y - (cy + 5);
+            const dist = Math.max(Math.abs(dx), Math.abs(dy));
+            tm.setHeight(x, y, Math.max(0, 4 - dist));
+        }
+    }
+
+    // Ramp going SE
+    for (let i = 0; i < 12; i++) tm.setHeight(cx + 24 + i, cy + i, Math.floor(i / 3) + 1);
+
+    // Ramp going SW
+    for (let i = 0; i < 12; i++) tm.setHeight(cx + 24 + i, cy + 14 - i, Math.floor(i / 3) + 1);
+
+    // Valley (height 0 depression surrounded by height 2)
+    for (let y = cy + 20; y < cy + 30; y++)
+        for (let x = cx; x < cx + 10; x++) tm.setHeight(x, y, y === cy + 25 ? 0 : 3);
+
+    // Alternating plateau
+    for (let y = cy + 20; y < cy + 30; y++)
+        for (let x = cx + 12; x < cx + 22; x++) tm.setHeight(x, y, (x + y) % 2 === 0 ? 5 : 1);
+
+    console.log('[demo] slope terrain generated');
+}
+
 /** Click-to-pathfind IsoAgent: attaches collider + click handler on the tilemap. */
 export function initAgent(): void {
     const tilemap = game.getEntity('tilemap')!.getComponent(Tilemap)!;
@@ -172,14 +259,41 @@ export function initAgent(): void {
 
     const compTilemapCollider = tilemap.entity.getComponent(Collider)!;
 
+    game.agentEnabled = true;
+    game.agentSelected = false;
+
     compTilemapCollider.addHandler('click', function () {
-        const start: [number, number] = [agent.position[0], agent.position[1]];
-        const end: [number, number] = [tilemap.mouseIsoPos[0], tilemap.mouseIsoPos[1]];
+        if (!game.agentEnabled) return;
+
+        const clickX = tilemap.mouseIsoPos[0];
+        const clickY = tilemap.mouseIsoPos[1];
+        const agentX = agent.position[0];
+        const agentY = agent.position[1];
+
+        // Click very close to agent → toggle selection
+        if (Math.hypot(clickX - agentX, clickY - agentY) < 0.8) {
+            game.agentSelected = !(game.agentSelected ?? false);
+            return true;
+        }
+
+        // Click elsewhere → move agent if selected
+        if (!game.agentSelected) return;
+
+        const start: [number, number] = [agentX, agentY];
+        const end: [number, number] = [clickX, clickY];
 
         if (vec2.dist(start, end) > 2) {
             pathfinder.findPath(start, end).then((p) => {
                 if (p != null) agent.followPath(p as [number, number][]);
             });
+        }
+    });
+
+    // Selection ring and P-key toggle
+    navAgent.registerCall('update', function () {
+        if (game.wasKeyPressed('KeyP')) {
+            game.agentEnabled = !(game.agentEnabled ?? true);
+            console.log('[agent] movement', game.agentEnabled ? 'enabled' : 'disabled');
         }
     });
 }

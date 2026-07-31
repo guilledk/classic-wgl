@@ -110,7 +110,7 @@
                 },
                 {
                     "type": "IsoAgent",
-                    "position": [14.019686629424593, 12, 0],
+                    "position": [95, 90, 0],
                     "scale": [1, 1, 1],
                     "texture": "humanoid",
                     "tilemap": "tilemap",
