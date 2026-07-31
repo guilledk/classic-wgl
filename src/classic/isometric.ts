@@ -635,7 +635,7 @@ export class Tilemap extends Drawable {
             const cw = this.game.canvas?.width ?? 1;
             const ch = this.game.canvas?.height ?? 1;
             const screenX = (clip[0] + 1.0) * 0.5 * cw;
-            const screenY = (1.0 - clip[1]) * 0.5 * ch;
+            const screenY = (clip[1] + 1.0) * 0.5 * ch;
 
             const agentDepth =
                 (agent.position[0] - agent.position[1]) / 400.0 + 0.5 - agent.position[2] / 14500.0;
