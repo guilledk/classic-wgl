@@ -58,7 +58,11 @@
                 "selectionMode",
                 "selectionColor",
                 "wallColor",
-                "slopeDarken"
+                "slopeDarken",
+                "agentScreenPos",
+                "agentIsoDepth",
+                "agentRadius",
+                "agentAlpha"
             ]
         }
     ],

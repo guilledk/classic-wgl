@@ -597,6 +597,60 @@ export class Tilemap extends Drawable {
         this.gl.uniform4fv(shader.unif.wallColor, [0.3, 0.2, 0.15, 1.0]);
         this.gl.uniform1f(shader.unif.slopeDarken, 0.4);
 
+        // Agent transparency: project agent world position to screen coords
+        const agentEntity = this.game.getEntity('navAgent');
+        const agent = agentEntity?.getComponent(IsoAgent);
+        if (agent && (this.game.agentSelected ?? false)) {
+            const aPos = vec3.clone(agent.position);
+            const sX = this.sizeX;
+            const sY = this.sizeY;
+            this.isoToCartesian(aPos);
+            vec3.add(aPos, aPos, this.position);
+            const hd = this.heightData;
+            const apx = agent.position[0];
+            const apy = agent.position[1];
+            const aftx = Math.floor(apx);
+            const afty = Math.floor(apy);
+            const afx = apx - aftx;
+            const afy = apy - afty;
+            const atH = (tx: number, ty: number) =>
+                hd[
+                    Math.min(Math.max(Math.floor(tx), 0), sX - 1) +
+                        Math.min(Math.max(Math.floor(ty), 0), sY - 1) * sX
+                ] ?? 0;
+            const ahNW = atH(aftx, afty);
+            const ahNE = atH(aftx + 1, afty);
+            const ahSW = atH(aftx, afty + 1);
+            const ahSE = atH(aftx + 1, afty + 1);
+            const ah =
+                ahNW +
+                (ahNE - ahNW) * afx +
+                (ahSW - ahNW) * afy +
+                (ahNW - ahNE - ahSW + ahSE) * afx * afy;
+            aPos[1] -= ah * this.heightScale;
+
+            const clip = vec3.create();
+            vec3.transformMat4(clip, aPos, this.game.camera.matrix() as mat4);
+            vec3.transformMat4(clip, clip, this.game.projectionMatrix as mat4);
+            const cw = this.game.canvas?.width ?? 1;
+            const ch = this.game.canvas?.height ?? 1;
+            const screenX = (clip[0] + 1.0) * 0.5 * cw;
+            const screenY = (1.0 - clip[1]) * 0.5 * ch;
+
+            const agentDepth =
+                (agent.position[0] - agent.position[1]) / 400.0 + 0.5 - agent.position[2] / 14500.0;
+
+            this.gl.uniform2f(shader.unif.agentScreenPos, screenX, screenY);
+            this.gl.uniform1f(shader.unif.agentIsoDepth, agentDepth);
+            this.gl.uniform1f(shader.unif.agentRadius, 80.0);
+            this.gl.uniform1f(shader.unif.agentAlpha, 0.7);
+        } else {
+            this.gl.uniform2f(shader.unif.agentScreenPos, -999, -999);
+            this.gl.uniform1f(shader.unif.agentIsoDepth, 0.0);
+            this.gl.uniform1f(shader.unif.agentRadius, 0.0);
+            this.gl.uniform1f(shader.unif.agentAlpha, 0.0);
+        }
+
         this.gl.enable(this.gl.DEPTH_TEST);
         this.gl.drawArrays(this.gl.TRIANGLES, 0, this._meshVertCount);
         this.gl.disable(this.gl.DEPTH_TEST);

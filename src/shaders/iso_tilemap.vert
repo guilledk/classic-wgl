@@ -14,6 +14,7 @@ uniform vec2 tilePixelSize;
 
 varying mediump vec2 vMapCoord;
 varying mediump float vTileId;
+varying mediump float vIsoDepth;
 
 void main(void ) {
     vec4 worldPos = modelMatrix * isoMatrix * vec4(vertexPos, 1.0);
@@ -28,4 +29,5 @@ void main(void ) {
     gl_Position = clipPos;
     vMapCoord = mapCoord;
     vTileId = tileId;
+    vIsoDepth = isoDepth;
 }
