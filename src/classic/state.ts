@@ -148,7 +148,6 @@ const game: GameState = {
         this.canvas.addEventListener('mouseup', this.mouseUpHandler.bind(this), false);
 
         const gl = this.canvas.getContext('webgl', {
-            desynchronized: true,
             preserveDrawingBuffer: true,
         });
 
