@@ -1,523 +1,302 @@
-import { APP_VERSION_DISPLAY } from '../version.ts';
 import game from '/classic/state.js';
-import {
-    UIManager,
-    UIText,
-    UISprite,
-    UIElement,
-    UIArray,
-    UIContainer,
-    UIPadding,
-} from '/classic/ui.js';
-import type { ICollider } from '/classic/types.js';
+import { Tilemap, IsometricNavMesh } from '/classic/isometric.js';
+import { UIManager, UIText, UISprite, UIElement, UIContainer } from '/classic/ui.js';
+import { Collider } from '/classic/collision.js';
+import { vec3 } from 'gl-matrix';
 
-type Color = [number, number, number, number];
-
-// --- Text scale variables ---
-const tHuge = 1.6; // very big
-const tBig = 0.8; // big
-const tMid = 0.5; // normal
-const tSmall = 0.4; // small
-// const tTiny = 0.2; // very small (unused)
-
-// --- sideMenu state and actions ---
-let sideMenuIsOpen = false;
-function toggleSideMenu(): void {
-    sideMenuIsOpen = !sideMenuIsOpen;
-    console.log(sideMenuIsOpen ? 'Menu opened' : 'Menu closed');
+declare module '/classic/types.js' {
+    interface IGameState {
+        editorTarget?: string;
+        editorTile?: number;
+        editorNavTile?: number;
+    }
 }
 
-// --- mainView state and actions ---
-let viewState = 0;
-function setView(index: number): void {
-    viewState = index;
-}
+let _tilePalette: UIContainer | null = null;
+let _navPalette: UIContainer | null = null;
+let _uiScale = 1;
 
-// Define main init func for this first example
+/**
+ * Entry point for all UI-system components.
+ * Creates the UIManager, computes a viewport-based scale factor, then
+ * assembles the top bar, tool buttons, tile/nav palettes, and mode control.
+ */
 export function initUI(): void {
-    // init UIManager
     const UI = new UIManager(game);
+    _uiScale = Math.max(1, Math.min(3, (game.canvas?.height ?? 1080) / 1080));
 
-    // add components
+    game.editorTarget = 'none';
+    game.editorTile = 0;
+    game.editorNavTile = 0;
+
     initTopBar(UI);
-    initMainView(UI);
-    initSideMenu(UI);
+    initToolButtons(UI);
+    _tilePalette = initTilePalette(UI);
+    _navPalette = initNavPalette(UI);
+    initEditorModeControl(UI);
 }
 
+/** Top bar: FPS counter (left), title (center), controls hint (right). */
 function initTopBar(UI: UIManager): void {
-    const topBarContainer = UI.spawnContainer(undefined, undefined, [0, 0.08, 0, 1]);
-    UI.root.addChild(topBarContainer, 'top-center', 'top-center');
+    const barH = Math.round(32 * _uiScale);
+    const textScale = 0.4 * _uiScale;
+    const titleScale = 0.6 * _uiScale;
 
-    // instantiate sub-parts
-    const FPS = initFPS(UI);
-    const MenuBtn = initBtn(UI, 'menu', tMid, () => {
-        if (!sideMenuIsOpen) {
-            toggleSideMenu();
-        }
-    });
-    const title = UI.spawnText(
-        'Classic Engine + UI',
-        undefined,
-        1000,
-        [0, 0.6, 0, 1],
+    const topBar = UI.spawnContainer(UI.root.width, barH, [0, 0, 0, 0.5]);
+    UI.root.addChild(topBar, 'top-center', 'top-center');
+
+    const fpsText = UI.spawnText('FPS', textScale, 100, [0, 0.6, 0, 1], [0, 0, 0, 0]);
+    topBar.addChild(fpsText, 'mid-left', 'mid-left');
+
+    const title = UI.spawnText('CLASSIC WGL', titleScale, 400, [1, 0.53, 0.3, 1], [0, 0, 0, 0]);
+    topBar.addChild(title, 'mid-center', 'mid-center');
+
+    const infoText = UI.spawnText(
+        'WASD MOVE | SCROLL ZOOM',
+        textScale,
+        400,
+        [1, 0.2, 0.6, 1],
         [0, 0, 0, 0],
     );
+    topBar.addChild(infoText, 'mid-right', 'mid-right');
 
-    // set positions
-    topBarContainer.addChild(FPS, 'mid-left', 'mid-left');
-    topBarContainer.addChild(MenuBtn, 'mid-right', 'mid-right');
-    topBarContainer.addChild(title, 'mid-center', 'mid-center');
-
-    // make reactive based on screen breakpoints,
-    // only reevaluated when the browser canvas resizes
-    const applyBreakpoints = (): void => {
-        // mobile
-        if (UI.root.width < 700) {
-            title.setTextScale(tSmall);
-            title.setText('classic + UI');
-            topBarContainer.setSize(UI.root.width, FPS.height);
-        }
-        // desktop
-        else if (UI.root.width < 1100) {
-            title.setTextScale(tMid);
-            title.setText('Classic Engine + UI');
-            topBarContainer.setSize(UI.root.width, FPS.height);
-        }
-        // wide desktop
-        else {
-            title.setTextScale(tBig);
-            title.setText('Classic Engine + UI');
-            topBarContainer.setSize(UI.root.width, FPS.height + 15);
-        }
-    };
-    UI.root.entity.registerCall('canvasResize', applyBreakpoints);
-    applyBreakpoints();
-}
-
-function initFPS(UI: UIManager): UIPadding {
-    // Static comp
-    const FPSContainer = UI.spawnPadding([10, 20, 10, 20], [0, 0, 0, 0]);
-    const FPSText = UI.spawnText('FPS', tMid);
-    FPSContainer.addChild(FPSText);
-    UI.root.addChild(FPSContainer, 'top-left', 'top-left');
-
-    // Dynamic comp
     let lastFPS = 0;
     let timeAccumulator = 0;
     UI.root.entity.registerCall('update', () => {
         timeAccumulator += game.deltaTime;
-        if (timeAccumulator >= 0.1) {
+        if (timeAccumulator >= 0.2) {
             lastFPS = game.fps;
-            FPSText.setText(lastFPS.toString());
+            fpsText.setText(lastFPS.toString());
             timeAccumulator = 0;
         }
         if (lastFPS >= 30) {
-            FPSText.setTextColor([0, 0.6, 0, 1]);
+            fpsText.setTextColor([0, 0.6, 0, 1]);
         } else {
-            FPSText.setTextColor([0.8, 0, 0, 1]);
+            fpsText.setTextColor([0.8, 0, 0, 1]);
         }
     });
-    return FPSContainer;
+
+    UI.root.entity.registerCall('canvasResize', () => {
+        topBar.setSize(UI.root.width, barH);
+    });
 }
 
-function initSideMenu(UI: UIManager): void {
-    // Static comp
-    const overlay = UI.spawnContainer(UI.root.width, UI.root.height, [0, 0.05, 0, 0.92]);
-    UI.root.addChild(overlay, 'top-left', 'top-left');
-    const sideContainer = UI.spawnContainer(200, UI.root.height);
-    UI.root.addChild(sideContainer, 'top-right', 'top-right');
-    const content = initMenuContent(UI);
-    sideContainer.addChild(content, 'top-left', 'top-left');
+/**
+ * Bottom-left tool buttons: DEV toggle + tilemap/navmesh mode selectors.
+ * Replicates the old raw-Sprite slide-out animation (sine wiggle on hover,
+ * lerp slide, click pulse) using UISprite + UI.addColliderToElem.
+ */
+function initToolButtons(UI: UIManager): void {
+    const btnPixel = Math.round(64 * _uiScale);
+    const slideDist = Math.round(300 * _uiScale);
+    const wiggleFactor = 24;
 
-    // Dynamic comp
-    const overlayCollider = UI.addColliderToElem(overlay);
+    function makeBtn(
+        texture: string,
+        w: number,
+        h: number,
+        frame: number,
+        tileSetSize: [number, number],
+    ): { container: UIContainer; sprite: UISprite; collider: Collider } {
+        const container = UI.spawnContainer(w, h, [0, 0, 0, 0]);
+        const sprite = UI.spawnSprite(texture, w, h, frame, tileSetSize);
+        container.addChild(sprite, 'mid-center', 'mid-center');
+        const collider = UI.addColliderToElem(container);
+        return { container, sprite, collider };
+    }
 
-    // clicking the overlay closes the menu, dispatched by the
-    // physics collider system
-    overlayCollider.addHandler('click', () => {
-        if (sideMenuIsOpen) {
-            toggleSideMenu();
-            return true; // stop propagation
-        }
-        return false;
+    const dev = makeBtn('editorIcons', btnPixel, btnPixel, 0, [4, 4]);
+    const tile = makeBtn('editorIcons', btnPixel, btnPixel, 1, [4, 4]);
+    const nav = makeBtn('editorIcons', btnPixel, btnPixel, 2, [4, 4]);
+
+    let sineCounter = 0;
+    let timeSinceClick = 10;
+    let isOpen = false;
+
+    dev.collider.addHandler('click', () => {
+        timeSinceClick = 0;
+        isOpen = !isOpen;
+        if (!isOpen) game.editorTarget = 'none';
+        return true;
+    });
+
+    tile.collider.addHandler('click', () => {
+        game.editorTarget = 'tilemap';
+        return true;
+    });
+
+    nav.collider.addHandler('click', () => {
+        game.editorTarget = 'navMesh';
+        return true;
     });
 
     UI.root.entity.registerCall('update', () => {
-        // in open state
-        if (sideMenuIsOpen) {
-            sideContainer.setColor([0, 0.1, 0, 1]);
-            sideContainer.setSize(UI.interpolation(sideContainer.width, 200), UI.root.height);
-            overlay.setSize(UI.root.width - sideContainer.width, UI.root.height);
+        const ch = game.canvas!.height;
+        const wiggle = Math.sin(Math.PI * sineCounter) / wiggleFactor;
+        const clickPulse =
+            timeSinceClick < 0.8 ? Math.sin((timeSinceClick + Math.PI / 4) * 2) / 8 : 0;
 
-            // idle / hover
-            overlay.setColor([0, 0.05, 0, 0.92]);
-            if (game.physics!.gjk(overlayCollider, game.physics!.mouse)) {
-                overlay.setColor([0.05, 0, 0, 0.92]);
+        const half = btnPixel / 2;
+        const openX = btnPixel - half;
+        const closedX = btnPixel - slideDist - half;
+        const tileY = ch - btnPixel * 3 - half;
+        const navY = ch - btnPixel * 4 - half;
+
+        dev.container.setPosition(btnPixel - half, ch - btnPixel - half);
+
+        const t = Math.min(timeSinceClick, 1);
+        const targetX = isOpen ? openX : closedX;
+
+        const tileCur = tile.container.position[0];
+        const navCur = nav.container.position[0];
+        if (timeSinceClick <= 1) {
+            tile.container.setPosition(tileCur + (targetX - tileCur) * t, tileY);
+            nav.container.setPosition(navCur + (targetX - navCur) * t, navY);
+        } else {
+            tile.container.setPosition(targetX, tileY);
+            nav.container.setPosition(targetX, navY);
+        }
+
+        const applyHover = (sprite: UISprite, collider: Collider) => {
+            if (game.physics!.gjk(collider, game.physics!.mouse)) {
+                const s = btnPixel + (wiggle + clickPulse) * btnPixel;
+                sprite.setSize(s, s);
+            } else {
+                sprite.setSize(btnPixel, btnPixel);
             }
-        }
-        // in close state
-        else {
-            sideContainer.setSize(UI.interpolation(sideContainer.width, 0), UI.root.height);
-            overlay.setColor([0, 0, 0, 0]);
-            overlay.setSize(0, 0);
-        }
+        };
+
+        applyHover(dev.sprite, dev.collider);
+        applyHover(tile.sprite, tile.collider);
+        applyHover(nav.sprite, nav.collider);
+
+        sineCounter = (sineCounter + game.deltaTime) % 1;
+        timeSinceClick += game.deltaTime * 3;
     });
 }
 
-function initMenuContent(UI: UIManager): UIPadding {
-    const container = UI.spawnPadding([56, 36, 36, 18], [0, 0.1, 0, 0]);
-    const group = UI.spawnArray(true, 'left', 2, [0, 0, 0, 0]);
-    container.addChild(group);
+/**
+ * Bottom-right tile-set palette. Shows the full tileset via UISprite,
+ * click maps pixel coords → tile index → game.editorTile.
+ * The fill-on-selection logic lives in prefabs.ts `initTilemapEditorLogic`.
+ * Starts disabled; enabled when game.editorTarget === 'tilemap'.
+ */
+function initTilePalette(UI: UIManager): UIContainer {
+    const compTilemap = game.getEntity('tilemap')!.getComponent(Tilemap)!;
+    const tSize = compTilemap.tilePixelSize;
+    const tsSize = compTilemap.tileSetSize;
+    const tsPixelSize = compTilemap.tileSetPixelSize;
+    const maxTile = compTilemap.maxTile;
+    const uiBorder = Math.round(10 * _uiScale);
 
-    const btn = initBtn(UI, 'init', tMid, () => {
-        setView(0);
-        toggleSideMenu();
+    const paletteW = tsPixelSize[0];
+    const paletteH = tsPixelSize[1];
+
+    const container = UI.spawnContainer(paletteW, paletteH, [0, 0, 0, 0.2]);
+    const sprite = UI.spawnSprite('tileSet', paletteW, paletteH, 0, [1, 1]);
+    container.addChild(sprite, 'top-left', 'top-left');
+
+    const selector = UI.spawnElement(tSize[0], tSize[1], [1, 1, 1, 0.3]);
+    container.addChild(selector, 'top-left', 'top-left');
+
+    const collider = UI.addColliderToElem(container);
+
+    let localX = 0;
+    let localY = 0;
+
+    collider.addHandler('click', () => {
+        const mouseLocal = vec3.clone(game.mousePos);
+        vec3.sub(mouseLocal, mouseLocal, container.position);
+
+        localX = Math.floor(mouseLocal[0] / tSize[0]);
+        localY = Math.floor(mouseLocal[1] / tSize[1]);
+
+        game.editorTile = Math.min(maxTile, localX + localY * tsSize[0]);
+
+        return true;
     });
-    const btn2 = initBtn(UI, 'gameover', tMid, () => {
-        setView(1);
-        toggleSideMenu();
-    });
-    const btn3 = initBtn(UI, 'skygpu', tMid, () => {
-        setView(2);
-        toggleSideMenu();
-    });
-    const btn4 = initBtn(UI, 'Box Grid', tMid, () => {
-        setView(3);
-        toggleSideMenu();
-    });
-
-    group.addChild(btn);
-    group.addChild(btn2);
-    group.addChild(btn3);
-    group.addChild(btn4);
-
-    return container;
-}
-
-function initMainView(UI: UIManager): void {
-    const container = UI.spawnContainer(1, 1, [1, 1, 1, 0]);
-    const pad = UI.spawnPadding([20, 20, 20, 20], [0, 0.08, 0, 0.98]);
-    const array = UI.spawnArray(true, 'center', 0, [0, 0, 0, 0]);
-    const btn = initBtn(UI, 'next', tMid, () => {
-        if (viewState <= 2) {
-            viewState += 1;
-        } else {
-            viewState = 0;
-        }
-    });
-    pad.addChild(array);
-    container.addChild(pad);
-    container.addChild(btn, 'bot-center', 'top-center');
-    UI.root.addChild(container);
-
-    // init each view...
-    const v0 = init00(UI);
-    array.addChild(v0);
-    const v1 = init01(UI).setEnabled(false);
-    array.addChild(v1);
-    const v2 = init02(UI).setEnabled(false);
-    array.addChild(v2);
-    const v3 = init03(UI).setEnabled(false);
-    array.addChild(v3);
-
-    type ViewType = UIArray | UIPadding;
-    const views: ViewType[] = [v0, v1, v2, v3];
-    let prevView: ViewType = v0;
 
     UI.root.entity.registerCall('update', () => {
-        container.setSize(pad.width, pad.height + 40);
+        container.setPosition(
+            game.canvas!.width - paletteW - uiBorder,
+            game.canvas!.height - paletteH - uiBorder,
+        );
 
-        const v = views[viewState] || v0;
-        if (v !== prevView) vSet(v);
-    });
-
-    function vSet(v: ViewType): void {
-        prevView.setEnabled(false);
-        v.setEnabled(true);
-        prevView = v;
-    }
-}
-
-function init00(UI: UIManager): UIArray {
-    const array = UI.spawnArray(true, 'left', 20, [1, 0, 0, 0]);
-    const title = UI.spawnText('Welcome', tBig, 1000, undefined, [0, 0, 0, 0]);
-    array.addChild(title);
-
-    const txt = UI.spawnText('', tSmall, 320, undefined, [0, 0, 0, 0]);
-    array.addChild(txt);
-    typeWriterFx(
-        txt,
-        `This front is constructed as a testing example of the new layout system built on top of classic-wgl ${APP_VERSION_DISPLAY}.`,
-        20,
-    );
-
-    const txt2 = UI.spawnText('', tSmall, 320, undefined, [0, 0, 0, 0]);
-    array.addChild(txt2);
-    typeWriterFx(
-        txt2,
-        'Layouts are designed to work on desktop and mobile updating automatically.',
-        60,
-    );
-
-    // clickable links for repo and main UI file...
-    const link = initLink(UI, '> UI manager file', undefined, () => {
-        window.open(
-            'https://github.com/vgMonky/classic-wgl/blob/00-layout-sys-first-approach/src/classic/ui.js',
-            '_blank',
+        selector.setPosition(
+            container.position[0] + localX * tSize[0],
+            container.position[1] + localY * tSize[1],
         );
     });
-    array.addChild(link);
 
-    const link2 = initLink(UI, '> this front file', undefined, () => {
-        window.open(
-            'https://github.com/vgMonky/classic-wgl/blob/00-layout-sys-first-approach/src/classic/uiPrefabs.js',
-            '_blank',
-        );
-    });
-    array.addChild(link2);
-
-    return array;
+    container.setEnabled(false);
+    return container;
 }
 
-function init01(UI: UIManager): UIPadding {
-    // game over component
-    // create the elements
-    const gameover = UI.spawnPadding([40, 40, 40, 40], [0, 0.1, 0, 0]);
-    const content = UI.spawnArray(true, 'center', 12, [0, 0, 0, 0]);
-    const text1 = UI.spawnText('Game over', 1.4, 200, [0.8, 0.2, 0.2, 1]);
-    const text2 = UI.spawnText('start again', 0.5, 300, undefined, [0, 0.3, 0, 0.05]);
+/**
+ * Bottom-right nav-tile palette (4x display scale, same as old prefab).
+ * Click maps pixel coords → tile index → game.editorNavTile.
+ * The fill-on-selection logic lives in prefabs.ts `initNavMeshEditorLogic`.
+ * Starts disabled; enabled when game.editorTarget === 'navMesh'.
+ */
+function initNavPalette(UI: UIManager): UIContainer {
+    const navMesh = game.getEntity('tilemapNavigation')!.getComponent(IsometricNavMesh)!;
+    const tSize = navMesh.tilePixelSize;
+    const tsSize = navMesh.tileSetSize;
+    const tsPixelSize = navMesh.tileSetPixelSize;
+    const maxTile = navMesh.maxTile;
+    const uiBorder = Math.round(10 * _uiScale);
+    const uiScale = 4;
 
-    // nest the elements
-    content.addChild(text1);
-    content.addChild(text2);
-    gameover.addChild(content);
+    const paletteW = tsPixelSize[0] * uiScale;
+    const paletteH = tsPixelSize[1] * uiScale;
 
-    const text2Collider = UI.addColliderToElem(text2 as unknown as UIElement);
+    const container = UI.spawnContainer(paletteW, paletteH, [0, 0, 0, 0.2]);
+    const sprite = UI.spawnSprite('navTileset', paletteW, paletteH, 0, [1, 1]);
+    container.addChild(sprite, 'top-left', 'top-left');
 
-    // test animation
+    const selector = UI.spawnElement(tSize[0] * uiScale, tSize[1] * uiScale, [1, 1, 1, 0.3]);
+    container.addChild(selector, 'top-left', 'top-left');
+
+    const collider = UI.addColliderToElem(container);
+
+    let localX = 0;
+    let localY = 0;
+
+    collider.addHandler('click', () => {
+        const mouseLocal = vec3.clone(game.mousePos);
+        vec3.sub(mouseLocal, mouseLocal, container.position);
+
+        localX = Math.floor(mouseLocal[0] / (tSize[0] * uiScale));
+        localY = Math.floor(mouseLocal[1] / (tSize[1] * uiScale));
+
+        game.editorNavTile = Math.min(maxTile, localX + localY * tsSize[0]);
+
+        return true;
+    });
+
     UI.root.entity.registerCall('update', () => {
-        // idle
-        text1.setTextColor([UI.newSine(0.7, 0.9, 400), 0, 0, 1]);
-        text2.setColor([0, 0, 0, UI.newSine(0, 0.2, 200)]);
-        text2.setTextColor([0, UI.newSine(0.6, 0.9, 200), 0, 1]);
+        container.setPosition(
+            game.canvas!.width - paletteW - uiBorder,
+            game.canvas!.height - paletteH - uiBorder,
+        );
 
-        // hover
-        if (game.physics!.gjk(text2Collider, game.physics!.mouse)) {
-            text2.setTextScale(UI.newSine(0.45, 0.5, 150));
-        } else {
-            text2.setTextScale(0.5);
-        }
+        selector.setPosition(
+            container.position[0] + localX * tSize[0] * uiScale,
+            container.position[1] + localY * tSize[1] * uiScale,
+        );
     });
 
-    // click
-    text2Collider.addHandler('click', () => {
-        console.log('start again clicked!!!');
-        return true; // returning true stops propagation
-    });
-
-    return gameover;
-}
-
-function init02(UI: UIManager): UIArray {
-    const array = UI.spawnArray(true, 'left', 10, [1, 0, 0, 0]);
-    const arrayH = UI.spawnArray(false, 'center', 8, [1, 0, 0, 0]);
-    const iso = UI.spawnSprite('skynetLogo', 110, 110, 0, [1, 1]);
-    const title = UI.spawnText('SKYGPU.NET', tHuge, 1000, undefined, [0, 0, 0, 0]);
-    const desc = UI.spawnText('', tMid, 500, undefined, [0, 0, 0, 0]);
-    typeWriterFx(desc, 'decentralized compute layer', 60);
-
-    array.addChild(title);
-    array.addChild(desc);
-    arrayH.addChild(iso);
-    arrayH.addChild(array);
-
-    // reevaluated only when the browser canvas resizes
-    const applyBreakpoints = (): void => {
-        // mobile
-        if (UI.root.width < 700) {
-            arrayH.setVertical(true);
-            iso.setSize(140, 140);
-            title.setTextScale(tBig);
-            desc.setTextScale(0);
-        }
-        // desktop
-        else {
-            arrayH.setVertical(false);
-            iso.setSize(110, 110);
-            title.setTextScale(tHuge);
-            desc.setTextScale(tMid);
-        }
-    };
-    UI.root.entity.registerCall('canvasResize', applyBreakpoints);
-    applyBreakpoints();
-
-    return arrayH;
-}
-
-function init03(UI: UIManager): UIArray {
-    const array = UI.spawnArray(true, 'center', 15, [1, 0, 0, 0]);
-    const title = UI.spawnText('box grid', tBig, 1000, undefined, [0, 0, 0, 0]);
-    const desc = UI.spawnText('hover grid to interact', tSmall, 300, undefined, [0, 0, 0, 0]);
-
-    // build grid directly inside array
-    const gridSize = 10;
-    const gap = 4;
-    const boxSize = 25;
-
-    const grid = UI.spawnArray(true, 'center', gap, [0, 0, 0, 0]); // vertical stack of rows
-    array.addChild(grid);
-    array.addChild(title);
-    array.addChild(desc);
-
-    for (let y = 0; y < gridSize; y++) {
-        const row = UI.spawnArray(false, 'center', gap, [0, 0, 0, 0]); // horizontal row
-        grid.addChild(row);
-        for (let x = 0; x < gridSize; x++) {
-            const box = createReactiveBox(UI, { size: boxSize });
-            row.addChild(box);
-        }
-    }
-
-    return array;
-}
-
-interface ReactiveBoxOpts {
-    size?: number;
-    minScale?: number;
-    maxDist?: number;
-    colorNear?: Color;
-    colorFar?: Color;
-}
-
-function createReactiveBox(UI: UIManager, opts: ReactiveBoxOpts = {}): UIContainer {
-    const size = opts.size || 30;
-    const minScale = opts.minScale || 0.25;
-    const maxDist = opts.maxDist || 120;
-    const colorNear = opts.colorNear || [0, 0.1, 0, 1];
-    const colorFar = opts.colorFar || [0, 0.5, 0, 1];
-
-    const box = UI.spawnContainer(size, size, colorFar);
-
-    box.entity.registerCall('update', () => {
-        const centerX = box.position[0] + box.width * 0.5;
-        const centerY = box.position[1] + box.height * 0.5;
-        const mx = game.mousePos[0];
-        const my = game.mousePos[1];
-        const dx = mx - centerX;
-        const dy = my - centerY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const t = Math.max(0, Math.min(1, 1 - dist / maxDist));
-        const scale = 1 - (1 - minScale) * t;
-        const newSize = Math.max(2, Math.round(size * scale));
-        box.setSize(newSize, newSize);
-        box.setPosition(centerX - newSize * 0.5, centerY - newSize * 0.5);
-
-        const lerp = (a: number, b: number, f: number): number => a + (b - a) * f;
-        const col: Color = [
-            lerp(colorFar[0], colorNear[0], t),
-            lerp(colorFar[1], colorNear[1], t),
-            lerp(colorFar[2], colorNear[2], t),
-            lerp(colorFar[3] ?? 1, colorNear[3] ?? 1, t),
-        ];
-        box.setColor(col);
-    });
-
-    return box;
-}
-
-// Base components - generic reusable components:
-// generic button
-function initBtn(
-    UI: UIManager,
-    txt: string = 'btn',
-    txtSize: number = tMid,
-    onClick: (() => void) | null = null,
-): UIPadding {
-    // Static comp
-    const container = UI.spawnPadding([10, 20, 10, 20], [0, 0.15, 0, 0]);
-    const text = UI.spawnText(txt.toString(), txtSize, 200, [0, 0.7, 0, 1], [0, 0.15, 0, 0]);
-    container.addChild(text);
-
-    // Dynamic comp
-    const container2Collider = UI.addColliderToElem(container);
-    const speed = 150;
-
-    // click, dispatched by the physics collider system
-    container2Collider.addHandler('click', () => {
-        if (onClick) {
-            onClick(); // run custom action
-        } else {
-            console.log('clicked!!!');
-        }
-        return true; // stop propagation
-    });
-
-    container.entity.registerCall('update', () => {
-        // idle
-        text.setTextColor([UI.newSine(0, 0.4, speed), UI.newSine(0.6, 0.9, speed), 0, 1]);
-        container.setColor([0, 0.15, 0, 0]);
-
-        // hover
-        if (game.physics!.gjk(container2Collider, game.physics!.mouse)) {
-            container.setColor([0, UI.newSine(0.5, 0.8, speed), 0, 1]);
-            text.setTextColor([0, 0.1, 0, 1]);
-        }
-    });
-
+    container.setEnabled(false);
     return container;
 }
 
-// generic link
-function initLink(
-    UI: UIManager,
-    txt: string = 'link',
-    txtSize: number = tSmall,
-    onClick: (() => void) | null = null,
-): UIPadding {
-    // Static comp
-    const container = UI.spawnPadding([0, 0, 0, 0], [0, 0.15, 0, 0]);
-    const text = UI.spawnText(txt.toString(), txtSize, 400, [0.7, 0.4, 0, 1], [0, 0.15, 0, 0]);
-    container.addChild(text);
+/** Toggles palette/nav-mesh visibility each frame based on game.editorTarget. */
+function initEditorModeControl(UI: UIManager): void {
+    const navMeshEntity = game.getEntity('tilemapNavigation')!;
 
-    // Dynamic comp
-    const container2Collider = UI.addColliderToElem(container);
-    const speed = 10;
-
-    // click, dispatched by the physics collider system
-    container2Collider.addHandler('click', () => {
-        if (onClick) {
-            onClick(); // run custom action
-        } else {
-            console.log('clicked!!!');
-        }
-        return true; // stop propagation
-    });
-
-    container.entity.registerCall('update', () => {
-        // idle
-        text.setTextColor([UI.newSine(0.6, 0.8, speed), 0.45, 0, 1]);
-        container.setColor([0, 0, 0, 0]);
-
-        // hover
-        if (game.physics!.gjk(container2Collider, game.physics!.mouse)) {
-            container.setColor([UI.newSine(0.7, 0.9, speed), 0.45, 0, 1]);
-            text.setTextColor([0, 0.1, 0, 1]);
-        }
-    });
-
-    return container;
-}
-
-function typeWriterFx(textElement: UIText, fullText: string, speed: number = 100): void {
-    let index = 0;
-    let lastTime = Date.now();
-
-    textElement.entity.registerCall('update', () => {
-        const now = Date.now();
-        if (index < fullText.length && now - lastTime > speed) {
-            index++;
-            textElement.setText(fullText.slice(0, index));
-            lastTime = now;
-        }
+    UI.root.entity.registerCall('update', () => {
+        if (_tilePalette) _tilePalette.setEnabled(game.editorTarget === 'tilemap');
+        if (_navPalette) _navPalette.setEnabled(game.editorTarget === 'navMesh');
+        navMeshEntity.enabled = game.editorTarget === 'navMesh';
     });
 }

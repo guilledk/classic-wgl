@@ -2,15 +2,11 @@ import game from '/classic/state.js';
 
 import {
     initCursor,
-    initFPSCounter,
-    initInfoText,
     initCameraControllerWASD,
-    initSelectionMonitor,
     initTilemap,
-    initTilemapEditor,
-    initNavMeshEditor,
+    initTilemapEditorLogic,
+    initNavMeshEditorLogic,
     initAgent,
-    initDEVButtons,
 } from './prefabs.js';
 import { initUI } from './uiPrefabs.js';
 
@@ -23,19 +19,12 @@ async function initContext(): Promise<void> {
     await game.load('/state.json');
 
     initCursor();
-    initFPSCounter();
-    initInfoText();
     initCameraControllerWASD();
-    initSelectionMonitor();
     initTilemap();
-    initTilemapEditor();
-    await initNavMeshEditor();
-
+    initTilemapEditorLogic();
+    initNavMeshEditorLogic();
     initAgent();
 
-    initDEVButtons();
-
-    // main ui
     initUI();
 
     game.camera.position[0] += 800;

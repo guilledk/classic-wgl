@@ -18,115 +18,7 @@
                 }
             ]
         },
-        "tilemapEditor": {
-            "components": [
-                {
-                    "type": "Sprite",
-                    "position": {
-                        "0": 1650,
-                        "1": 703,
-                        "2": -1000
-                    },
-                    "scale": [1, 1, 1],
-                    "texture": "tileSet",
-                    "ignoreCam": true,
-                    "frame": 0,
-                    "tileSetSize": [1, 1],
-                    "anchor": [0, 0]
-                },
-                {
-                    "type": "Rectangle",
-                    "position": {
-                        "0": 1650,
-                        "1": 703,
-                        "2": -1000
-                    },
-                    "scale": [256, 256, 1],
-                    "color": [0, 0, 0, 0.2],
-                    "ignoreCam": true
-                }
-            ]
-        },
-        "navMeshEditor": {
-            "components": [
-                {
-                    "type": "Sprite",
-                    "position": {
-                        "0": 1842,
-                        "1": 895,
-                        "2": -1000
-                    },
-                    "scale": [4, 4, 1],
-                    "texture": "navTileset",
-                    "ignoreCam": true,
-                    "frame": 0,
-                    "tileSetSize": [1, 1],
-                    "anchor": [0, 0]
-                },
-                {
-                    "type": "Rectangle",
-                    "position": {
-                        "0": 1842,
-                        "1": 895,
-                        "2": -1000
-                    },
-                    "scale": [64, 64, 1],
-                    "color": [0, 0, 0, 0.2],
-                    "ignoreCam": true
-                }
-            ]
-        },
-        "fpsCounter": {
-            "components": [
-                {
-                    "type": "Text",
-                    "position": [0, 0, -1000],
-                    "scale": [1, 1, 1],
-                    "textureFont": "font",
-                    "maxCharSize": [3, 1],
-                    "fontSize": [16, 16],
-                    "glyphSize": [32, 32],
-                    "glyphStr": "!\"#$%&'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~",
-                    "color": [1, 1, 1, 1],
-                    "bgcolor": [0, 0, 0, 1],
-                    "ignoreCam": true
-                }
-            ]
-        },
-        "textLabel1": {
-            "components": [
-                {
-                    "type": "Text",
-                    "position": [100, 0, -1000],
-                    "scale": [0.8, 0.8, 1],
-                    "textureFont": "font",
-                    "maxCharSize": [24, 1],
-                    "fontSize": [16, 16],
-                    "glyphSize": [32, 32],
-                    "glyphStr": "!\"#$%&'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~",
-                    "color": [1, 0.53, 0.3, 1],
-                    "bgcolor": [0.3, 0.1, 0, 1],
-                    "ignoreCam": true
-                }
-            ]
-        },
-        "textLabel2": {
-            "components": [
-                {
-                    "type": "Text",
-                    "position": [100, 40, -1000],
-                    "scale": [0.5, 0.5, 1],
-                    "textureFont": "font",
-                    "maxCharSize": [38, 1],
-                    "fontSize": [16, 16],
-                    "glyphSize": [32, 32],
-                    "glyphStr": "!\"#$%&'()*+,-./?0123456789:;<=>@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`{|}~",
-                    "color": [1, 0.2, 0.6, 1],
-                    "bgcolor": [0.3, 0, 0.15, 1],
-                    "ignoreCam": true
-                }
-            ]
-        },
+
         "semaphore01": {
             "components": [
                 {
@@ -197,35 +89,7 @@
                 }
             ]
         },
-        "tilemapTileSelector": {
-            "components": [
-                {
-                    "type": "Rectangle",
-                    "position": [1650, 703, -1000],
-                    "scale": [32, 32, 1],
-                    "color": [1, 1, 1, 0.2],
-                    "ignoreCam": true
-                }
-            ]
-        },
-        "navMeshTileSelector": {
-            "components": [
-                {
-                    "type": "Rectangle",
-                    "position": {
-                        "0": 1842,
-                        "1": 895,
-                        "2": -1000
-                    },
-                    "scale": [32, 32, 1],
-                    "color": [1, 1, 1, 0.2],
-                    "ignoreCam": true
-                }
-            ]
-        },
-        "selectionMonitor": {
-            "components": []
-        },
+
         "tilemapNavigation": {
             "components": [
                 {
@@ -255,48 +119,6 @@
                     "anchor": [0, 0.98],
                     "speed": 2.6,
                     "animSpeed": 1
-                }
-            ]
-        },
-        "btnTilemap": {
-            "components": [
-                {
-                    "type": "Sprite",
-                    "position": [-400, 0, -100],
-                    "scale": [0.25, 0.25, 1],
-                    "texture": "editorIcons",
-                    "ignoreCam": true,
-                    "frame": 1,
-                    "tileSetSize": [4, 4],
-                    "anchor": [0.5, 0.5]
-                }
-            ]
-        },
-        "btnNavMesh": {
-            "components": [
-                {
-                    "type": "Sprite",
-                    "position": [-400, 0, -100],
-                    "scale": [0.25, 0.25, 1],
-                    "texture": "editorIcons",
-                    "ignoreCam": true,
-                    "frame": 2,
-                    "tileSetSize": [4, 4],
-                    "anchor": [0.5, 0.5]
-                }
-            ]
-        },
-        "btnDEV": {
-            "components": [
-                {
-                    "type": "Sprite",
-                    "position": [64, 841, -100],
-                    "scale": [0.5, 0.5, 1],
-                    "texture": "editorIcons",
-                    "ignoreCam": true,
-                    "frame": 0,
-                    "tileSetSize": [4, 4],
-                    "anchor": [0.5, 0.5]
                 }
             ]
         }
