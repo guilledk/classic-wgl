@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import { fileURLToPath, URL } from 'node:url';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -58,6 +58,23 @@ export default defineConfig({
     alias: {
       '/classic': fileURLToPath(new URL('./src/classic', import.meta.url)),
       '/lib': fileURLToPath(new URL('./src/lib', import.meta.url)),
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['tests/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      skipFull: false,
+      include: [
+        'src/lib/**/*.ts',
+        'src/classic/ecs.ts',
+        'src/classic/camera.ts',
+        'src/classic/collision.ts',
+        'src/classic/utils.ts',
+        'src/classic/registry.ts',
+      ],
     },
   },
 });

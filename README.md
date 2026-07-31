@@ -23,6 +23,17 @@ npm i
 npm run dev
 ```
 
+## Testing
+Tests are written with [Vitest](https://vitest.dev) and live under `tests/`,
+mirroring the structure of `src/`.
+
+```bash
+npm run typecheck    # tsc --noEmit
+npm test             # run the test suite once
+npm run test:watch   # re-run tests on change
+npm run test:coverage # run tests with a v8 coverage report
+```
+
 ## GLSL resources:
 
 https://learnwebgl.brown37.net/12_shader_language/documents/webgl-reference-card-1_0.pdf

@@ -13,6 +13,9 @@ logs
 dist/
 build/
 
+# Test coverage output
+coverage/
+
 # Vite cache
 .vite/
 
