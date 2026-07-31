@@ -5,8 +5,9 @@
     "type": "module",
     "main": "index.js",
     "scripts": {
-        "dev": "vite",
-        "build": "vite build",
+        "assets": "node scripts/copy-assets.mjs",
+        "dev": "npm run assets && vite",
+        "build": "npm run assets && vite build",
         "preview": "vite preview",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
