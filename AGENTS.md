@@ -20,13 +20,13 @@ npm run typecheck     # tsc --noEmit (strict mode) — run before finishing
 npm test              # vitest run (single pass)
 npm run test:watch    # vitest watch mode
 npm run test:coverage # vitest run --coverage (v8, scoped allowlist)
+npm run format        # prettier --write . (auto-format all source files)
+npm run format:check  # prettier --check . (CI check)
 ```
 
-CI (`.github/workflows/ci.yml`) runs `npm run typecheck` and
-`npm run test:coverage` on every push to `master` and every PR. Always run
-both before considering a task done. **There is no lint step in CI and no
-ESLint/Prettier config in this repo** — match the existing style by hand
-(see Conventions below) rather than introducing new tooling unless asked.
+CI (`.github/workflows/ci.yml`) runs `npm run format:check`, `npm run typecheck`,
+and `npm run test:coverage` on every push to `master` and every PR. Always run
+all three before considering a task done.
 
 ## Directory map
 
@@ -60,7 +60,8 @@ src/
 tests/                mirrors src/ 1:1 (tests/classic/*, tests/lib/*)
   helpers/mockGame.ts   createMockGL / createMockPhysics / createMockGame
 public/               static assets + manifest.json (shaders/textures/
-                       animations) + state.json (persisted demo entities)
+                        animations) + state.json (persisted demo entities)
+.prettierrc            Prettier config (4-space indent, single quotes, semicolons, 100-char width)
 ```
 
 ## Architecture essentials
@@ -99,12 +100,12 @@ public/               static assets + manifest.json (shaders/textures/
   don't try to `import` a shader file directly.
 - **UI layer** (`ui.ts`) is a small retained-mode layout system built by
   extending the rendering primitives directly: `UIElement extends
-  Rectangle`, `UIText extends Text`, `UISprite extends Sprite`. Layout is
+Rectangle`, `UIText extends Text`, `UISprite extends Sprite`. Layout is
   triggered by `UIManager.markDirty()` / `refreshLayout()`, driven off the
   `'canvasResize'` call.
 - **Isometric/pathfinding**: `isometric.ts` owns a `pathfinder.ts` Web
   Worker (spun up via `new Worker(new URL('./pathfinder.ts',
-  import.meta.url), { type: 'module' })`) and talks to it with an
+import.meta.url), { type: 'module' })`) and talks to it with an
   id-correlated `initmap`/`updatemap`/`findpath` message protocol.
 - **Feature-local type augmentation**: files extend `IGameState` in place
   via `declare module './types.js' { interface IGameState { ... } }`
@@ -113,7 +114,7 @@ public/               static assets + manifest.json (shaders/textures/
 
 ## Conventions
 
-- 2-space indentation, single quotes, semicolons everywhere.
+- 4-space indentation (enforced by Prettier), single quotes, semicolons everywhere.
 - `PascalCase` for classes/components; interfaces representing an abstract
   contract are `I`-prefixed (`IEntity`, `IComponent`, `IGameState`,
   `IShape`, `ICamera`, ...). `camelCase` for functions/methods/variables.
@@ -128,11 +129,11 @@ public/               static assets + manifest.json (shaders/textures/
   `/classic/*` -> `src/classic/*`, `/lib/*` -> `src/lib/*`. Convention: use
   the alias for cross-module imports, but use a relative import for a
   module's own directory `types.js` (e.g. `import type { ... } from
-  './types.js'` from within `src/classic/`).
+'./types.js'` from within `src/classic/`).
 - `type`-only imports use `import type { ... }` explicitly
   (`verbatimModuleSyntax: true` in `tsconfig.json` requires this).
 - Abstract methods are implemented as base-class methods that `throw new
-  Error('Abstract method must be overridden')` rather than using the
+Error('Abstract method must be overridden')` rather than using the
   `abstract` keyword.
 - JSDoc-style `/** ... */` comments are used for file headers and
   non-trivial exported functions, but not uniformly on every method —
@@ -148,13 +149,13 @@ public/               static assets + manifest.json (shaders/textures/
   `registry.ts`). Not every file needs 100% coverage; the demo/prefab/UI
   layer is out of scope for coverage.
 - Use `tests/helpers/mockGame.ts` instead of touching real WebGL/DOM:
-  - `createMockGL()` — stub `WebGLRenderingContext` with only the methods
-    actually exercised.
-  - `createMockPhysics()` — stub `IPhysicsProvider`.
-  - `createMockGame(overrides?)` — minimal `IGameState`-shaped object,
-    override/spread as needed per test.
-  These are intentionally partial mocks force-cast to the real interface —
-  keep that pattern rather than building full fakes.
+    - `createMockGL()` — stub `WebGLRenderingContext` with only the methods
+      actually exercised.
+    - `createMockPhysics()` — stub `IPhysicsProvider`.
+    - `createMockGame(overrides?)` — minimal `IGameState`-shaped object,
+      override/spread as needed per test.
+      These are intentionally partial mocks force-cast to the real interface —
+      keep that pattern rather than building full fakes.
 - Typical test shape: define a tiny local `Component` subclass inline,
   construct `Entity`s with a mock game, assert on both behavior and
   internal bookkeeping. Use `toBeCloseTo(...)` for float/vector

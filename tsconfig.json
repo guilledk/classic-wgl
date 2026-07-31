@@ -1,24 +1,24 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "allowImportingTsExtensions": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "baseUrl": ".",
-    "paths": {
-      "/classic/*": ["./src/classic/*"],
-      "/lib/*": ["./src/lib/*"]
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "noEmit": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "verbatimModuleSyntax": true,
+        "allowImportingTsExtensions": true,
+        "lib": ["ES2022", "DOM", "DOM.Iterable"],
+        "baseUrl": ".",
+        "paths": {
+            "/classic/*": ["./src/classic/*"],
+            "/lib/*": ["./src/lib/*"]
+        },
+        "types": ["webgl2", "node"]
     },
-    "types": ["webgl2", "node"]
-  },
-  "include": ["src/**/*", "tests/**/*", "vite.config.ts"],
-  "exclude": ["node_modules", "dist"]
+    "include": ["src/**/*", "tests/**/*", "vite.config.ts"],
+    "exclude": ["node_modules", "dist"]
 }

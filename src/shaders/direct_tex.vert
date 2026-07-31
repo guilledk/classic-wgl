@@ -7,7 +7,7 @@ uniform mat4 projectionMatrix;
 
 varying mediump vec2 vTexCoord;
 
-void main(void) {
+void main(void ) {
     gl_Position = projectionMatrix * cameraMatrix * modelMatrix * vertexPos;
     vTexCoord = texCoord;
 }

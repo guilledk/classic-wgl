@@ -39,7 +39,7 @@ aliases). See the Conventions section of `AGENTS.md` for details.
 - Base all work on `master` (the default branch); CI runs on pushes to
   `master` and on every PR.
 - Keep commit messages short, lowercase, and imperative (e.g. `fix npx
-  vite build`, `add Vitest test harness and CI`) — this repo does not use
+vite build`, `add Vitest test harness and CI`) — this repo does not use
   Conventional Commits prefixes.
 - Prefer small, focused commits over one large commit per feature.
 

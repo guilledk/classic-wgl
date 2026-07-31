@@ -14,13 +14,8 @@ uniform vec2 tilePixelSize;
 
 varying mediump vec2 vMapCoord;
 
-void main(void) {
-    gl_Position =
-        projectionMatrix *
-        cameraMatrix *
-        modelMatrix *
-        isoMatrix * 
-        vertexPos;
+void main(void ) {
+    gl_Position = projectionMatrix * cameraMatrix * modelMatrix * isoMatrix * vertexPos;
 
     vMapCoord = mapCoord;
 }
