@@ -262,6 +262,13 @@ export function initAgent(): void {
     game.agentEnabled = true;
     game.agentSelected = false;
 
+    // Init agent height to terrain surface
+    const aTx = Math.floor(agent.position[0]);
+    const aTy = Math.floor(agent.position[1]);
+    const aIdx =
+        Math.min(aTx, tilemap.sizeX - 1) + Math.min(aTy, tilemap.sizeY - 1) * tilemap.sizeX;
+    agent.position[2] = (tilemap.heightData[aIdx] ?? 0) * tilemap.heightScale;
+
     compTilemapCollider.addHandler('click', function () {
         if (!game.agentEnabled) return;
 
