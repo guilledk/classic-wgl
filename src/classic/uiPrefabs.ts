@@ -1,3 +1,4 @@
+import { APP_VERSION_DISPLAY } from '../version.ts';
 import game from '/classic/state.js';
 import {
   UIManager,
@@ -240,7 +241,7 @@ function init00(UI: UIManager): UIArray {
   array.addChild(txt);
   typeWriterFx(
     txt,
-    'This front is constructed as a testing example of the new layout system built on top of clasic-wgl v0.1a0.',
+    `This front is constructed as a testing example of the new layout system built on top of classic-wgl ${APP_VERSION_DISPLAY}.`,
     20
   );
 
