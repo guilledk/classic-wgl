@@ -244,6 +244,8 @@ export class Sprite extends Drawable {
             this.game.shaders.imageSheet.unif.tileSetSize,
             this.tileSetSize as number[],
         );
+        this.gl.uniform1f(this.game.shaders.imageSheet.unif.useIsoDepth, 0.0);
+        this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, 0.0);
 
         this.gl.drawElements(
             this.gl.TRIANGLES,

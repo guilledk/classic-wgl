@@ -19,5 +19,7 @@ vec4 getTilePixel(float tileIdFlat, vec2 texCoord) {
 }
 
 void main(void ) {
-    gl_FragColor = getTilePixel(tileIdFlat, vec2(vTexCoord.x, vTexCoord.y));
+    vec4 color = getTilePixel(tileIdFlat, vec2(vTexCoord.x, vTexCoord.y));
+    if (color.a < 0.01) discard;
+    gl_FragColor = color;
 }

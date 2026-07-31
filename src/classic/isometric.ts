@@ -30,6 +30,12 @@ export class Tilemap extends Drawable {
     invScale: vec3;
     _isoToCartesian: mat4;
     _cartesianToIso: mat4;
+    heightData: number[];
+    heightScale: number;
+    _meshVertBuffer: WebGLBuffer | null = null;
+    _meshVertCount: number = 0;
+    _meshDirty: boolean = true;
+    _needsBufferResize: boolean = true;
 
     constructor(
         entity: IEntity,
@@ -65,6 +71,9 @@ export class Tilemap extends Drawable {
         this.maxTile = maxTile;
         this.dataUrl = dataUrl;
 
+        this.heightData = Array(sizeX * sizeY).fill(1);
+        this.heightScale = tilePixelSize[0];
+
         if (dataUrl != null) {
             this.data = [];
             this.loadMap(dataUrl);
@@ -75,6 +84,7 @@ export class Tilemap extends Drawable {
                     this.data[x + sizeX * y] = 0;
                 }
             }
+            this._meshDirty = true;
         }
 
         this.mouseIsoPos = vec3.fromValues(-1, -1, -1);
@@ -99,12 +109,43 @@ export class Tilemap extends Drawable {
         vec3.add(this.mouseIsoPos, this.mouseIsoPos, this.game.camera.getFix());
         vec3.div(this.mouseIsoPos, this.mouseIsoPos, this.game.camera.scale as vec3);
         this.cartesianToIso(this.mouseIsoPos);
+
+        const hd = this.heightData;
+        const sX = this.sizeX;
+        const sY = this.sizeY;
+        const at = (tx: number, ty: number) =>
+            hd[
+                Math.min(Math.max(Math.floor(tx), 0), sX - 1) +
+                    Math.min(Math.max(Math.floor(ty), 0), sY - 1) * sX
+            ] ?? 0;
+        const tileStep = (this.scale[0] as number) * 0.7071;
+
+        let isoX = this.mouseIsoPos[0];
+        let isoY = this.mouseIsoPos[1];
+
+        for (let i = 0; i < 3; i++) {
+            const ftx = Math.floor(isoX);
+            const fty = Math.floor(isoY);
+            const fx = isoX - ftx;
+            const fy = isoY - fty;
+            const hNW = at(ftx, fty);
+            const hNE = at(ftx + 1, fty);
+            const hSW = at(ftx, fty + 1);
+            const hSE = at(ftx + 1, fty + 1);
+            const h = hNW + (hNE - hNW) * fx + (hSW - hNW) * fy + (hNW - hNE - hSW + hSE) * fx * fy;
+            if (h <= 0) break;
+            const zOffset = (h * this.heightScale) / tileStep;
+            isoX = this.mouseIsoPos[0] - zOffset;
+            isoY = this.mouseIsoPos[1] + zOffset;
+        }
+
+        this.mouseIsoPos[0] = isoX;
+        this.mouseIsoPos[1] = isoY;
     }
 
     modelMatrix(): mat4 {
         const modelMatrix = mat4.create();
         mat4.translate(modelMatrix, modelMatrix, this.position);
-        mat4.scale(modelMatrix, modelMatrix, [...this.mapSize, 1] as vec3);
         return modelMatrix;
     }
 
@@ -126,8 +167,11 @@ export class Tilemap extends Drawable {
         fetch(url)
             .then((res) => res.text())
             .then((text) => {
-                this.data = JSON.parse(atob(text));
+                this.data = JSON.parse(atob(text.trim()));
                 this.uploadToGPU();
+            })
+            .catch((err) => {
+                console.error('[Tilemap] Failed to load map data:', err);
             });
     }
 
@@ -139,6 +183,7 @@ export class Tilemap extends Drawable {
         minObj.tilePixelSize = this.tilePixelSize;
         minObj.maxTile = this.maxTile;
         minObj.data = this.dataUrl;
+        minObj.heightScale = this.heightScale;
         return minObj;
     }
 
@@ -162,19 +207,13 @@ export class Tilemap extends Drawable {
         vec3.transformMat4(v as vec3, v as vec3, this._isoToCartesian);
     }
 
-    isoDistanceToCam(pos: vec3): number {
-        const camPos = vec3.clone(game.camera.position as vec3);
-        vec3.add(camPos, camPos, [0, -game.camera.size[1] / 2, 0]);
-        this.cartesianToIso(camPos);
-        return vec3.distance(camPos, pos);
-    }
-
     generateNoiseMap(): void {
         for (let y = 0; y < this.sizeY; y++) {
             for (let x = 0; x < this.sizeX; x++) {
                 this.data[x + this.sizeX * y] = Math.floor(getNoiseRange(x, y, 0, this.maxTile));
             }
         }
+        this._meshDirty = true;
     }
 
     getSelection(): [vec2, vec2] {
@@ -196,6 +235,7 @@ export class Tilemap extends Drawable {
                 this.data[x + this.sizeX * y] = value;
             }
         }
+        this._meshDirty = true;
     }
 
     uploadToGPU(): void {
@@ -230,89 +270,336 @@ export class Tilemap extends Drawable {
         this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
         this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
         this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+
+        this._meshDirty = true;
+    }
+
+    setHeight(x: number, y: number, value: number): void {
+        if (x < 0 || x >= this.sizeX || y < 0 || y >= this.sizeY) return;
+        this.heightData[x + this.sizeX * y] = value;
+        this._meshDirty = true;
+    }
+
+    buildMesh(): void {
+        const sX = this.sizeX;
+        const sY = this.sizeY;
+        const hs = this.heightScale;
+
+        const maxVerts = sX * sY * 180; // worst case: face + 4 walls = 30 vertices = 180 floats
+        const verts = new Float32Array(maxVerts);
+        let vi = 0;
+
+        const mx = new Float32Array(sX + 1);
+        const my = new Float32Array(sY + 1);
+        for (let i = 0; i <= sX; i++) mx[i] = i / sX;
+        for (let i = 0; i <= sY; i++) my[i] = i / sY;
+
+        for (let ty = 0; ty < sY; ty++) {
+            for (let tx = 0; tx < sX; tx++) {
+                const idx = tx + ty * sX;
+                const tid = this.data[idx];
+                const hThis = this.heightData[idx];
+
+                const hNW = hThis;
+                const hNE = tx + 1 < sX ? this.heightData[tx + 1 + ty * sX] : hThis;
+                const hSW = ty + 1 < sY ? this.heightData[tx + (ty + 1) * sX] : hThis;
+                const hSE =
+                    tx + 1 < sX && ty + 1 < sY ? this.heightData[tx + 1 + (ty + 1) * sX] : hThis;
+
+                const hasFace = tid !== 0 || hNW !== 0 || hNE !== 0 || hSW !== 0 || hSE !== 0;
+                if (!hasFace) continue;
+
+                const zNW = hNW * hs;
+                const zNE = hNE * hs;
+                const zSW = hSW * hs;
+                const zSE = hSE * hs;
+
+                const zMax = Math.max(zNW, zNE, zSW, zSE);
+                const zMin = Math.min(zNW, zNE, zSW, zSE);
+                const steepness = Math.min((zMax - zMin) / hs, 1.0);
+                const faceTileId = -steepness;
+
+                const mxNW = mx[tx];
+                const myNW = my[ty];
+                const mxNE = mx[tx + 1];
+                const myNE = my[ty];
+                const mxSW = mx[tx];
+                const mySW = my[ty + 1];
+                const mxSE = mx[tx + 1];
+                const mySE = my[ty + 1];
+
+                verts[vi++] = tx;
+                verts[vi++] = ty;
+                verts[vi++] = zNW;
+                verts[vi++] = mxNW;
+                verts[vi++] = myNW;
+                verts[vi++] = faceTileId;
+                verts[vi++] = tx + 1;
+                verts[vi++] = ty;
+                verts[vi++] = zNE;
+                verts[vi++] = mxNE;
+                verts[vi++] = myNE;
+                verts[vi++] = faceTileId;
+                verts[vi++] = tx;
+                verts[vi++] = ty + 1;
+                verts[vi++] = zSW;
+                verts[vi++] = mxSW;
+                verts[vi++] = mySW;
+                verts[vi++] = faceTileId;
+                verts[vi++] = tx + 1;
+                verts[vi++] = ty;
+                verts[vi++] = zNE;
+                verts[vi++] = mxNE;
+                verts[vi++] = myNE;
+                verts[vi++] = faceTileId;
+                verts[vi++] = tx + 1;
+                verts[vi++] = ty + 1;
+                verts[vi++] = zSE;
+                verts[vi++] = mxSE;
+                verts[vi++] = mySE;
+                verts[vi++] = faceTileId;
+                verts[vi++] = tx;
+                verts[vi++] = ty + 1;
+                verts[vi++] = zSW;
+                verts[vi++] = mxSW;
+                verts[vi++] = mySW;
+                verts[vi++] = faceTileId;
+
+                const wallTileId = tid || 1;
+
+                if (tx + 1 >= sX && hThis > 0) {
+                    const zTop = hThis * hs;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxNE;
+                    verts[vi++] = myNE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxNE;
+                    verts[vi++] = myNE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxSE;
+                    verts[vi++] = mySE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxNE;
+                    verts[vi++] = myNE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxSE;
+                    verts[vi++] = mySE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxSE;
+                    verts[vi++] = mySE;
+                    verts[vi++] = wallTileId;
+                }
+
+                if (ty + 1 >= sY && hThis > 0) {
+                    const zTop = hThis * hs;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxSW;
+                    verts[vi++] = mySW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxSW;
+                    verts[vi++] = mySW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxSE;
+                    verts[vi++] = mySE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxSW;
+                    verts[vi++] = mySW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxSE;
+                    verts[vi++] = mySE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxSE;
+                    verts[vi++] = mySE;
+                    verts[vi++] = wallTileId;
+                }
+
+                if (tx === 0 && hThis > 0) {
+                    const zTop = hThis * hs;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxSW;
+                    verts[vi++] = mySW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxSW;
+                    verts[vi++] = mySW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxNW;
+                    verts[vi++] = myNW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty + 1;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxSW;
+                    verts[vi++] = mySW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxNW;
+                    verts[vi++] = myNW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxNW;
+                    verts[vi++] = myNW;
+                    verts[vi++] = wallTileId;
+                }
+
+                if (ty === 0 && hThis > 0) {
+                    const zTop = hThis * hs;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxNE;
+                    verts[vi++] = myNE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxNE;
+                    verts[vi++] = myNE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxNW;
+                    verts[vi++] = myNW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx + 1;
+                    verts[vi++] = ty;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxNE;
+                    verts[vi++] = myNE;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty;
+                    verts[vi++] = zTop;
+                    verts[vi++] = mxNW;
+                    verts[vi++] = myNW;
+                    verts[vi++] = wallTileId;
+                    verts[vi++] = tx;
+                    verts[vi++] = ty;
+                    verts[vi++] = 0;
+                    verts[vi++] = mxNW;
+                    verts[vi++] = myNW;
+                    verts[vi++] = wallTileId;
+                }
+            }
+        }
+
+        const floatCount = vi;
+        this._meshVertCount = floatCount / 6;
+
+        if (this._meshVertBuffer == null || this._needsBufferResize) {
+            if (this._meshVertBuffer != null) this.gl.deleteBuffer(this._meshVertBuffer);
+            this._meshVertBuffer = this.gl.createBuffer();
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this._meshVertBuffer);
+            this.gl.bufferData(this.gl.ARRAY_BUFFER, maxVerts * 4, this.gl.DYNAMIC_DRAW);
+            this._needsBufferResize = false;
+        }
+
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this._meshVertBuffer);
+        this.gl.bufferSubData(this.gl.ARRAY_BUFFER, 0, verts.subarray(0, floatCount));
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, null);
+        this._meshDirty = false;
     }
 
     rawDraw(): void {
-        // Verts
-        this.game.buffers.quad.verts.bind();
-        this.gl.vertexAttribPointer(
-            this.game.shaders.isoTilemap.attr.vertexPos,
-            3,
-            this.gl.FLOAT,
-            false,
-            0,
-            0,
-        );
-        this.gl.enableVertexAttribArray(this.game.shaders.isoTilemap.attr.vertexPos);
+        if (this._meshDirty) {
+            this.buildMesh();
+        }
 
-        // UVs
-        this.game.buffers.quad.uvs.bind();
-        this.gl.vertexAttribPointer(
-            this.game.shaders.isoTilemap.attr.mapCoord,
-            2,
-            this.gl.FLOAT,
-            false,
-            0,
-            0,
-        );
-        this.gl.enableVertexAttribArray(this.game.shaders.isoTilemap.attr.mapCoord);
+        if (this._meshVertBuffer == null || this._meshVertCount === 0) return;
+        if (this.mapDataTexture == null) return;
 
-        // Indices
-        this.game.buffers.quad.indices.bind();
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this._meshVertBuffer);
+        const stride = 6 * 4;
+        const shader = this.game.shaders.isoTilemap;
 
-        this.game.shaders.isoTilemap.bind();
+        this.gl.vertexAttribPointer(shader.attr.vertexPos, 3, this.gl.FLOAT, false, stride, 0);
+        this.gl.enableVertexAttribArray(shader.attr.vertexPos);
+
+        this.gl.vertexAttribPointer(shader.attr.mapCoord, 2, this.gl.FLOAT, false, stride, 12);
+        this.gl.enableVertexAttribArray(shader.attr.mapCoord);
+
+        this.gl.vertexAttribPointer(shader.attr.tileId, 1, this.gl.FLOAT, false, stride, 20);
+        this.gl.enableVertexAttribArray(shader.attr.tileId);
+
+        shader.bind();
 
         this.gl.activeTexture(this.gl.TEXTURE0);
         this.gl.bindTexture(this.gl.TEXTURE_2D, this.mapDataTexture);
 
         this.tileSet.bind(this.gl.TEXTURE1);
 
-        this.gl.uniform1i(this.game.shaders.isoTilemap.unif.mapData, 0);
-        this.gl.uniform1i(this.game.shaders.isoTilemap.unif.tileSet, 1);
+        this.gl.uniform1i(shader.unif.mapData, 0);
+        this.gl.uniform1i(shader.unif.tileSet, 1);
 
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.projectionMatrix,
-            false,
-            this.game.projectionMatrix,
-        );
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.cameraMatrix,
-            false,
-            this.game.camera.matrix(),
-        );
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.modelMatrix,
-            false,
-            this.modelMatrix(),
-        );
-        this.gl.uniformMatrix4fv(
-            this.game.shaders.isoTilemap.unif.isoMatrix,
-            false,
-            this._isoToCartesian,
-        );
+        this.gl.uniformMatrix4fv(shader.unif.projectionMatrix, false, this.game.projectionMatrix);
+        this.gl.uniformMatrix4fv(shader.unif.cameraMatrix, false, this.game.camera.matrix());
+        this.gl.uniformMatrix4fv(shader.unif.modelMatrix, false, this.modelMatrix());
+        this.gl.uniformMatrix4fv(shader.unif.isoMatrix, false, this._isoToCartesian);
 
-        this.gl.uniform2fv(this.game.shaders.isoTilemap.unif.tileSetSize, this.tileSetSize);
-        this.gl.uniform2fv(this.game.shaders.isoTilemap.unif.tilePixelSize, this.tilePixelSize);
+        this.gl.uniform2fv(shader.unif.tileSetSize, this.tileSetSize);
+        this.gl.uniform2fv(shader.unif.tilePixelSize, this.tilePixelSize);
+        this.gl.uniform2fv(shader.unif.mapSize, this.mapSize);
 
-        this.gl.uniform2fv(this.game.shaders.isoTilemap.unif.mapSize, this.mapSize);
-
-        this.gl.uniform2fv(this.game.shaders.isoTilemap.unif.selectedTile, [
-            this.mouseIsoPos[0],
-            this.mouseIsoPos[1],
-        ]);
-
-        this.gl.uniform2fv(this.game.shaders.isoTilemap.unif.selectionBegin, [
+        this.gl.uniform2fv(shader.unif.selectedTile, [this.mouseIsoPos[0], this.mouseIsoPos[1]]);
+        this.gl.uniform2fv(shader.unif.selectionBegin, [
             this.selectionIsoBegin[0],
             this.selectionIsoBegin[1],
         ]);
+        this.gl.uniform1i(shader.unif.selectionMode, this.game.selectionMode);
+        this.gl.uniform4fv(shader.unif.selectionColor, this.game.selectionColor);
 
-        this.gl.uniform1i(this.game.shaders.isoTilemap.unif.selectionMode, this.game.selectionMode);
-        this.gl.uniform4fv(
-            this.game.shaders.isoTilemap.unif.selectionColor,
-            this.game.selectionColor,
-        );
+        this.gl.uniform4fv(shader.unif.wallColor, [0.3, 0.2, 0.15, 1.0]);
+        this.gl.uniform1f(shader.unif.slopeDarken, 0.4);
 
-        this.gl.drawElements(this.gl.TRIANGLES, 6, this.gl.UNSIGNED_SHORT, 0);
+        this.gl.enable(this.gl.DEPTH_TEST);
+        this.gl.drawArrays(this.gl.TRIANGLES, 0, this._meshVertCount);
+        this.gl.disable(this.gl.DEPTH_TEST);
     }
 }
 
@@ -445,13 +732,23 @@ class IsometricDrawable extends Drawable {
         const cartPos = vec3.clone(this.position);
         this.tilemap.isoToCartesian(cartPos);
         vec3.add(cartPos, cartPos, this.tilemap.position);
+
+        const tx = Math.floor(this.position[0]);
+        const ty = Math.floor(this.position[1]);
+        const h =
+            this.tilemap.heightData?.[
+                Math.min(tx, this.tilemap.sizeX - 1) +
+                    Math.min(ty, this.tilemap.sizeY - 1) * this.tilemap.sizeX
+            ] ?? 0;
+        cartPos[1] -= h * this.tilemap.heightScale;
+
         mat4.translate(modelMatrix, modelMatrix, cartPos);
         mat4.scale(modelMatrix, modelMatrix, this.scale);
         return modelMatrix;
     }
 
     order(): number {
-        return this.tilemap.order() - this.tilemap.isoDistanceToCam(this.position);
+        return this.position[0] - this.position[1];
     }
 }
 
@@ -567,7 +864,18 @@ export class IsoSprite extends IsometricDrawable {
             this.tileSetSize as number[],
         );
 
+        this.gl.uniform1f(this.game.shaders.imageSheet.unif.useIsoDepth, 1.0);
+
+        const depth =
+            (this.position[0] - this.position[1]) / 400.0 +
+            0.5 -
+            this.position[2] / 14500.0 -
+            0.001;
+        this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, depth);
+
+        this.gl.enable(this.gl.DEPTH_TEST);
         this.gl.drawElements(this.gl.TRIANGLES, 6, this.gl.UNSIGNED_SHORT, 0);
+        this.gl.disable(this.gl.DEPTH_TEST);
     }
 }
 
@@ -640,6 +948,8 @@ export class IsoAgent extends IsoSprite {
     }
 
     followPath(path: Vec2Like[]): void {
+        if (!path || path.length < 2) return;
+
         this._path = path;
 
         this._init_dist = vec2.distance(this.position as vec2, this._path[1] as vec2);
@@ -665,6 +975,16 @@ export class IsoAgent extends IsoSprite {
                 break;
 
             case AgentStates.followPath:
+                if (
+                    this._target_index >= this._path.length ||
+                    this._start_index >= this._path.length ||
+                    !this._path[this._target_index] ||
+                    !this._path[this._start_index]
+                ) {
+                    this.idle();
+                    return;
+                }
+
                 this._delta += (this.speed * this.game.deltaTime) / this._init_dist;
                 if (this._delta >= 1) {
                     this.nextTarget();
@@ -707,6 +1027,30 @@ export class IsoAgent extends IsoSprite {
                     [...this._path[this._target_index], this.position[2]] as vec3,
                     this._delta,
                 );
+
+                const px = this.position[0];
+                const py = this.position[1];
+                const tx = Math.floor(px);
+                const ty = Math.floor(py);
+                const fx = px - tx;
+                const fy = py - ty;
+                const sX = this.tilemap.sizeX;
+                const sY = this.tilemap.sizeY;
+                const hd = this.tilemap.heightData;
+                const cx = Math.min(tx, sX - 1);
+                const cy = Math.min(ty, sY - 1);
+                const cx1 = Math.min(tx + 1, sX - 1);
+                const cy1 = Math.min(ty + 1, sY - 1);
+                const hTop =
+                    (hd[cx + cy * sX] ?? 0) +
+                    ((hd[cx1 + cy * sX] ?? 0) - (hd[cx + cy * sX] ?? 0)) * fx;
+                const hBot =
+                    (hd[cx + cy1 * sX] ?? 0) +
+                    ((hd[cx1 + cy1 * sX] ?? 0) - (hd[cx + cy1 * sX] ?? 0)) * fx;
+                const hi = hTop + (hBot - hTop) * fy;
+                const targetZ = hi * this.tilemap.heightScale;
+                const zSpeed = Math.min(1, this.game.deltaTime * 4);
+                this.position[2] += (targetZ - this.position[2]) * zSpeed;
                 break;
         }
     }

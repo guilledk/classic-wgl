@@ -149,6 +149,7 @@ const game: GameState = {
 
         const gl = this.canvas.getContext('webgl', {
             preserveDrawingBuffer: true,
+            depth: true,
         });
 
         if (gl === null) {
@@ -383,9 +384,10 @@ const game: GameState = {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, this.canvas!.width, this.canvas!.height);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthFunc(gl.LEQUAL);
 
         this.renderList.length = 0;
         this.performCall('renderList');
