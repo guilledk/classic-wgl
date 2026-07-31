@@ -6,7 +6,7 @@ import { Collider, Polygon } from '/classic/collision.js';
 import { vec2, vec3 } from 'gl-matrix';
 
 // Extend game state for editor target
-declare module './types.js' {
+declare module '/classic/types.js' {
     interface IGameState {
         editorTarget?: string;
     }

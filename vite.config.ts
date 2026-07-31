@@ -57,6 +57,7 @@ export default defineConfig({
     resolve: {
         alias: {
             '/classic': fileURLToPath(new URL('./src/classic', import.meta.url)),
+            '/demo': fileURLToPath(new URL('./src/demo', import.meta.url)),
             '/lib': fileURLToPath(new URL('./src/lib', import.meta.url)),
         },
     },

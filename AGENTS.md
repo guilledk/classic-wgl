@@ -32,9 +32,9 @@ all three before considering a task done.
 
 ```
 src/
-  main.ts            entry point (sets document.title, imports demo.ts)
+  main.ts            entry point (sets document.title, imports demo/init.ts)
   version.ts          derives APP_NAME/APP_VERSION from package.json
-  classic/            the engine + demo application
+  classic/            the engine core
     ecs.ts             Entity / Component base classes
     types.ts            all shared interfaces (IGameState, IEntity, ...)
     registry.ts          component name -> constructor registry (for JSON load)
@@ -45,12 +45,13 @@ src/
     animator.ts           Animator component (sprite-sheet frame stepping)
     isometric.ts          Tilemap, IsometricNavMesh, IsoSprite, IsoAgent
     pathfinder.ts         Web Worker: A* pathfinding over the nav mesh
-    prefabs.ts            initX() functions that assemble built-in game objects
     ui.ts                 UIElement/UIContainer/UIArray/UIPadding/UIManager
-    uiPrefabs.ts           demo UI tree built from ui.ts primitives
     utils.ts               fetch/shader/buffer/texture/animation helpers
-    demo.ts                application entry: init -> load resources -> load
-                           state -> run prefabs -> initUI() -> launch()
+  demo/               application-specific demo code
+    init.ts              entry: init -> load resources -> load state ->
+                         run prefabs -> initUI() -> launch()
+    prefabs.ts           initX() functions that assemble built-in game objects
+    uiPrefabs.ts         demo UI tree built from ui.ts primitives
   lib/                vendored, mostly-standalone algorithms
     gjk.ts               GJK convex collision detection
     quadtree.ts          generic spatial Quadtree<T extends Rect>
@@ -61,6 +62,7 @@ tests/                mirrors src/ 1:1 (tests/classic/*, tests/lib/*)
   helpers/mockGame.ts   createMockGL / createMockPhysics / createMockGame
 public/               static assets + manifest.json (shaders/textures/
                         animations) + state.json (persisted demo entities)
+                        + style.css
 .prettierrc            Prettier config (4-space indent, single quotes, semicolons, 100-char width)
 ```
 
@@ -85,7 +87,7 @@ public/               static assets + manifest.json (shaders/textures/
   component module for its side effects is required** before that component
   type can be loaded from JSON — if you add a new component, register it and
   make sure its module is imported somewhere in the load path (usually via
-  `demo.ts` or another already-imported module).
+  `init.ts` or another already-imported module).
 - **Prefab functions** (`prefabs.ts`) are the idiomatic way to build
   gameplay: plain `initXxx()` functions that call `game.spawnEntity()`,
   `entity.addComponent()`, and `entity.registerCall()`. There is no
@@ -108,7 +110,7 @@ Rectangle`, `UIText extends Text`, `UISprite extends Sprite`. Layout is
 import.meta.url), { type: 'module' })`) and talks to it with an
   id-correlated `initmap`/`updatemap`/`findpath` message protocol.
 - **Feature-local type augmentation**: files extend `IGameState` in place
-  via `declare module './types.js' { interface IGameState { ... } }`
+  via `declare module '/classic/types.js' { interface IGameState { ... } }`
   (see `ui.ts`, `prefabs.ts`) instead of editing `types.ts` directly for
   optional/feature-specific state.
 
@@ -126,7 +128,8 @@ import.meta.url), { type: 'module' })`) and talks to it with an
   intentional and consistent across the whole codebase — don't switch to
   `.ts` extensions.
 - Path aliases (defined in both `vite.config.ts` and `tsconfig.json`):
-  `/classic/*` -> `src/classic/*`, `/lib/*` -> `src/lib/*`. Convention: use
+  `/classic/*` -> `src/classic/*`, `/demo/*` -> `src/demo/*`,
+  `/lib/*` -> `src/lib/*`. Convention: use
   the alias for cross-module imports, but use a relative import for a
   module's own directory `types.js` (e.g. `import type { ... } from
 './types.js'` from within `src/classic/`).
