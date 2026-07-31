@@ -14,7 +14,6 @@ A layout layer build on top of the engine
 ```bash
 git clone <repo-url>
 cd classic.wgl
-git checkout dev
 nix-shell
 npm i
 ```
