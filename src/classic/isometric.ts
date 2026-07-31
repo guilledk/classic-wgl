@@ -572,14 +572,14 @@ export class IsoSprite extends IsometricDrawable {
 }
 
 const animDirs = [
-    'South',
-    'SouthEast',
     'East',
-    'NorthEast',
-    'North',
-    'NorthWest',
-    'West',
+    'SouthEast',
+    'South',
     'SouthWest',
+    'West',
+    'NorthWest',
+    'North',
+    'NorthEast',
 ];
 
 const AgentStates = {
@@ -618,7 +618,7 @@ export class IsoAgent extends IsoSprite {
         this.idle();
 
         this.speed = speed; // tiles per second
-        this.animIndex = 0;
+        this.animIndex = 2;
         this._init_dist = 0;
 
         entity.registerCall('update', this.update.bind(this));
