@@ -34,7 +34,8 @@
                 "tileIdFlat",
                 "tileSetSize",
                 "useIsoDepth",
-                "isoDepth"
+                "isoDepth",
+                "ghostAlpha"
             ]
         },
         {
@@ -58,14 +59,7 @@
                 "selectionMode",
                 "selectionColor",
                 "wallColor",
-                "slopeDarken",
-                "agentScreenPos",
-                "agentTopLeft",
-                "agentSpriteSize",
-                "agentIsoDepth",
-                "agentTexture",
-                "agentFrame",
-                "agentTileSetSize"
+                "slopeDarken"
             ]
         }
     ],
