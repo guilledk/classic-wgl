@@ -81,7 +81,7 @@ void main(void ) {
     if (
         all(greaterThanEqual(gl_FragCoord.xy, agentBoxMin)) &&
         all(lessThanEqual(gl_FragCoord.xy, agentBoxMax)) &&
-        vIsoDepth < agentIsoDepth
+        vIsoDepth <= agentIsoDepth + 0.001
     ) {
         color.a = 0.0;
     }

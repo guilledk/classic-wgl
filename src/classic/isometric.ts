@@ -635,11 +635,10 @@ export class Tilemap extends Drawable {
             const cw = this.game.canvas?.width ?? 1;
             const ch = this.game.canvas?.height ?? 1;
             const screenX = (clip[0] + 1.0) * 0.5 * cw;
-            const screenY =
-                (clip[1] + 1.0) * 0.5 * ch +
-                (agent as unknown as { tilePixelSize: [number, number] }).tilePixelSize[1] *
-                    0.75 *
-                    (this.game.camera.scale[1] as number);
+            const feetScreenY = (clip[1] + 1.0) * 0.5 * ch;
+            const tps = (agent as unknown as { tilePixelSize: [number, number] }).tilePixelSize;
+            const sc = (this.game.camera.scale[1] as number) || 1;
+            const screenY = feetScreenY + tps[1] * 0.75 * sc;
 
             const agentDepth =
                 (agent.position[0] - agent.position[1]) / 400.0 + 0.5 - agent.position[2] / 14500.0;
@@ -647,12 +646,10 @@ export class Tilemap extends Drawable {
             this.gl.uniform2f(shader.unif.agentScreenPos, screenX, screenY);
             this.gl.uniform1f(shader.unif.agentIsoDepth, agentDepth);
 
-            const tps = (agent as unknown as { tilePixelSize: [number, number] }).tilePixelSize;
-            const sc = (this.game.camera.scale[1] as number) || 1;
             const boxMinX = screenX - tps[0] * 0.5 * sc;
-            const boxMinY = screenY - tps[1] * 0.02 * sc;
+            const boxMinY = feetScreenY - tps[1] * 0.02 * sc;
             const boxMaxX = screenX + tps[0] * 0.5 * sc;
-            const boxMaxY = screenY + tps[1] * 0.98 * sc;
+            const boxMaxY = feetScreenY + tps[1] * 0.98 * sc;
 
             this.gl.uniform2f(shader.unif.agentBoxMin, boxMinX, boxMinY);
             this.gl.uniform2f(shader.unif.agentBoxMax, boxMaxX, boxMaxY);
