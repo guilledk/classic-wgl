@@ -176,6 +176,8 @@ export function initHeightEditorLogic(): void {
                 }
             }
         }
+
+        game.getEntity('tilemapNavigation')?.getComponent(IsometricNavMesh)?.syncHeights();
     });
 }
 
@@ -215,6 +217,8 @@ export function generateDemoSlopes(): void {
         for (let x = cx + 12; x < cx + 22; x++) tm.setHeight(x, y, (x + y) % 2 === 0 ? 5 : 1);
 
     console.log('[demo] slope terrain generated');
+
+    game.getEntity('tilemapNavigation')?.getComponent(IsometricNavMesh)?.syncHeights();
 }
 
 /** Click-to-pathfind IsoAgent: attaches collider + click handler on the tilemap. */
