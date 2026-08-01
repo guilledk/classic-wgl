@@ -105,7 +105,7 @@ void main(void ) {
     }
 
     float edge = fwidth(vHeight);
-    float silhouette = smoothstep(5.0, 25.0, edge);
+    float silhouette = smoothstep(1.0, 8.0, edge);
     color.rgb *= 1.0 - silhouette * 0.5;
 
     if (color.a < 0.01) discard;
