@@ -34,6 +34,7 @@ export class Tilemap extends Drawable {
     heightScale: number;
     _meshVertBuffer: WebGLBuffer | null = null;
     _meshVertCount: number = 0;
+    _topFaceVertCount: number = 0;
     _meshDirty: boolean = true;
     _needsBufferResize: boolean = true;
 
@@ -364,8 +365,33 @@ export class Tilemap extends Drawable {
                 verts[vi++] = mxSW;
                 verts[vi++] = mySW;
                 verts[vi++] = faceTileId;
+            }
+        }
+
+        this._topFaceVertCount = vi / 6;
+
+        for (let ty = 0; ty < sY; ty++) {
+            for (let tx = 0; tx < sX; tx++) {
+                const idx = tx + ty * sX;
+                const tid = this.data[idx];
+                const hThis = this.heightData[idx];
+
+                const hNW = hThis;
+                const hNE = tx + 1 < sX ? this.heightData[tx + 1 + ty * sX] : hThis;
+                const hSW = ty + 1 < sY ? this.heightData[tx + (ty + 1) * sX] : hThis;
+                const hSE =
+                    tx + 1 < sX && ty + 1 < sY ? this.heightData[tx + 1 + (ty + 1) * sX] : hThis;
 
                 const wallTileId = tid || 1;
+
+                const mxNW = mx[tx];
+                const myNW = my[ty];
+                const mxNE = mx[tx + 1];
+                const myNE = my[ty];
+                const mxSW = mx[tx];
+                const mySW = my[ty + 1];
+                const mxSE = mx[tx + 1];
+                const mySE = my[ty + 1];
 
                 if (tx + 1 >= sX && hThis > 0) {
                     const zTop = hThis * hs;
@@ -598,7 +624,20 @@ export class Tilemap extends Drawable {
         this.gl.uniform1f(shader.unif.slopeDarken, 0.4);
 
         this.gl.enable(this.gl.DEPTH_TEST);
-        this.gl.drawArrays(this.gl.TRIANGLES, 0, this._meshVertCount);
+
+        // Pass 1: top faces
+        this.gl.uniform1f(shader.unif.wallGhostAlpha, 1.0);
+        this.gl.drawArrays(this.gl.TRIANGLES, 0, this._topFaceVertCount);
+
+        // Pass 2: walls transparent
+        const wallVertCount = this._meshVertCount - this._topFaceVertCount;
+        if (wallVertCount > 0) {
+            this.gl.depthFunc(this.gl.ALWAYS);
+            this.gl.depthMask(false);
+            this.gl.uniform1f(shader.unif.wallGhostAlpha, 0.4);
+            this.gl.drawArrays(this.gl.TRIANGLES, this._topFaceVertCount, wallVertCount);
+        }
+
         this.gl.disable(this.gl.DEPTH_TEST);
     }
 }

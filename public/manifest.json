@@ -60,7 +60,7 @@
                 "selectionColor",
                 "wallColor",
                 "slopeDarken",
-                "tilemapGhostAlpha"
+                "wallGhostAlpha"
             ]
         }
     ],
