@@ -1,10 +1,8 @@
 precision mediump float;
-#extension GL_OES_standard_derivatives : enable
 
 varying mediump vec2 vMapCoord;
 varying mediump float vTileId;
 varying mediump float vIsoDepth;
-varying mediump float vHeight;
 
 uniform sampler2D mapData;
 uniform vec2 mapSize;
@@ -71,16 +69,17 @@ vec4 getTilePixel(float tileIdFlat, vec2 mapCoord) {
 }
 
 void main(void ) {
+    vec4 color;
+
     if (vTileId > 0.5) {
-        gl_FragColor = wallColor;
-        return;
-    }
+        color = wallColor;
+    } else {
+        vec2 mapCoord = vec2(vMapCoord.x, vMapCoord.y);
+        color = getTilePixel(getMapData(mapCoord), mapCoord);
 
-    vec2 mapCoord = vec2(vMapCoord.x, vMapCoord.y);
-    vec4 color = getTilePixel(getMapData(mapCoord), mapCoord);
-
-    if (vTileId < -0.01) {
-        color.rgb *= 1.0 + vTileId * slopeDarken;
+        if (vTileId < -0.01) {
+            color.rgb *= 1.0 + vTileId * slopeDarken;
+        }
     }
 
     vec2 agentUV = vec2(
@@ -92,7 +91,7 @@ void main(void ) {
         agentUV.x <= 1.0 &&
         agentUV.y >= 0.0 &&
         agentUV.y <= 1.0 &&
-        vIsoDepth < agentIsoDepth
+        vIsoDepth < agentIsoDepth + 0.002
     ) {
         vec2 tilePx = vec2(1.0) / agentTileSetSize;
         vec2 tileCorner =
@@ -103,10 +102,6 @@ void main(void ) {
             color.a = 0.2;
         }
     }
-
-    float edge = fwidth(vHeight);
-    float silhouette = smoothstep(1.0, 8.0, edge);
-    color.rgb *= 1.0 - silhouette * 0.5;
 
     if (color.a < 0.01) discard;
     gl_FragColor = color;

@@ -642,7 +642,9 @@ export class Tilemap extends Drawable {
                     (this.game.camera.scale[1] as number);
 
             const agentDepth =
-                (agent.position[0] - agent.position[1]) / 400.0 + 0.5 - agent.position[2] / 14500.0;
+                (agent.position[0] - agent.position[1]) / 400.0 +
+                0.5 -
+                (ah * this.heightScale) / 14500.0;
 
             this.gl.uniform2f(shader.unif.agentScreenPos, screenX, screenY);
             this.gl.uniform1f(shader.unif.agentIsoDepth, agentDepth);
