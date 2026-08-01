@@ -1,4 +1,5 @@
 precision mediump float;
+#extension GL_OES_standard_derivatives : enable
 
 varying mediump vec2 vMapCoord;
 varying mediump float vTileId;
