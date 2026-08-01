@@ -61,7 +61,8 @@
                 "slopeDarken",
                 "agentScreenPos",
                 "agentIsoDepth",
-                "agentRadius"
+                "agentBoxMin",
+                "agentBoxMax"
             ]
         }
     ],

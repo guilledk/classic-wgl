@@ -20,7 +20,8 @@ uniform float slopeDarken;
 
 uniform vec2 agentScreenPos;
 uniform float agentIsoDepth;
-uniform float agentRadius;
+uniform vec2 agentBoxMin;
+uniform vec2 agentBoxMax;
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture2D(mapData, pos);
@@ -77,9 +78,12 @@ void main(void ) {
         color.rgb *= 1.0 + vTileId * slopeDarken;
     }
 
-    float dist = length(gl_FragCoord.xy - agentScreenPos);
-    if (dist < agentRadius && vIsoDepth < agentIsoDepth) {
-        color.a *= smoothstep(agentRadius - 4.0, agentRadius, dist);
+    if (
+        all(greaterThanEqual(gl_FragCoord.xy, agentBoxMin)) &&
+        all(lessThanEqual(gl_FragCoord.xy, agentBoxMax)) &&
+        vIsoDepth < agentIsoDepth
+    ) {
+        color.a = 0.0;
     }
 
     if (color.a < 0.01) discard;
