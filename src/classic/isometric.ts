@@ -757,7 +757,7 @@ class IsometricDrawable extends Drawable {
     }
 
     order(): number {
-        return this.position[0] - this.position[1];
+        return this.position[0] - this.position[1] - this.tilemap.sizeX - this.tilemap.sizeY;
     }
 }
 
@@ -879,7 +879,7 @@ export class IsoSprite extends IsometricDrawable {
             (this.position[0] - this.position[1]) / 400.0 +
             0.5 -
             this.position[2] / 14500.0 -
-            0.003;
+            0.001;
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, depth);
 
         this.gl.enable(this.gl.DEPTH_TEST);
