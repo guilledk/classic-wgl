@@ -99,7 +99,7 @@ void main(void ) {
             vec2(mod(agentFrame, agentTileSetSize.x), floor(agentFrame / agentTileSetSize.x));
         vec4 agentColor = texture2D(agentTexture, tileCorner + agentUV * tilePx);
         if (agentColor.a > 0.01) {
-            color.rgb = mix(color.rgb, agentColor.rgb * 1.5, 0.6);
+            color.rgb = mix(color.rgb, agentColor.rgb * 1.5, 0.4);
         }
     }
 
