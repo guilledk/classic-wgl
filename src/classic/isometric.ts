@@ -1029,7 +1029,6 @@ export class IsoAgent extends IsoSprite {
                     return;
                 }
 
-                this._delta += (this.speed * this.game.deltaTime) / this._init_dist;
                 if (this._delta >= 1) {
                     this.nextTarget();
                     this._delta = 0;
@@ -1085,16 +1084,21 @@ export class IsoAgent extends IsoSprite {
                 const cy = Math.min(ty, sY - 1);
                 const cx1 = Math.min(tx + 1, sX - 1);
                 const cy1 = Math.min(ty + 1, sY - 1);
-                const hTop =
-                    (hd[cx + cy * sX] ?? 0) +
-                    ((hd[cx1 + cy * sX] ?? 0) - (hd[cx + cy * sX] ?? 0)) * fx;
-                const hBot =
-                    (hd[cx + cy1 * sX] ?? 0) +
-                    ((hd[cx1 + cy1 * sX] ?? 0) - (hd[cx + cy1 * sX] ?? 0)) * fx;
-                const hi = hTop + (hBot - hTop) * fy;
+                const hNW = hd[cx + cy * sX] ?? 0;
+                const hNE = hd[cx1 + cy * sX] ?? 0;
+                const hSW = hd[cx + cy1 * sX] ?? 0;
+                const hSE = hd[cx1 + cy1 * sX] ?? 0;
+                const hi =
+                    hNW + (hNE - hNW) * fx + (hSW - hNW) * fy + (hNW - hNE - hSW + hSE) * fx * fy;
                 const targetZ = hi * this.tilemap.heightScale;
                 const zSpeed = Math.min(1, this.game.deltaTime * 4);
                 this.position[2] += (targetZ - this.position[2]) * zSpeed;
+
+                const dx = (hNE - hNW) * (1 - fy) + (hSE - hSW) * fy;
+                const dy = (hSW - hNW) * (1 - fx) + (hSE - hNE) * fx;
+                const steepness = Math.sqrt(dx * dx + dy * dy);
+                const speedFactor = 1.0 - (Math.min(steepness, 3.0) / 3.0) * 0.5;
+                this._delta += (this.speed * speedFactor * this.game.deltaTime) / this._init_dist;
                 break;
         }
     }
