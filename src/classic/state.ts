@@ -158,6 +158,8 @@ const game: GameState = {
 
         this.gl = gl;
 
+        gl.getExtension('OES_standard_derivatives');
+
         console.log(getVideoCardInfo(this.gl));
 
         this.physics = new PhysicsProvider(this) as IPhysicsProvider;

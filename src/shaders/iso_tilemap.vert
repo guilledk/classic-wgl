@@ -15,6 +15,7 @@ uniform vec2 tilePixelSize;
 varying mediump vec2 vMapCoord;
 varying mediump float vTileId;
 varying mediump float vIsoDepth;
+varying mediump float vHeight;
 
 void main(void ) {
     vec4 worldPos = modelMatrix * isoMatrix * vec4(vertexPos, 1.0);
@@ -30,4 +31,5 @@ void main(void ) {
     vMapCoord = mapCoord;
     vTileId = tileId;
     vIsoDepth = isoDepth;
+    vHeight = vertexPos.z;
 }

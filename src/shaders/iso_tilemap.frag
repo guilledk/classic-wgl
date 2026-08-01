@@ -3,6 +3,7 @@ precision mediump float;
 varying mediump vec2 vMapCoord;
 varying mediump float vTileId;
 varying mediump float vIsoDepth;
+varying mediump float vHeight;
 
 uniform sampler2D mapData;
 uniform vec2 mapSize;
@@ -101,6 +102,10 @@ void main(void ) {
             color.a = 0.2;
         }
     }
+
+    float edge = fwidth(vHeight);
+    float silhouette = smoothstep(5.0, 25.0, edge);
+    color.rgb *= 1.0 - silhouette * 0.5;
 
     if (color.a < 0.01) discard;
     gl_FragColor = color;
