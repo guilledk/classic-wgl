@@ -227,7 +227,7 @@ function aStarPath(mapName: string, from: Vec2, to: Vec2): Vec2[] | null {
 
     function reconstructPath(node: Vec2): Vec2[] {
         let current: Vec2 | false = node;
-        const path: Vec2[] = [];
+        const path: Vec2[] = [[node[0], node[1]]];
         do {
             current = cameFrom.get(current as Vec2);
             if (current !== false) {
