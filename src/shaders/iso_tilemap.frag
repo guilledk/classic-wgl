@@ -21,7 +21,6 @@ uniform float slopeDarken;
 uniform vec2 agentScreenPos;
 uniform float agentIsoDepth;
 uniform float agentRadius;
-uniform float agentAlpha;
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture2D(mapData, pos);
@@ -79,11 +78,8 @@ void main(void ) {
     }
 
     float dist = length(gl_FragCoord.xy - agentScreenPos);
-    if (dist < agentRadius && vIsoDepth < agentIsoDepth + 0.001) {
-        float fade = smoothstep(0.0, 1.0, dist / agentRadius);
-        color.a *= mix(1.0 - agentAlpha, 1.0, fade);
-        float halo = smoothstep(0.75, 1.0, dist / agentRadius);
-        color.rgb += halo * 0.25;
+    if (dist < agentRadius && vIsoDepth < agentIsoDepth) {
+        color.a *= smoothstep(agentRadius - 4.0, agentRadius, dist);
     }
 
     if (color.a < 0.01) discard;

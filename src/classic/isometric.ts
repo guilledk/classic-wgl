@@ -647,12 +647,10 @@ export class Tilemap extends Drawable {
             this.gl.uniform2f(shader.unif.agentScreenPos, screenX, screenY);
             this.gl.uniform1f(shader.unif.agentIsoDepth, agentDepth);
             this.gl.uniform1f(shader.unif.agentRadius, 80.0);
-            this.gl.uniform1f(shader.unif.agentAlpha, 0.7);
         } else {
             this.gl.uniform2f(shader.unif.agentScreenPos, -999, -999);
             this.gl.uniform1f(shader.unif.agentIsoDepth, 0.0);
             this.gl.uniform1f(shader.unif.agentRadius, 0.0);
-            this.gl.uniform1f(shader.unif.agentAlpha, 0.0);
         }
 
         this.gl.enable(this.gl.DEPTH_TEST);
