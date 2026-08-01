@@ -17,6 +17,7 @@ uniform vec4 selectionColor;
 uniform int selectionMode;
 uniform vec4 wallColor;
 uniform float slopeDarken;
+uniform float tilemapGhostAlpha;
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture2D(mapData, pos);
@@ -74,6 +75,10 @@ void main(void ) {
         }
     }
 
-    if (color.a < 0.01) discard;
+    if (tilemapGhostAlpha > 0.0) {
+        color.a = tilemapGhostAlpha;
+    } else if (color.a < 0.01) {
+        discard;
+    }
     gl_FragColor = color;
 }

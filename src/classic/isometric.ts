@@ -598,7 +598,19 @@ export class Tilemap extends Drawable {
         this.gl.uniform1f(shader.unif.slopeDarken, 0.4);
 
         this.gl.enable(this.gl.DEPTH_TEST);
+
+        // Ghost pass: all terrain faintly visible through occluding terrain
+        this.gl.uniform1f(shader.unif.tilemapGhostAlpha, 0.4);
+        this.gl.depthFunc(this.gl.ALWAYS);
+        this.gl.depthMask(false);
         this.gl.drawArrays(this.gl.TRIANGLES, 0, this._meshVertCount);
+
+        // Normal pass: opaque terrain where it should be visible
+        this.gl.uniform1f(shader.unif.tilemapGhostAlpha, 0.0);
+        this.gl.depthFunc(this.gl.LEQUAL);
+        this.gl.depthMask(true);
+        this.gl.drawArrays(this.gl.TRIANGLES, 0, this._meshVertCount);
+
         this.gl.disable(this.gl.DEPTH_TEST);
     }
 }
