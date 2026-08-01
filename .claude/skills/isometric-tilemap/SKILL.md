@@ -1,0 +1,683 @@
+---
+name: isometric-tilemap
+description: >
+    Expertise for the isometric tilemap rendering system in classic-wgl.
+    Use when modifying or debugging tilemap rendering, shaders, mesh generation,
+    height/slope/wall geometry, tile editing tools, or the isometric coordinate
+    transform chain. Covers the GPU-driven sprite-sheet lookup, per-tile 3D
+    mesh generation, wall face generation, and the Tilemap/IsoSprite/IsoAgent
+    class hierarchy. Trigger phrases: "tilemap", "isometric", "slope", "wall",
+    "height tile", "buildMesh", "iso_tilemap", "depth formula", "isoDepth",
+    "Tilemap component", "IsometricNavMesh", "isometric rendering",
+    "isometric shader", "sprite occlusion", "terrain rendering".
+compatibility: Requires WebGL context with depth buffer. Relies on gl-matrix,
+    custom Vite shader plugin, and the ECS call-registry pattern.
+metadata:
+    author: classic-wgl
+    version: '0.4'
+allowed-tools: Read, Grep, Glob, Bash(git *), Edit, Write
+---
+
+## Scope: isometric tilemap rendering only
+
+This skill covers the isometric tilemap subsystem: rendering pipeline, mesh generation,
+shader programs, coordinate transforms, height/wall geometry, depth-sorting,
+editor tools, and the component class hierarchy. It does NOT cover the generic ECS,
+physics, UI layout system, camera, or animation subsystems except where they directly
+intersect the tilemap (e.g. collider for tile selection, UIManager for palettes).
+
+---
+
+## 1. MAP ORIENTATION — MUST READ FIRST
+
+The most common source of bugs in this system is getting the isometric depth
+direction backwards. **Memorise this:**
+
+### Camera and cardinal directions
+
+The isometric projection places the camera looking from the **southwest**.
+On-screen:
+
+| Screen position | Iso-grid direction | Depth        | Example tile |
+| --------------- | ------------------ | ------------ | ------------ |
+| Bottom-left     | **SW**             | **Closest**  | `(0, 199)`   |
+| Bottom-right    | SE                 | Close-mid    | `(199, 199)` |
+| Top-left        | NW                 | Mid-far      | `(0, 0)`     |
+| Top-right       | **NE**             | **Farthest** | `(199, 0)`   |
+
+### The depth axis is `tx − ty`, NOT `tx + ty`
+
+- `tx − ty` is negative at SW (closest) and positive at NE (farthest) — correctly
+  distinguishes the two corners.
+- `tx + ty` is **identical** for SW `(0,199)` and NE `(199,0)` — it cannot tell
+  them apart. Never use `x+y` for depth ordering.
+
+### World-space mapping
+
+The iso-to-cartesian transform (`isoToCartesian4 * scale(45)`):
+
+```
+worldX = 31.82 × (tx + ty)
+worldY = 15.91 × (ty − tx)
+```
+
+- `worldX` goes right on screen; grows with both `tx` and `ty`
+- `worldY` goes down on screen; grows with `ty`, shrinks with `tx`
+
+### Vertex shader Y-offset
+
+```glsl
+worldPos.y -= vertexPos.z;
+```
+
+This pushes elevated vertices **up** on screen (since `ortho(top=0, bottom=vh)`
+flips Y — subtracting from `worldY` means the vertex moves toward screen-top).
+
+---
+
+## 2. ARCHITECTURE OVERVIEW
+
+### Data flow
+
+```
+data[] + heightData[]
+  └─ uploadToGPU() → mapDataTexture (GL_TEXTURE_2D, RGBA, NEAREST)
+                        │
+buildMesh() → Float32Array verts → GL_ARRAY_BUFFER (DYNAMIC_DRAW)
+                        │
+rawDraw() each frame:
+  bind mesh VBO → set vertexAttribPointer(pos, mapCoord, tileId)
+  bind mapDataTexture → TEXTURE0
+  bind tileSet → TEXTURE1
+  set uniforms (including isoDepth for sprites) → drawArrays / drawElements
+```
+
+### Key files
+
+| File                           | Role                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| `src/classic/isometric.ts`     | Tilemap, IsometricNavMesh, IsoSprite, IsoAgent classes; buildMesh(), rawDraw() |
+| `src/shaders/iso_tilemap.vert` | Isometric transform + iso-coordinate depth formula                             |
+| `src/shaders/iso_tilemap.frag` | Sprite-sheet lookup, wall colour, slope darkening                              |
+| `src/shaders/direct_tex.vert`  | Sprite vertex shader — isoDepth uniform pass-through                           |
+| `src/shaders/sheet.frag`       | Sprite fragment shader — alpha discard                                         |
+| `src/classic/utils.ts`         | isoToCartesian4 / cartesianToIso4 matrices, Buffer class                       |
+| `src/demo/prefabs.ts`          | Editor logic handlers (tile/nav/height fill-on-selection)                      |
+| `src/demo/uiPrefabs.ts`        | Dev tool buttons, palettes, height widget                                      |
+| `src/classic/state.ts`         | WebGL context (depth: true), draw loop, camera/projection                      |
+
+---
+
+## 3. TRANSFORM CHAIN
+
+The iso_tilemap vertex shader:
+
+```glsl
+vec4 worldPos = modelMatrix * isoMatrix * vec4(vertexPos, 1.0);
+worldPos.y -= vertexPos.z;
+vec4 clipPos = projectionMatrix * cameraMatrix * worldPos;
+// iso-coordinate depth formula (see §5)
+float isoDepth = clamp((vertexPos.x - vertexPos.y) / 400.0 + 0.5 - vertexPos.z / 14500.0, 0.0, 1.0);
+clipPos.z = isoDepth;
+gl_Position = clipPos;
+```
+
+### What each matrix does
+
+| Matrix             | Construction                                     | Purpose                                                                     |
+| ------------------ | ------------------------------------------------ | --------------------------------------------------------------------------- |
+| `projectionMatrix` | `mat4.ortho(0, vw, vh, 0, -10000, 10000)`        | Maps to screen pixels, top-left origin, Y flipped                           |
+| `cameraMatrix`     | `translate(-getFix()) * scale(cameraScale)`      | 2D camera pan + zoom                                                        |
+| `modelMatrix`      | `translate(tilemap.position)`                    | Places tilemap. **No mapSize scaling** — vertices are already at map scale. |
+| `isoMatrix`        | `invert(cartesianToIso4) * scale(tilemap.scale)` | Map-space → isometric screen-space                                          |
+
+`cartesianToIso4` = `rotateZ(π/4) * scale(1, 2, 1)` — rotates 45° and stretches Y by 2×.
+
+### Vertex space
+
+Vertices from `buildMesh()` are in **map space**: x ∈ [0, sizeX], y ∈ [0, sizeY], z = height × heightScale.
+
+---
+
+## 4. DEPTH SYSTEM (ISO-COORDINATE DEPTH)
+
+This is the **cornerstone** of the rendering system. All isometric objects
+(tilemap vertices and sprites) use the same depth formula. Depth is derived
+purely from grid coordinates and elevation — no camera-dependent terms.
+
+### Depth formula
+
+```
+isoDepth = clamp((tx − ty) / 400 + 0.5 − Z / 14500, 0, 1)
+```
+
+Where:
+
+- `400 = sizeX + sizeY` — normalises the grid range [-199, 199] to [-0.5, 0.5]
+- `14500` — calibrates elevation contribution so one height unit (Z=32) is
+  equivalent to ~0.88 grid-tile steps of isometric distance
+- `Z = height × heightScale` — world-space elevation
+- `clamp(…, 0, 1)` — safety guard for extreme height values
+
+### Per-tile step
+
+| Term          | Depth change per unit           | What it represents                  |
+| ------------- | ------------------------------- | ----------------------------------- |
+| `(tx−ty)/400` | ±0.0025 per tile step           | Isometric distance along SW→NE axis |
+| `Z/14500`     | +0.00221 per height unit (Z=32) | Elevation pushing object "closer"   |
+
+One height unit ≈ 0.88 tile steps — matches the visual ratio: Z=32 displaces
+32 pixels vertically, while one tile-step displaces ~35.6 pixels diagonally.
+
+### Why this depth metric
+
+- **Monotonic**: no two objects at genuinely different iso-grid positions
+  produce identical depth (unlike Y-to-depth mapping).
+- **Screen-Y-free**: doesn't depend on camera position or projection.
+- **Correct SW→NE ordering**: `tx−ty` is negative at SW (closest) and positive
+  at NE (farthest).
+- **Consistent across tilemap and sprites**: same formula in vertex shader
+  (tilemap) and on CPU (sprites via `isoDepth` uniform).
+
+### Depth test setup
+
+- `glDepthFunc(gl.LEQUAL)` — closer objects (smaller depth) pass.
+- Depth buffer cleared each frame (`gl.clear(DEPTH_BUFFER_BIT)`).
+- Tilemap draws with depth test → writes depth.
+- Each IsoSprite draws with depth test → reads depth from tilemap, writes its own.
+- Non-isometric UI/sprites draw **without** depth test (disabled by default in
+  draw loop; enabled/disabled per-drawable in `rawDraw()`).
+
+### Sprite depth (IsoSprite)
+
+Computed per-frame in `IsoSprite.rawDraw()`:
+
+```typescript
+const depth =
+    (this.position[0] - this.position[1]) / 400.0 + 0.5 - this.position[2] / 14500.0 - 0.001;
+this.gl.uniform1f(shader.unif.isoDepth, depth);
+```
+
+The `-0.001` bias prevents z-fighting when the sprite sits on terrain at
+exactly the same grid position (LEQUAL passes, sprite renders slightly in front).
+
+The `isoDepth` uniform is passed to `direct_tex.vert`, which overrides
+`gl_Position.z` when `useIsoDepth > 0.5`:
+
+```glsl
+if (useIsoDepth > 0.5) {
+    gl_Position.z = clamp(isoDepth, 0.0, 1.0);
+}
+```
+
+### Sprite alpha discard
+
+`sheet.frag` discards fragments with near-zero alpha **before** the depth test:
+
+```glsl
+vec4 color = getTilePixel(tileIdFlat, texCoord);
+if (color.a < 0.01) discard;
+gl_FragColor = color;
+```
+
+This is critical: without `discard`, transparent sprite fragments would pass
+the depth test and write depth values, blocking terrain behind them. With
+`discard`, transparent fragments are dropped — depth buffer is untouched,
+terrain shows through.
+
+### RenderList sort
+
+The `order()` for IsometricDrawables is:
+
+```typescript
+order(): number {
+    return this.position[0] - this.position[1]
+         - this.tilemap.sizeX - this.tilemap.sizeY;
+}
+```
+
+The `− sizeX − sizeY` offset guarantees ALL isometric sprites have
+order < 0 and draw **after** the tilemap (order = 0), regardless of map
+position. Without this, NE sprites (`tx > ty`, order > 0) would draw
+before the tilemap and be overpainted by opaque terrain — breaking
+ghost rendering and depth‑based occlusion.
+
+Relative sprite-to-sprite ordering is preserved; depth test LEQUAL handles
+per‑pixel occlusion correctly.
+
+---
+
+## 5. SHADER PIPELINE
+
+### iso_tilemap.vert — tilemap vertex shader
+
+**Attributes:** `vertexPos` (vec3), `mapCoord` (vec2), `tileId` (float)
+
+**Key logic:**
+
+1. Apply isoMatrix + modelMatrix to get world-space position
+2. `worldPos.y -= vertexPos.z` — visual Y-offset for elevation
+3. Compute iso-coordinate depth formula (§4)
+4. Override `clipPos.z = isoDepth`
+
+**Varyings:** `vMapCoord`, `vTileId`
+
+### iso_tilemap.frag — tilemap fragment shader
+
+**Three rendering paths, gated by `vTileId`:**
+
+| Condition         | Path            | Behaviour                                                      |
+| ----------------- | --------------- | -------------------------------------------------------------- |
+| `vTileId > 0.5`   | Wall face       | Flat `wallColor` ([0.3, 0.2, 0.15, 1.0])                       |
+| `vTileId < -0.01` | Sloped top face | Sprite-sheet lookup, then `rgb *= 1.0 + vTileId * slopeDarken` |
+| Otherwise         | Flat top face   | Normal sprite-sheet lookup + selection overlay                 |
+
+`slopeDarken` uniform defaults to `0.4` — a 1-height-unit cliff darkens by
+40%, a gentle 0.2-unit ramp by ~8%.
+
+### direct_tex.vert — sprite vertex shader
+
+**Uniforms:** `useIsoDepth`, `isoDepth`
+
+When `useIsoDepth > 0.5`: overrides `gl_Position.z = clamp(isoDepth, 0, 1)`.
+Used by IsoSprites. Non-isometric Sprites set `useIsoDepth = 0`.
+
+### sheet.frag — sprite fragment shader
+
+Shared by IsoSprite and Sprite. Does sprite-sheet frame lookup + alpha discard.
+
+---
+
+## 6. MESH GENERATION — buildMesh()
+
+### Vertex format (6 floats, interleaved)
+
+```
+[x, y, z, mx, my, tileId]
+```
+
+| Offset | Count | Content                              | Attribute   |
+| ------ | ----- | ------------------------------------ | ----------- |
+| 0      | 3     | Map-space position (tx, ty, z)       | `vertexPos` |
+| 12     | 2     | Normalised map coords (tx/sX, ty/sY) | `mapCoord`  |
+| 20     | 1     | -steepness (top faces), ≥1 (walls)   | `tileId`    |
+
+### Top face (floor/slope)
+
+For each non-empty tile, 4 corners form 2 triangles (6 vertices):
+
+```
+hNW = heightData[tx + ty * sX]            (this tile)
+hNE = heightData[tx+1 + ty * sX]          (east neighbour)
+hSW = heightData[tx + (ty+1) * sX]        (south neighbour)
+hSE = heightData[tx+1 + (ty+1) * sX]      (SE neighbour)
+```
+
+This is a **continuous surface**: corners come from the tile's own height AND
+its neighbours'. Setting `heightData[5+3*sX] = 3` affects FOUR tiles'
+corners (NW of this, NE of west, SW of north, SE of NW).
+
+**Slope detection:** `steepness = clamp((zMax - zMin) / hs, 0, 1)` →
+`faceTileId = -steepness`. Flat tiles get `faceTileId = 0`.
+
+### Wall faces
+
+**Only at map boundaries.** Interior walls were removed because they
+conflicted with the continuous surface — walls used per-tile stored heights
+while top faces used neighbour-shared corners, creating visible gaps.
+
+```typescript
+if (tx + 1 >= sX && hThis > 0) {
+    /* east boundary wall */
+}
+if (ty + 1 >= sY && hThis > 0) {
+    /* south boundary wall */
+}
+if (tx === 0 && hThis > 0) {
+    /* west boundary wall */
+}
+if (ty === 0 && hThis > 0) {
+    /* north boundary wall */
+}
+```
+
+Boundary walls extend from Z=0 to Z = hThis × hs.
+
+### Performance optimizations
+
+1. **Pre-sized Float32Array** — `new Float32Array(sizeX * sizeY * 180)` at
+   worst-case, direct index writes via `vi++`, no `Array.push()` intermediate
+2. **Buffer reuse** — `DYNAMIC_DRAW` + `bufferSubData` instead of
+   `deleteBuffer`/`createBuffer` per rebuild
+3. **Pre-computed normalised coords** — `mx[i]` / `my[i]` lookup tables
+   computed once
+4. **Dirty flag** — `_meshDirty` prevents rebuilds every frame; only set by
+   `fillRegion()`, `generateNoiseMap()`, `uploadToGPU()`, `setHeight()`
+
+---
+
+## 7. DATA MODEL
+
+### Core arrays
+
+| Field                   | Type       | Size            | Description                                                                            |
+| ----------------------- | ---------- | --------------- | -------------------------------------------------------------------------------------- |
+| `data`                  | `number[]` | `sizeX * sizeY` | Tile sprite index (0 = empty)                                                          |
+| `heightData`            | `number[]` | `sizeX * sizeY` | Height of each tile's NW corner. Defaults to `1`.                                      |
+| `heightScale`           | `number`   | —               | World-space Z per height unit. Default = `tilePixelSize[0]`.                           |
+| `heightScaleMultiplier` | `number`   | game state      | User-adjustable multiplier (default 1). `heightScale = tilePixelSize[0] * multiplier`. |
+
+### Continuous surface model
+
+HeightData stores one value per tile, but each tile's top-face corners read
+**neighbour** entries. Setting a single height entry affects the corners of
+four tiles. This creates natural slopes between tiles at different heights
+— the shared corner interpolates smoothly.
+
+### Slope darkening
+
+`faceTileId = -steepness` where `steepness = min((zMax−zMin) / hs, 1)`.
+Fragment shader multiplies `rgb *= 1.0 + vTileId * slopeDarken` for
+proportional darkening (vTileId is negative, so this darkens).
+`slopeDarken = 0.4` by default.
+
+---
+
+## 8. AGENT HEIGHT AND MOVEMENT
+
+### IsoAgent.update() — smooth height tracking
+
+After XY lerp, bilinearly interpolates terrain height at the agent's exact
+float position:
+
+```typescript
+const px = this.position[0];
+const py = this.position[1];
+const tx = Math.floor(px);
+const ty = Math.floor(py);
+const fx = px - tx;
+const fy = py - ty;
+const hNW = heightData[tx + ty * sX];
+const hNE = heightData[tx + 1 + ty * sX];
+const hSW = heightData[tx + ty + 1 * sX];
+const hSE = heightData[tx + 1 + ty + 1 * sX];
+const hTop = hNW + (hNE - hNW) * fx;
+const hBot = hSW + (hSE - hSW) * fx;
+const hi = hTop + (hBot - hTop) * fy;
+const targetZ = hi * heightScale;
+position[2] += (targetZ - position[2]) * min(1, deltaTime * 4);
+```
+
+This matches the GPU's vertex interpolation exactly — the agent's depth Z
+matches the terrain surface. Lerp rate of 4/s gives smooth uphill walking.
+
+---
+
+## 9. CLASS HIERARCHY
+
+```
+Drawable (transforms.ts)
+  ├─ Tilemap (isometric.ts)              GPU-driven isometric tilemap
+  │    └─ IsometricNavMesh               Pathfinding nav mesh (extends Tilemap)
+  └─ IsometricDrawable (isometric.ts)    Base for iso-placed sprites
+       └─ IsoSprite                      Sprite on isometric map
+            └─ IsoAgent                  Animated pathfinding agent
+```
+
+### Key methods on Tilemap
+
+| Method                                    | Purpose                                                              |
+| ----------------------------------------- | -------------------------------------------------------------------- |
+| `uploadToGPU()`                           | Uploads `data[]` to `mapDataTexture`, dirties mesh                   |
+| `buildMesh()`                             | Generates 3D geometry from `data[]` + `heightData[]` into VBO        |
+| `rawDraw()`                               | Binds mesh VBO + textures + uniforms, `drawArrays()` with depth test |
+| `setHeight(x,y,v)`                        | Sets one height entry, dirties mesh                                  |
+| `fillRegion(from,to,v)`                   | Fills tile data in rectangle, dirties mesh                           |
+| `modelMatrix()`                           | `translate(position)` — no mapSize scaling                           |
+| `isoToCartesian(v)` / `cartesianToIso(v)` | Coordinate transforms                                                |
+
+### Key methods on IsometricDrawable
+
+| Method          | Purpose                                                              |
+| --------------- | -------------------------------------------------------------------- |
+| `order()`       | `position[0] - position[1]` — matches depth axis for renderList sort |
+| `modelMatrix()` | iso→cartesian, adds terrain Y-offset, no Z manipulation              |
+
+### IsometricNavMesh caveats
+
+- Extends Tilemap with `tilePixelSize: [8,8]`, `maxTile: 2`, `'navTileset'`
+- Spawns a Web Worker (`pathfinder.ts`) for A* pathfinding
+- `dump()` has its own serialization — does not inherit `tileSet`/`tilePixelSize`
+
+---
+
+## 10. EDITING TOOLS
+
+### editorTarget routing
+
+Four modes: `'tilemap'`, `'navMesh'`, `'height'`, plus `'none'` when panel closed.
+
+The tilemap's single `Collider` has multiple `'selection'` handlers registered.
+Each checks `game.editorTarget` and only executes if it matches:
+
+```typescript
+collider.addHandler('selection', function () {
+    if (game.editorTarget !== 'tilemap') return;
+    compTilemap.fillRegion(begin, end, game.editorTile ?? 0);
+    compTilemap.uploadToGPU();
+});
+// ... same pattern for 'navMesh' and 'height'
+```
+
+### Height widget
+
+Bottom-right of canvas. Two rows with manual pixel positioning:
+
+- Row 1: `[−] [height value] [+]` — sets `game.editorHeight`
+- Row 2: `[s−] [×N] [s+]` — sets `game.heightScaleMultiplier`, calls
+  `tilemap.heightScale = tilePixelSize[0] * multiplier` and dirties mesh
+
+### Agent selection
+
+- Green `[A]` button at bottom-left toggles `game.agentSelected`
+- Clicking within ~1.5 tiles of the agent on the map toggles selection
+- P key toggles `game.agentEnabled`
+- Map clicks only pathfind when agent is selected AND enabled
+
+### Adding a new editor mode
+
+1. Add state to `IGameState` via module augmentation in `uiPrefabs.ts` and `prefabs.ts`
+2. Add a dev button in `initToolButtons()` (use next frame of `'editorIcons'`)
+3. Create a UI widget patterned after `initHeightWidget()` or `initTilePalette()`
+4. Add a selection handler in `prefabs.ts` guarding on `editorTarget`
+5. Call the init function from `initContext()` in `init.ts`
+6. Register enable/disable in `initEditorModeControl()`
+
+---
+
+## 11. PERFORMANCE NOTES
+
+### Pre-sized Float32Array
+
+`buildMesh()` writes directly into a pre-allocated `Float32Array` at worst-case
+capacity. Manual index `vi` tracks write position — no `Array.push()`, no
+intermediate JS `Number[]`, no GC pressure.
+
+### Buffer reuse
+
+First build allocates VBO at max capacity with `DYNAMIC_DRAW`. Subsequent
+rebuilds use `bufferSubData` to update in-place. The `_needsBufferResize`
+flag is only true at construction (map size never changes).
+
+### Dirty flag
+
+Mesh is only rebuilt when data/height changes. During normal rendering
+(camera pan, agent movement), `rawDraw()` just rebinds the existing VBO.
+
+### Pre-computed normalized coords
+
+`mx[i]` and `my[i]` arrays computed once in `buildMesh()`, eliminating
+repeated division in the inner loop (~200K divisions saved per 200×200 map).
+
+### order() computation
+
+Simplified from `isoDistanceToCam(pos)` (which required camera-world-to-iso
+conversion + Euclidean distance) to `position[0] - position[1]` — a single
+subtraction.
+
+---
+
+## 12. COMMON PITFALLS
+
+### Never use x+y for depth ordering
+
+`x+y` is identical for SW `(0,199)` and NE `(199,0)` — it cannot distinguish
+the closest and farthest corners, producing backwards occlusion on one diagonal.
+Always use `tx − ty`.
+
+### modelMatrix must NOT scale by mapSize
+
+Vertices from `buildMesh()` are already in map space (x ∈ [0, sizeX]).
+Adding `scale([mapSize, 1])` would scale them again.
+
+### vTileId gate values
+
+- `> 0.5` → wall colour path (wall vertex tileId = `data[idx] || 1`)
+- `< -0.01` → sloped face darkening path (faceTileId = `-steepness`)
+- Between -0.01 and 0.5 → normal sprite-sheet lookup (flat top faces, tileId=0)
+
+### Sprite depth must match tilemap depth
+
+The `isoDepth` formula on CPU must use the SAME denominators as the vertex
+shader (400 and 14500). Any mismatch causes sprites to render at the wrong
+depth relative to terrain.
+
+### Transparent sprite fragments need discard
+
+Without `discard` in `sheet.frag`, transparent sprite pixels pass the depth
+test and write depth — blocking terrain behind them. Always include:
+
+```glsl
+if (color.a < 0.01) discard;
+```
+
+### Continuous surface vs walls
+
+The continuous surface model (corners from neighbours) is incompatible with
+interior wall generation. Walls used per-tile stored heights while top faces
+used shared corner heights — causing gaps. Interior walls were removed; only
+map-boundary walls remain.
+
+### Depth test scope
+
+Depth test is enabled per-drawable, not globally. Tilemap and IsoSprite
+each enable/disable depth test in their `rawDraw()` methods. Non-isometric
+drawables (UI, cursor) never enable it. The global draw loop does NOT
+enable depth test.
+
+---
+
+## 13. FAILED APPROACHES (DO NOT REPEAT)
+
+| Approach                                | Why it failed                                                                                             |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `x+y` for depth axis                    | Identical values for SW and NE — can't distinguish closest from farthest                                  |
+| Y-to-depth mapping                      | Same-screen-Y objects get identical depth regardless of iso position — sprite always wins against terrain |
+| Polygon offset for wall-ground z-fight  | Shifted ALL terrain toward camera, breaking sprite-terrain occlusion                                      |
+| Z tiebreaker (`-z/10000`) in Y-to-depth | Made terrain always closer than sprites at same Y — backwards occlusion                                   |
+| isoZBias from isoDistanceToCam          | CPU distance metric didn't match GPU depth formula — sprite always appeared closer                        |
+| `worldPos.x` term in depth formula      | Absolute world-X overpowered the iso-coordinate distance — sprite always closer                           |
+| Interior wall generation                | Created gaps between surfaces: walls used per-tile heights, faces used shared corners                     |
+
+---
+
+## 14. ADDING FEATURES
+
+### Wall texturing (future)
+
+`tileId` ≥ 1 already identifies wall vertices. Replace `wallColor` fragment
+shader path with a sprite-sheet lookup. May need a dedicated wall-tile UV
+attribute.
+
+### New geometry types (ramps, overhangs)
+
+Add data arrays to Tilemap, generate custom vertex positions in `buildMesh()`,
+update fragment shader if different texturing is needed.
+
+### Dynamic map size
+
+Replace hardcoded `400` denominator with `sizeX + sizeY` uniform. Replace
+`14500` with a derived uniform. Currently safe for 200×200 maps.
+
+---
+
+## 15. GHOST RENDERING (DUAL-PASS)
+
+Every `IsoSprite.rawDraw()` renders in two passes within a single draw call
+sequence. This makes all isometric sprites visible through occluding terrain
+without modifying the terrain shader.
+
+### How it works
+
+**Pass 1 — Ghost (silhouette through terrain):**
+
+```
+depthFunc → ALWAYS         // render regardless of depth
+depthMask → false           // don't write depth
+ghostAlpha → 0.4            // 40 % alpha silhouette
+drawElements(...)
+```
+
+The ghost always renders at 40 % opacity on top of whatever is already in
+the framebuffer. Since all sprites draw after the tilemap (§4 RenderList
+sort), the ghost blends over terrain, walls, and other terrain geometry.
+
+**Pass 2 — Normal (full sprite where visible):**
+
+```
+depthFunc → LEQUAL         // only render where sprite is in front of terrain
+depthMask → true            // write depth
+ghostAlpha → 0.0            // full opacity
+drawElements(...)
+```
+
+The normal pass overdraws the ghost with the full sprite where the sprite
+is isometrically in front of the terrain (depth test passes). Where the
+terrain occludes the sprite, the normal pass is blocked — leaving the
+ghost silhouette visible.
+
+### Shader support
+
+`sheet.frag` has a `ghostAlpha` uniform. When > 0, the output alpha is
+overridden:
+
+```glsl
+uniform float ghostAlpha;
+// ...
+if (ghostAlpha > 0.0) {
+    color.a = ghostAlpha;
+}
+```
+
+Non‑isometric sprites (`Sprite.rawDraw()`) set `ghostAlpha = 0` — no ghost.
+
+### Key requirement: draw order
+
+The ghost only works if sprites draw **after** the tilemap. See §4
+RenderList sort: `order()` subtracts `sizeX + sizeY` to guarantee all
+isometric sprites have negative order.
+
+### Why ALWAYS not GEQUAL
+
+`GEQUAL` was tried first — it only renders the ghost where the sprite
+depth ≥ terrain depth. This works for the SW quadrant (terrain closer to
+camera) but fails for the NE quadrant (terrain farther). `ALWAYS` renders
+the ghost through all terrain; the normal `LEQUAL` pass cleans up the
+visible areas.
+
+### Why this is performant
+
+- One extra `drawElements` call per isometric sprite per frame
+- Same VAO, same texture, same uniforms — only `ghostAlpha` and
+  `depthFunc`/`depthMask` change
+- No FBOs, no additional texture lookups, no terrain shader changes
