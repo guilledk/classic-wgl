@@ -635,10 +635,11 @@ export class Tilemap extends Drawable {
             const cw = this.game.canvas?.width ?? 1;
             const ch = this.game.canvas?.height ?? 1;
             const screenX = (clip[0] + 1.0) * 0.5 * cw;
-            const feetScreenY = (clip[1] + 1.0) * 0.5 * ch;
-            const tps = (agent as unknown as { tilePixelSize: [number, number] }).tilePixelSize;
-            const sc = (this.game.camera.scale[1] as number) || 1;
-            const screenY = feetScreenY + tps[1] * 0.75 * sc;
+            const screenY =
+                (clip[1] + 1.0) * 0.5 * ch +
+                (agent as unknown as { tilePixelSize: [number, number] }).tilePixelSize[1] *
+                    0.75 *
+                    (this.game.camera.scale[1] as number);
 
             const agentDepth =
                 (agent.position[0] - agent.position[1]) / 400.0 + 0.5 - agent.position[2] / 14500.0;
@@ -646,18 +647,23 @@ export class Tilemap extends Drawable {
             this.gl.uniform2f(shader.unif.agentScreenPos, screenX, screenY);
             this.gl.uniform1f(shader.unif.agentIsoDepth, agentDepth);
 
-            const boxMinX = screenX - tps[0] * 0.5 * sc;
-            const boxMinY = feetScreenY - tps[1] * 0.02 * sc;
-            const boxMaxX = screenX + tps[0] * 0.5 * sc;
-            const boxMaxY = feetScreenY + tps[1] * 0.98 * sc;
+            const tp = (agent as unknown as { tilePixelSize: [number, number] }).tilePixelSize;
+            const sw = tp[0] * (this.game.camera.scale[0] as number);
+            const sh = tp[1] * (this.game.camera.scale[1] as number);
+            this.gl.uniform2f(shader.unif.agentTopLeft, screenX - sw * 0.5, screenY + sh * 0.25);
+            this.gl.uniform2f(shader.unif.agentSpriteSize, sw, sh);
+            this.gl.uniform1f(shader.unif.agentFrame, agent.frame);
+            this.gl.uniform2fv(shader.unif.agentTileSetSize, agent.tileSetSize as number[]);
 
-            this.gl.uniform2f(shader.unif.agentBoxMin, boxMinX, boxMinY);
-            this.gl.uniform2f(shader.unif.agentBoxMax, boxMaxX, boxMaxY);
+            (agent as unknown as { texture: ITexture }).texture.bind(this.gl.TEXTURE2);
+            this.gl.uniform1i(shader.unif.agentTexture, 2);
         } else {
             this.gl.uniform2f(shader.unif.agentScreenPos, -999, -999);
             this.gl.uniform1f(shader.unif.agentIsoDepth, 0.0);
-            this.gl.uniform2f(shader.unif.agentBoxMin, 0, 0);
-            this.gl.uniform2f(shader.unif.agentBoxMax, 0, 0);
+            this.gl.uniform2f(shader.unif.agentTopLeft, -999, -999);
+            this.gl.uniform2f(shader.unif.agentSpriteSize, 0, 0);
+            this.gl.uniform1f(shader.unif.agentFrame, 0);
+            this.gl.uniform2f(shader.unif.agentTileSetSize, 1, 1);
         }
 
         this.gl.enable(this.gl.DEPTH_TEST);

@@ -60,9 +60,12 @@
                 "wallColor",
                 "slopeDarken",
                 "agentScreenPos",
+                "agentTopLeft",
+                "agentSpriteSize",
                 "agentIsoDepth",
-                "agentBoxMin",
-                "agentBoxMax"
+                "agentTexture",
+                "agentFrame",
+                "agentTileSetSize"
             ]
         }
     ],

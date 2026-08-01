@@ -19,9 +19,12 @@ uniform vec4 wallColor;
 uniform float slopeDarken;
 
 uniform vec2 agentScreenPos;
+uniform vec2 agentTopLeft;
+uniform vec2 agentSpriteSize;
 uniform float agentIsoDepth;
-uniform vec2 agentBoxMin;
-uniform vec2 agentBoxMax;
+uniform sampler2D agentTexture;
+uniform float agentFrame;
+uniform vec2 agentTileSetSize;
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture2D(mapData, pos);
@@ -78,12 +81,22 @@ void main(void ) {
         color.rgb *= 1.0 + vTileId * slopeDarken;
     }
 
+    vec2 agentUV = (gl_FragCoord.xy - agentTopLeft) / agentSpriteSize;
     if (
-        all(greaterThanEqual(gl_FragCoord.xy, agentBoxMin)) &&
-        all(lessThanEqual(gl_FragCoord.xy, agentBoxMax)) &&
-        vIsoDepth <= agentIsoDepth + 0.001
+        agentUV.x >= 0.0 &&
+        agentUV.x <= 1.0 &&
+        agentUV.y >= 0.0 &&
+        agentUV.y <= 1.0 &&
+        vIsoDepth < agentIsoDepth
     ) {
-        color.a = 0.0;
+        vec2 tilePx = vec2(1.0) / agentTileSetSize;
+        vec2 tileCorner =
+            tilePx *
+            vec2(mod(agentFrame, agentTileSetSize.x), floor(agentFrame / agentTileSetSize.x));
+        vec4 agentColor = texture2D(agentTexture, tileCorner + agentUV * tilePx);
+        if (agentColor.a > 0.01) {
+            color.a = 0.0;
+        }
     }
 
     if (color.a < 0.01) discard;
