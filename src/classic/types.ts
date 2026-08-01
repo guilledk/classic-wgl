@@ -218,6 +218,8 @@ export interface ITilemap extends IDrawable {
     sizeX: number;
     sizeY: number;
     tileScale: vec3 | number[];
+    heightData: number[];
+    heightScale: number;
     cartesianToIsoTile(pos: vec3 | number[]): vec3;
     isoTileToCartesian(pos: vec3 | number[]): vec3;
 }

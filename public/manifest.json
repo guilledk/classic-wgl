@@ -32,14 +32,17 @@
                 "projectionMatrix",
                 "texSampler",
                 "tileIdFlat",
-                "tileSetSize"
+                "tileSetSize",
+                "useIsoDepth",
+                "isoDepth",
+                "ghostAlpha"
             ]
         },
         {
             "name": "isoTilemap",
             "vertex": "/shaders/iso_tilemap.vert",
             "fragment": "/shaders/iso_tilemap.frag",
-            "attr": ["vertexPos", "mapCoord"],
+            "attr": ["vertexPos", "mapCoord", "tileId"],
             "unif": [
                 "isoMatrix",
                 "modelMatrix",
@@ -54,7 +57,9 @@
                 "selectedTile",
                 "selectionBegin",
                 "selectionMode",
-                "selectionColor"
+                "selectionColor",
+                "wallColor",
+                "slopeDarken"
             ]
         }
     ],
