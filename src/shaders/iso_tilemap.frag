@@ -81,7 +81,10 @@ void main(void ) {
         color.rgb *= 1.0 + vTileId * slopeDarken;
     }
 
-    vec2 agentUV = (gl_FragCoord.xy - agentTopLeft) / agentSpriteSize;
+    vec2 agentUV = vec2(
+        (gl_FragCoord.x - agentTopLeft.x) / agentSpriteSize.x,
+        (agentTopLeft.y - gl_FragCoord.y) / agentSpriteSize.y
+    );
     if (
         agentUV.x >= 0.0 &&
         agentUV.x <= 1.0 &&
@@ -95,7 +98,7 @@ void main(void ) {
             vec2(mod(agentFrame, agentTileSetSize.x), floor(agentFrame / agentTileSetSize.x));
         vec4 agentColor = texture2D(agentTexture, tileCorner + agentUV * tilePx);
         if (agentColor.a > 0.01) {
-            color.a = 0.0;
+            color.a = 0.2;
         }
     }
 
