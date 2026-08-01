@@ -6,6 +6,7 @@ uniform sampler2D texSampler;
 
 uniform vec2 tileSetSize;
 uniform float tileIdFlat;
+uniform float ghostAlpha;
 
 vec4 getTilePixel(float tileIdFlat, vec2 texCoord) {
     vec2 tileId = vec2(floor(mod(tileIdFlat, tileSetSize.x)), floor(tileIdFlat / tileSetSize.x));
@@ -19,5 +20,10 @@ vec4 getTilePixel(float tileIdFlat, vec2 texCoord) {
 }
 
 void main(void ) {
-    gl_FragColor = getTilePixel(tileIdFlat, vec2(vTexCoord.x, vTexCoord.y));
+    vec4 color = getTilePixel(tileIdFlat, vec2(vTexCoord.x, vTexCoord.y));
+    if (color.a < 0.01) discard;
+    if (ghostAlpha > 0.0) {
+        color.a = ghostAlpha;
+    }
+    gl_FragColor = color;
 }
