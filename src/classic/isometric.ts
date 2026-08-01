@@ -879,20 +879,18 @@ export class IsoSprite extends IsometricDrawable {
             (this.position[0] - this.position[1]) / 400.0 +
             0.5 -
             this.position[2] / 14500.0 -
-            0.001;
+            0.003;
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, depth);
 
         this.gl.enable(this.gl.DEPTH_TEST);
 
         // Ghost pass: visible through occluding terrain
-        this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, depth + 0.003);
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.ghostAlpha, 0.4);
-        this.gl.depthFunc(this.gl.GREATER);
+        this.gl.depthFunc(this.gl.ALWAYS);
         this.gl.depthMask(false);
         this.gl.drawElements(this.gl.TRIANGLES, 6, this.gl.UNSIGNED_SHORT, 0);
 
         // Normal pass: on top of terrain
-        this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, depth);
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.ghostAlpha, 0.0);
         this.gl.depthFunc(this.gl.LEQUAL);
         this.gl.depthMask(true);
