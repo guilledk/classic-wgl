@@ -186,11 +186,19 @@ at the same grid position.
 
 ```typescript
 order(): number {
-    return this.position[0] - this.position[1];
+    return this.position[0] - this.position[1]
+         - this.tilemap.sizeX - this.tilemap.sizeY;
 }
 ```
 
-Matches the depth axis exactly. No camera-dependent math needed.
+The `− sizeX − sizeY` offset ensures all isometric sprites have `order < 0`
+and draw **after** the tilemap (order = 0). Without it, NE sprites
+(`tx > ty`) get positive order and draw before the tilemap — ghost
+rendering and depth‑based occlusion break because opaque terrain overpaints
+the sprites.
+
+Relative sprite-to-sprite ordering is preserved; depth test LEQUAL handles
+per‑pixel occlusion correctly.
 
 ---
 
@@ -451,6 +459,7 @@ lerp catches up — the agent renders behind the terrain surface.
 | NW corner of map appears at viewport center instead of target tile | Camera position was set incorrectly (see §5)                                 |
 | Agent visually lagging ~1 tile behind terrain on slopes            | `modelMatrix()` uses `Math.floor` NW-corner read instead of bilinear         |
 | Agent rendering behind terrain for first ~0.5 s after spawn        | `position[2]` not initialised to terrain height (starts at 0)                |
+| Ghost rendering / sprite invisible in NE quadrant                  | `order()` positive for NE sprites — drawn before tilemap, overpainted by it  |
 
 ---
 

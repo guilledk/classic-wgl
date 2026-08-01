@@ -227,17 +227,23 @@ terrain shows through.
 
 ### RenderList sort
 
-The `order()` for IsometricDrawables is now:
+The `order()` for IsometricDrawables is:
 
 ```typescript
 order(): number {
-    return this.position[0] - this.position[1];
+    return this.position[0] - this.position[1]
+         - this.tilemap.sizeX - this.tilemap.sizeY;
 }
 ```
 
-This matches the depth axis exactly — no matrix inversions, no distance
-calculations. The renderList sorts **descending** by order: larger
-`tx−ty` (farther = NE) → higher order → drawn first → behind.
+The `− sizeX − sizeY` offset guarantees ALL isometric sprites have
+order < 0 and draw **after** the tilemap (order = 0), regardless of map
+position. Without this, NE sprites (`tx > ty`, order > 0) would draw
+before the tilemap and be overpainted by opaque terrain — breaking
+ghost rendering and depth‑based occlusion.
+
+Relative sprite-to-sprite ordering is preserved; depth test LEQUAL handles
+per‑pixel occlusion correctly.
 
 ---
 
@@ -602,3 +608,76 @@ update fragment shader if different texturing is needed.
 
 Replace hardcoded `400` denominator with `sizeX + sizeY` uniform. Replace
 `14500` with a derived uniform. Currently safe for 200×200 maps.
+
+---
+
+## 15. GHOST RENDERING (DUAL-PASS)
+
+Every `IsoSprite.rawDraw()` renders in two passes within a single draw call
+sequence. This makes all isometric sprites visible through occluding terrain
+without modifying the terrain shader.
+
+### How it works
+
+**Pass 1 — Ghost (silhouette through terrain):**
+
+```
+depthFunc → ALWAYS         // render regardless of depth
+depthMask → false           // don't write depth
+ghostAlpha → 0.4            // 40 % alpha silhouette
+drawElements(...)
+```
+
+The ghost always renders at 40 % opacity on top of whatever is already in
+the framebuffer. Since all sprites draw after the tilemap (§4 RenderList
+sort), the ghost blends over terrain, walls, and other terrain geometry.
+
+**Pass 2 — Normal (full sprite where visible):**
+
+```
+depthFunc → LEQUAL         // only render where sprite is in front of terrain
+depthMask → true            // write depth
+ghostAlpha → 0.0            // full opacity
+drawElements(...)
+```
+
+The normal pass overdraws the ghost with the full sprite where the sprite
+is isometrically in front of the terrain (depth test passes). Where the
+terrain occludes the sprite, the normal pass is blocked — leaving the
+ghost silhouette visible.
+
+### Shader support
+
+`sheet.frag` has a `ghostAlpha` uniform. When > 0, the output alpha is
+overridden:
+
+```glsl
+uniform float ghostAlpha;
+// ...
+if (ghostAlpha > 0.0) {
+    color.a = ghostAlpha;
+}
+```
+
+Non‑isometric sprites (`Sprite.rawDraw()`) set `ghostAlpha = 0` — no ghost.
+
+### Key requirement: draw order
+
+The ghost only works if sprites draw **after** the tilemap. See §4
+RenderList sort: `order()` subtracts `sizeX + sizeY` to guarantee all
+isometric sprites have negative order.
+
+### Why ALWAYS not GEQUAL
+
+`GEQUAL` was tried first — it only renders the ghost where the sprite
+depth ≥ terrain depth. This works for the SW quadrant (terrain closer to
+camera) but fails for the NE quadrant (terrain farther). `ALWAYS` renders
+the ghost through all terrain; the normal `LEQUAL` pass cleans up the
+visible areas.
+
+### Why this is performant
+
+- One extra `drawElements` call per isometric sprite per frame
+- Same VAO, same texture, same uniforms — only `ghostAlpha` and
+  `depthFunc`/`depthMask` change
+- No FBOs, no additional texture lookups, no terrain shader changes
