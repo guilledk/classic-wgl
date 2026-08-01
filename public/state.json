@@ -116,7 +116,7 @@
                     "tilemap": "tilemap",
                     "frame": 333,
                     "tileSetSize": [32, 16],
-                    "anchor": [0, 0.98],
+                    "anchor": [0.5, 0.98],
                     "speed": 2.6,
                     "animSpeed": 1
                 }
