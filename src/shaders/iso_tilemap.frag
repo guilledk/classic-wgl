@@ -17,6 +17,10 @@ uniform vec4 selectionColor;
 uniform int selectionMode;
 uniform vec4 wallColor;
 
+uniform float gridRadius;
+uniform int showGrid;
+uniform vec3 gridColor;
+
 uniform vec3 ambientColor;
 uniform vec3 lightDirection;
 uniform vec3 lightColor;
@@ -77,6 +81,25 @@ void main(void ) {
 
     float diff = max(dot(normalize(vNormal), lightDirection), 0.0);
     color.rgb *= ambientColor + diff * lightColor;
+
+    if (showGrid > 0 && selectionMode == -1 && vTileId <= 0.5) {
+        vec2 tileCoord = vMapCoord * mapSize;
+        vec2 localUV = fract(tileCoord);
+        float mt = floor(selectedTile.x);
+        float nt = floor(selectedTile.y);
+        float ct = floor(tileCoord.x);
+        float rt = floor(tileCoord.y);
+        float dist = max(abs(ct - mt), abs(nt - rt));
+        if (dist <= gridRadius) {
+            float edge = 0.04;
+            float dx = min(localUV.x, 1.0 - localUV.x);
+            float dy = min(localUV.y, 1.0 - localUV.y);
+            float edgeDist = min(dx, dy);
+            float border = 1.0 - smoothstep(0.0, edge, edgeDist);
+            float fade = 1.0 - dist / max(gridRadius, 0.01);
+            color.rgb = mix(color.rgb, gridColor, border * fade * 0.85);
+        }
+    }
 
     gl_FragColor = color;
 }
