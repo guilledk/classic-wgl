@@ -158,8 +158,7 @@ function initToolButtons(UI: UIManager): void {
         {
             label: 'Light Config',
             action: () => {
-                game.editorTarget =
-                    game.editorTarget === 'light' ? 'none' : 'light';
+                game.editorTarget = game.editorTarget === 'light' ? 'none' : 'light';
                 isOpen = false;
             },
             isActive: () => game.editorTarget === 'light',
