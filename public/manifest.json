@@ -60,6 +60,9 @@
                 "selectionMode",
                 "selectionColor",
                 "wallColor",
+                "gridRadius",
+                "showGrid",
+                "gridColor",
                 "ambientColor",
                 "lightDirection",
                 "lightColor"

@@ -499,6 +499,10 @@ export class Tilemap extends Drawable {
 
         this.gl.uniform4fv(shader.unif.wallColor, [0.3, 0.2, 0.15, 1.0]);
 
+        this.gl.uniform1f(shader.unif.gridRadius, 3.0);
+        this.gl.uniform1i(shader.unif.showGrid, (game.showGrid ?? false) ? 1 : 0);
+        this.gl.uniform3fv(shader.unif.gridColor, [0, 0, 0]);
+
         this.gl.uniformMatrix3fv(shader.unif.normalMatrix, false, this._normalMatrix);
         this.gl.uniform3fv(shader.unif.ambientColor, game.lightAmbient ?? [0.2, 0.2, 0.25]);
         this.gl.uniform3fv(shader.unif.lightDirection, game.lightDir ?? [0.45, -0.35, 0.82]);

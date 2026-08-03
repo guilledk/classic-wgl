@@ -23,6 +23,7 @@ declare module '/classic/types.js' {
         lightAmbient?: [number, number, number];
         lightDir?: [number, number, number];
         lightColor?: [number, number, number];
+        showGrid?: boolean;
         lightAzimuth?: number;
         lightElevation?: number;
     }
