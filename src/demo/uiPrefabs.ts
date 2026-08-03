@@ -135,8 +135,7 @@ function initToolButtons(UI: UIManager): void {
         {
             label: 'Tile Editor',
             action: () => {
-                game.editorTarget =
-                    game.editorTarget === 'tilemap' ? 'none' : 'tilemap';
+                game.editorTarget = game.editorTarget === 'tilemap' ? 'none' : 'tilemap';
                 game.agentSelected = false;
                 game.uiConsumedClick = true;
                 isOpen = false;
@@ -146,8 +145,7 @@ function initToolButtons(UI: UIManager): void {
         {
             label: 'Nav Editor',
             action: () => {
-                game.editorTarget =
-                    game.editorTarget === 'navMesh' ? 'none' : 'navMesh';
+                game.editorTarget = game.editorTarget === 'navMesh' ? 'none' : 'navMesh';
                 game.agentSelected = false;
                 game.uiConsumedClick = true;
                 isOpen = false;
@@ -157,8 +155,7 @@ function initToolButtons(UI: UIManager): void {
         {
             label: 'Height Editor',
             action: () => {
-                game.editorTarget =
-                    game.editorTarget === 'height' ? 'none' : 'height';
+                game.editorTarget = game.editorTarget === 'height' ? 'none' : 'height';
                 game.agentSelected = false;
                 game.uiConsumedClick = true;
                 isOpen = false;
@@ -168,8 +165,7 @@ function initToolButtons(UI: UIManager): void {
         {
             label: 'Light Config',
             action: () => {
-                game.editorTarget =
-                    game.editorTarget === 'light' ? 'none' : 'light';
+                game.editorTarget = game.editorTarget === 'light' ? 'none' : 'light';
                 game.agentSelected = false;
                 game.uiConsumedClick = true;
                 isOpen = false;
