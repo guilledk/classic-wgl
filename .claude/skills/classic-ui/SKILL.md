@@ -11,7 +11,7 @@ description: >
     "UISprite", "spawnContainer", "spawnText", "spawnSprite", "setEnabled",
     "editorTarget", "slide‑out", "addColliderToElem", "initToolButtons",
     "initHeightWidget", "initLightWidget", "editor mode",
-    "start menu", "click outside",
+    "start menu", "click outside", "consumesClick", "uiConsumedClick",
     "UIManager", "markUIDirty", "refreshLayout",
     "setChildrenPos", "anchor system".
 compatibility: All UI elements are Drawables on the renderList with ignoreCam
@@ -21,7 +21,7 @@ compatibility: All UI elements are Drawables on the renderList with ignoreCam
     transformed to screen space via camera getFix.
 metadata:
     author: classic-wgl
-    version: '0.2'
+    version: '0.3'
 allowed-tools: Read, Grep, Glob, Bash(git *), Edit, Write
 ---
 
@@ -410,6 +410,43 @@ UI.root.entity.registerCall('update', () => {
 });
 ```
 
+### Click consumption system
+
+Dev tool panels suppress map interactions (tile selection, agent
+pathing, selection overlay) when the user clicks a UI element,
+preventing clicks from leaking through to the tilemap.
+
+**Problem:** The tilemap `Collider` has the lowest PID and iterates
+first in the quadtree. UI colliders fire after — too late to stop
+the tilemap's `'click'` handler (agent pathing). The selection
+overlay (`beginSelection`/`updateSelection`) fires synchronously in
+mouse event handlers, even before `performCalls()` click dispatch.
+
+**Solution — three layers:**
+
+1. **`Collider.consumesClick` flag + prescan**: Before dispatching
+   click handlers, `performCalls()` iterates all mouse‑intersecting
+   colliders and sets `game.uiConsumedClick = true` if any collider
+   has `consumesClick = true`. Tag all UI colliders (backdrop,
+   panel‑menu rows, palette, widget buttons, agent indicator)
+   with `consumesClick = true`.
+
+2. **Flag‑guarded selection**: `updateSelection()` (mouse move) and
+   `endSelection()` (mouse up) check `game.uiConsumedClick` and
+   skip when set. `beginSelection()` is moved from synchronous
+   `mouseDownHandler` to `draw()` **after** `performCalls()`,
+   so the prescan runs first — no one‑frame overlay glitch.
+
+3. **Panel‑menu pre‑flag**: `game.panelMenuOpen` is synced from
+   `isOpen` in the update loop. On mousedown, if the menu is
+   open the flag is pre‑set — agent and selection suppressed
+   before any handler dispatches.
+
+**Mutual exclusion:** All menu tool items toggle between their
+target and `'none'`. Selecting any tool deselects the agent
+(`game.agentSelected = false`). Clicking the agent [A] button
+sets `editorTarget = 'none'`, closing any open tool panels.
+
 ### DEV close resets tool
 
 ```typescript
@@ -574,20 +611,22 @@ and all Unicode (arrows, degree symbols, emoji, accented chars).
 
 ## 9. COMMON PITFALLS
 
-| Symptom                                                               | Cause                                                                                             | Fix                                                     |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Widget background half off‑screen right/bottom, children shifted left | `container.setPosition(x0 + widgetW/2, y0 + widgetH/2)` — `setPosition` sets top‑left, not centre | Use `container.setPosition(x0, y0)`                     |
-| `"Char 'X' not in font glyph string"`                                 | Non‑ASCII character in `spawnText`                                                                | Use ASCII equivalent                                    |
-| Widget absurdly wide                                                  | `widgetW` computed as sum of all element widths instead of `Math.max()` per row                   | Take max of row widths                                  |
-| Buttons clipped by expanding label text                               | Buttons positioned from label edge rather than widget right edge                                  | Pin buttons to right margin                             |
-| Menu item clicks never fire                                           | Collider positions stale — `refreshLayout()` runs before manual positioning                       | Call `UI.refreshLayout()` at end of update handler      |
-| Text visible even when parent `setEnabled(false)`                     | Child not added to parent with `addChild` — `setEnabled` cascade follows child tree only          | `parent.addChild(child, ...)`                           |
-| Panel background too small for text                                   | Character width miscalculated — `N × 8` instead of `N × glyphPixelW`                              | Use `glyphPixelW = 16 × _uiScale`                       |
-| Widget flickers / overlaps on toggle                                  | Multiple `setEnabled` calls in one frame each marking dirty                                       | Consolidate to one `editorTarget` field                 |
-| Collider doesn't respond to clicks                                    | Collider position not synced — shape at creation position (0,0)                                   | `UI.refreshLayout()` or ensure dirty flag triggers sync |
-| Slide‑out buttons invisible                                           | `isOpen` not set, or `closedX` pushes past canvas edge                                            | Check open/closed state logic                           |
+| Symptom                                                               | Cause                                                                                             | Fix                                                                                                       |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Widget background half off‑screen right/bottom, children shifted left | `container.setPosition(x0 + widgetW/2, y0 + widgetH/2)` — `setPosition` sets top‑left, not centre | Use `container.setPosition(x0, y0)`                                                                       |
+| `"Char 'X' not in font glyph string"`                                 | Non‑ASCII character in `spawnText`                                                                | Use ASCII equivalent                                                                                      |
+| Widget absurdly wide                                                  | `widgetW` computed as sum of all element widths instead of `Math.max()` per row                   | Take max of row widths                                                                                    |
+| Buttons clipped by expanding label text                               | Buttons positioned from label edge rather than widget right edge                                  | Pin buttons to right margin                                                                               |
+| Menu item clicks never fire                                           | Collider positions stale — `refreshLayout()` runs before manual positioning                       | Call `UI.refreshLayout()` at end of update handler                                                        |
+| Text visible even when parent `setEnabled(false)`                     | Child not added to parent with `addChild` — `setEnabled` cascade follows child tree only          | `parent.addChild(child, ...)`                                                                             |
+| Panel background too small for text                                   | Character width miscalculated — `N × 8` instead of `N × glyphPixelW`                              | Use `glyphPixelW = 16 × _uiScale`                                                                         |
+| Widget flickers / overlaps on toggle                                  | Multiple `setEnabled` calls in one frame each marking dirty                                       | Consolidate to one `editorTarget` field                                                                   |
+| Collider doesn't respond to clicks                                    | Collider position not synced — shape at creation position (0,0)                                   | `UI.refreshLayout()` or ensure dirty flag triggers sync                                                   |
+| Slide‑out buttons invisible                                           | `isOpen` not set, or `closedX` pushes past canvas edge                                            | Check open/closed state logic                                                                             |
 | Widget has no background                                              | `setEnabled(false)` call before ever showing — background entity is disabled                      |
 | `spawnText` empty or clipped                                          | `maxChars` too small for the string; increase the third argument                                  |
+| Agent paths to map tile behind open panel‑menu                        | Collider PID ordering — tilemap `'click'` handler fires before UI prescan sets `uiConsumedClick`  | Prescan `consumesClick` colliders in `performCalls()`, pre‑flag via `panelMenuOpen` in `mouseDownHandler` |
+| Selection overlay flashes briefly when clicking UI                    | `beginSelection()` ran synchronously before click dispatch could set the flag                     | Defer `beginSelection()` to `draw()` after `performCalls()` prescan                                       |
 
 ---
 
