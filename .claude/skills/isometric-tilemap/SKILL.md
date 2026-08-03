@@ -14,7 +14,7 @@ compatibility: Requires WebGL context with depth buffer. Relies on gl-matrix,
     custom Vite shader plugin, and the ECS call-registry pattern.
 metadata:
     author: classic-wgl
-    version: '0.4'
+    version: '0.5'
 allowed-tools: Read, Grep, Glob, Bash(git *), Edit, Write
 ---
 
@@ -275,6 +275,19 @@ per‑pixel occlusion correctly.
 `slopeDarken` uniform defaults to `0.4` — a 1-height-unit cliff darkens by
 40%, a gentle 0.2-unit ramp by ~8%.
 
+**Lighting uniforms:** `ambientColor` (vec3), `lightDirection` (vec3, world‑space
+surface→light), `lightColor` (vec3). After colour sampling, the shader applies
+Lambert diffuse lighting:
+
+```glsl
+float diff = max(dot(normalize(vNormal), lightDirection), 0.0);
+color.rgb *= ambientColor + diff * lightColor;
+```
+
+This runs after wall/tile colour, slope darkening, and selection overlay — so
+all three rendering paths are lit. The `vNormal` varying comes from the vertex
+shader via the `normal` attribute and `normalMatrix` transform (see §16).
+
 ### direct_tex.vert — sprite vertex shader
 
 **Uniforms:** `useIsoDepth`, `isoDepth`
@@ -290,10 +303,10 @@ Shared by IsoSprite and Sprite. Does sprite-sheet frame lookup + alpha discard.
 
 ## 6. MESH GENERATION — buildMesh()
 
-### Vertex format (6 floats, interleaved)
+### Vertex format (9 floats, interleaved)
 
 ```
-[x, y, z, mx, my, tileId]
+[x, y, z, mx, my, tileId, nx, ny, nz]
 ```
 
 | Offset | Count | Content                              | Attribute   |
@@ -301,6 +314,7 @@ Shared by IsoSprite and Sprite. Does sprite-sheet frame lookup + alpha discard.
 | 0      | 3     | Map-space position (tx, ty, z)       | `vertexPos` |
 | 12     | 2     | Normalised map coords (tx/sX, ty/sY) | `mapCoord`  |
 | 20     | 1     | -steepness (top faces), ≥1 (walls)   | `tileId`    |
+| 24     | 3     | Face normal in map space             | `normal`    |
 
 ### Top face (floor/slope)
 
@@ -681,3 +695,155 @@ visible areas.
 - Same VAO, same texture, same uniforms — only `ghostAlpha` and
   `depthFunc`/`depthMask` change
 - No FBOs, no additional texture lookups, no terrain shader changes
+
+---
+
+## 16. LIGHTING SYSTEM
+
+### Overview
+
+The tilemap uses ambient + directional diffuse (Lambert) lighting.
+Per‑face flat‑shaded normals are computed during mesh construction and
+transformed through a `normalMatrix` uniform to account for the non‑uniform
+isometric scale. Light parameters are driven by selectable presets with
+adjustable azimuth/elevation.
+
+### Key files
+
+| File                           | Role                                                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `src/classic/lighting.ts`      | Presets dict, `applyLightPreset()`, `updateLightDirection()`, `initLighting()`                                |
+| `src/shaders/iso_tilemap.vert` | `normal` attribute, `normalMatrix` uniform, `vNormal` varying                                                 |
+| `src/shaders/iso_tilemap.frag` | `ambientColor` / `lightDirection` / `lightColor` uniforms, diffuse calc                                       |
+| `src/classic/isometric.ts`     | Per‑face normal computation in `buildMesh()`, `normalMatrix` in `setScale()`, uniform plumbing in `rawDraw()` |
+| `public/manifest.json`         | `normal` attr + `normalMatrix`/`ambientColor`/`lightDirection`/`lightColor` unifs                             |
+| `src/demo/uiPrefabs.ts`        | Light config widget (preset cycle + azimuth/elevation ± buttons)                                              |
+
+### Normal computation in `buildMesh()`
+
+Normals are computed **per triangle** and stored in map space (same coordinate
+frame as vertex positions, pre‑isoMatrix). All three vertices of a triangle
+share the same normal (flat shading).
+
+**Top face, triangle 1 (NW → NE → SW):**
+
+```
+edge1 = (1, 0, zNE − zNW)
+edge2 = (0, 1, zSW − zNW)
+n = normalize(cross(edge1, edge2)) = normalize((zNW−zNE, zNW−zSW, 1))
+```
+
+**Top face, triangle 2 (NE → SE → SW):**
+
+```
+edge1 = (0, 1, zSE − zNE)
+edge2 = (−1, 1, zSW − zNE)
+n = normalize(cross(edge1, edge2)) = normalize((zSW−zSE, zNE−zSE, 1))
+```
+
+**Wall normals** are axis‑aligned unit vectors in map space:
+
+| Wall boundary | Condition   | Map‑space normal |
+| ------------- | ----------- | ---------------- |
+| East          | `tx+1 ≥ sX` | `(−1, 0, 0)`     |
+| South         | `ty+1 ≥ sY` | `(0, 1, 0)`      |
+| West          | `tx = 0`    | `(1, 0, 0)`      |
+| North         | `ty = 0`    | `(0, −1, 0)`     |
+
+The `pushVert()` helper writes the same `(nx, ny, nz)` for all three
+vertices of each triangle. `writeTriNormal()` computes the normal from
+two edge vectors using the standard cross‑product formula.
+
+### `normalMatrix` uniform
+
+The `isoMatrix` applies a non‑uniform scale (from `isoToCartesian4`:
+`scale(1, 0.5, 1)` in XY). Normals must be transformed by the
+**inverse‑transpose** of the model‑view matrix's upper‑left 3×3:
+
+```typescript
+// In setScale():
+const iso3 = mat3.create();
+mat3.fromMat4(iso3, this._isoToCartesian);
+const invIso3 = mat3.create();
+mat3.invert(invIso3, iso3);
+mat3.transpose(this._normalMatrix, invIso3);
+```
+
+In the vertex shader:
+
+```glsl
+vNormal = normalize(normalMatrix * normal);
+```
+
+The normal matrix is static — it only changes when the tilemap scale changes
+(via `setScale()`), which dirties the mesh and triggers a rebuild.
+
+### `rawDraw()` uniform plumbing
+
+```typescript
+// New attribute pointer (normal at byte offset 24, 3 floats):
+this.gl.vertexAttribPointer(shader.attr.normal, 3, this.gl.FLOAT, false, stride, 24);
+this.gl.enableVertexAttribArray(shader.attr.normal);
+
+// New uniforms:
+this.gl.uniformMatrix3fv(shader.unif.normalMatrix, false, this._normalMatrix);
+this.gl.uniform3fv(shader.unif.ambientColor, game.lightAmbient ?? [0.2, 0.2, 0.25]);
+this.gl.uniform3fv(shader.unif.lightDirection, game.lightDir ?? [0.45, -0.35, 0.82]);
+this.gl.uniform3fv(shader.unif.lightColor, game.lightColor ?? [0.8, 0.75, 0.65]);
+```
+
+### Light presets
+
+Defined in `src/classic/lighting.ts`:
+
+```
+LIGHT_PRESETS = {
+    sunny:  ambient:[0.15,0.15,0.20] direction:norm([0.453,0.211,0.866]) color:[1.0,0.95,0.85]
+    cloudy: ambient:[0.35,0.35,0.40] direction:norm([0.0,-0.2,1.0]) color:[0.70,0.72,0.78]
+    dawn:   ambient:[0.20,0.15,0.25] direction:norm([0.5, 0.2,0.3]) color:[1.0,0.40,0.20]
+    night:  ambient:[0.10,0.12,0.25] direction:norm([-0.2,-0.5,0.8]) color:[0.30,0.40,0.70]
+}
+```
+
+`applyLightPreset(key)` copies a preset into `game.lightAmbient`,
+`game.lightDir`, and `game.lightColor`, and derives `game.lightAzimuth`
+and `game.lightElevation` from the direction vector.
+
+### Direction ↔ azimuth/elevation
+
+The light direction is stored as a world‑space unit vector (`surface → light`).
+It's convertible to/from azimuth/elevation for UI display:
+
+```
+azimuth   = atan2(d[0], −d[1]) × 180/π   (0° = South of iso map)
+elevation = asin(d[2]) × 180/π           (0° = horizon, 90° = zenith)
+
+lightDir.x = cos(el) × sin(az)
+lightDir.y = −cos(el) × cos(az)   (negated because world Y goes down)
+lightDir.z = sin(el)
+```
+
+When the user tweaks azimuth or elevation via the light config widget,
+`updateLightDirection()` recomputes the direction vector and stores it
+in `game.lightDir`. The preset changes to `'custom'` to indicate deviation
+from a named preset.
+
+### Slope darkening removed
+
+The manual slope‑darkening pass (`color.rgb *= 1.0 + vTileId * slopeDarken`)
+was removed from the fragment shader. The lighting system now provides the
+sole slope contrast: steeper faces have angled normals that reduce the
+`dot(N, L)` term, naturally darkening them relative to flat terrain. No
+separate darkening uniform or math is needed.
+
+### Shader apply order
+
+```
+1. Sample tile colour (getTilePixel)
+2. Apply selection overlay (if active)
+3. Alpha discard (if near‑zero)
+4. Apply lighting: color.rgb *= ambientColor + dot(N, L) * lightColor
+```
+
+Lighting runs after selection so the selection overlay (an editor tool)
+retains its visual intensity regardless of light settings.

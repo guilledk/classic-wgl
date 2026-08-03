@@ -42,12 +42,13 @@
             "name": "isoTilemap",
             "vertex": "/shaders/iso_tilemap.vert",
             "fragment": "/shaders/iso_tilemap.frag",
-            "attr": ["vertexPos", "mapCoord", "tileId"],
+            "attr": ["vertexPos", "mapCoord", "tileId", "normal"],
             "unif": [
                 "isoMatrix",
                 "modelMatrix",
                 "cameraMatrix",
                 "projectionMatrix",
+                "normalMatrix",
                 "mapData",
                 "mapSize",
                 "mapTileSize",
@@ -59,7 +60,9 @@
                 "selectionMode",
                 "selectionColor",
                 "wallColor",
-                "slopeDarken"
+                "ambientColor",
+                "lightDirection",
+                "lightColor"
             ]
         }
     ],
