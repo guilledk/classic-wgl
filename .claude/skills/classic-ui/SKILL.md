@@ -281,7 +281,10 @@ Configured as an array of `{ label, action, isActive }` objects:
 const menuItems = [
     {
         label: 'Tile Editor',
-        action: () => { game.editorTarget = 'tilemap'; isOpen = false; },
+        action: () => {
+            game.editorTarget = 'tilemap';
+            isOpen = false;
+        },
         isActive: () => game.editorTarget === 'tilemap',
     },
     // ... nav, height, light
@@ -324,11 +327,11 @@ backdropCol.addHandler('click', () => {
 
 Per‑frame in the update loop, each row's background color is set:
 
-| State | Color |
-| --- | --- |
-| Hovered (GJK intersect) | `[0.25, 0.45, 0.75, 1]` |
+| State                    | Color                   |
+| ------------------------ | ----------------------- |
+| Hovered (GJK intersect)  | `[0.25, 0.45, 0.75, 1]` |
 | Active tool (isActive()) | `[0.20, 0.35, 0.60, 1]` |
-| Default | `[0.15, 0.15, 0.15, 1]` |
+| Default                  | `[0.15, 0.15, 0.15, 1]` |
 
 ### Panel sizing
 
@@ -358,7 +361,7 @@ UI.root.entity.registerCall('update', () => {
     // ... position elements, setEnabled menu/backdrop ...
     // ... hover highlight checks ...
 
-    UI.refreshLayout();  // sync all colliders immediately
+    UI.refreshLayout(); // sync all colliders immediately
 });
 ```
 
@@ -367,7 +370,8 @@ UI.root.entity.registerCall('update', () => {
 ```typescript
 UI.root.entity.registerCall('update', () => {
     const ch = game.canvas!.height;
-    const h = btnPixel, half = h / 2;
+    const h = btnPixel,
+        half = h / 2;
 
     // DEV
     devContainer.setPosition(h - half, ch - h - half);
@@ -395,9 +399,11 @@ UI.root.entity.registerCall('update', () => {
     // Hover / active highlights
     for (const { row, col, item } of itemRows) {
         const hovered = game.physics!.gjk(col, game.physics!.mouse);
-        row.color = hovered ? [0.25, 0.45, 0.75, 1]
-            : item.isActive() ? [0.2, 0.35, 0.6, 1]
-            : [0.15, 0.15, 0.15, 1];
+        row.color = hovered
+            ? [0.25, 0.45, 0.75, 1]
+            : item.isActive()
+              ? [0.2, 0.35, 0.6, 1]
+              : [0.15, 0.15, 0.15, 1];
     }
 
     UI.refreshLayout();
@@ -486,7 +492,7 @@ Extended via `declare module` in `prefabs.ts` and `uiPrefabs.ts`:
 ```typescript
 declare module '/classic/types.js' {
     interface IGameState {
-        editorTarget?: string;   // 'tilemap' | 'navMesh' | 'height' | 'light' | 'none'
+        editorTarget?: string; // 'tilemap' | 'navMesh' | 'height' | 'light' | 'none'
     }
 }
 ```
@@ -499,9 +505,9 @@ each frame:
 ```typescript
 UI.root.entity.registerCall('update', () => {
     if (_tilePalette) _tilePalette.setEnabled(game.editorTarget === 'tilemap');
-    if (_navPalette)  _navPalette.setEnabled(game.editorTarget === 'navMesh');
+    if (_navPalette) _navPalette.setEnabled(game.editorTarget === 'navMesh');
     if (_heightWidget) _heightWidget.setEnabled(game.editorTarget === 'height');
-    if (_lightWidget)  _lightWidget.setEnabled(game.editorTarget === 'light');
+    if (_lightWidget) _lightWidget.setEnabled(game.editorTarget === 'light');
     navMeshEntity.enabled = game.editorTarget === 'navMesh';
 });
 ```
@@ -568,18 +574,18 @@ and all Unicode (arrows, degree symbols, emoji, accented chars).
 
 ## 9. COMMON PITFALLS
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| Widget background half off‑screen right/bottom, children shifted left | `container.setPosition(x0 + widgetW/2, y0 + widgetH/2)` — `setPosition` sets top‑left, not centre | Use `container.setPosition(x0, y0)` |
-| `"Char 'X' not in font glyph string"` | Non‑ASCII character in `spawnText` | Use ASCII equivalent |
-| Widget absurdly wide | `widgetW` computed as sum of all element widths instead of `Math.max()` per row | Take max of row widths |
-| Buttons clipped by expanding label text | Buttons positioned from label edge rather than widget right edge | Pin buttons to right margin |
-| Menu item clicks never fire | Collider positions stale — `refreshLayout()` runs before manual positioning | Call `UI.refreshLayout()` at end of update handler |
-| Text visible even when parent `setEnabled(false)` | Child not added to parent with `addChild` — `setEnabled` cascade follows child tree only | `parent.addChild(child, ...)` |
-| Panel background too small for text | Character width miscalculated — `N × 8` instead of `N × glyphPixelW` | Use `glyphPixelW = 16 × _uiScale` |
-| Widget flickers / overlaps on toggle | Multiple `setEnabled` calls in one frame each marking dirty | Consolidate to one `editorTarget` field |
-| Collider doesn't respond to clicks | Collider position not synced — shape at creation position (0,0) | `UI.refreshLayout()` or ensure dirty flag triggers sync |
-| Slide‑out buttons invisible | `isOpen` not set, or `closedX` pushes past canvas edge | Check open/closed state logic |
+| Symptom                                                               | Cause                                                                                             | Fix                                                     |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Widget background half off‑screen right/bottom, children shifted left | `container.setPosition(x0 + widgetW/2, y0 + widgetH/2)` — `setPosition` sets top‑left, not centre | Use `container.setPosition(x0, y0)`                     |
+| `"Char 'X' not in font glyph string"`                                 | Non‑ASCII character in `spawnText`                                                                | Use ASCII equivalent                                    |
+| Widget absurdly wide                                                  | `widgetW` computed as sum of all element widths instead of `Math.max()` per row                   | Take max of row widths                                  |
+| Buttons clipped by expanding label text                               | Buttons positioned from label edge rather than widget right edge                                  | Pin buttons to right margin                             |
+| Menu item clicks never fire                                           | Collider positions stale — `refreshLayout()` runs before manual positioning                       | Call `UI.refreshLayout()` at end of update handler      |
+| Text visible even when parent `setEnabled(false)`                     | Child not added to parent with `addChild` — `setEnabled` cascade follows child tree only          | `parent.addChild(child, ...)`                           |
+| Panel background too small for text                                   | Character width miscalculated — `N × 8` instead of `N × glyphPixelW`                              | Use `glyphPixelW = 16 × _uiScale`                       |
+| Widget flickers / overlaps on toggle                                  | Multiple `setEnabled` calls in one frame each marking dirty                                       | Consolidate to one `editorTarget` field                 |
+| Collider doesn't respond to clicks                                    | Collider position not synced — shape at creation position (0,0)                                   | `UI.refreshLayout()` or ensure dirty flag triggers sync |
+| Slide‑out buttons invisible                                           | `isOpen` not set, or `closedX` pushes past canvas edge                                            | Check open/closed state logic                           |
 | Widget has no background                                              | `setEnabled(false)` call before ever showing — background entity is disabled                      |
 | `spawnText` empty or clipped                                          | `maxChars` too small for the string; increase the third argument                                  |
 
