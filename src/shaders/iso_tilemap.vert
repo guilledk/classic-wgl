@@ -3,17 +3,20 @@ precision mediump float;
 attribute vec3 vertexPos;
 attribute vec2 mapCoord;
 attribute float tileId;
+attribute vec3 normal;
 
 uniform mat4 isoMatrix;
 uniform mat4 modelMatrix;
 uniform mat4 cameraMatrix;
 uniform mat4 projectionMatrix;
+uniform mat3 normalMatrix;
 
 uniform vec2 mapSize;
 uniform vec2 tilePixelSize;
 
 varying mediump vec2 vMapCoord;
 varying mediump float vTileId;
+varying mediump vec3 vNormal;
 
 void main(void ) {
     vec4 worldPos = modelMatrix * isoMatrix * vec4(vertexPos, 1.0);
@@ -28,4 +31,5 @@ void main(void ) {
     gl_Position = clipPos;
     vMapCoord = mapCoord;
     vTileId = tileId;
+    vNormal = normalize(normalMatrix * normal);
 }

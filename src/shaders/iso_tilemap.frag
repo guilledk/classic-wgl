@@ -2,7 +2,7 @@ precision mediump float;
 
 varying mediump vec2 vMapCoord;
 varying mediump float vTileId;
-varying mediump float vIsoDepth;
+varying mediump vec3 vNormal;
 
 uniform sampler2D mapData;
 uniform vec2 mapSize;
@@ -16,7 +16,10 @@ uniform vec2 selectionBegin;
 uniform vec4 selectionColor;
 uniform int selectionMode;
 uniform vec4 wallColor;
-uniform float slopeDarken;
+
+uniform vec3 ambientColor;
+uniform vec3 lightDirection;
+uniform vec3 lightColor;
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture2D(mapData, pos);
@@ -68,12 +71,12 @@ void main(void ) {
     } else {
         vec2 mapCoord = vec2(vMapCoord.x, vMapCoord.y);
         color = getTilePixel(getMapData(mapCoord), mapCoord);
-
-        if (vTileId < -0.01) {
-            color.rgb *= 1.0 + vTileId * slopeDarken;
-        }
     }
 
     if (color.a < 0.01) discard;
+
+    float diff = max(dot(normalize(vNormal), lightDirection), 0.0);
+    color.rgb *= ambientColor + diff * lightColor;
+
     gl_FragColor = color;
 }
