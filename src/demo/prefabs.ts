@@ -15,6 +15,12 @@ declare module '/classic/types.js' {
         heightEditMode?: string;
         agentEnabled?: boolean;
         agentSelected?: boolean;
+        lightPreset?: string;
+        lightAmbient?: [number, number, number];
+        lightDir?: [number, number, number];
+        lightColor?: [number, number, number];
+        lightAzimuth?: number;
+        lightElevation?: number;
     }
 }
 

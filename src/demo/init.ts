@@ -11,6 +11,7 @@ import {
     generateDemoSlopes,
 } from './prefabs.js';
 import { initUI } from './uiPrefabs.js';
+import { initLighting } from '/classic/lighting.js';
 
 import { isoToCartesian4 } from '/classic/utils.js';
 import { mat4, vec3 } from 'gl-matrix';
@@ -33,6 +34,7 @@ async function initContext(): Promise<void> {
     generateDemoSlopes();
 
     initUI();
+    initLighting();
 
     // Centre camera on demo slope area around tile (90, 85)
     const isoToWorld = mat4.clone(isoToCartesian4);
