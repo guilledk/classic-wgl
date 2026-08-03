@@ -847,3 +847,65 @@ separate darkening uniform or math is needed.
 
 Lighting runs after selection so the selection overlay (an editor tool)
 retains its visual intensity regardless of light settings.
+
+---
+
+## 17. MOUSE-HOVER GRID OVERLAY
+
+### Overview
+
+The fragment shader draws black grid lines at tile boundaries within a
+configurable Chebyshev radius of the mouse cursor.  Toggled via G key;
+suppressed during editor selection and never drawn on wall faces.
+Enabled by default (`game.showGrid = true`).
+
+### Uniforms
+
+| Uniform      | Type   | Purpose                                   |
+| ------------ | ------ | ----------------------------------------- |
+| `showGrid`   | int    | Toggle (0 = off, 1 = on)                  |
+| `gridRadius` | float  | Tile-radius around mouse (default 3.0)   |
+| `gridColor`  | vec3   | Line colour (default black [0,0,0])      |
+
+Declared in `iso_tilemap.frag`, added to `manifest.json` under
+`isoTilemap.unif`, set each frame in `Tilemap.rawDraw()`.
+
+### Fragment shader logic
+
+1. Gate: `showGrid > 0 && selectionMode == -1 && vTileId <= 0.5`
+   (off during selection overlay; walls excluded)
+2. Recover tile-space coords from the varying:
+   `tileCoord = vMapCoord * mapSize`
+3. Identify the current tile: `ct = floor(tileCoord.x)`,
+   `rt = floor(tileCoord.y)`
+4. Identify the mouse tile: `mt = floor(selectedTile.x)`,
+   `nt = floor(selectedTile.y)`
+5. Chebyshev distance: `dist = max(abs(ct - mt), abs(nt - rt))`
+6. If `dist <= gridRadius`, compute edge-proximity:
+   ```glsl
+   float dx = min(localUV.x, 1.0 - localUV.x);
+   float dy = min(localUV.y, 1.0 - localUV.y);
+   float edgeDist = min(dx, dy);
+   float border = 1.0 - smoothstep(0.0, edge, edgeDist);
+   ```
+7. Distance fade: `fade = 1.0 - dist / max(gridRadius, 0.01)`
+8. Blend: `color.rgb = mix(color.rgb, gridColor, border * fade * 0.85)`
+
+Runs after lighting so grid lines are always visible regardless of
+light settings.
+
+### Toggle state
+
+`game.showGrid` (boolean) added via module augmentation in
+`prefabs.ts` / `uiPrefabs.ts`.  The G-key handler lives in
+`initTilemap()`'s `'update'` callback via
+`game.wasKeyPressed('KeyG')`.  Defaults to `true` set in
+`init.ts`.
+
+### Pitfall: max vs min for edge distance
+
+Using `max()` to combine edge-distances (e.g. `max(smoothstep(0, e,
+localUV.x), smoothstep(0, e, 1.0 - localUV.x))`) always produces ~1
+because any point is far from at *least* one edge.  The correct
+operation is `min(localUV, 1.0 - localUV)` — distance to the
+**nearest** edge — so `border = 1` only at boundaries.
