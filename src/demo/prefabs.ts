@@ -21,6 +21,8 @@ declare module '/classic/types.js' {
         lightColor?: [number, number, number];
         lightAzimuth?: number;
         lightElevation?: number;
+        uiConsumedClick?: boolean;
+        panelMenuOpen?: boolean;
     }
 }
 
@@ -281,6 +283,7 @@ export function initAgent(): void {
 
     compTilemapCollider.addHandler('click', function () {
         if (!game.agentEnabled) return;
+        if (game.uiConsumedClick) return;
 
         const clickX = tilemap.mouseIsoPos[0];
         const clickY = tilemap.mouseIsoPos[1];
