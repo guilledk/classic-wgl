@@ -14,6 +14,14 @@ import {
     initBuffers,
     initTextures,
     initAnimations,
+    estimateManifestWeight,
+    slowSleep,
+    MANIFEST_WEIGHT,
+    SHADER_FETCH_WEIGHT,
+    SHADER_COMPILE_WEIGHT,
+    BUFFERS_WEIGHT,
+    TEXTURE_WEIGHT,
+    ANIMATIONS_WEIGHT,
 } from '/classic/utils.js';
 
 import type {
@@ -32,6 +40,7 @@ import type {
     CallName,
     CallFunction,
     StateData,
+    ProgressCallback,
 } from './types.js';
 
 // Type for the game state object
@@ -39,7 +48,7 @@ interface GameState extends IGameState {
     init(): void;
     getTexture(name: string): ITexture;
     download(url: string): void;
-    load(url: string): Promise<void>;
+    load(url: string, onProgress?: ProgressCallback): Promise<void>;
     registerCall(callName: CallName, entity: IEntity, fn: CallFunction): void;
     unregisterCall(callName: CallName, entity: IEntity, fn: CallFunction): void;
     performCall(callName: CallName): void;
@@ -49,7 +58,7 @@ interface GameState extends IGameState {
     destroyEntity(entity: IEntity): void;
     getGameObject(cmd: string | IComponent): IEntity | IComponent;
     resizeCanvas(): void;
-    loadResources(): Promise<void>;
+    loadResources(onProgress?: ProgressCallback): Promise<void>;
     launch(): void;
     draw(now: number): void;
     isMouseButtonDown(button: number): boolean;
@@ -207,13 +216,21 @@ const game: GameState = {
         URL.revokeObjectURL(link.href);
     },
 
-    async load(url: string) {
+    async load(url: string, onProgress?: ProgressCallback) {
+        const report = onProgress ?? (() => {});
+
+        report(`Fetching ${url}`, 0);
         const state = await fetchObject<StateData>(url);
         if (!state) {
             throw new Error(`Failed to load state from ${url}`);
         }
+        await slowSleep();
 
-        for (const entityName in state.entities) {
+        const entityNames = Object.keys(state.entities);
+        for (let i = 0; i < entityNames.length; i++) {
+            const entityName = entityNames[i];
+            report(`Spawning entity: ${entityName}`, (i + 1) / entityNames.length);
+
             const entity = state.entities[entityName];
             const instance = this.spawnEntity(entityName);
 
@@ -345,20 +362,47 @@ const game: GameState = {
         this.performCall('canvasResize');
     },
 
-    async loadResources() {
+    async loadResources(onProgress?: ProgressCallback) {
+        const report = onProgress ?? (() => {});
+
+        report('Fetching manifest', 0);
         const manifest = await fetchObject<Manifest>('/manifest.json');
         if (!manifest) {
             throw new Error('Failed to load manifest.json');
         }
         this.manifest = manifest;
+        await slowSleep();
 
-        this.shaders = await initShaders(this.gl, this.manifest.shaders);
+        const total = estimateManifestWeight(manifest);
+        let acc = MANIFEST_WEIGHT;
+        const reportPhase = (label: string) => report(label, acc / total);
 
+        reportPhase('Initializing shaders');
+        this.shaders = await initShaders(this.gl, this.manifest.shaders, (label, frac) =>
+            report(
+                label,
+                (acc +
+                    frac *
+                        (this.manifest.shaders.length *
+                            (SHADER_FETCH_WEIGHT + SHADER_COMPILE_WEIGHT))) /
+                    total,
+            ),
+        );
+        acc += this.manifest.shaders.length * (SHADER_FETCH_WEIGHT + SHADER_COMPILE_WEIGHT);
+
+        report('Initializing buffers', acc / total);
         this.buffers = initBuffers(this.gl);
+        acc += BUFFERS_WEIGHT;
 
-        this.textures = await initTextures(this.gl, this.manifest.textures);
+        report('Loading textures', acc / total);
+        this.textures = await initTextures(this.gl, this.manifest.textures, (label, frac) =>
+            report(label, (acc + frac * (this.manifest.textures.length * TEXTURE_WEIGHT)) / total),
+        );
+        acc += this.manifest.textures.length * TEXTURE_WEIGHT;
 
+        report('Building animations', acc / total);
         this.animations = initAnimations(this.manifest.animations);
+        acc += ANIMATIONS_WEIGHT;
     },
 
     launch() {
