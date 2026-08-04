@@ -36,6 +36,7 @@ export class SdfText extends Drawable {
     glowRadius: number;
     glowColor: Color;
     snapToPixel: boolean;
+    showNotdef: boolean;
     vertexBuffer: WebGLBuffer | null = null;
     vertexCount: number;
     glyphData: Float32Array;
@@ -76,6 +77,7 @@ export class SdfText extends Drawable {
         this.glowRadius = 0;
         this.glowColor = [1, 1, 1, 0.3];
         this.snapToPixel = false;
+        this.showNotdef = true;
         this.text = '';
         this.textWidth = 0;
         this.textHeight = 0;
@@ -175,6 +177,8 @@ export class SdfText extends Drawable {
         const g = this.metrics.glyphs[ch];
         if (g) return g.xAdvance;
         if (ch === ' ') return this.metrics.glyphs[' ']?.xAdvance || this.metrics.glyphSize * 0.5;
+        if (ch === '\t')
+            return (this.metrics.glyphs[' ']?.xAdvance || this.metrics.glyphSize * 0.5) * 4;
         return this.metrics.glyphSize * 0.5;
     }
 

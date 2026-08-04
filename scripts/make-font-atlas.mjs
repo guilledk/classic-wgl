@@ -28,13 +28,130 @@ const resDir = path.join(root, 'public', 'res');
 
 const GLYPH_SIZE = 64;
 const PAD = 2;
-// Font cell-pixel size. Must match the "cell pixel" unit used throughout the
-// engine: cell px = (GLYPH_SIZE * 1.2 * old_RENDER_SCALE) / old_CELL_SCALE
-// old_RENDER_SCALE was 16, old_CELL_SCALE was 48.  Simplifies to GLYPH_SIZE * 0.4.
+// Font cell-pixel size matching the engine's unit system:
+// cell px = (GLYPH_SIZE * 1.2 * old_RENDER_SCALE) / old_CELL_SCALE = 64 * 0.4
 const FONT_CELL_SIZE = GLYPH_SIZE * 0.4;
 
-const CHARS =
-    ' !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~';
+// ---------------------------------------------------------------------------
+// Charset groups
+// ---------------------------------------------------------------------------
+
+function charRange(a, b) {
+    const o = [];
+    for (let cp = a; cp <= b; cp++) o.push(String.fromCodePoint(cp));
+    return o;
+}
+
+const CHARSET_GROUPS = {
+    ascii: charRange(0x0020, 0x007e),
+    latin1: charRange(0x00a0, 0x00ff),
+    punct: [
+        ...'\u2010\u2011\u2012\u2013\u2014\u2015\u2018\u2019\u201a\u201b\u201c\u201d\u201e',
+        ...'\u2020\u2021\u2022\u2023\u2026\u2030\u2032\u2033\u2039\u203a\u203b\u203c\u2044',
+    ].join(''),
+    supsub: [
+        ...'\u2070\u2074\u2075\u2076\u2077\u2078\u2079\u207a\u207b\u207c\u207d\u207e\u207f',
+        ...'\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089\u208a\u208b\u208c\u208d\u208e',
+    ].join(''),
+    fractions: charRange(0x2150, 0x215f),
+    currency: charRange(0x20a0, 0x20b5).concat(['\u20b9', '\u20bd', '\u0192']),
+    roman: charRange(0x2160, 0x217f),
+    arrows: charRange(0x2190, 0x21ff),
+    math: [
+        ...'\u2200\u2202\u2203\u2205\u2206\u2207\u2208\u2209\u220f\u2211\u2212\u2213\u2215',
+        ...'\u2217\u2219\u221a\u221d\u221e\u221f\u2220\u2229\u222a\u222b\u2248\u2260\u2261',
+        ...'\u2264\u2265\u226a\u226b\u2282\u2283\u2295\u2297\u22a5\u22c5',
+    ].join(''),
+    box: charRange(0x2500, 0x257f),
+    blocks: charRange(0x2580, 0x2590).concat(charRange(0x2594, 0x259f)), // exclude ░▒▓ (dither, incompatible with SDF)
+    geometric: charRange(0x25a0, 0x25ff),
+    symbols: [
+        ...'\u2600\u2601\u2602\u2603\u2604\u2605\u2606\u2609\u260e\u2610\u2611\u2612\u2618',
+        ...'\u261b\u261e\u2620\u2622\u2623\u262f\u2639\u263a\u263c\u2640\u2642',
+        ...'\u2648\u2649\u264a\u264b\u264c\u264d\u264e\u264f\u2650\u2651\u2652\u2653',
+        ...'\u2654\u2655\u2656\u2657\u2658\u2659\u265a\u265b\u265c\u265d\u265e\u265f',
+        ...'\u2660\u2661\u2662\u2663\u2664\u2665\u2666\u2667\u2668\u2669\u266a\u266b\u266c',
+        ...'\u266d\u266e\u266f\u267b',
+        ...'\u2680\u2681\u2682\u2683\u2684\u2685',
+        ...'\u2690\u2691\u2692\u2693\u2694\u2695\u2696\u2697\u2698\u2699\u269c\u26a0\u26a1',
+    ].join(''),
+    dingbats: [
+        ...'\u2708\u2712\u2713\u2714\u2715\u2716\u2717\u2718\u271a\u271b\u271c\u2720\u2721',
+        ...'\u2726\u2727\u2729\u272a\u272b\u272c\u272d\u272e\u272f\u2730\u2731\u2732\u2733',
+        ...'\u2734\u2735\u2736\u2739\u273d\u2740\u2744\u2756\u2764\u2765\u2766\u2767',
+        ...'\u2794\u2798\u279c\u27a1\u27a4\u27b2',
+    ].join(''),
+    enclosed: [
+        ...charRange(0x2460, 0x2469),
+        ...charRange(0x2776, 0x277f),
+        ...charRange(0x2780, 0x2789),
+    ],
+    keys: [
+        ...'\u2318\u2325\u2303\u2324\u23ce\u232b\u2326\u21ea\u2423\u21b5\u21b9\u2380\u2387',
+    ].join(''),
+    greek: [...charRange(0x0391, 0x03a9), ...charRange(0x03b1, 0x03c9)],
+};
+
+function resolveCharset(spec) {
+    if (!spec) return CHARSET_GROUPS.ascii.concat(makeDefaultCharset());
+    let chars = '';
+    for (const tok of spec.split(',')) {
+        const t = tok.trim();
+        if (!t) continue;
+        if (t === 'all') {
+            for (const g of Object.values(CHARSET_GROUPS)) chars += g;
+            continue;
+        }
+        if (t.startsWith('-')) {
+            // exclude groups will be handled in a second pass
+            continue;
+        }
+        const group = CHARSET_GROUPS[t];
+        if (group) {
+            chars += group;
+            continue;
+        }
+        console.error(
+            `Unknown charset group: "${t}". Available: ${Object.keys(CHARSET_GROUPS).join(', ')}`,
+        );
+        process.exit(1);
+    }
+    // Apply exclusions
+    for (const tok of spec.split(',')) {
+        const t = tok.trim();
+        if (t.startsWith('-')) {
+            const name = t.slice(1);
+            const group = CHARSET_GROUPS[name];
+            if (!group) continue;
+            for (const ch of group) chars = chars.replaceAll(ch, '');
+        }
+    }
+    return [...new Set([...chars])].join('');
+}
+
+function makeDefaultCharset() {
+    const groups = [
+        'latin1',
+        'punct',
+        'supsub',
+        'fractions',
+        'currency',
+        'roman',
+        'arrows',
+        'math',
+        'box',
+        'blocks',
+        'geometric',
+        'symbols',
+        'dingbats',
+        'enclosed',
+        'keys',
+        'greek',
+    ];
+    return groups.map((g) => CHARSET_GROUPS[g]).join('');
+}
+
+const CHARS = resolveCharset('all');
 
 function nearestPow2(n) {
     let v = 1;
@@ -313,6 +430,7 @@ function parseArgs(args) {
         spread: 4,
         maxSize: 4096,
         noCache: false,
+        charset: null,
     };
 
     for (let i = 1; i < args.length; i++) {
@@ -321,6 +439,7 @@ function parseArgs(args) {
         else if (a === '--ss' && i + 1 < args.length) opts.ss = parseInt(args[++i], 10);
         else if (a === '--spread' && i + 1 < args.length) opts.spread = parseInt(args[++i], 10);
         else if (a === '--max-size' && i + 1 < args.length) opts.maxSize = parseInt(args[++i], 10);
+        else if (a === '--charset' && i + 1 < args.length) opts.charset = args[++i];
         else if (a === '--no-cache') opts.noCache = true;
     }
 
@@ -330,13 +449,15 @@ function parseArgs(args) {
 async function main() {
     const { fontPath, fontName, opts } = parseArgs(process.argv.slice(2));
     const baseName = fontName.toLowerCase().replace(/\s+/g, '-');
+    const fontSize = FONT_CELL_SIZE;
+    const charset = opts.charset ? resolveCharset(opts.charset) : CHARS;
 
     // Check cache
     if (!opts.noCache) {
         const fontBuf = await readFile(fontPath);
-        const key = cacheKey(fontBuf, CHARS, opts);
+        const key = cacheKey(fontBuf, charset, opts);
         if (await cacheHit(baseName, key)) {
-            console.log(`SDF atlas cache hit for ${baseName} (${CHARS.length} glyphs)`);
+            console.log(`SDF atlas cache hit for ${baseName} (${charset.length} glyphs)`);
             return;
         }
     }
@@ -344,17 +465,40 @@ async function main() {
     console.log(`Loading font: ${fontPath}`);
     GlobalFonts.registerFromPath(fontPath, opts.family);
 
-    const fontSize = FONT_CELL_SIZE;
-
     // Shared 2D context, resized per glyph
     const gfx = createCanvas(8, 8).getContext('2d');
 
+    // Render .notdef references (known-absent code points) and hash them
+    const notdefA = renderGlyphSDF(gfx, opts.family, fontSize, opts.ss, opts.spread, '\u{1F600}');
+    const notdefB = renderGlyphSDF(gfx, opts.family, fontSize, opts.ss, opts.spread, '\u4e00');
+    const notdefHash = (b) => Buffer.from(b).toString('base64');
+    const ndHashes = new Set([
+        notdefHash(notdefA.imageData.data),
+        notdefHash(notdefB.imageData.data),
+    ]);
+    // Also consider fully-blank glyphs (all byte=128) as absent
+    function isAbsent(result) {
+        if (result.anyVariant === false) return true;
+        return ndHashes.has(notdefHash(result.imageData.data));
+    }
+
+    // Dedup bitmap-identical glyphs (e.g. NBSP ≡ space)
+    const seen = new Map();
+
     const glyphResults = [];
-    console.log(`Generating ${CHARS.length} glyphs (ss=${opts.ss}, spread=${opts.spread})...`);
+    console.log(`Generating ${charset.length} glyphs (ss=${opts.ss}, spread=${opts.spread})...`);
     const t0 = Date.now();
 
-    for (const char of CHARS) {
+    for (const char of charset) {
         const result = renderGlyphSDF(gfx, opts.family, fontSize, opts.ss, opts.spread, char);
+        if (isAbsent(result)) continue;
+        const h = notdefHash(result.imageData.data);
+        const prev = seen.get(h);
+        if (prev) {
+            glyphResults.push({ ...result, char, xAdvance: result.xAdvance }); // use own advance
+            continue;
+        }
+        seen.set(h, result);
         glyphResults.push(result);
     }
 
@@ -410,12 +554,17 @@ async function main() {
     const jsonPath = path.join(resDir, `${baseName}-sdf.json`);
 
     await writeFile(pngPath, pngBuf);
-    await writeFile(jsonPath, JSON.stringify(metrics));
+    await writeFile(
+        jsonPath,
+        JSON.stringify(metrics, (key, value) =>
+            typeof value === 'number' ? Math.round(value * 1000) / 1000 : value,
+        ),
+    );
 
     // Write cache signature (after successful output)
     if (!opts.noCache) {
         const fontBuf = await readFile(fontPath);
-        await cacheWrite(baseName, cacheKey(fontBuf, CHARS, opts));
+        await cacheWrite(baseName, cacheKey(fontBuf, charset, opts));
     }
 
     console.log(`Generated: ${pngPath}  (${atlasSize}x${atlasSize})`);
