@@ -442,3 +442,65 @@ describe('UISdfText', () => {
         expect(instance.text).toBe('CBA');
     });
 });
+
+describe('UISdfText advance + buffer', () => {
+    let game: IGameState;
+
+    beforeEach(() => {
+        game = createMockGame({
+            textures: { 'test-sdf': createMockTexture() } as any,
+            shaders: { sdf: createMockShader(), solid: createMockSolidShader() } as any,
+            sdfFonts: { test: TEST_METRICS } as any,
+            getSdfFont: vi.fn(() => TEST_METRICS) as any,
+        });
+    });
+
+    it('advanceFor returns consistent widths for wrap and layout', async () => {
+        const { SdfText: SdfTextClass } = await loadSdfText();
+        const entity = new Entity(game, 1, 'advtest');
+        const instance = entity.addComponent(
+            SdfTextClass as any,
+            [0, 0, 0],
+            [1, 1, 1],
+            'test',
+            [1, 1, 1, 1],
+            [0, 0, 0, 0],
+            true,
+        ) as SdfText;
+
+        const advH = instance.advanceFor('H');
+        const advSpace = instance.advanceFor(' ');
+        const advUnknown = instance.advanceFor('\u4e00');
+        expect(advH).toBe(56);
+        expect(advSpace).toBe(18);
+        expect(advUnknown).toBe(32); // fallback = glyphSize * 0.5
+    });
+
+    it('skips bufferData on subsequent rawDraw calls when text unchanged', async () => {
+        const { SdfText: SdfTextClass } = await loadSdfText();
+        const entity = new Entity(game, 1, 'bufdirty');
+        const instance = entity.addComponent(
+            SdfTextClass as any,
+            [0, 0, 0],
+            [1, 1, 1],
+            'test',
+            [1, 1, 1, 1],
+            [0, 0, 0, 0],
+            true,
+        ) as SdfText;
+        instance.setText('AB');
+
+        const gl = (instance as any).gl as WebGLRenderingContext & {
+            bufferData: ReturnType<typeof vi.fn>;
+        };
+        const bufCalls = (gl.bufferData as ReturnType<typeof vi.fn>).mock.calls.length;
+
+        instance.rawDraw();
+        const calls1 = (gl.bufferData as ReturnType<typeof vi.fn>).mock.calls.length;
+        instance.rawDraw();
+        const calls2 = (gl.bufferData as ReturnType<typeof vi.fn>).mock.calls.length;
+
+        expect(calls1 - bufCalls).toBe(1);
+        expect(calls2).toBe(calls1); // no new bufferData call
+    });
+});
