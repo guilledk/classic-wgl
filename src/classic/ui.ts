@@ -1,7 +1,7 @@
 import game from '/classic/state.js';
 import { Rectangle, Text, Sprite } from '/classic/transforms.js';
 import { Polygon, Collider } from '/classic/collision.js';
-import type { IEntity, IGameState, IComponent, ICollider } from './types.js';
+import type { IEntity, IGameState, IComponent, ICollider, ColliderHandler } from './types.js';
 import { vec3 } from 'gl-matrix';
 
 type Color = [number, number, number, number] | number[];
@@ -546,6 +546,31 @@ export class UIManager {
         this.root.entity.registerCall('update', () => {
             if (this.dirty) this.refreshLayout();
         });
+
+        this.root.entity.registerCall('update', () => {
+            for (const { elem, collider } of this._elementColliders) {
+                const base = (elem as unknown as { _btnBase?: number[] })._btnBase;
+                if (!base) continue;
+                const meta = elem as unknown as { _clickFrames?: number };
+                if (meta._clickFrames && meta._clickFrames > 0) meta._clickFrames--;
+                if (!elem.entity.enabled) continue;
+                if (meta._clickFrames && meta._clickFrames > 0) {
+                    const b = base;
+                    elem.color = [1, 1, 1, b[3]];
+                    continue;
+                }
+                const hovered = this.game.physics!.gjk(collider, this.game.physics!.mouse);
+                const b = base;
+                elem.color = hovered
+                    ? [
+                          Math.min(1, b[0] + (1 - b[0]) * 0.25),
+                          Math.min(1, b[1] + (1 - b[1]) * 0.25),
+                          Math.min(1, b[2] + (1 - b[2]) * 0.25),
+                          b[3],
+                      ]
+                    : base;
+            }
+        });
     }
 
     markDirty(): void {
@@ -661,6 +686,72 @@ export class UIManager {
         color: Color = [0.06, 0.15, 0.06, 1],
     ): UIContainer {
         return this._spawnUIComponent('container', UIContainer, color, width, height, this.zlayer);
+    }
+
+    spawnButton(
+        width: number,
+        height: number,
+        color: Color,
+        onClick: ColliderHandler,
+        opts?: {
+            text?: string;
+            textScale?: number;
+            textColor?: Color;
+            sprite?: string;
+            spriteFrame?: number;
+            spriteTileSet?: [number, number];
+            priority?: number;
+            hover?: boolean;
+            clickFeedback?: number;
+        },
+    ): { container: UIContainer; collider: Collider; child?: UIText | UISprite } {
+        const container = this.spawnContainer(width, height, color);
+        let child: UIText | UISprite | undefined;
+        if (opts?.sprite) {
+            child = this.spawnSprite(
+                opts.sprite,
+                width,
+                height,
+                opts.spriteFrame ?? 0,
+                opts.spriteTileSet ?? [1, 1],
+            );
+        } else if (opts?.text) {
+            child = this.spawnText(
+                opts.text,
+                opts.textScale ?? 0.5,
+                100,
+                opts.textColor ?? [1, 1, 1, 1],
+                [0, 0, 0, 0],
+            );
+        }
+        if (child) {
+            container.addChild(child, 'mid-center', 'mid-center');
+        }
+        const collider = this.addColliderToElem(container);
+        collider.consumesClick = true;
+        if (opts?.priority !== undefined) {
+            collider.clickPriority = opts.priority;
+        }
+        const wrappedClick =
+            opts?.clickFeedback !== undefined
+                ? () => {
+                      (container as unknown as { _clickFrames: number })._clickFrames =
+                          opts.clickFeedback!;
+                      return onClick();
+                  }
+                : onClick;
+        collider.addHandler('click', wrappedClick);
+        if (opts?.hover) {
+            const meta = container as unknown as {
+                _btnBase: Color;
+                _btnCollider: Collider;
+                _clickFrames: number;
+            };
+            meta._btnBase = [...color];
+            meta._btnCollider = collider;
+            meta._clickFrames = 0;
+        }
+        return { container, collider, child };
     }
 
     spawnPadding(

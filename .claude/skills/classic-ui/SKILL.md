@@ -627,6 +627,28 @@ and all Unicode (arrows, degree symbols, emoji, accented chars).
 | `spawnText` empty or clipped                                          | `maxChars` too small for the string; increase the third argument                                  |
 | Agent paths to map tile behind open panel‑menu                        | Collider PID ordering — tilemap `'click'` handler fires before UI prescan sets `uiConsumedClick`  | Prescan `consumesClick` colliders in `performCalls()`, pre‑flag via `panelMenuOpen` in `mouseDownHandler` |
 | Selection overlay flashes briefly when clicking UI                    | `beginSelection()` ran synchronously before click dispatch could set the flag                     | Defer `beginSelection()` to `draw()` after `performCalls()` prescan                                       |
+| Click on popup menu item closes menu instead of activating item       | Overlapping colliders (e.g. bottom menu item overlaps toggle button) — lower-PID collider fires first and consumes click | Set `collider.clickPriority = 1` on menu item rows so they dispatch before the parent toggle button |
+
+### 9.1 Click priority dispatch
+
+When two clickable colliders overlap in screen space (e.g. a popup menu stacked
+above a toggle button), the default dispatch order is by collider `_pid`
+(creation order). A lower-PID collider handles the click first and can consume
+it before the visually‑on‑top element gets a chance.
+
+`Collider` exposes a `clickPriority: number` field (default `0`). In
+`performCalls()`, all GJK‑intersecting click‑handler colliders are collected
+and sorted **descending** by `clickPriority`, tiebroken by `_pid` ascending.
+Higher priority → dispatched first.
+
+**Pattern:** Set `clickPriority = 1` (or higher) on child/popup panel item
+colliders so they dispatch before the parent toggle or background button:
+
+```typescript
+const col = UI.addColliderToElem(row);
+col.consumesClick = true;
+col.clickPriority = 1;  // dispatch before DEV toggle button (priority 0)
+```
 
 ---
 
@@ -637,6 +659,8 @@ UIManager(game) → UI
 UI.spawnContainer(w, h, [r,g,b,a])       → UIContainer
 UI.spawnText(str, fontScale, maxChars, [r,g,b,a], [br,bg,bb,ba]) → UIText
 UI.spawnSprite(texName, w, h, frame, [cols,rows]) → UISprite
+UI.spawnButton(w, h, color, onClick, opts?) → { container: UIContainer, collider: Collider, child?: UIText|UISprite }
+//  opts: { text?, textScale?, textColor?, sprite?, spriteFrame?, spriteTileSet?, priority?, hover?, clickFeedback? }
 UI.addColliderToElem(UIElement)           → Collider
 
 container.addChild(child, selfAnchor?, childAnchor?) → this
@@ -654,4 +678,6 @@ sprite.setPosition(x, y)                  → this
 col.addHandler('click', () => boolean)    → void
 col.addHandler('enter', () => void)       → void
 col.addHandler('exit', () => void)        → void
+col.clickPriority = number                 → higher dispatches first in overlaps
+col.consumesClick = boolean                → true prevents map interactions
 ```
