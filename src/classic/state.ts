@@ -2,7 +2,8 @@ import { mat4, vec3 } from 'gl-matrix';
 
 import { Entity } from '/classic/ecs.js';
 import { Camera } from '/classic/camera.js';
-import { PhysicsProvider } from '/classic/collision.js';
+import { PhysicsProvider, Polygon } from '/classic/collision.js';
+import { IsoSprite } from '/classic/isometric.js';
 import { getComponentConstructor } from '/classic/registry.js';
 import {
     getObjectValues,
@@ -123,6 +124,8 @@ const game: GameState = {
     renderList: [],
 
     camera: new Camera([0, 0, 0], [1, 1, 1]),
+
+    debugFootprints: false,
 
     physics: null,
 
@@ -391,12 +394,13 @@ const game: GameState = {
         const gl = this.gl;
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, this.canvas!.width, this.canvas!.height);
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.depthFunc(gl.LEQUAL);
+        gl.depthMask(true);
 
         this.renderList.length = 0;
         this.performCall('renderList');
@@ -413,7 +417,199 @@ const game: GameState = {
         });
 
         for (const drawable of this.renderList) {
+            if ((drawable as any).entity && !(drawable as any).entity.enabled) continue;
             drawable.rawDraw();
+        }
+
+        if (this.debugFootprints) {
+            const xVerts = new Float32Array([-16, -16, 0, 16, 16, 0, -16, 16, 0, 16, -16, 0]);
+            const xBuf = this.gl.createBuffer();
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, xBuf);
+            this.gl.bufferData(this.gl.ARRAY_BUFFER, xVerts, this.gl.STATIC_DRAW);
+
+            for (const entity of Object.values(this.entities)) {
+                let iso: IsoSprite | null = null;
+                for (const c of entity.components) {
+                    if (c instanceof IsoSprite) {
+                        iso = c as IsoSprite;
+                        break;
+                    }
+                }
+                if (!iso) continue;
+
+                this.shaders.solid.bind();
+                this.gl.uniformMatrix4fv(
+                    this.shaders.solid.unif.projectionMatrix,
+                    false,
+                    this.projectionMatrix,
+                );
+                this.gl.uniformMatrix4fv(
+                    this.shaders.solid.unif.cameraMatrix,
+                    false,
+                    this.camera.matrix(),
+                );
+
+                this.gl.depthFunc(this.gl.ALWAYS);
+                this.gl.depthMask(false);
+
+                // Compute world-space footprint vertices on-the-fly with terrain height
+                const hd = iso.tilemap.heightData;
+                const sW = iso.tilemap.sizeX;
+                const atH = (tx: number, ty: number) =>
+                    hd[
+                        Math.min(Math.max(tx, 0), sW - 1) +
+                            Math.min(Math.max(ty, 0), iso.tilemap.sizeY - 1) * sW
+                    ] ?? 0;
+
+                const worldFootprint: [number, number, number][] = iso.footprint.map((pt) => {
+                    const px = iso.position[0] + pt[0];
+                    const py = iso.position[1] + pt[1];
+                    const ftx = Math.floor(px);
+                    const fty = Math.floor(py);
+                    const fx = px - ftx;
+                    const fy = py - fty;
+                    const hNW = atH(ftx, fty);
+                    const hNE = atH(ftx + 1, fty);
+                    const hSW = atH(ftx, fty + 1);
+                    const hSE = atH(ftx + 1, fty + 1);
+                    const h =
+                        hNW +
+                        (hNE - hNW) * fx +
+                        (hSW - hNW) * fy +
+                        (hNW - hNE - hSW + hSE) * fx * fy;
+
+                    const v = vec3.fromValues(px, py, 0);
+                    iso.tilemap.isoToCartesian(v);
+                    vec3.add(v, v, iso.tilemap.position);
+                    v[1] -= h * iso.tilemap.heightScale;
+                    return [v[0], v[1], 0] as [number, number, number];
+                });
+                const fpVerts = new Float32Array(worldFootprint.flatMap((v) => [v[0], v[1], v[2]]));
+                const fpBuf = this.gl.createBuffer();
+                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, fpBuf);
+                this.gl.bufferData(this.gl.ARRAY_BUFFER, fpVerts, this.gl.STATIC_DRAW);
+                this.gl.vertexAttribPointer(
+                    this.shaders.solid.attr.vertexPos,
+                    3,
+                    this.gl.FLOAT,
+                    false,
+                    0,
+                    0,
+                );
+                this.gl.enableVertexAttribArray(this.shaders.solid.attr.vertexPos);
+                this.gl.uniformMatrix4fv(this.shaders.solid.unif.modelMatrix, false, mat4.create());
+                this.gl.uniform4fv(this.shaders.solid.unif.color, [0.0, 1.0, 0.5, 0.7]);
+                this.gl.drawArrays(this.gl.LINE_LOOP, 0, worldFootprint.length);
+                this.gl.deleteBuffer(fpBuf);
+
+                // Anchor X with terrain height
+                const anchorWorld = vec3.clone(iso.position);
+                iso.tilemap.isoToCartesian(anchorWorld);
+                vec3.add(anchorWorld, anchorWorld, iso.tilemap.position);
+
+                const ax = iso.position[0];
+                const ay = iso.position[1];
+                const aftx = Math.floor(ax);
+                const afty = Math.floor(ay);
+                const afx = ax - aftx;
+                const afy = ay - afty;
+                const ahNW = atH(aftx, afty);
+                const ahNE = atH(aftx + 1, afty);
+                const ahSW = atH(aftx, afty + 1);
+                const ahSE = atH(aftx + 1, afty + 1);
+                const ah =
+                    ahNW +
+                    (ahNE - ahNW) * afx +
+                    (ahSW - ahNW) * afy +
+                    (ahNW - ahNE - ahSW + ahSE) * afx * afy;
+                anchorWorld[1] -= ah * iso.tilemap.heightScale;
+
+                const anchorModel = mat4.create();
+                mat4.translate(anchorModel, anchorModel, anchorWorld);
+                this.gl.uniformMatrix4fv(this.shaders.solid.unif.modelMatrix, false, anchorModel);
+                this.gl.uniform4fv(this.shaders.solid.unif.color, [1.0, 0.0, 1.0, 0.9]);
+
+                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, xBuf);
+                this.gl.vertexAttribPointer(
+                    this.shaders.solid.attr.vertexPos,
+                    3,
+                    this.gl.FLOAT,
+                    false,
+                    0,
+                    0,
+                );
+                this.gl.drawArrays(this.gl.LINE_STRIP, 0, 2);
+                this.gl.drawArrays(this.gl.LINE_STRIP, 2, 2);
+            }
+
+            // ---- Compass Rose + XYZ Axes (top-left, below FPS bar) ----
+            const ds = Math.max(1, Math.min(3, this.canvas!.height / 1080));
+            const roseCx = 100 * ds;
+            const roseCy = 65 * ds;
+            const roseR = 28 * ds;
+            const xyzCx = 200 * ds;
+            const xyzCy = 65 * ds;
+            const xyzLen = 35 * ds;
+
+            this.shaders.solid.bind();
+            this.gl.uniformMatrix4fv(
+                this.shaders.solid.unif.projectionMatrix,
+                false,
+                this.projectionMatrix,
+            );
+            this.gl.uniformMatrix4fv(this.shaders.solid.unif.cameraMatrix, false, mat4.create());
+            this.gl.uniformMatrix4fv(this.shaders.solid.unif.modelMatrix, false, mat4.create());
+
+            const drawLine = (x1: number, y1: number, x2: number, y2: number, color: number[]) => {
+                this.gl.uniform4fv(this.shaders.solid.unif.color, color);
+                const b = this.gl.createBuffer();
+                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, b);
+                this.gl.bufferData(
+                    this.gl.ARRAY_BUFFER,
+                    new Float32Array([x1, y1, 0, x2, y2, 0]),
+                    this.gl.STATIC_DRAW,
+                );
+                this.gl.vertexAttribPointer(
+                    this.shaders.solid.attr.vertexPos,
+                    3,
+                    this.gl.FLOAT,
+                    false,
+                    0,
+                    0,
+                );
+                this.gl.enableVertexAttribArray(this.shaders.solid.attr.vertexPos);
+                this.gl.drawArrays(this.gl.LINE_STRIP, 0, 2);
+                this.gl.deleteBuffer(b);
+            };
+
+            this.gl.depthMask(false);
+            this.gl.depthFunc(this.gl.ALWAYS);
+
+            // 2:1 isometric grid lines through compass center
+            const gridColor = [0.6, 0.6, 0.5, 0.4] as number[];
+            const gx = roseR * 1.15;
+            drawLine(roseCx - gx, roseCy - gx / 2, roseCx + gx, roseCy + gx / 2, gridColor);
+            drawLine(roseCx - gx, roseCy + gx / 2, roseCx + gx, roseCy - gx / 2, gridColor);
+
+            // 4 cardinal spokes
+            const spokeColor = [1.0, 1.0, 0.8, 0.85] as number[];
+            drawLine(roseCx, roseCy, roseCx, roseCy - roseR, spokeColor); // N = straight UP
+            drawLine(roseCx, roseCy, roseCx + roseR, roseCy, spokeColor); // E = straight RIGHT
+            drawLine(roseCx, roseCy, roseCx, roseCy + roseR, spokeColor); // S = straight DOWN
+            drawLine(roseCx, roseCy, roseCx - roseR, roseCy, spokeColor); // W = straight LEFT
+
+            // XYZ axes
+            drawLine(xyzCx, xyzCy, xyzCx + xyzLen, xyzCy - xyzLen / 2, [1.0, 0.3, 0.3, 0.9]); // X
+            drawLine(xyzCx, xyzCy, xyzCx + xyzLen, xyzCy + xyzLen / 2, [0.3, 1.0, 0.3, 0.9]); // Y
+            drawLine(xyzCx, xyzCy, xyzCx, xyzCy - xyzLen, [0.4, 0.4, 1.0, 0.9]); // Z
+
+            this.gl.deleteBuffer(xBuf);
+            this.gl.depthFunc(this.gl.LEQUAL);
+            this.gl.depthMask(true);
+        } else {
+            this.gl.drawArrays(this.gl.LINE_STRIP, 0, 0);
+            this.gl.depthFunc(this.gl.LEQUAL);
+            this.gl.depthMask(true);
         }
 
         //this.physics.debugDraw();

@@ -1,5 +1,5 @@
 import game from '/classic/state.js';
-import { Tilemap, IsometricNavMesh, IsoAgent } from '/classic/isometric.js';
+import { Tilemap, IsometricNavMesh, IsoAgent, IsoSprite } from '/classic/isometric.js';
 import { Sprite } from '/classic/transforms.js';
 import { Collider, Polygon } from '/classic/collision.js';
 
@@ -24,6 +24,7 @@ declare module '/classic/types.js' {
         showGrid?: boolean;
         uiConsumedClick?: boolean;
         panelMenuOpen?: boolean;
+        debugFootprints?: boolean;
     }
 }
 
@@ -309,7 +310,14 @@ export function initAgent(): void {
 
         if (vec2.dist(start, end) > 2) {
             pathfinder.findPath(start, end).then((p) => {
-                if (p != null) agent.followPath(p as [number, number][]);
+                if (p != null) {
+                    const path = p as [number, number][];
+                    for (let i = 1; i < path.length; i++) {
+                        path[i][0] += 0.5;
+                        path[i][1] += 0.5;
+                    }
+                    agent.followPath(path);
+                }
             });
         }
     });
@@ -321,4 +329,38 @@ export function initAgent(): void {
             console.log('[agent] movement', game.agentEnabled ? 'enabled' : 'disabled');
         }
     });
+}
+
+/** Attaches footprint Polygon colliders to all static IsoSprite entities. */
+export function initFootprintColliders(): void {
+    const tm = game.getEntity('tilemap')!.getComponent(Tilemap)!;
+    const hd = tm.heightData;
+    const sX = tm.sizeX;
+    const sY = tm.sizeY;
+    const hs = tm.heightScale;
+    const at = (tx: number, ty: number) =>
+        hd[Math.min(Math.max(tx, 0), sX - 1) + Math.min(Math.max(ty, 0), sY - 1) * sX] ?? 0;
+
+    for (const entity of Object.values(game.entities)) {
+        for (const c of entity.components) {
+            if (c instanceof IsoSprite) {
+                const sprite = c as IsoSprite;
+
+                const px = sprite.position[0];
+                const py = sprite.position[1];
+                const ftx = Math.floor(px);
+                const fty = Math.floor(py);
+                const fx = px - ftx;
+                const fy = py - fty;
+                const hTop = at(ftx, fty) + (at(ftx + 1, fty) - at(ftx, fty)) * fx;
+                const hBot = at(ftx, fty + 1) + (at(ftx + 1, fty + 1) - at(ftx, fty + 1)) * fx;
+                sprite.position[2] = (hTop + (hBot - hTop) * fy) * hs;
+
+                if (!(sprite instanceof IsoAgent)) {
+                    sprite.attachCollider();
+                }
+                break;
+            }
+        }
+    }
 }
