@@ -31,11 +31,17 @@ export class SdfText extends Drawable {
     textWidth: number;
     textHeight: number;
     justify: 'left' | 'center' | 'right' = 'left';
+    weight: number;
+    gamma: number;
+    glowRadius: number;
+    glowColor: Color;
+    snapToPixel: boolean;
     vertexBuffer: WebGLBuffer | null = null;
     vertexCount: number;
     glyphData: Float32Array;
 
     private _cpuBufferSize: number;
+    private _bufferDirty: boolean;
     protected _scale: number;
 
     constructor(
@@ -65,11 +71,17 @@ export class SdfText extends Drawable {
         this.shadowOffset = [0, 0];
         this.shadowColor = [0, 0, 0, 0.5];
         this.shadowBlur = 0;
+        this.weight = 0;
+        this.gamma = 1.4;
+        this.glowRadius = 0;
+        this.glowColor = [1, 1, 1, 0.3];
+        this.snapToPixel = false;
         this.text = '';
         this.textWidth = 0;
         this.textHeight = 0;
         this.vertexCount = 0;
         this._cpuBufferSize = 0;
+        this._bufferDirty = false;
         this._scale = (scale as number[])[0] || 1;
         this.glyphData = new Float32Array(0);
     }
@@ -91,7 +103,13 @@ export class SdfText extends Drawable {
         const m = mat4.create();
         const ox = offset?.[0] ?? 0;
         const oy = offset?.[1] ?? 0;
-        mat4.translate(m, m, [this.position[0] + ox, this.position[1] + oy, this.position[2]]);
+        let px = this.position[0] + ox;
+        let py = this.position[1] + oy;
+        if (this.snapToPixel && this.ignoreCam) {
+            px = Math.round(px);
+            py = Math.round(py);
+        }
+        mat4.translate(m, m, [px, py, this.position[2]]);
         mat4.scale(m, m, [this.textWidth, this.textHeight, this.scale[2]]);
         return m;
     }
@@ -123,6 +141,22 @@ export class SdfText extends Drawable {
         this.shadowOffset = [offsetX, offsetY];
         this.shadowColor = rgba;
         this.shadowBlur = blur;
+        return this;
+    }
+
+    setGlow(radius: number, rgba: Color = [1, 1, 1, 0.3]): this {
+        this.glowRadius = radius;
+        this.glowColor = rgba;
+        return this;
+    }
+
+    setWeight(w: number): this {
+        this.weight = w;
+        return this;
+    }
+
+    setGamma(g: number): this {
+        this.gamma = g;
         return this;
     }
 
@@ -261,14 +295,7 @@ export class SdfText extends Drawable {
 
         this.glyphData = data;
         this.vertexCount = perLine.length * vertsPerGlyph;
-
-        if (data.length > this._cpuBufferSize) {
-            this._cpuBufferSize = data.length;
-        }
-        if (this.vertexBuffer) {
-            this.gl.deleteBuffer(this.vertexBuffer);
-            this.vertexBuffer = null;
-        }
+        this._bufferDirty = true;
     }
 
     rawDraw(): void {
@@ -278,13 +305,17 @@ export class SdfText extends Drawable {
             this.vertexBuffer = this.gl.createBuffer();
         }
 
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, this.glyphData, this.gl.DYNAMIC_DRAW);
+        if (this._bufferDirty) {
+            this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+            this.gl.bufferData(this.gl.ARRAY_BUFFER, this.glyphData, this.gl.DYNAMIC_DRAW);
+            this._bufferDirty = false;
+        }
 
         const shader = this.game.shaders.sdf;
         shader.bind();
 
         const stride = 4 * 4;
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
         this.gl.vertexAttribPointer(shader.attr.vertexPos, 2, this.gl.FLOAT, false, stride, 0);
         this.gl.enableVertexAttribArray(shader.attr.vertexPos);
 
@@ -303,18 +334,27 @@ export class SdfText extends Drawable {
             this.gl.uniformMatrix4fv(shader.unif.cameraMatrix, false, mat4.create());
         }
 
-        const drawPass = (color: Color, outlineW: number, offsetX: number, offsetY: number) => {
+        this.gl.uniform1f(shader.unif.softEdge, 0.08);
+        this.gl.uniform1f(shader.unif.spread, this.metrics.spread || 2);
+        this.gl.uniform2f(
+            shader.unif.atlasSize,
+            this.metrics.atlasSize[0],
+            this.metrics.atlasSize[1],
+        );
+        this.gl.uniform1f(shader.unif.weight, this.weight);
+        this.gl.uniform1f(shader.unif.gamma, this.gamma);
+
+        const drawPass = (passColor: Color, outlineW: number, offsetX: number, offsetY: number) => {
             const passModel = this.modelMatrix(
                 offsetX !== 0 || offsetY !== 0 ? [offsetX, offsetY] : undefined,
             );
             this.gl.uniformMatrix4fv(shader.unif.modelMatrix, false, passModel);
 
-            this.gl.uniform4fv(shader.unif.color, color as number[]);
+            this.gl.uniform4fv(shader.unif.color, passColor as number[]);
 
-            const outlineColor = outlineW !== 0 ? this.outlineColor : [0, 0, 0, 0];
-            this.gl.uniform4fv(shader.unif.outlineColor, outlineColor as number[]);
+            const oc = outlineW !== 0 ? this.outlineColor : [0, 0, 0, 0];
+            this.gl.uniform4fv(shader.unif.outlineColor, oc as number[]);
             this.gl.uniform1f(shader.unif.outlineWidth, outlineW);
-            this.gl.uniform1f(shader.unif.softEdge, 0.08);
 
             this.gl.drawArrays(this.gl.TRIANGLES, 0, this.vertexCount);
         };
@@ -324,12 +364,11 @@ export class SdfText extends Drawable {
             (this.shadowColor[3] as number) > 0;
 
         if (hasShadow) {
-            drawPass(
-                this.shadowColor,
-                this.outlineWidth + this.shadowBlur * 0.1,
-                this.shadowOffset[0],
-                this.shadowOffset[1],
-            );
+            drawPass(this.shadowColor, this.shadowBlur, this.shadowOffset[0], this.shadowOffset[1]);
+        }
+
+        if (this.glowRadius > 0 && (this.glowColor[3] as number) > 0) {
+            drawPass(this.glowColor, this.glowRadius, 0, 0);
         }
 
         drawPass(this.color, this.outlineWidth, 0, 0);

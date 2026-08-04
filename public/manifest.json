@@ -51,7 +51,11 @@
                 "color",
                 "outlineColor",
                 "outlineWidth",
-                "softEdge"
+                "softEdge",
+                "spread",
+                "atlasSize",
+                "weight",
+                "gamma"
             ]
         },
         {

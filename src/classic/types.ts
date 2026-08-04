@@ -285,6 +285,7 @@ export interface SdfFontMetrics {
     family: string;
     atlasSize: [number, number];
     glyphSize: number;
+    spread: number;
     baseline: number;
     lineHeight: number;
     glyphs: Record<string, GlyphMetrics>;

@@ -10,6 +10,7 @@ const TEST_METRICS: SdfFontMetrics = {
     family: 'Test',
     atlasSize: [512, 512],
     glyphSize: 64,
+    spread: 4,
     baseline: 48,
     lineHeight: 83.2,
     glyphs: {
@@ -71,6 +72,8 @@ function createMockShader() {
             outlineColor: {},
             outlineWidth: {},
             softEdge: {},
+            spread: {},
+            atlasSize: {},
         },
     };
 }

@@ -549,6 +549,12 @@ export async function initSdfFonts(
             throw new Error(`Failed to load font metrics: ${entry.metrics}`);
         }
         fonts[entry.name] = (await resp.json()) as SdfFontMetrics;
+        if (fonts[entry.name].spread === undefined) {
+            console.warn(
+                `SDF font "${entry.name}" is missing "spread" in metrics JSON. ` +
+                    'Re-run make-font-atlas.mjs or the atlas may be stale.',
+            );
+        }
         stepDone += 1;
     }
 
