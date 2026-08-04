@@ -5,7 +5,7 @@
     "type": "module",
     "main": "index.js",
     "scripts": {
-        "assets": "node scripts/copy-assets.mjs",
+        "assets": "node scripts/copy-assets.mjs && node scripts/make-font-atlas.mjs assets/fonts/DejaVuSans.ttf --family DejaVuSans",
         "dev": "npm run assets && vite",
         "build": "npm run assets && vite build",
         "preview": "vite preview",

@@ -118,21 +118,27 @@ describe('estimateManifestWeight', () => {
     const texture = { name: 't', src: '/res/t.png' };
 
     it('counts each shader as fetch (2) plus compile (1)', () => {
-        const manifest = { shaders: [shader, shader], textures: [], animations: [] } as Manifest;
-        expect(estimateManifestWeight(manifest)).toBe(2 + 2 * 3 + 1 + 0 + 1);
+        const manifest = {
+            shaders: [shader, shader],
+            textures: [],
+            sdfFonts: [],
+            animations: [],
+        } as Manifest;
+        expect(estimateManifestWeight(manifest)).toBe(2 + 2 * 3 + 1 + 0 + 0 + 1);
     });
 
     it('counts each texture as one unit', () => {
         const manifest = {
             shaders: [],
             textures: [texture, texture, texture],
+            sdfFonts: [],
             animations: [],
         } as Manifest;
-        expect(estimateManifestWeight(manifest)).toBe(2 + 0 + 1 + 3 * 1 + 1);
+        expect(estimateManifestWeight(manifest)).toBe(2 + 0 + 1 + 3 * 1 + 0 + 1);
     });
 
     it('accounts for manifest, buffers and animations overhead', () => {
-        const manifest = { shaders: [], textures: [], animations: [] } as Manifest;
-        expect(estimateManifestWeight(manifest)).toBe(2 + 0 + 1 + 0 + 1);
+        const manifest = { shaders: [], textures: [], sdfFonts: [], animations: [] } as Manifest;
+        expect(estimateManifestWeight(manifest)).toBe(2 + 0 + 1 + 0 + 0 + 1);
     });
 });

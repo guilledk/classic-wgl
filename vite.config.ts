@@ -77,6 +77,7 @@ export default defineConfig({
                 'src/classic/registry.ts',
                 'src/classic/loader.ts',
                 'src/classic/consoleLog.ts',
+                'src/classic/sdfText.ts',
             ],
         },
     },
