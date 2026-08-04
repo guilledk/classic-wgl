@@ -66,7 +66,7 @@ export function initUI(): void {
 
 /** Top bar: FPS counter (left), title (center), controls hint (right). */
 function initTopBar(UI: UIManager): void {
-    const barH = Math.round(56 * _uiScale);
+    const barH = Math.round(68 * _uiScale);
     const textScale = 0.4 * _uiScale;
     const titleScale = 1.5 * _uiScale;
 
@@ -341,7 +341,7 @@ function initToolButtons(UI: UIManager): void {
         {
             sdfText: true,
             text: 'A',
-            textScale: 0.55 * _uiScale,
+            textScale: 0.42 * _uiScale,
             priority: 1,
             hover: true,
             clickFeedback: 5,
@@ -889,7 +889,7 @@ function initTextShowcase(UI: UIManager): UIContainer {
 
     const labelScale = 0.75 * _uiScale;
     const lineH = Math.round(28 * _uiScale);
-    const contentH = lineH * 17;
+    const contentH = lineH * 18;
 
     const scaleLabel = UI.spawnSdfText(
         'Scale ramp:',
@@ -1020,12 +1020,12 @@ function initTextShowcase(UI: UIManager): UIContainer {
         wLabel.setPosition(x0 + pad, y0 + pad + lineH * 3 - sy);
         wSample.setPosition(x0 + pad, y0 + pad + lineH * 4 - sy);
         jLabel.setPosition(x0 + pad, y0 + pad + lineH * 6 - sy);
-        jLeft.setPosition(x0 + pad, y0 + pad + lineH * 7 - sy);
-        jCenter.setPosition(x0 + pad, y0 + pad + lineH * 8.5 - sy);
-        jRight.setPosition(x0 + pad, y0 + pad + lineH * 10 - sy);
-        glyphLabel.setPosition(x0 + pad, y0 + pad + lineH * 12 - sy);
-        shadowLabel.setPosition(x0 + pad, y0 + pad + lineH * 14 - sy);
-        shadowSample.setPosition(x0 + pad, y0 + pad + lineH * 15 - sy);
+        jLeft.setPosition(x0 + pad, y0 + pad + lineH * 7.5 - sy);
+        jCenter.setPosition(x0 + pad, y0 + pad + lineH * 9.5 - sy);
+        jRight.setPosition(x0 + pad, y0 + pad + lineH * 11.5 - sy);
+        glyphLabel.setPosition(x0 + pad, y0 + pad + lineH * 13.5 - sy);
+        shadowLabel.setPosition(x0 + pad, y0 + pad + lineH * 15.5 - sy);
+        shadowSample.setPosition(x0 + pad, y0 + pad + lineH * 16.5 - sy);
 
         // Scrollbar thumb
         if (maxScroll > 0) {
