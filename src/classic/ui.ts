@@ -280,7 +280,7 @@ export class UISdfText extends SdfText {
         return this.textWidth;
     }
     get height(): number {
-        return this.textHeight;
+        return this._layoutHeight || this.textHeight;
     }
 
     private _wordPx(word: string): number {
@@ -369,6 +369,7 @@ export class UISdfText extends SdfText {
     }
 
     private _recalculateTextElement(): void {
+        this._layoutWidth = this.justify !== 'left' ? this.maxWidth : 0;
         const lines = this._wrapAtPixelWidth(this.rawText || '', this.maxWidth);
 
         const joinedText = lines.join('\n');

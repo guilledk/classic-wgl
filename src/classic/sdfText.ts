@@ -44,6 +44,8 @@ export class SdfText extends Drawable {
     private _cpuBufferSize: number;
     private _bufferDirty: boolean;
     protected _scale: number;
+    protected _layoutWidth: number;
+    protected _layoutHeight: number;
 
     constructor(
         entity: IEntity,
@@ -84,6 +86,8 @@ export class SdfText extends Drawable {
         this.vertexCount = 0;
         this._cpuBufferSize = 0;
         this._bufferDirty = false;
+        this._layoutWidth = 0;
+        this._layoutHeight = 0;
         this._scale = (scale as number[])[0] || 1;
         this.glyphData = new Float32Array(0);
     }
@@ -215,19 +219,20 @@ export class SdfText extends Drawable {
         }
 
         if (this.justify !== 'left') {
+            const columnW = this._layoutWidth || maxWidth;
             const lineWidths: Record<number, number> = {};
             for (const pg of perLine) {
                 lineWidths[pg.y] = (lineWidths[pg.y] || 0) + pg.adv;
             }
             for (const pg of perLine) {
                 const lw = Math.max(1, lineWidths[pg.y] || 0);
-                const extra = maxWidth - lw;
+                const extra = columnW - lw;
                 if (this.justify === 'center') pg.x += extra / 2;
                 else if (this.justify === 'right') pg.x += extra;
             }
         }
 
-        this.textWidth = maxWidth;
+        this.textWidth = (this.justify !== 'left' && this._layoutWidth) || maxWidth;
         this.textHeight = maxH * (lineIndex || 1);
 
         let glyphExtentMin = Infinity;
@@ -242,6 +247,9 @@ export class SdfText extends Drawable {
         if (glyphExtentMin < glyphExtentMax) {
             this.textHeight = glyphExtentMax - glyphExtentMin;
         }
+
+        const margin = ((this.metrics.spread || 2) + 2) * this._scale;
+        this._layoutHeight = Math.max(1, this.textHeight - 2 * margin);
 
         const vertsPerGlyph = 6;
         const floatsPerVert = 4;
