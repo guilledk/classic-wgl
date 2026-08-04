@@ -350,6 +350,9 @@ export interface IGameState {
     // Camera
     camera: ICamera;
 
+    // Debug
+    debugFootprints?: boolean;
+
     // Physics
     physics: IPhysicsProvider | null;
 

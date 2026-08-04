@@ -34,7 +34,7 @@
                 "tileIdFlat",
                 "tileSetSize",
                 "useIsoDepth",
-                "isoDepth",
+                "isoDepthCorners",
                 "ghostAlpha"
             ]
         },
