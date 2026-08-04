@@ -1,5 +1,6 @@
 import game from '/classic/state.js';
 import { Rectangle, Text, Sprite } from '/classic/transforms.js';
+import { SdfText } from '/classic/sdfText.js';
 import { Polygon, Collider } from '/classic/collision.js';
 import type { IEntity, IGameState, IComponent, ICollider, ColliderHandler } from './types.js';
 import { vec3 } from 'gl-matrix';
@@ -19,7 +20,7 @@ export interface UIComponentBase {
 }
 
 // Union type for any UI component that can be a child
-export type UIChild = UIElement | UIText | UISprite;
+export type UIChild = UIElement | UIText | UISprite | UISdfText;
 
 // UIManager interface extension for game state
 declare module './types.js' {
@@ -213,6 +214,145 @@ export class UIText extends Text {
         this.setMaxCharSize(cols, rows);
 
         super.setText(lines.map((l) => l.padEnd(cols, ' ')).join(''));
+    }
+
+    setPosition(x: number, y: number): this {
+        this.position[0] = x;
+        this.position[1] = y;
+        return this;
+    }
+
+    setEnabled(flag: boolean): this {
+        if (this.entity.enabled !== flag) markUIDirty(this);
+        this.entity.enabled = flag;
+        return this;
+    }
+}
+
+export class UISdfText extends SdfText {
+    rawText: string;
+    maxWidth: number;
+
+    constructor(
+        entity: IEntity,
+        text: string,
+        textScale: number,
+        maxWidth: number,
+        color: Color,
+        bgColor: Color,
+        zlayer: number,
+    ) {
+        super(
+            entity,
+            [0, 0, zlayer],
+            [textScale, textScale, 1],
+            'dejavusans',
+            color,
+            bgColor,
+            true,
+        );
+
+        this.rawText = text;
+        this.maxWidth = maxWidth;
+        this._recalculateTextElement();
+    }
+
+    get width(): number {
+        return this.textWidth;
+    }
+    get height(): number {
+        return this.textHeight;
+    }
+
+    private _wordPx(word: string): number {
+        let w = 0;
+        for (const ch of word) w += this.advanceFor(ch);
+        return w;
+    }
+
+    private _wrapAtPixelWidth(str: string, maxPx: number): string[] {
+        const scale = this._scale;
+        const spacePx = this.advanceFor(' ') * scale;
+        const result: string[] = [];
+
+        for (const rawLine of str.split('\n')) {
+            const words = rawLine.split(' ');
+            const lines: string[] = [];
+            let line = '';
+            let linePx = 0;
+
+            for (const word of words) {
+                const wordPx = this._wordPx(word) * scale;
+                const gap = linePx > 0 ? spacePx : 0;
+
+                if (linePx + gap + wordPx <= maxPx) {
+                    line += (line.length ? ' ' : '') + word;
+                    linePx += gap + wordPx;
+                } else {
+                    if (line.length > 0) lines.push(line);
+                    line = word;
+                    linePx = wordPx;
+                }
+            }
+            if (line.length) lines.push(line);
+            result.push(...lines);
+        }
+
+        return result.length > 0 ? result : [''];
+    }
+
+    setText(str: string): this {
+        if (str === this.rawText) return this;
+
+        this.rawText = str;
+        this._recalculateTextElement();
+        markUIDirty(this);
+        return this;
+    }
+
+    setTextScale(newScale: number): this {
+        if (newScale === this._scale) return this;
+
+        this.setScale(newScale);
+        this.rawText = this.text;
+        this._recalculateTextElement();
+        markUIDirty(this);
+        return this;
+    }
+
+    setTextColor(rgba: Color): this {
+        this.color = rgba;
+        return this;
+    }
+
+    setColor(rgba: Color): this {
+        this.bgcolor = rgba;
+        this._recalculateTextElement();
+        return this;
+    }
+
+    setMaxWidth(number: number): this {
+        if (number === this.maxWidth) return this;
+
+        this.maxWidth = number;
+        this._recalculateTextElement();
+        markUIDirty(this);
+        return this;
+    }
+
+    setJustify(align: 'left' | 'center' | 'right'): this {
+        if (align === this.justify) return this;
+        this.justify = align;
+        this._recalculateTextElement();
+        markUIDirty(this);
+        return this;
+    }
+
+    private _recalculateTextElement(): void {
+        const lines = this._wrapAtPixelWidth(this.rawText || '', this.maxWidth);
+
+        const joinedText = lines.join('\n');
+        super.setTextSync(joinedText);
     }
 
     setPosition(x: number, y: number): this {
@@ -641,6 +781,28 @@ export class UIManager {
         return element;
     }
 
+    spawnSdfText(
+        text: string = 'Text',
+        textScale: number = 1,
+        maxWidth: number = 400,
+        color: Color = [1, 1, 1, 1],
+        bgColor: Color = [0, 0, 0, 0],
+    ): UISdfText {
+        const name = this._generateName('sdftext');
+        const entity = this.game.spawnEntity(name);
+        const element = entity.addComponent(
+            UISdfText,
+            text,
+            textScale,
+            maxWidth,
+            color,
+            bgColor,
+            this.zlayer,
+        ) as UISdfText;
+        this.elements.set(name, element as unknown as UIElement);
+        return element;
+    }
+
     spawnSprite(
         texture: string = 'editorIcons',
         width: number = 64,
@@ -697,6 +859,7 @@ export class UIManager {
             text?: string;
             textScale?: number;
             textColor?: Color;
+            sdfText?: boolean;
             sprite?: string;
             spriteFrame?: number;
             spriteTileSet?: [number, number];
@@ -704,9 +867,9 @@ export class UIManager {
             hover?: boolean;
             clickFeedback?: number;
         },
-    ): { container: UIContainer; collider: Collider; child?: UIText | UISprite } {
+    ): { container: UIContainer; collider: Collider; child?: UIText | UISdfText | UISprite } {
         const container = this.spawnContainer(width, height, color);
-        let child: UIText | UISprite | undefined;
+        let child: UIText | UISdfText | UISprite | undefined;
         if (opts?.sprite) {
             child = this.spawnSprite(
                 opts.sprite,
@@ -716,13 +879,24 @@ export class UIManager {
                 opts.spriteTileSet ?? [1, 1],
             );
         } else if (opts?.text) {
-            child = this.spawnText(
-                opts.text,
-                opts.textScale ?? 0.5,
-                100,
-                opts.textColor ?? [1, 1, 1, 1],
-                [0, 0, 0, 0],
-            );
+            if (opts?.sdfText) {
+                const sdfScale = (opts.textScale ?? 0.5) * 2.5;
+                child = this.spawnSdfText(
+                    opts.text,
+                    sdfScale,
+                    300,
+                    opts.textColor ?? [1, 1, 1, 1],
+                    [0, 0, 0, 0],
+                );
+            } else {
+                child = this.spawnText(
+                    opts.text,
+                    opts.textScale ?? 0.5,
+                    100,
+                    opts.textColor ?? [1, 1, 1, 1],
+                    [0, 0, 0, 0],
+                );
+            }
         }
         if (child) {
             container.addChild(child, 'mid-center', 'mid-center');

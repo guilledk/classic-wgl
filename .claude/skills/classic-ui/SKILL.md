@@ -44,8 +44,10 @@ Drawable (transforms.ts)
             └─ UIArray (ui.ts)           flex‑like horizontal/vertical layout
   └─ Sprite (transforms.ts)              textured quad
        └─ UISprite (ui.ts)               sized in canvas pixels
-  └─ Text (transforms.ts)                render‑to‑texture text
-       └─ UIText (ui.ts)                 sized in canvas pixels
+  └─ Text (transforms.ts)                render‑to‑texture text (legacy)
+       └─ UIText (ui.ts)                 sized in canvas pixels (legacy)
+  └─ SdfText (sdfText.ts)                direct SDF vertex‑buffer text
+       └─ UISdfText (ui.ts)              word‑wrap, justify, outline, shadow
 ```
 
 The `UIManager` singleton is stored as `game.ui`. It owns the root container
@@ -55,7 +57,7 @@ and drives layout refresh via a dirty flag.
 
 | File                        | Role                                                                    |
 | --------------------------- | ----------------------------------------------------------------------- |
-| `src/classic/ui.ts`         | UIManager, UIContainer, UIElement, UIText, UISprite, UIArray, UIPadding |
+| `src/classic/ui.ts`         | UIManager, UIContainer, UIElement, UIText, UISdfText, UISprite, UIArray, UIPadding |
 | `src/demo/uiPrefabs.ts`     | Demo UI tree: top bar, tool buttons, palettes, height/light widgets     |
 | `src/demo/prefabs.ts`       | Editor logic handlers (tile/nav/height fill‑on‑selection)               |
 | `src/classic/transforms.ts` | Drawable, Rectangle, Sprite, Text base classes                          |
@@ -609,6 +611,86 @@ and all Unicode (arrows, degree symbols, emoji, accented chars).
 
 ---
 
+## 8b. SDF FONT TEXT (`UISdfText`)
+
+The `UISdfText` renderer uses a pre‑generated signed‑distance‑field (SDF)
+atlas and supports proportional spacing, word‑wrapping by pixel width,
+multi‑line via explicit `\n`, and per‑line justification. It replaces the
+legacy `UIText`'s monospaced sprite‑sheet approach.
+
+### Factory method
+
+```typescript
+UI.spawnSdfText(text, textScale, maxWidth, color, bgColor) → UISdfText
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `text` | `string` | Initial text content |
+| `textScale` | `number` | Scale multiplier (cell‑pixel units; ~2.5× larger than equivalent `UIText` scale) |
+| `maxWidth` | `number` | Maximum pixel width before word‑wrapping (screen pixels, *not* char count) |
+| `color` | `Color` | Foreground text RGBA |
+| `bgColor` | `Color` | Background RGBA (unused in UISdfText; pass `[0,0,0,0]`) |
+
+### Scale conversion from `UIText`
+
+| Legacy `UIText` scale | Equivalent `UISdfText` scale | Notes |
+|---|---|---|
+| 0.4 | 1.0 | Controls hint "WASD MOVE" |
+| 0.5 | 1.25 | Menu items, height widget |
+| 0.55 | 1.375 | Agent `[A]` button |
+| 0.6 | 1.5 | Classic title |
+
+### Feature methods
+
+| Method | Description |
+|---|---|
+| `setText(str)` | Sets new text; triggers word‑wrap and layout recalculation (synchronous) |
+| `setTextColor(rgba)` | Sets foreground color |
+| `setTextScale(scale)` | Changes scale; recalculates layout |
+| `setMaxWidth(px)` | Changes pixel max‑width; recalculates wrapping |
+| `setJustify('left' \| 'center' \| 'right')` | Per‑line horizontal alignment |
+| `setOutline(width, color)` | Adds an outline band around glyph edges (SDF‑unit width, RGBA) |
+| `setShadow(ox, oy, color, blur)` | Drop‑shadow with offset and blur |
+| `setEnabled(bool)` | Toggles visibility; cascades through children |
+| `setPosition(x, y)` | Positions top‑left corner in canvas‑pixel space |
+
+### Multi‑line support
+
+Embed `\n` in the text string for hard line breaks. The `wrapTextAtPixelWidth`
+function splits on `\n` first, then applies word‑wrapping within each segment.
+`_buildGlyphBuffer` offsets each line's glyphs by `lineIndex * lineHeight * scale`.
+
+### Justification
+
+`setJustify('center')` shifts each line's glyphs by `(maxWidth - linePixelWidth) / 2`.
+`setJustify('right')` shifts by `(maxWidth - linePixelWidth)`. Per‑line widths are
+computed from actual glyph advance sums, not character counts.
+
+### `spawnButton` integration
+
+```typescript
+UI.spawnButton(w, h, color, onClick, {
+    sdfText: true,              // uses spawnSdfText instead of spawnText
+    text: 'Label',
+    textScale: 0.5 * _uiScale,  // legacy scale — auto‑converted ×2.5 internally
+});
+```
+
+### Common pitfalls specific to SDF text
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Text not visible, vertexCount=0 | Metrics not loaded synchronously | Ensure `initSdfFonts` runs in `loadResources()`; `game.getSdfFont(name)` returns data |
+| All glyphs collapse to one line | `lineIndex` not added to `gy` | `gy += pg.y * lineHeight * scale` in `_buildGlyphBuffer` |
+| Text squashed vertically | `textHeight` changed after vertex loop | Compute glyph extent *before* building vertex data |
+| Lines overlapping (multi‑line) | Same as above | Track `lineIndex` in perLine and offset `gy` |
+| Text overflow at right edge | `maxWidth` too small, or widget widths not adjusted for scale conversion | Bump `labelW`/`dirW`/`glyphPixelW` by ~1.25–2× |
+| `setJustify` has no effect on legacy `UIText` | Legacy text has no justify support | Only use on `UISdfText` instances |
+| Text ~3× smaller than expected | Scale not converted from legacy units | Multiply legacy scale by ~2.5 |
+
+---
+
 ## 9. COMMON PITFALLS
 
 | Symptom                                                               | Cause                                                                                             | Fix                                                                                                       |
@@ -658,9 +740,10 @@ col.clickPriority = 1;  // dispatch before DEV toggle button (priority 0)
 UIManager(game) → UI
 UI.spawnContainer(w, h, [r,g,b,a])       → UIContainer
 UI.spawnText(str, fontScale, maxChars, [r,g,b,a], [br,bg,bb,ba]) → UIText
+UI.spawnSdfText(str, textScale, maxWidth, [r,g,b,a], [br,bg,bb,ba]) → UISdfText
 UI.spawnSprite(texName, w, h, frame, [cols,rows]) → UISprite
-UI.spawnButton(w, h, color, onClick, opts?) → { container: UIContainer, collider: Collider, child?: UIText|UISprite }
-//  opts: { text?, textScale?, textColor?, sprite?, spriteFrame?, spriteTileSet?, priority?, hover?, clickFeedback? }
+UI.spawnButton(w, h, color, onClick, opts?) → { container: UIContainer, collider: Collider, child?: UIText|UISdfText|UISprite }
+//  opts: { text?, textScale?, textColor?, sdfText?, sprite?, spriteFrame?, spriteTileSet?, priority?, hover?, clickFeedback? }
 UI.addColliderToElem(UIElement)           → Collider
 
 container.addChild(child, selfAnchor?, childAnchor?) → this
@@ -671,6 +754,13 @@ container.setSize(w, h)                  → this
 
 text.setText(str)                         → this
 text.setTextColor([r,g,b,a])              → this
+
+sdftext.setText(str)                      → this
+sdftext.setJustify('left'|'center'|'right') → this
+sdftext.setOutline(width, [r,g,b,a])      → this
+sdftext.setShadow(ox, oy, [r,g,b,a], blur) → this
+sdftext.setTextScale(n)                   → this
+sdftext.setMaxWidth(n)                    → this
 
 sprite.setSize(w, h)                      → this
 sprite.setPosition(x, y)                  → this

@@ -70,6 +70,7 @@ function createMockShaderGL(overrides: Partial<ShaderGL> = {}): ShaderGL {
             return true;
         }),
         getProgramInfoLog: vi.fn(() => ''),
+        bindAttribLocation: vi.fn(),
         getAttribLocation: vi.fn(() => 0),
         getUniformLocation: vi.fn(() => ({})),
         useProgram: vi.fn(),

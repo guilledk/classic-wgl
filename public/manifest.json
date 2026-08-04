@@ -39,6 +39,22 @@
             ]
         },
         {
+            "name": "sdf",
+            "vertex": "/shaders/sdf.vert",
+            "fragment": "/shaders/sdf.frag",
+            "attr": ["vertexPos", "texCoord"],
+            "unif": [
+                "modelMatrix",
+                "cameraMatrix",
+                "projectionMatrix",
+                "texSampler",
+                "color",
+                "outlineColor",
+                "outlineWidth",
+                "softEdge"
+            ]
+        },
+        {
             "name": "isoTilemap",
             "vertex": "/shaders/iso_tilemap.vert",
             "fragment": "/shaders/iso_tilemap.frag",
@@ -95,6 +111,10 @@
             "src": "/res/font.png"
         },
         {
+            "name": "dejavusans-sdf",
+            "src": "/res/dejavusans-sdf.png"
+        },
+        {
             "name": "editorIcons",
             "src": "/res/editor_icons.png"
         },
@@ -117,6 +137,12 @@
         {
             "name": "house",
             "src": "/res/house01.png"
+        }
+    ],
+    "sdfFonts": [
+        {
+            "name": "dejavusans",
+            "metrics": "/res/dejavusans-sdf.json"
         }
     ],
     "animations": [
