@@ -34,6 +34,7 @@ let _tilePalette: UIContainer | null = null;
 let _navPalette: UIContainer | null = null;
 let _heightWidget: UIContainer | null = null;
 let _lightWidget: UIContainer | null = null;
+let _textShowcase: UIContainer | null = null;
 let _uiScale = 1;
 
 /**
@@ -59,6 +60,7 @@ export function initUI(): void {
     _navPalette = initNavPalette(UI);
     _heightWidget = initHeightWidget(UI);
     _lightWidget = initLightWidget(UI);
+    _textShowcase = initTextShowcase(UI);
     initEditorModeControl(UI);
 }
 
@@ -307,6 +309,15 @@ function initToolButtons(UI: UIManager): void {
                 isOpen = false;
             },
             isActive: () => game.debugFootprints ?? false,
+        },
+        {
+            label: 'Text Demo',
+            action: () => {
+                game.editorTarget = game.editorTarget === 'textDemo' ? 'none' : 'textDemo';
+                game.uiConsumedClick = true;
+                isOpen = false;
+            },
+            isActive: () => game.editorTarget === 'textDemo',
         },
     ];
 
@@ -856,6 +867,131 @@ function initLightWidget(UI: UIManager): UIContainer {
     return container;
 }
 
+/** SDF text rendering showcase panel. */
+function initTextShowcase(UI: UIManager): UIContainer {
+    const uiBorder = Math.round(10 * _uiScale);
+    const widgetW = Math.round(800 * _uiScale);
+    const widgetH = Math.round(400 * _uiScale);
+    const pad = Math.round(12 * _uiScale);
+
+    const container = UI.spawnContainer(widgetW, widgetH, [0.06, 0.06, 0.12, 0.92]);
+    UI.addColliderToElem(container).consumesClick = true;
+
+    const labelScale = 0.75 * _uiScale;
+    const lineH = Math.round(28 * _uiScale);
+
+    // Scale ramp
+    const scaleLabel = UI.spawnSdfText(
+        'Scale ramp:',
+        labelScale,
+        300,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(scaleLabel, 'top-left', 'top-left');
+    scaleLabel.setPosition(pad, pad);
+
+    const scaleSamples = UI.spawnSdfText(
+        'Handgloves 0123',
+        labelScale,
+        600,
+        [1, 1, 1, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(scaleSamples, 'top-left', 'top-left');
+    scaleSamples.setPosition(pad, pad + lineH);
+    scaleSamples.setTextScale(labelScale);
+    scaleSamples.setOutline(0.5, [0.1, 0.05, 0, 1]);
+
+    // Weight + outline row
+    const wLabel = UI.spawnSdfText(
+        'Weight −0.08 / outline 1px:',
+        labelScale * 0.8,
+        400,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(wLabel, 'top-left', 'top-left');
+    wLabel.setPosition(pad, pad + lineH * 3);
+
+    const wSample = UI.spawnSdfText('BOLD', labelScale * 1.5, 300, [1, 0.5, 0.2, 1], [0, 0, 0, 0]);
+    container.addChild(wSample, 'top-left', 'top-left');
+    wSample.setPosition(pad, pad + lineH * 4);
+    wSample.setWeight(-0.08);
+    wSample.setOutline(1, [0.1, 0.02, 0, 1]);
+
+    // Justification
+    const jLabel = UI.spawnSdfText(
+        'Justification: left / center / right',
+        labelScale * 0.8,
+        400,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(jLabel, 'top-left', 'top-left');
+    jLabel.setPosition(pad, pad + lineH * 6);
+
+    const jLeft = UI.spawnSdfText('left', labelScale, 180, [0.3, 0.8, 1, 1], [0, 0, 0, 0]);
+    container.addChild(jLeft, 'top-left', 'top-left');
+    jLeft.setPosition(pad, pad + lineH * 7);
+    jLeft.setJustify('left');
+
+    const jCenter = UI.spawnSdfText('center', labelScale, 180, [0.3, 1, 0.5, 1], [0, 0, 0, 0]);
+    container.addChild(jCenter, 'top-left', 'top-left');
+    jCenter.setPosition(pad, pad + lineH * 8.5);
+    jCenter.setJustify('center');
+
+    const jRight = UI.spawnSdfText('right', labelScale, 180, [1, 0.8, 0.3, 1], [0, 0, 0, 0]);
+    container.addChild(jRight, 'top-left', 'top-left');
+    jRight.setPosition(pad, pad + lineH * 10);
+    jRight.setJustify('right');
+
+    // Special characters row
+    const glyphLabel = UI.spawnSdfText(
+        '♔ ♕ ♖ ✓ ✗ ❤ ♻ ☠ ⚡ ★ ☆ ● ◆ № ½ ™ € ▲ ▼ █ ┌─┐',
+        labelScale,
+        widgetW - pad * 2,
+        [1, 0.8, 0.4, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(glyphLabel, 'top-left', 'top-left');
+    glyphLabel.setPosition(pad, pad + lineH * 12);
+
+    // Shadow / glow demo
+    const shadowLabel = UI.spawnSdfText(
+        'Shadow (2,2 outl 2) / Glow',
+        labelScale * 0.8,
+        400,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(shadowLabel, 'top-left', 'top-left');
+    shadowLabel.setPosition(pad, pad + lineH * 14);
+
+    const shadowSample = UI.spawnSdfText(
+        'SHADOW',
+        labelScale * 1.2,
+        300,
+        [1, 0.9, 0.3, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(shadowSample, 'top-left', 'top-left');
+    shadowSample.setPosition(pad, pad + lineH * 15);
+    shadowSample.setShadow(2, 2, [0, 0, 0, 0.4], 2);
+
+    UI.root.entity.registerCall('update', () => {
+        const cw = game.canvas!.width;
+        const ch = game.canvas!.height;
+        const x0 = cw - uiBorder - widgetW;
+        const y0 = ch - uiBorder - widgetH;
+        container.setPosition(x0, y0);
+        UI.refreshLayout();
+    });
+
+    container.setEnabled(false);
+    return container;
+}
+
 /** Toggles palette/nav-mesh/height-widget visibility each frame based on game.editorTarget. */
 function initEditorModeControl(UI: UIManager): void {
     const navMeshEntity = game.getEntity('tilemapNavigation')!;
@@ -865,6 +1001,7 @@ function initEditorModeControl(UI: UIManager): void {
         if (_navPalette) _navPalette.setEnabled(game.editorTarget === 'navMesh');
         if (_heightWidget) _heightWidget.setEnabled(game.editorTarget === 'height');
         if (_lightWidget) _lightWidget.setEnabled(game.editorTarget === 'light');
+        if (_textShowcase) _textShowcase.setEnabled(game.editorTarget === 'textDemo');
         navMeshEntity.enabled = game.editorTarget === 'navMesh';
     });
 }

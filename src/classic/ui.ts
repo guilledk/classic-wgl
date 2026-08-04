@@ -276,13 +276,14 @@ export class UISdfText extends SdfText {
         const result: string[] = [];
 
         for (const rawLine of str.split('\n')) {
-            const words = rawLine.split(' ');
             const lines: string[] = [];
             let line = '';
             let linePx = 0;
 
-            for (const word of words) {
+            for (const word of rawLine.split(' ')) {
+                if (!word) continue;
                 const wordPx = this._wordPx(word) * scale;
+                // NBSP (U+00A0) joins words — treat as a non-breaking space
                 const gap = linePx > 0 ? spacePx : 0;
 
                 if (linePx + gap + wordPx <= maxPx) {
