@@ -57,6 +57,28 @@ The camera looks from the **southwest**. The isometric diamond on screen:
 the closest and farthest corners apart. `tx − ty` gives `−199` vs `+199` —
 correctly separating them.
 
+### Iso ↔ cardinal / screen mapping
+
+In this engine, the iso-grid directions map to cardinal compass points and
+screen directions as follows (verify with the debug compass rose overlay):
+
+| Iso direction | Cardinal | Screen direction | Depth (`tx−ty`) |
+|:---|:---|:---|:---|
+| NE `(+tx, −ty)` | **N** | straight **UP** | Farthest |
+| SE `(+tx, +ty)` | **E** | straight **RIGHT** | Mid |
+| SW `(−tx, +ty)` | **S** | straight **DOWN** | Closest |
+| NW `(−tx, −ty)` | **W** | straight **LEFT** | Mid |
+
+Intercardinals (NE/SE/SW/NW in compass terms) map to the 2:1 diagonal screen
+vectors between these cardinals:
+
+| Compass | Iso `(dtx, dty)` | Screen vector |
+|:---|:---|:---|
+| **NE** | `(+1, 0)` | right-up 2:1 |
+| **SE** | `(0, +1)` | right-down 2:1 |
+| **SW** | `(−1, 0)` | left-down 2:1 |
+| **NW** | `(0, −1)` | left-up 2:1 |
+
 ---
 
 ## 2. ISO ↔ CARTESIAN TRANSFORM MATRICES
@@ -67,19 +89,10 @@ correctly separating them.
 cartesianToIso4 = rotateZ(π / 4) * scale(1, 2, 1);
 ```
 
-```
-Matrix:
-[[ 0.707, -0.707, 0, 0 ],
- [ 0.354,  0.354, 0, 0 ],   ← wait, this is actually:
- [ 0,      0,     1, 0 ],
- [ 0,      0,     0, 1 ]]
-```
-
-Correction: `rotateZ(π/4) * scale(1, 2, 1)`:
+`scale(1,2)` first, then `rotateZ(π/4)`:
 
 ```
-scale(1,2) first, then rotateZ(π/4):
-rot * S = [[c, -2s, 0, 0], [s, 2c, 0, 0], [0,0,1,0], [0,0,0,1]]
+rot * S = [[cos45, -2sin45, 0, 0], [sin45, 2cos45, 0, 0], [0,0,1,0], [0,0,0,1]]
         = [[0.707, -1.414, 0, 0], [0.707, 1.414, 0, 0], [0,0,1,0], [0,0,0,1]]
 ```
 
@@ -174,13 +187,25 @@ gl_Position = clipPos;
 
 ### CPU-side sprite depth (IsoSprite.rawDraw)
 
+Per-vertex depth capped at anchor depth, passed as `isoDepthCorners` vec4:
+
 ```typescript
-const depth =
-    (this.position[0] - this.position[1]) / 400.0 + 0.5 - this.position[2] / 14500.0 - 0.001;
+const baseDepth = (pos[0]-pos[1]) / 400 + 0.5 - pos[2] / 14500 - 0.005;
+for (let i = 0; i < 4; i++) {
+    const d = (pos[0] + fp[i][0] - pos[1] - fp[i][1]) / 400 + 0.5 - pos[2] / 14500 - 0.005;
+    raw[i] = Math.min(d, baseDepth);
+}
+const minFp = Math.min(raw[0], raw[1], raw[2], raw[3]);
+cornerDepths[0] = minFp; // bottom-left (SW)
+cornerDepths[1] = minFp; // bottom-right (SE) — flat base edge
+cornerDepths[2] = raw[3]; // top-left (NW), capped at baseDepth
+cornerDepths[3] = raw[0]; // top-right (NE), capped at baseDepth
 ```
 
-The `-0.001` bias prevents z-fighting when the sprite sits exactly on terrain
-at the same grid position.
+The `-0.005` bias (not `-0.001`) overcomes GPU-interpolated terrain vertex
+depths at adjacent mesh vertices that can dip ~0.0026 below the exact
+iso-position depth. See `isometric-tilemap` §4 for the shader-side corner
+selection and §17 for footprint format.
 
 ### Sort order (IsometricDrawable)
 
@@ -434,15 +459,59 @@ trees, houses, semaphores) — not just the agent.
 
 ### Initialise `position[2]` to terrain height
 
+ALL sprites need `position[2]` set to the bilinear terrain height, not just
+the agent. Static sprites loaded from `state.json` default to `position[2] = -1`,
+which causes base clipping on height>0 terrain. Initialise them in
+`initFootprintColliders()`:
+
 ```typescript
-const aTx = Math.floor(agent.position[0]);
-const aTy = Math.floor(agent.position[1]);
-agent.position[2] = (heightData[aTx + aTy * sizeX] ?? 0) * heightScale;
+const px = sprite.position[0];
+const py = sprite.position[1];
+const ftx = Math.floor(px),
+    fty = Math.floor(py);
+const fx = px - ftx,
+    fy = py - fty;
+const hTop = at(ftx, fty) + (at(ftx + 1, fty) - at(ftx, fty)) * fx;
+const hBot = at(ftx, fty + 1) + (at(ftx + 1, fty + 1) - at(ftx, fty + 1)) * fx;
+sprite.position[2] = (hTop + (hBot - hTop) * fy) * heightScale;
 ```
 
-`IsoAgent.position[2]` feeds into the `isoDepth` formula for the sprite
-depth test. If it starts at 0, there's a ~0.5 s lag while the `update()`
-lerp catches up — the agent renders behind the terrain surface.
+### Collider and debug footprint terrain height
+
+Both `IsoSprite.attachCollider()` and the state.ts debug footprint rendering
+must apply bilinear terrain height per-vertex to world-space positions:
+
+```typescript
+const h = /* bilinear at (position[0] + pt[0], position[1] + pt[1]) */;
+v[1] -= h * tilemap.heightScale;
+```
+
+Without this, colliders and debug footprints appear `h * heightScale` pixels
+below the terrain surface (shifted toward SW / camera by ~1 tile per height unit).
+
+### Anchor placement from visual base
+
+A sprite's anchor Y in the texture should match the visible ground-contact
+row (`groundY`). For sprites with transparent pixels below the visible content
+(tree trunk, traffic light pole base), the anchor defaults to ~0.997 (bottom
+of texture) but the visual base is higher:
+
+```
+anchorY = groundY / textureHeight
+```
+
+To keep the sprite visually in place after changing the anchor:
+
+```
+delta_worldY = (oldAnchorRow - groundY) * scaleY
+dty = delta_worldY / 31.82, dtx = -dty
+newPosition = oldPosition + [dtx, dty]
+```
+
+The 1-tile-up adjustment (anchoring 32 screen‑pixels above groundY to centre
+the footprint diamond's SW vertex on the visual base) is unnecessary when
+terrain height compensation is correctly applied — the anchor should sit
+directly at groundY.
 
 ---
 
@@ -460,6 +529,10 @@ lerp catches up — the agent renders behind the terrain surface.
 | Agent visually lagging ~1 tile behind terrain on slopes            | `modelMatrix()` uses `Math.floor` NW-corner read instead of bilinear         |
 | Agent rendering behind terrain for first ~0.5 s after spawn        | `position[2]` not initialised to terrain height (starts at 0)                |
 | Ghost rendering / sprite invisible in NE quadrant                  | `order()` positive for NE sprites — drawn before tilemap, overpainted by it  |
+| Terrain flickering / black artifacts after creating UIText elements | `Text.setText` binds internal FBO, changes viewport — must restore both. Also requires minimal draw-call flush (`drawArrays(LINE_STRIP, 0, 0)`) at frame end to sync GPU pipeline state |
+| Sprite clipped at visual base on height>0 terrain                   | `position[2]` not initialized to bilinear terrain height in `initFootprintColliders()` — defaults to -1 |
+| Agent ghosted when standing near large sprite                       | Depth buffer conflict between large sprite's per-vertex gradient and small sprite. Fix: `depthMask(false)` on normal pass + renderList sort for sprite-sprite ordering |
+| Depth bias too small for terrain interpolation                      | GPU fragment interpolation between adjacent terrain mesh vertices can produce depths ~0.0026 below the exact-position value. Bias must be at least `-0.005` to overcome this |
 
 ---
 
@@ -479,4 +552,11 @@ tileStep = scale × 0.7071  (NOT scale × 0.3536!)
 zOffset  = height × heightScale / tileStep
 isoTx = visualMouseTx − zOffset
 isoTy = visualMouseTy + zOffset
+
+                      COMPASS / CARDINALS
+                      ===================
+iso NE (+tx,−ty) → N (screen UP)      iso (0,−1) → NW (screen left-up 2:1)
+iso SE (+tx,+ty) → E (screen RIGHT)   iso (+1, 0) → NE (screen right-up 2:1)
+iso SW (−tx,+ty) → S (screen DOWN)    iso (0,+1) → SE (screen right-down 2:1)
+iso NW (−tx,−ty) → W (screen LEFT)    iso (−1, 0) → SW (screen left-down 2:1)
 ```

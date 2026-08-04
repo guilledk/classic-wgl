@@ -45,6 +45,27 @@ On-screen:
 | Top-left        | NW                 | Mid-far      | `(0, 0)`     |
 | Top-right       | **NE**             | **Farthest** | `(199, 0)`   |
 
+### Iso ↔ cardinal / screen mapping
+
+The iso-grid directions map to cardinal compass points. Use the debug overlay
+("Footprints" toggle in DEV menu) to verify:
+
+| Iso direction | Cardinal | Screen | `(dtx, dty)` |
+|:---|:---|:---|:---|
+| NE | **N** | straight UP | `(+1, −1)` |
+| SE | **E** | straight RIGHT | `(+1, +1)` |
+| SW | **S** | straight DOWN | `(−1, +1)` |
+| NW | **W** | straight LEFT | `(−1, −1)` |
+
+Intercardinals map to 2:1 diagonal screen vectors:
+
+| Compass | Iso | Screen vector |
+|:---|:---|:---|
+| NE | `(+1, 0)` | right-up 2:1 |
+| SE | `(0, +1)` | right-down 2:1 |
+| SW | `(−1, 0)` | left-down 2:1 |
+| NW | `(0, −1)` | left-up 2:1 |
+
 ### The depth axis is `tx − ty`, NOT `tx + ty`
 
 - `tx − ty` is negative at SW (closest) and positive at NE (farthest) — correctly
@@ -190,24 +211,37 @@ One height unit ≈ 0.88 tile steps — matches the visual ratio: Z=32 displaces
 
 ### Sprite depth (IsoSprite)
 
-Computed per-frame in `IsoSprite.rawDraw()`:
+Per-vertex depth via `isoDepthCorners` (vec4 uniform), computed each frame in
+`rawDraw()`. The SW-footprint and SE-footprint vertices both get the minimum
+depth across all footprint corners (flat base edge). NE/NW vertices are capped
+at the anchor depth (`baseDepth`) to prevent the top of the sprite from
+exceeding a safe bound:
 
 ```typescript
-const depth =
-    (this.position[0] - this.position[1]) / 400.0 + 0.5 - this.position[2] / 14500.0 - 0.001;
-this.gl.uniform1f(shader.unif.isoDepth, depth);
+const baseDepth = (pos[0]-pos[1])/400 + 0.5 - pos[2]/14500 - 0.005;
+for (let i = 0; i < 4; i++) {
+    const d = (pos[0] + fp[i][0] - pos[1] - fp[i][1])/400 + 0.5 - pos[2]/14500 - 0.005;
+    raw[i] = Math.min(d, baseDepth);
+}
+const minFp = Math.min(raw[0], raw[1], raw[2], raw[3]);
+cornerDepths[0] = minFp; // bottom-left  = min across all footprint verts
+cornerDepths[1] = minFp; // bottom-right = same (flat base edge)
+cornerDepths[2] = raw[3]; // top-left     = NW, capped at baseDepth
+cornerDepths[3] = raw[0]; // top-right    = NE, capped at baseDepth
 ```
 
-The `-0.001` bias prevents z-fighting when the sprite sits on terrain at
-exactly the same grid position (LEQUAL passes, sprite renders slightly in front).
+Footprint indices: `[NE, SE, SW, NW]`. Shader indices: `x=SW, y=SE, z=NW, w=NE`.
+The `-0.005` bias (not `-0.001`) overcomes GPU-interpolated terrain vertex
+depths that can dip below the exact-iso-position terrain depth by ~0.0026.
 
-The `isoDepth` uniform is passed to `direct_tex.vert`, which overrides
-`gl_Position.z` when `useIsoDepth > 0.5`:
+The `isoDepthCorners` uniform in `direct_tex.vert` uses branchless GLSL100
+corner selection via `mix(vertexPos.x, vertexPos.y)`:
 
 ```glsl
-if (useIsoDepth > 0.5) {
-    gl_Position.z = clamp(isoDepth, 0.0, 1.0);
-}
+float bottomDepth = mix(isoDepthCorners.x, isoDepthCorners.y, vertexPos.x);
+float topDepth    = mix(isoDepthCorners.z, isoDepthCorners.w, vertexPos.x);
+float cornerDepth = mix(topDepth, bottomDepth, vertexPos.y);
+gl_Position.z     = clamp(cornerDepth, 0.0, 1.0);
 ```
 
 ### Sprite alpha discard
@@ -242,8 +276,15 @@ position. Without this, NE sprites (`tx > ty`, order > 0) would draw
 before the tilemap and be overpainted by opaque terrain — breaking
 ghost rendering and depth‑based occlusion.
 
-Relative sprite-to-sprite ordering is preserved; depth test LEQUAL handles
-per‑pixel occlusion correctly.
+Relative sprite-to-sprite ordering is handled by the renderList sort, NOT by
+the depth buffer. The normal pass sets `depthMask(false)` — sprites do not
+write depth, so they never occlude each other via the Z-buffer. The renderList
+draw order (closer = smaller `tx−ty` = drawn later = on top) fully controls
+sprite-sprite visibility.
+
+Sprite-vs-terrain occlusion still uses the depth buffer: the terrain writes
+depth first (order 0, drawn before all sprites), then sprites compare against
+it via LEQUAL but don't write depth themselves.
 
 ---
 
@@ -290,9 +331,20 @@ shader via the `normal` attribute and `normalMatrix` transform (see §16).
 
 ### direct_tex.vert — sprite vertex shader
 
-**Uniforms:** `useIsoDepth`, `isoDepth`
+**Uniforms:** `useIsoDepth`, `isoDepthCorners` (vec4)
 
-When `useIsoDepth > 0.5`: overrides `gl_Position.z = clamp(isoDepth, 0, 1)`.
+When `useIsoDepth > 0.5`: sets per-vertex depth by selecting the corner depth
+using branchless `mix` operations on `vertexPos.xy` (**GLSL 100 compatible**;
+do NOT use `gl_VertexID` which requires GLSL 300 es). All four components carry
+the same value (single uniform depth), logically equivalent to `float isoDepth`:
+
+```glsl
+float bottomDepth = mix(isoDepthCorners.x, isoDepthCorners.y, vertexPos.x);
+float topDepth    = mix(isoDepthCorners.z, isoDepthCorners.w, vertexPos.x);
+float cornerDepth = mix(topDepth, bottomDepth, vertexPos.y);
+gl_Position.z     = clamp(cornerDepth, 0.0, 1.0);
+```
+
 Used by IsoSprites. Non-isometric Sprites set `useIsoDepth = 0`.
 
 ### sheet.frag — sprite fragment shader
@@ -424,6 +476,30 @@ position[2] += (targetZ - position[2]) * min(1, deltaTime * 4);
 
 This matches the GPU's vertex interpolation exactly — the agent's depth Z
 matches the terrain surface. Lerp rate of 4/s gives smooth uphill walking.
+
+### Pathfinding tile centers
+
+The A* pathfinder (`pathfinder.ts`) floors both `from` and `to` to integer
+tile coordinates, returning paths of integer waypoints (tile corners rather
+than centers). After receiving a path, offset every waypoint by `[0.5, 0.5]`
+(except `path[0]` which `followPath` overwrites with the agent's current
+position):
+
+```typescript
+pathfinder.findPath(start, end).then((p) => {
+    if (p != null) {
+        const path = p as [number, number][];
+        for (let i = 1; i < path.length; i++) {
+            path[i][0] += 0.5;
+            path[i][1] += 0.5;
+        }
+        agent.followPath(path);
+    }
+});
+```
+
+Without this, the agent snaps to tile vertices (e.g. `[100, 50]`) instead of
+tile centers (`[100.5, 50.5]`).
 
 ---
 
@@ -589,6 +665,85 @@ each enable/disable depth test in their `rawDraw()` methods. Non-isometric
 drawables (UI, cursor) never enable it. The global draw loop does NOT
 enable depth test.
 
+### `getComponent` uses strict constructor equality
+
+`entity.getComponent(IsoSprite)` checks `component.constructor === IsoSprite`.
+This will **not** find `IsoAgent` instances (which extend `IsoSprite`).
+When querying for a base class, iterate `entity.components` with `instanceof`:
+
+```typescript
+let iso: IsoSprite | null = null;
+for (const c of entity.components) {
+    if (c instanceof IsoSprite) { iso = c as IsoSprite; break; }
+}
+```
+
+### Static sprites need position[2] initialized
+
+Static IsoSprites (tree, house, semaphores) loaded from `state.json` default to
+`position[2] = -1`. On height>0 terrain this causes the sprite to render
+behind the terrain surface (clipping at the base). Initialize `position[2]`
+to the bilinear terrain height in `initFootprintColliders()`:
+
+```typescript
+const h = /* bilinear at (sprite.position[0], sprite.position[1]) */;
+sprite.position[2] = h * tilemap.heightScale;
+```
+
+### GLSL100: no gl_VertexID
+
+`gl_VertexID` requires GLSL 300 es / WebGL2-only features. The existing shaders
+use GLSL 100 (`attribute`, `varying`). For per-vertex data in GLSL 100, use
+`mix` with `vertexPos.xy` to select corners branchlessly (see §5
+`direct_tex.vert`).
+
+### Debug footprint state must be restored
+
+When debug-footprint rendering changes `depthFunc(ALWAYS)` or `depthMask(false)`,
+restore `depthFunc(LEQUAL)` and `depthMask(true)` after the debug loop.
+Unrestored state leaks into the next frame's terrain rendering, causing
+"dark trails" on elevated terrain.
+
+### GPU pipeline flush required after Text init
+
+Creating `UIText` entities (which allocate internal framebuffers and call
+`setText` → `appendText` at construction time) can leave the GPU pipeline in
+a state that produces terrain flickering. The fix is a minimal draw-call flush
+at frame end:
+
+```typescript
+gl.drawArrays(gl.LINE_STRIP, 0, 0); // 0-vertex draw = pipeline flush
+gl.depthFunc(gl.LEQUAL);
+gl.depthMask(true);
+```
+
+### GL state isolation at frame start
+
+The draw loop must reset depth state EVERY frame at frame start — never assume
+the previous frame's last drawable left clean state:
+
+```typescript
+gl.depthFunc(gl.LEQUAL);
+gl.depthMask(true);
+```
+
+Sprites set `depthMask(false)` on their normal pass, and if the terrain draws
+before any sprite restores it, terrain won't write depth.
+
+### Text.setText must restore FBO + viewport
+
+`Text.setText` binds an internal framebuffer for render-to-texture, changes
+the viewport to the texture size, and renders glyphs. It MUST restore the
+default framebuffer and viewport after completion:
+
+```typescript
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+```
+
+Without this, subsequent `gl.clear` and draw calls operate on the text's
+internal FBO (a tiny 32×32px texture) instead of the main canvas.
+
 ---
 
 ## 13. FAILED APPROACHES (DO NOT REPEAT)
@@ -599,9 +754,13 @@ enable depth test.
 | Y-to-depth mapping                      | Same-screen-Y objects get identical depth regardless of iso position — sprite always wins against terrain |
 | Polygon offset for wall-ground z-fight  | Shifted ALL terrain toward camera, breaking sprite-terrain occlusion                                      |
 | Z tiebreaker (`-z/10000`) in Y-to-depth | Made terrain always closer than sprites at same Y — backwards occlusion                                   |
-| isoZBias from isoDistanceToCam          | CPU distance metric didn't match GPU depth formula — sprite always appeared closer                        |
+| `isoZBias` from isoDistanceToCam        | CPU distance metric didn't match GPU depth formula — sprite always appeared closer                        |
 | `worldPos.x` term in depth formula      | Absolute world-X overpowered the iso-coordinate distance — sprite always closer                           |
 | Interior wall generation                | Created gaps between surfaces: walls used per-tile heights, faces used shared corners                     |
+| Per-vertex isoDepth without anchor cap  | Top vertices of tall sprites get large (= far-away) depth values. Terrain at sprite's base clips the sprite. All iso sprites appear in ghost mode. Cap top vertices at anchor depth via `Math.min()`                               |
+| SW-corner single uniform depth          | Large sprites get depth shifted far toward camera (Δ0.03 for 12×12 house footprint). Makes them render in front of smaller sprites that are genuinely closer. Use per-vertex capped depth instead                                                                         |
+| Texture-pixel→iso coordinate footprint  | Hundreds of texture pixels convert to massive iso offsets (12+ tiles), producing enormous footprints that span the full sprite silhouette. Use explicit tile-based footprints in `state.json`                                                          |
+| Depth buffer for sprite-sprite ordering | Sprites writing depth block each other. A large sprite's per-vertex depth gradient can extend far toward the camera, blocking smaller sprites that should render in front. Use `depthMask(false)` + renderList sort instead                                                     |
 
 ---
 
@@ -850,7 +1009,150 @@ retains its visual intensity regardless of light settings.
 
 ---
 
-## 17. MOUSE-HOVER GRID OVERLAY
+## 17. SPRITE FOOTPRINTS
+
+### Overview
+
+Each `IsoSprite` carries a `footprint: Vec2Like[]` — a list of iso-space
+`[tx, ty]` offsets from `this.position` (the anchor). The footprint serves
+three purposes: depth computation (`getDepth()`), collision (`attachCollider()`),
+and debug visualization.
+
+The footprint is specified in `state.json` as a `footprint` array on the
+component config. If omitted, `IsoSprite.defaultFootprint()` provides a
+0.5-tile diamond.
+
+### Diamond format
+
+A proper isometric diamond on screen uses diagonal iso offsets:
+
+```json
+"footprint": [
+    [r, -r],   // NE — top-center on screen
+    [r,  r],   // SE — right-center on screen
+    [-r, r],   // SW — bottom-center on screen
+    [-r,-r]    // NW — left-center on screen
+]
+```
+
+This produces a 2:1 diamond on screen (width = 2× height).
+
+Axis-aligned footprints like `[[0,-r],[r,0],[0,r],[-r,0]]` produce
+**rectangles** on screen — avoid this.
+
+### Default footprint
+
+```typescript
+static defaultFootprint(): Vec2Like[] {
+    return [
+        [0.5, -0.5],
+        [0.5,  0.5],
+        [-0.5, 0.5],
+        [-0.5,-0.5],
+    ];
+}
+```
+
+### getDepth()
+
+Returns the minimum `(tx−ty)/400` across all footprint vertices (the
+SW‑most / closest-to-camera point), plus the standard Z-bias of `-0.005`.
+Used by `rawDraw()` as one input. The final depth actually passed to the
+shader is computed inline in `rawDraw()` using per-vertex footptint depths
+capped at `baseDepth` (anchor depth). See §4 for the full computation.
+
+```typescript
+getDepth(): number {
+    let minV = Infinity;
+    for (const pt of this.footprint) {
+        const d = (this.position[0] + pt[0] - this.position[1] - pt[1]) / 400.0;
+        if (d < minV) minV = d;
+    }
+    return minV + 0.5 - this.position[2] / 14500.0 - 0.005;
+}
+```
+
+The `-0.005` bias overcomes GPU-interpolated terrain vertex depths that can dip
+~0.0026 below the exact-iso-position terrain depth at adjacent mesh vertices.
+
+### attachCollider()
+
+Creates a `Collider` with a world-space `Polygon` from the footprint. Each
+footprint vertex is converted to world-space via `isoToCartesian`, and
+bilinear terrain height compensation is applied per-vertex:
+
+```typescript
+const h = /* bilinear at (position[0] + pt[0], position[1] + pt[1]) */;
+v[1] -= h * tilemap.heightScale;
+```
+
+This ensures colliders sit at the terrain surface, matching the visual
+sprite's `modelMatrix()` Y-offset. Static sprites (tree, house, semaphores)
+compute this once; the agent's footprint is drawn on-the-fly each frame in
+the debug loop.
+
+### Debug visualization
+
+`state.ts` draws each sprite's footprint as a `LINE_LOOP` (cyan-green) and
+an anchor X marker (magenta) when `game.debugFootprints` is true. The
+footprint is computed on-the-fly each frame from `iso.position` + `iso.footprint`,
+so it follows the agent's movement. Both the footprint and anchor X apply
+bilinear terrain height Y-offset. Toggled via the "Footprints" item in the
+DEV panel menu.
+
+When debug is OFF, a minimal GPU pipeline flush runs at frame end to prevent
+state corruption from the 10+ UIText elements that allocate internal
+framebuffers at init time:
+
+```typescript
+gl.drawArrays(gl.LINE_STRIP, 0, 0);
+gl.depthFunc(gl.LEQUAL);
+gl.depthMask(true);
+```
+
+### Anchor placement
+
+The anchor should be at the sprite's visual ground-contact point. For
+sprites with transparent pixels below the visible content (tree, traffic
+lights), the anchor row must be detected from the texture's non-alpha
+pixels and the position compensated:
+
+```
+anchorY = groundY / textureHeight
+delta_worldY = (oldAnchorRow - groundY) * scaleY
+dty = delta_worldY / 31.82, dtx = -dty
+```
+
+Without this, the anchor X marker (and the footprint diamond center) appear
+offset from the visible sprite base by 1–3 tiles.
+
+### Footprint in state.json
+
+Example for a 12×12 house diamond:
+
+```json
+{
+    "type": "IsoSprite",
+    "position": [32.90, 2.86, -1],
+    "scale": [1.7, 1.7, 1],
+    "anchor": [0.5, 0.768],
+    "footprint": [
+        [6, -6],
+        [6,  6],
+        [-6, 6],
+        [-6,-6]
+    ]
+}
+```
+
+The `position[2]` should be initialized to the bilinear terrain height at
+the anchor point to prevent base clipping on height>0 terrain (handled in
+`initFootprintColliders()`).
+
+
+---
+
+## 18. MOUSE-HOVER GRID OVERLAY
 
 ### Overview
 
