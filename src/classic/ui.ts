@@ -38,6 +38,9 @@ function markUIDirty(component: { game: IGameState }): void {
 
 // UIElement is a Rectangle component with pixel-based sizing
 export class UIElement extends Rectangle {
+    _parentContainer: UIContainer | null = null;
+    _uiFixed: boolean = false;
+
     constructor(entity: IEntity, color: Color, width: number, height: number, zlayer: number) {
         super(entity, [0, 0, zlayer], [width, height, 1], color, true);
     }
@@ -76,6 +79,22 @@ export class UIElement extends Rectangle {
         this.height = height;
         markUIDirty(this);
         return this;
+    }
+
+    clipRect(): { x: number; y: number; w: number; h: number } | null {
+        let parent: UIContainer | null = this._parentContainer;
+        while (parent) {
+            if ((parent as UIContainer).clipChildren) {
+                return {
+                    x: parent.position[0],
+                    y: parent.position[1],
+                    w: parent.width,
+                    h: parent.height,
+                };
+            }
+            parent = parent._parentContainer;
+        }
+        return null;
     }
 
     setColor(rgba: Color): this {
@@ -445,11 +464,15 @@ interface ChildEntry {
 export class UIContainer extends UIElement {
     children: ChildEntry[];
     anchor: AnchorType;
+    clipChildren: boolean;
+    scrollY: number;
 
     constructor(entity: IEntity, color: Color, width: number, height: number, zlayer: number) {
         super(entity, color, width, height, zlayer);
         this.children = [];
         this.anchor = 'mid-center';
+        this.clipChildren = false;
+        this.scrollY = 0;
     }
 
     addChild(
@@ -458,6 +481,7 @@ export class UIContainer extends UIElement {
         childAnchor: AnchorType = this.anchor,
     ): this {
         this.children.push({ child, selfAnchor, childAnchor });
+        (child as UIElement)._parentContainer = this;
         markUIDirty(this);
         return this;
     }
@@ -483,17 +507,26 @@ export class UIContainer extends UIElement {
 
     setChildrenPos(): void {
         const [panelX, panelY] = this.position;
+        const sy = this.clipChildren ? this.scrollY : 0;
 
         for (const { child, selfAnchor, childAnchor } of this.children) {
             if (!child.entity.enabled) continue;
+            if ((child as UIElement)._uiFixed) continue;
 
             const panelOffset = this.getAnchorOffset(selfAnchor, this.width, this.height);
             const childOffset = this.getAnchorOffset(childAnchor, child.width, child.height);
 
             const x = panelX + panelOffset.x - childOffset.x;
-            const y = panelY + panelOffset.y - childOffset.y;
+            const y = panelY + panelOffset.y - childOffset.y - sy;
 
             child.setPosition(x, y);
+        }
+
+        if (this.clipChildren) {
+            const r = { x: panelX, y: panelY, w: this.width, h: this.height };
+            for (const { child } of this.children) {
+                (child as any)._uiClipRect = r;
+            }
         }
     }
 }

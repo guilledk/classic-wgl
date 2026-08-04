@@ -867,20 +867,30 @@ function initLightWidget(UI: UIManager): UIContainer {
     return container;
 }
 
-/** SDF text rendering showcase panel. */
+/** SDF text rendering showcase panel with scroll and scissor clipping. */
 function initTextShowcase(UI: UIManager): UIContainer {
     const uiBorder = Math.round(10 * _uiScale);
     const widgetW = Math.round(800 * _uiScale);
     const widgetH = Math.round(400 * _uiScale);
     const pad = Math.round(12 * _uiScale);
+    const scrollW = Math.round(8 * _uiScale);
 
     const container = UI.spawnContainer(widgetW, widgetH, [0.06, 0.06, 0.12, 0.92]);
     UI.addColliderToElem(container).consumesClick = true;
+    container.clipChildren = true;
+
+    const scrollTrack = UI.spawnElement(scrollW, widgetH, [0.15, 0.15, 0.15, 0.6]);
+    container.addChild(scrollTrack, 'mid-right', 'mid-right');
+    scrollTrack._uiFixed = true;
+
+    const scrollThumb = UI.spawnElement(scrollW, 40, [0.4, 0.4, 0.4, 0.8]);
+    container.addChild(scrollThumb, 'mid-right', 'mid-right');
+    scrollThumb._uiFixed = true;
 
     const labelScale = 0.75 * _uiScale;
     const lineH = Math.round(28 * _uiScale);
+    const contentH = lineH * 17;
 
-    // Scale ramp
     const scaleLabel = UI.spawnSdfText(
         'Scale ramp:',
         labelScale,
@@ -889,7 +899,6 @@ function initTextShowcase(UI: UIManager): UIContainer {
         [0, 0, 0, 0],
     );
     container.addChild(scaleLabel, 'top-left', 'top-left');
-    scaleLabel.setPosition(pad, pad);
 
     const scaleSamples = UI.spawnSdfText(
         'Handgloves 0123',
@@ -899,11 +908,9 @@ function initTextShowcase(UI: UIManager): UIContainer {
         [0, 0, 0, 0],
     );
     container.addChild(scaleSamples, 'top-left', 'top-left');
-    scaleSamples.setPosition(pad, pad + lineH);
     scaleSamples.setTextScale(labelScale);
     scaleSamples.setOutline(0.5, [0.1, 0.05, 0, 1]);
 
-    // Weight + outline row
     const wLabel = UI.spawnSdfText(
         'Weight −0.08 / outline 1px:',
         labelScale * 0.8,
@@ -912,15 +919,12 @@ function initTextShowcase(UI: UIManager): UIContainer {
         [0, 0, 0, 0],
     );
     container.addChild(wLabel, 'top-left', 'top-left');
-    wLabel.setPosition(pad, pad + lineH * 3);
 
     const wSample = UI.spawnSdfText('BOLD', labelScale * 1.5, 300, [1, 0.5, 0.2, 1], [0, 0, 0, 0]);
     container.addChild(wSample, 'top-left', 'top-left');
-    wSample.setPosition(pad, pad + lineH * 4);
     wSample.setWeight(-0.08);
     wSample.setOutline(1, [0.1, 0.02, 0, 1]);
 
-    // Justification
     const jLabel = UI.spawnSdfText(
         'Justification: left / center / right',
         labelScale * 0.8,
@@ -929,35 +933,46 @@ function initTextShowcase(UI: UIManager): UIContainer {
         [0, 0, 0, 0],
     );
     container.addChild(jLabel, 'top-left', 'top-left');
-    jLabel.setPosition(pad, pad + lineH * 6);
 
-    const jLeft = UI.spawnSdfText('left', labelScale, 180, [0.3, 0.8, 1, 1], [0, 0, 0, 0]);
+    const jLeft = UI.spawnSdfText(
+        'The quick brown fox jumps over the lazy dog.',
+        labelScale,
+        widgetW - pad * 2 - scrollW,
+        [0.3, 0.8, 1, 1],
+        [0, 0, 0, 0],
+    );
     container.addChild(jLeft, 'top-left', 'top-left');
-    jLeft.setPosition(pad, pad + lineH * 7);
     jLeft.setJustify('left');
 
-    const jCenter = UI.spawnSdfText('center', labelScale, 180, [0.3, 1, 0.5, 1], [0, 0, 0, 0]);
+    const jCenter = UI.spawnSdfText(
+        'The quick brown fox jumps over the lazy dog.',
+        labelScale,
+        widgetW - pad * 2 - scrollW,
+        [0.3, 1, 0.5, 1],
+        [0, 0, 0, 0],
+    );
     container.addChild(jCenter, 'top-left', 'top-left');
-    jCenter.setPosition(pad, pad + lineH * 8.5);
     jCenter.setJustify('center');
 
-    const jRight = UI.spawnSdfText('right', labelScale, 180, [1, 0.8, 0.3, 1], [0, 0, 0, 0]);
+    const jRight = UI.spawnSdfText(
+        'The quick brown fox jumps over the lazy dog.',
+        labelScale,
+        widgetW - pad * 2 - scrollW,
+        [1, 0.8, 0.3, 1],
+        [0, 0, 0, 0],
+    );
     container.addChild(jRight, 'top-left', 'top-left');
-    jRight.setPosition(pad, pad + lineH * 10);
     jRight.setJustify('right');
 
-    // Special characters row
     const glyphLabel = UI.spawnSdfText(
         '♔ ♕ ♖ ✓ ✗ ❤ ♻ ☠ ⚡ ★ ☆ ● ◆ № ½ ™ € ▲ ▼ █ ┌─┐',
         labelScale,
-        widgetW - pad * 2,
+        widgetW - pad * 2 - scrollW,
         [1, 0.8, 0.4, 1],
         [0, 0, 0, 0],
     );
     container.addChild(glyphLabel, 'top-left', 'top-left');
-    glyphLabel.setPosition(pad, pad + lineH * 12);
 
-    // Shadow / glow demo
     const shadowLabel = UI.spawnSdfText(
         'Shadow (2,2 outl 2) / Glow',
         labelScale * 0.8,
@@ -966,7 +981,6 @@ function initTextShowcase(UI: UIManager): UIContainer {
         [0, 0, 0, 0],
     );
     container.addChild(shadowLabel, 'top-left', 'top-left');
-    shadowLabel.setPosition(pad, pad + lineH * 14);
 
     const shadowSample = UI.spawnSdfText(
         'SHADOW',
@@ -976,7 +990,6 @@ function initTextShowcase(UI: UIManager): UIContainer {
         [0, 0, 0, 0],
     );
     container.addChild(shadowSample, 'top-left', 'top-left');
-    shadowSample.setPosition(pad, pad + lineH * 15);
     shadowSample.setShadow(2, 2, [0, 0, 0, 0.4], 2);
 
     UI.root.entity.registerCall('update', () => {
@@ -985,6 +998,50 @@ function initTextShowcase(UI: UIManager): UIContainer {
         const x0 = cw - uiBorder - widgetW;
         const y0 = ch - uiBorder - widgetH;
         container.setPosition(x0, y0);
+
+        if (container.entity.enabled) {
+            game._scrollContainers = [{ x: x0, y: y0, w: widgetW, h: widgetH }];
+        }
+
+        // Scroll
+        const maxScroll = Math.max(0, contentH - widgetH);
+        const mx = game.mousePos[0];
+        const my = game.mousePos[1];
+        const mouseInside = mx >= x0 && mx <= x0 + widgetW && my >= y0 && my <= y0 + widgetH;
+        if (maxScroll > 0 && game.panelMenuOpen !== true && mouseInside) {
+            container.scrollY += -game.mouseWheel * 30;
+            container.scrollY = Math.max(0, Math.min(maxScroll, container.scrollY));
+        }
+
+        const sy = container.scrollY;
+
+        scaleLabel.setPosition(x0 + pad, y0 + pad - sy);
+        scaleSamples.setPosition(x0 + pad, y0 + pad + lineH - sy);
+        wLabel.setPosition(x0 + pad, y0 + pad + lineH * 3 - sy);
+        wSample.setPosition(x0 + pad, y0 + pad + lineH * 4 - sy);
+        jLabel.setPosition(x0 + pad, y0 + pad + lineH * 6 - sy);
+        jLeft.setPosition(x0 + pad, y0 + pad + lineH * 7 - sy);
+        jCenter.setPosition(x0 + pad, y0 + pad + lineH * 8.5 - sy);
+        jRight.setPosition(x0 + pad, y0 + pad + lineH * 10 - sy);
+        glyphLabel.setPosition(x0 + pad, y0 + pad + lineH * 12 - sy);
+        shadowLabel.setPosition(x0 + pad, y0 + pad + lineH * 14 - sy);
+        shadowSample.setPosition(x0 + pad, y0 + pad + lineH * 15 - sy);
+
+        // Scrollbar thumb
+        if (maxScroll > 0) {
+            const thumbH = Math.max(20, (widgetH / contentH) * widgetH);
+            const thumbY = y0 + (sy / maxScroll) * (widgetH - thumbH);
+            scrollTrack.setSize(scrollW, widgetH);
+            scrollTrack.setPosition(x0 + widgetW - scrollW, y0);
+            scrollThumb.setSize(scrollW, thumbH);
+            scrollThumb.setPosition(x0 + widgetW - scrollW, thumbY);
+            scrollTrack.setEnabled(true);
+            scrollThumb.setEnabled(true);
+        } else {
+            scrollTrack.setEnabled(false);
+            scrollThumb.setEnabled(false);
+        }
+
         UI.refreshLayout();
     });
 

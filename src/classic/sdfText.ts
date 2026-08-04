@@ -305,6 +305,18 @@ export class SdfText extends Drawable {
     rawDraw(): void {
         if (this.vertexCount === 0) return;
 
+        const clipRect = (this as any)._uiClipRect as
+            { x: number; y: number; w: number; h: number } | undefined;
+        if (clipRect) {
+            this.gl.enable(this.gl.SCISSOR_TEST);
+            this.gl.scissor(
+                clipRect.x,
+                this.gl.drawingBufferHeight - clipRect.y - clipRect.h,
+                clipRect.w,
+                clipRect.h,
+            );
+        }
+
         if (!this.vertexBuffer) {
             this.vertexBuffer = this.gl.createBuffer();
         }
@@ -376,6 +388,10 @@ export class SdfText extends Drawable {
         }
 
         drawPass(this.color, this.outlineWidth, 0, 0);
+
+        if (clipRect) {
+            this.gl.disable(this.gl.SCISSOR_TEST);
+        }
     }
 }
 

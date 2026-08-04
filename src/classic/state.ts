@@ -462,6 +462,7 @@ const game: GameState = {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.depthFunc(gl.LEQUAL);
         gl.depthMask(true);
+        gl.disable(gl.SCISSOR_TEST);
 
         this.renderList.length = 0;
         this.performCall('renderList');
