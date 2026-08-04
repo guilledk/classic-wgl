@@ -286,6 +286,7 @@ export class Collider extends Component implements ICollider {
     _handlerNames: ColliderHandlerName[];
     _handlers: Record<ColliderHandlerName, ColliderHandler[]>;
     consumesClick: boolean = false;
+    clickPriority: number = 0;
 
     constructor(entity: IEntity, shape: IShape) {
         super(entity);
@@ -515,12 +516,25 @@ export class PhysicsProvider {
                     break;
                 }
             }
-            for (const c of this.screen.retrieve(this.mouse)) {
+
+            // Collect all GJK-intersecting click-handler colliders, sort by
+            // clickPriority descending (higher priority dispatched first),
+            // tiebroken by _pid ascending. This prevents z-order / layout
+            // overlap bugs where a lower-PID collider steals clicks from an
+            // overlapping higher-priority element (e.g. popup menu over a
+            // toggle button).
+            const mouseCandidates = this.screen.retrieve(this.mouse);
+            const clickCandidates: Collider[] = [];
+            for (const c of mouseCandidates) {
                 if (c._pid === 0 || !('entity' in c) || !c.entity.enabled) continue;
                 const collider = c as Collider;
                 if (collider.hasHandlers('click') && this.gjk(this.mouse, c)) {
-                    if (collider.callHandler('click')) break;
+                    clickCandidates.push(collider);
                 }
+            }
+            clickCandidates.sort((a, b) => b.clickPriority - a.clickPriority || a._pid - b._pid);
+            for (const collider of clickCandidates) {
+                if (collider.callHandler('click')) break;
             }
         }
 
@@ -532,7 +546,7 @@ export class PhysicsProvider {
             const collider = c as Collider;
             if (collider.hasHandlers('enter')) {
                 for (const otherId in this.colliding[Number(id)]) {
-                    if (!(id in this.collided)) {
+                    if (!this.collided[Number(id)]?.[Number(otherId)]) {
                         const other = this._registry[Number(otherId)];
                         collider.callHandler('enter', other);
                     }
@@ -548,7 +562,7 @@ export class PhysicsProvider {
             const collider = c as Collider;
             if (collider.hasHandlers('exit')) {
                 for (const otherId in this.collided[Number(id)]) {
-                    if (!(id in this.colliding)) {
+                    if (!this.colliding[Number(id)]?.[Number(otherId)]) {
                         const other = this._registry[Number(otherId)];
                         collider.callHandler('exit', other);
                     }
