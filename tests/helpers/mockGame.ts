@@ -44,6 +44,7 @@ export function createMockGL(): WebGLRenderingContext {
         uniform4fv: vi.fn(),
         uniform1i: vi.fn(),
         uniform1f: vi.fn(),
+        uniform2f: vi.fn(),
         drawElements: vi.fn(),
         drawArrays: vi.fn(),
         activeTexture: vi.fn(),
