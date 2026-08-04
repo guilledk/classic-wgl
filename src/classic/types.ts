@@ -256,6 +256,10 @@ export interface IUIManager {
 // Resource Manifest Types
 // ============================================================================
 
+/** Reports loading progress for a bounded phase; `fraction` is always 0..1
+ * for that phase's own scope. */
+export type ProgressCallback = (label: string, fraction: number) => void;
+
 export interface TextureManifestEntry {
     name: string;
     src: string;
@@ -362,7 +366,7 @@ export interface IGameState {
     init(): void;
     getTexture(name: string): ITexture;
     download(url: string): void;
-    load(url: string): Promise<void>;
+    load(url: string, onProgress?: ProgressCallback): Promise<void>;
     registerCall(callName: CallName, entity: IEntity, fn: CallFunction): void;
     unregisterCall(callName: CallName, entity: IEntity, fn: CallFunction): void;
     performCall(callName: CallName): void;
@@ -372,7 +376,7 @@ export interface IGameState {
     destroyEntity(entity: IEntity): void;
     getGameObject(cmd: string | IComponent): IEntity | IComponent;
     resizeCanvas(): void;
-    loadResources(): Promise<void>;
+    loadResources(onProgress?: ProgressCallback): Promise<void>;
     launch(): void;
     draw(now: number): void;
 
