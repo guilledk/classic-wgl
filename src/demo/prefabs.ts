@@ -25,6 +25,7 @@ declare module '/classic/types.js' {
         uiConsumedClick?: boolean;
         panelMenuOpen?: boolean;
         debugFootprints?: boolean;
+        _scrollContainers?: { x: number; y: number; w: number; h: number }[];
     }
 }
 
@@ -48,6 +49,15 @@ export function initCameraControllerWASD(): void {
         if (game.isKeyDown('KeyD')) game.camera.position[0] += game.scrollSpeed * game.deltaTime;
 
         if (Math.abs(game.mouseWheel) > 0.01) {
+            const sc = game._scrollContainers;
+            if (sc && sc.length > 0) {
+                const mx = game.mousePos[0];
+                const my = game.mousePos[1];
+                if (sc.some((r) => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h)) {
+                    return;
+                }
+            }
+
             game.camera.scale[0] += game.mouseWheel * game.deltaTime;
             game.camera.scale[1] += game.mouseWheel * game.deltaTime;
 
