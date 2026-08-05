@@ -228,14 +228,21 @@ function initToolButtons(UI: UIManager): void {
     const menuFontScale = 0.5 * _uiScale;
     const menuPanelGap = Math.round(0 * _uiScale);
 
-    // DEV button
-    const devContainer = UI.spawnContainer(btnPixel, btnPixel, [0, 0, 0, 0]);
-    const devSprite = UI.spawnSprite('editorIcons', btnPixel, btnPixel, 0, [4, 4]);
-    devContainer.addChild(devSprite, 'mid-center', 'mid-center');
-    const devCollider = UI.addColliderToElem(devContainer);
-    devCollider.consumesClick = true;
-
     let isOpen = false;
+
+    // DEV button
+    const devBtn = UI.spawnButton(
+        btnPixel,
+        btnPixel,
+        [0, 0, 0, 0],
+        () => {
+            game.uiConsumedClick = true;
+            isOpen = !isOpen;
+            if (!isOpen) game.editorTarget = 'none';
+            return true;
+        },
+        { sprite: 'editorIcons', spriteFrame: 0, spriteTileSet: [4, 4] },
+    );
 
     interface MenuItem {
         label: string;
@@ -302,26 +309,37 @@ function initToolButtons(UI: UIManager): void {
 
     // Agent selection indicator: small [A] button, always visible
     const agentInd = Math.round(48 * _uiScale);
-    const agentBox = UI.spawnContainer(agentInd, agentInd, [0.1, 0.6, 0.1, 0.8]);
-    const agentTxt = UI.spawnText('A', 0.55 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    agentBox.addChild(agentTxt, 'mid-center', 'mid-center');
-    const agentCol = UI.addColliderToElem(agentBox);
-    agentCol.consumesClick = true;
-
-    agentCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.editorTarget = 'none';
-        game.agentSelected = !(game.agentSelected ?? true);
-        return true;
-    });
+    const agentBtn = UI.spawnButton(
+        agentInd,
+        agentInd,
+        [0.1, 0.6, 0.1, 0.8],
+        () => {
+            game.uiConsumedClick = true;
+            game.editorTarget = 'none';
+            game.agentSelected = !(game.agentSelected ?? true);
+            return true;
+        },
+        { text: 'A', textScale: 0.55 * _uiScale, priority: 1, hover: true, clickFeedback: 5 },
+    );
 
     // Menu panel background
-    const menuPanel = UI.spawnContainer(menuW, menuH, [0.1, 0.1, 0.1, 0.95]);
+    const menuPanel = UI.spawnButton(menuW, menuH, [0.1, 0.1, 0.1, 0.95], () => true, {
+        priority: 2,
+    }).container;
 
     // Menu item rows
     const itemRows = menuItems.map((item) => {
         const rowW = menuW - menuPadding * 2;
-        const row = UI.spawnContainer(rowW, menuItemH, [0.15, 0.15, 0.15, 1]);
+        const { container: row, collider: col } = UI.spawnButton(
+            rowW,
+            menuItemH,
+            [0.15, 0.15, 0.15, 1],
+            () => {
+                item.action();
+                return true;
+            },
+            { priority: 3 },
+        );
         const label = UI.spawnText(
             item.label,
             menuFontScale,
@@ -330,22 +348,16 @@ function initToolButtons(UI: UIManager): void {
             [0, 0, 0, 0],
         );
         row.addChild(label, 'mid-left', 'mid-left');
-        const col = UI.addColliderToElem(row);
-        col.consumesClick = true;
         menuPanel.addChild(row, 'top-left', 'top-left');
         return { row, label, col, item };
     });
 
     // Full-screen backdrop for click-outside-to-close
-    const backdrop = UI.spawnContainer(1, 1, [0, 0, 0, 0.01]);
-    const backdropCol = UI.addColliderToElem(backdrop);
-    backdropCol.consumesClick = true;
-
-    backdropCol.addHandler('click', () => {
+    const backdrop = UI.spawnButton(1, 1, [0, 0, 0, 0.01], () => {
         if (!isOpen) return false;
         const mx = game.mousePos[0];
         const my = game.mousePos[1];
-        const dp = devContainer.position;
+        const dp = devBtn.container.position;
         const mp = menuPanel.position;
         const onDev =
             mx >= dp[0] && mx <= dp[0] + btnPixel && my >= dp[1] && my <= dp[1] + btnPixel;
@@ -355,23 +367,7 @@ function initToolButtons(UI: UIManager): void {
             isOpen = false;
         }
         return false;
-    });
-
-    // DEV button click — toggles menu
-    devCollider.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        isOpen = !isOpen;
-        if (!isOpen) game.editorTarget = 'none';
-        return true;
-    });
-
-    // Menu item click — execute action and close
-    for (const { col, item } of itemRows) {
-        col.addHandler('click', () => {
-            item.action();
-            return true;
-        });
-    }
+    }).container;
 
     // Update loop
     UI.root.entity.registerCall('update', () => {
@@ -380,13 +376,15 @@ function initToolButtons(UI: UIManager): void {
         const half = h / 2;
 
         // DEV button position
-        devContainer.setPosition(h - half, ch - h - half);
+        devBtn.container.setPosition(h - half, ch - h - half);
 
         // Agent indicator: above DEV button when menu closed
         const agentTop = ch - h * 2 - agentInd / 2;
         const selected = game.agentSelected ?? true;
-        agentBox.color = selected ? [0.1, 0.7, 0.1, 0.8] : [0.3, 0.3, 0.3, 0.6];
-        agentBox.setPosition(agentInd / 2, agentTop);
+        (agentBtn.container as unknown as { _btnBase: number[] })._btnBase = selected
+            ? [0.1, 0.7, 0.1, 0.8]
+            : [0.3, 0.3, 0.3, 0.6];
+        agentBtn.container.setPosition(agentInd / 2, agentTop);
 
         // Menu panel: above DEV button
         const menuTop = ch - h - menuPanelGap - menuH;
@@ -547,7 +545,7 @@ function initHeightWidget(UI: UIManager): UIContainer {
     const btnSize = Math.round(32 * _uiScale);
     const labelW = Math.round(50 * _uiScale);
     const gap = Math.round(4 * _uiScale);
-    const widgetW = btnSize * 2 + labelW + Math.round(12 * _uiScale);
+    const widgetW = gap * 4 + btnSize * 2 + labelW;
     const rowH = btnSize;
     const widgetH = rowH * 3 + gap * 4;
     const uiBorder = Math.round(10 * _uiScale);
@@ -563,78 +561,80 @@ function initHeightWidget(UI: UIManager): UIContainer {
     const container = UI.spawnContainer(widgetW, widgetH, [0, 0, 0, 0.4]);
 
     // Row 1: height delta value
-    const hMinus = UI.spawnContainer(btnSize, btnSize, [0.6, 0.1, 0.1, 1]);
-    const hMinusTxt = UI.spawnText('-', 0.6 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    hMinus.addChild(hMinusTxt, 'mid-center', 'mid-center');
+    const { container: hMinus } = UI.spawnButton(
+        btnSize,
+        btnSize,
+        [0.6, 0.1, 0.1, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.editorHeight = (game.editorHeight ?? 0) - 1;
+            return true;
+        },
+        { text: '-', textScale: 0.6 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(hMinus, 'top-left', 'top-left');
 
     const hLabel = UI.spawnText('0', 0.5 * _uiScale, 60, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(hLabel, 'top-left', 'top-left');
 
-    const hPlus = UI.spawnContainer(btnSize, btnSize, [0.1, 0.6, 0.1, 1]);
-    const hPlusTxt = UI.spawnText('+', 0.6 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    hPlus.addChild(hPlusTxt, 'mid-center', 'mid-center');
+    const { container: hPlus } = UI.spawnButton(
+        btnSize,
+        btnSize,
+        [0.1, 0.6, 0.1, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.editorHeight = (game.editorHeight ?? 0) + 1;
+            return true;
+        },
+        { text: '+', textScale: 0.6 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(hPlus, 'top-left', 'top-left');
 
     // Row 2: height scale multiplier
-    const sMinus = UI.spawnContainer(btnSize, btnSize, [0.1, 0.1, 0.6, 1]);
-    const sMinusTxt = UI.spawnText('s-', 0.45 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    sMinus.addChild(sMinusTxt, 'mid-center', 'mid-center');
+    const { container: sMinus } = UI.spawnButton(
+        btnSize,
+        btnSize,
+        [0.1, 0.1, 0.6, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.heightScaleMultiplier = Math.max(1, (game.heightScaleMultiplier ?? 1) - 1);
+            updateHeightScale();
+            return true;
+        },
+        { text: 's-', textScale: 0.45 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(sMinus, 'top-left', 'top-left');
 
     const sLabel = UI.spawnText('x1', 0.45 * _uiScale, 60, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(sLabel, 'top-left', 'top-left');
 
-    const sPlus = UI.spawnContainer(btnSize, btnSize, [0.1, 0.1, 0.6, 1]);
-    const sPlusTxt = UI.spawnText('s+', 0.45 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    sPlus.addChild(sPlusTxt, 'mid-center', 'mid-center');
+    const { container: sPlus } = UI.spawnButton(
+        btnSize,
+        btnSize,
+        [0.1, 0.1, 0.6, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.heightScaleMultiplier = (game.heightScaleMultiplier ?? 1) + 1;
+            updateHeightScale();
+            return true;
+        },
+        { text: 's+', textScale: 0.45 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(sPlus, 'top-left', 'top-left');
 
     // Row 3: set / blend mode toggle
-    const modeBtn = UI.spawnContainer(widgetW, rowH, [0.2, 0.2, 0.2, 1]);
-    const modeTxt = UI.spawnText('blend', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    modeBtn.addChild(modeTxt, 'mid-center', 'mid-center');
+    const { container: modeBtn, child: modeTxt } = UI.spawnButton(
+        widgetW - gap * 2,
+        rowH,
+        [0.2, 0.2, 0.2, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.heightEditMode = game.heightEditMode === 'set' ? 'blend' : 'set';
+            return true;
+        },
+        { text: 'blend', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(modeBtn, 'top-left', 'top-left');
-
-    // Colliders
-    const hMinusCol = UI.addColliderToElem(hMinus);
-    hMinusCol.consumesClick = true;
-    const hPlusCol = UI.addColliderToElem(hPlus);
-    hPlusCol.consumesClick = true;
-    const sMinusCol = UI.addColliderToElem(sMinus);
-    sMinusCol.consumesClick = true;
-    const sPlusCol = UI.addColliderToElem(sPlus);
-    sPlusCol.consumesClick = true;
-    const modeCol = UI.addColliderToElem(modeBtn);
-    modeCol.consumesClick = true;
-
-    hMinusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.editorHeight = (game.editorHeight ?? 0) - 1;
-        return true;
-    });
-    hPlusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.editorHeight = (game.editorHeight ?? 0) + 1;
-        return true;
-    });
-    sMinusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.heightScaleMultiplier = Math.max(1, (game.heightScaleMultiplier ?? 1) - 1);
-        updateHeightScale();
-        return true;
-    });
-    sPlusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.heightScaleMultiplier = (game.heightScaleMultiplier ?? 1) + 1;
-        updateHeightScale();
-        return true;
-    });
-    modeCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.heightEditMode = game.heightEditMode === 'set' ? 'blend' : 'set';
-        return true;
-    });
 
     // Manual positioning each frame
     UI.root.entity.registerCall('update', () => {
@@ -647,7 +647,7 @@ function initHeightWidget(UI: UIManager): UIContainer {
         const cy2 = rowH + gap * 2;
         const cy3 = rowH * 2 + gap * 3;
 
-        container.setPosition(x0 + widgetW / 2, y0 + widgetH / 2);
+        container.setPosition(x0, y0);
 
         hMinus.setPosition(x0 + cx, y0 + cy1);
         hLabel.setPosition(x0 + cx + btnSize + gap, y0 + cy1);
@@ -661,7 +661,8 @@ function initHeightWidget(UI: UIManager): UIContainer {
 
         hLabel.setText((game.editorHeight ?? 0).toString());
         sLabel.setText('x' + (game.heightScaleMultiplier ?? 1).toString());
-        modeTxt.setText(game.heightEditMode ?? 'blend');
+        (modeTxt as UIText).setText(game.heightEditMode ?? 'blend');
+        UI.refreshLayout();
     });
 
     container.setEnabled(false);
@@ -685,115 +686,114 @@ function initLightWidget(UI: UIManager): UIContainer {
 
     const container = UI.spawnContainer(widgetW, widgetH, [0, 0, 0, 0.4]);
 
+    const AZ_STEP = 15;
+    const EL_STEP = 10;
+
     // Row 1: preset cycle
-    const presetPrev = UI.spawnContainer(btnSize, btnSize, [0.3, 0.3, 0.6, 1]);
-    const presetPrevTxt = UI.spawnText('<<', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    presetPrev.addChild(presetPrevTxt, 'mid-center', 'mid-center');
+    const { container: presetPrev } = UI.spawnButton(
+        btnSize,
+        btnSize,
+        [0.3, 0.3, 0.6, 1],
+        () => {
+            game.uiConsumedClick = true;
+            const keys = PRESET_ORDER;
+            const cur = game.lightPreset ?? 'sunny';
+            const idx = keys.indexOf(cur);
+            const prev = keys[(idx - 1 + keys.length) % keys.length];
+            applyLightPreset(prev);
+            return true;
+        },
+        { text: '<<', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(presetPrev, 'top-left', 'top-left');
 
     const presetLabel = UI.spawnText('Sunny Day', 0.45 * _uiScale, 120, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(presetLabel, 'top-left', 'top-left');
 
-    const presetNext = UI.spawnContainer(btnSize, btnSize, [0.3, 0.3, 0.6, 1]);
-    const presetNextTxt = UI.spawnText('>>', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    presetNext.addChild(presetNextTxt, 'mid-center', 'mid-center');
+    const { container: presetNext } = UI.spawnButton(
+        btnSize,
+        btnSize,
+        [0.3, 0.3, 0.6, 1],
+        () => {
+            game.uiConsumedClick = true;
+            const keys = PRESET_ORDER;
+            const cur = game.lightPreset ?? 'sunny';
+            const idx = keys.indexOf(cur);
+            const next = keys[(idx + 1) % keys.length];
+            applyLightPreset(next);
+            return true;
+        },
+        { text: '>>', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(presetNext, 'top-left', 'top-left');
 
     // Row 2: azimuth
     const azLabel = UI.spawnText('az: 45deg', 0.45 * _uiScale, 80, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(azLabel, 'top-left', 'top-left');
 
-    const azMinus = UI.spawnContainer(smallBtn, smallBtn, [0.6, 0.3, 0.1, 1]);
-    const azMinusTxt = UI.spawnText('-', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    azMinus.addChild(azMinusTxt, 'mid-center', 'mid-center');
+    const { container: azMinus } = UI.spawnButton(
+        smallBtn,
+        smallBtn,
+        [0.6, 0.3, 0.1, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.lightAzimuth = ((game.lightAzimuth ?? 0) - AZ_STEP + 360) % 360;
+            updateLightDirection();
+            game.lightPreset = 'custom';
+            return true;
+        },
+        { text: '-', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(azMinus, 'top-left', 'top-left');
 
-    const azPlus = UI.spawnContainer(smallBtn, smallBtn, [0.1, 0.6, 0.3, 1]);
-    const azPlusTxt = UI.spawnText('+', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    azPlus.addChild(azPlusTxt, 'mid-center', 'mid-center');
+    const { container: azPlus } = UI.spawnButton(
+        smallBtn,
+        smallBtn,
+        [0.1, 0.6, 0.3, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.lightAzimuth = ((game.lightAzimuth ?? 0) + AZ_STEP) % 360;
+            updateLightDirection();
+            game.lightPreset = 'custom';
+            return true;
+        },
+        { text: '+', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(azPlus, 'top-left', 'top-left');
 
     // Row 3: elevation
     const elLabel = UI.spawnText('el: 45deg', 0.45 * _uiScale, 80, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(elLabel, 'top-left', 'top-left');
 
-    const elMinus = UI.spawnContainer(smallBtn, smallBtn, [0.6, 0.3, 0.1, 1]);
-    const elMinusTxt = UI.spawnText('-', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    elMinus.addChild(elMinusTxt, 'mid-center', 'mid-center');
+    const { container: elMinus } = UI.spawnButton(
+        smallBtn,
+        smallBtn,
+        [0.6, 0.3, 0.1, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.lightElevation = Math.max(0, (game.lightElevation ?? 45) - EL_STEP);
+            updateLightDirection();
+            game.lightPreset = 'custom';
+            return true;
+        },
+        { text: '-', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(elMinus, 'top-left', 'top-left');
 
-    const elPlus = UI.spawnContainer(smallBtn, smallBtn, [0.1, 0.6, 0.3, 1]);
-    const elPlusTxt = UI.spawnText('+', 0.4 * _uiScale, 100, [1, 1, 1, 1], [0, 0, 0, 0]);
-    elPlus.addChild(elPlusTxt, 'mid-center', 'mid-center');
+    const { container: elPlus } = UI.spawnButton(
+        smallBtn,
+        smallBtn,
+        [0.1, 0.6, 0.3, 1],
+        () => {
+            game.uiConsumedClick = true;
+            game.lightElevation = Math.min(90, (game.lightElevation ?? 45) + EL_STEP);
+            updateLightDirection();
+            game.lightPreset = 'custom';
+            return true;
+        },
+        { text: '+', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+    );
     container.addChild(elPlus, 'top-left', 'top-left');
-
-    const presetPrevCol = UI.addColliderToElem(presetPrev);
-    presetPrevCol.consumesClick = true;
-    const presetNextCol = UI.addColliderToElem(presetNext);
-    presetNextCol.consumesClick = true;
-    const azMinusCol = UI.addColliderToElem(azMinus);
-    azMinusCol.consumesClick = true;
-    const azPlusCol = UI.addColliderToElem(azPlus);
-    azPlusCol.consumesClick = true;
-    const elMinusCol = UI.addColliderToElem(elMinus);
-    elMinusCol.consumesClick = true;
-    const elPlusCol = UI.addColliderToElem(elPlus);
-    elPlusCol.consumesClick = true;
-
-    presetPrevCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        const keys = PRESET_ORDER;
-        const cur = game.lightPreset ?? 'sunny';
-        const idx = keys.indexOf(cur);
-        const prev = keys[(idx - 1 + keys.length) % keys.length];
-        applyLightPreset(prev);
-        return true;
-    });
-
-    presetNextCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        const keys = PRESET_ORDER;
-        const cur = game.lightPreset ?? 'sunny';
-        const idx = keys.indexOf(cur);
-        const next = keys[(idx + 1) % keys.length];
-        applyLightPreset(next);
-        return true;
-    });
-
-    const AZ_STEP = 15;
-    const EL_STEP = 10;
-
-    azMinusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.lightAzimuth = ((game.lightAzimuth ?? 0) - AZ_STEP + 360) % 360;
-        updateLightDirection();
-        game.lightPreset = 'custom';
-        return true;
-    });
-
-    azPlusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.lightAzimuth = ((game.lightAzimuth ?? 0) + AZ_STEP) % 360;
-        updateLightDirection();
-        game.lightPreset = 'custom';
-        return true;
-    });
-
-    elMinusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.lightElevation = Math.max(0, (game.lightElevation ?? 45) - EL_STEP);
-        updateLightDirection();
-        game.lightPreset = 'custom';
-        return true;
-    });
-
-    elPlusCol.addHandler('click', () => {
-        game.uiConsumedClick = true;
-        game.lightElevation = Math.min(90, (game.lightElevation ?? 45) + EL_STEP);
-        updateLightDirection();
-        game.lightPreset = 'custom';
-        return true;
-    });
 
     UI.root.entity.registerCall('update', () => {
         const cw = game.canvas!.width;
@@ -828,6 +828,7 @@ function initLightWidget(UI: UIManager): UIContainer {
 
         const el = Math.round(game.lightElevation ?? 45);
         elLabel.setText('el: ' + el + 'deg');
+        UI.refreshLayout();
     });
 
     container.setEnabled(false);
