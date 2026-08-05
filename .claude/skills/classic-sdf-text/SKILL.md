@@ -25,7 +25,7 @@ Drawable (transforms.ts)
 `SdfText` renders each glyph as a textured quad from a pre-generated SDF atlas.
 It builds an interleaved `Float32Array` vertex buffer (position + UV per vertex,
 6 vertices per glyph) and issues one `drawArrays(gl.TRIANGLES)` call per text
-string per frame (plus an optional second pass for drop-shadow).
+string per frame (plus optional passes for shadow and glow).
 
 `UISdfText` extends `SdfText` with word-wrapping (pixel-width driven, not
 character-count), explicit `\n` line breaks, and per-line justification
@@ -39,13 +39,13 @@ All data (metrics + atlas texture) is loaded synchronously during
 | File | Role |
 |------|------|
 | `scripts/make-font-atlas.mjs` | Build-time SDF atlas + metrics JSON generator |
-| `src/classic/sdfText.ts` | `SdfText` class: glyph layout, vertex buffer, rawDraw |
-| `src/classic/ui.ts` (UISdfText) | `UISdfText` class: word-wrap, justify, multi-line |
+| `src/classic/sdfText.ts` | `SdfText` class: glyph layout, vertex buffer, `rawDraw` |
+| `src/classic/ui.ts` (UISdfText) | `UISdfText` class: word-wrap, justify, height/layout |
 | `src/shaders/sdf.vert` | Vertex shader: `texCoord` varying passthrough |
-| `src/shaders/sdf.frag` | Fragment shader: `smoothstep` + outline + shadow |
-| `src/classic/utils.ts` | `initSdfFonts()` — loads metrics JSON at startup |
-| `src/classic/state.ts` | `game.sdfFonts`, `game.getSdfFont()` |
-| `public/manifest.json` | `"sdfFonts": [{ "name": "...", "metrics": "..." }]` |
+| `src/shaders/sdf.frag` | Fragment shader: derivative AA, weight, gamma, outline, alpha comp |
+| `src/classic/utils.ts` | `initSdfFonts()` — loads metrics JSON at startup, warns if `spread` missing |
+| `src/classic/state.ts` | `game.sdfFonts`, `game.getSdfFont()`, scissor-test disable |
+| `public/manifest.json` | `"sdfFonts": [{ "name": "...", "metrics": "..." }]` + shader uniforms |
 
 ---
 
@@ -58,20 +58,64 @@ rasterise a `.ttf`/`.otf` file and produce a grayscale SDF texture atlas.
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `GLYPH_SIZE` | 64 | Target cell size in output pixels |
-| `RENDER_SCALE` | 16 | High-res render multiplier |
-| `SOURCE_W` | `HIGH_RES + padding*2` = 3072 | Source canvas pixel dimensions |
-| `CELL_SCALE` | `SOURCE_W / GLYPH_SIZE` = 48 | Source pixels per output cell pixel |
-| `ORIGIN_CELL` | `padding / CELL_SCALE` ≈ 21.33 | Font baseline in cell-pixel coordinates |
-| `maxDist` | `GLYPH_SIZE` = 64 | SDF distance-field spread (in source pixels) |
+| `FONT_CELL_SIZE` | `GLYPH_SIZE * 0.4` = 25.6 | Font size in cell pixels (engine unit) |
+| `PAD` | 2 | Texel gutter between glyphs (prevents LINEAR filter bleed) |
+| `SS` (supersampling factor) | 12 | High-res render multiplier per cell px |
+| `spread` (default) | 4 | SDF distance-field spread in cell pixels |
+| `GLYPH_SIZE` | 64 | Preserved for metric compatibility |
 
 ### Algorithm
 
-1. Render each glyph at `fontSize * RENDER_SCALE` px, `textBaseline='alphabetic'`, `textAlign='left'`
-2. Compute SDF: detect edges (inside→outside transitions), brute-force Manhattan distances, normalize to `[0..255]` with `maxDist` spread
-3. Crop to bounding box of non-background pixels (`byte ≠ 1`)
-4. Shelf-pack cropped glyphs into power-of-two atlas (typically 256×256)
-5. Output `public/res/<font>-sdf.png` + `public/res/<font>-sdf.json`
+**Per-glyph:**
+1. Size the raster: `cellW = ceil(inkW) + 2·(spread + pad)`, `source = cellW · SS`
+2. Render at `renderSize = FONT_CELL_SIZE · SS` px, `textBaseline='alphabetic'`, `textAlign='left'`
+3. Build inside/outside binary masks from alpha channel
+4. Compute squared-distance transform: separable Felzenszwalb EDT (`dt1d` / `edt2d`) — O(n)
+5. Point-sample at cell centres, normalize to `[0..255]` with `maxDist = spread · SS`
+6. Detect `.notdef`/blank via bitmap hash comparison against known-absent code points
+
+**Atlas:**
+- Shelf-pack cropped glyph cells into power-of-two atlas (typically 512² or 1024²)
+- `PAD=2` gutter between glyphs; background is `#000` (far-outside)
+- Packer retries with `size *= 2` on overflow; hard-fails at `--max-size` (default 4096)
+
+**Caching:**
+- Key = `sha256(font bytes + charset + SS + spread + glyphSize + PAD)`
+- Stored next to outputs as `<name>-sdf.sig`; cache hit skips regeneration
+- Cache invalidates itself if `.png` or `.json` output files are missing
+
+**CLI:**
+```
+node scripts/make-font-atlas.mjs <font.ttf> [--family name] [--ss 12] [--spread 4]
+    [--max-size 4096] [--charset groups] [--no-cache]
+```
+
+### Charset groups
+
+Charset is specified via `--charset` (default: `all`). Named groups can be combined with `+` and excluded with `-`:
+
+| Group | Glyphs | Contents |
+|---|---|---|
+| `ascii` | 95 | `0020-007E` |
+| `latin1` | 96 | `00A0-00FF` accented names, `¡¿«»°±×÷£¥¢§©®µ¶·` |
+| `punct` | 26 | curly quotes, en/em dash, ellipsis, bullet, prime, dagger |
+| `supsub` | 28 | `⁰¹²³⁻ⁿ ₀₁₂` formulas |
+| `fractions` | 16 | `½ ⅓ ¼ ⅔ ⅛` health/stack fractions |
+| `currency` | 25 | `€ ₽ ₹ ₩ ¤ ƒ` shops/economy |
+| `roman` | 32 | `Ⅰ Ⅱ Ⅲ Ⅳ` tiers |
+| `arrows` | 112 | `← ↑ → ↓ ↔ ⇧ ⇥ ↵` movement, tooltips |
+| `math` | 36 | `≈ ≠ ≤ ≥ ∞ √ ∑ ∆ ⊕` stat displays |
+| `box` | 128 | `┌─┬─┐ │ ├─┼─┤ └─┴─┘` frames, panels |
+| `blocks` | 29 | `█ ▌ ▄ ▀` progress bars (excludes ░▒▓ dither) |
+| `geometric` | 96 | `■ ▲ ● ◆ ◇` markers, minimap icons |
+| `symbols` | 84 | `☠ ☢ ⚠ ⚡ ♔♕ ♠♥♦♣ ⚀-⚅ ♪♫` game icons |
+| `dingbats` | 44 | `✓ ✔ ✗ ✘ ❤ ➔` toggles, rarity, lives |
+| `enclosed` | 30 | `① ➀ ❶` numbered lists |
+| `keys` | 13 | `⌘ ⌥ ⌃ ⏎ ⌫ ⌦ ␣` key prompts |
+| `greek` | 50 | `α β γ Δ Σ Ω π μ` stats/formulas |
+
+Default `all` produces ~935 glyphs on a 2048² atlas. Characters not covered by the
+font are silently dropped (detected via `.notdef` bitmap hash matching).
 
 ### Metrics JSON format
 
@@ -79,18 +123,21 @@ rasterise a `.ttf`/`.otf` file and produce a grayscale SDF texture atlas.
 {
   "name": "dejavusans",
   "family": "DejaVuSans",
-  "atlasSize": [256, 256],
+  "atlasSize": [2048, 2048],
   "glyphSize": 64,
+  "spread": 4,
   "baseline": 19.968,
   "lineHeight": 33.28,
   "glyphs": {
-    "A": { "x": 232, "y": 0, "w": 20, "h": 22, "xOffset": -1.33, "yOffset": -20.33, "xAdvance": 17.51 }
+    "A": { "x": 108, "y": 77, "w": 30, "h": 31, "xOffset": -6, "yOffset": -25.968, "xAdvance": 17.512 }
   }
 }
 ```
 
 All numeric quantities are in **cell pixels** — the universal unit for SDF
-text metrics. One cell pixel = one pixel in the original 64×64 SDF output grid.
+text metrics (`FONT_CELL_SIZE = 25.6`). Floats are rounded to 3 decimal places.
+
+`spread` is required — `initSdfFonts()` warns if absent (stale atlas).
 
 ---
 
@@ -103,22 +150,41 @@ Everything is in **cell pixels**, multiplied by `_scale` to get screen pixels.
 | Glyph top in local coords | `gy = baseline * scale + yOffset * scale` |
 | Glyph bottom | `gy + h * scale` |
 | Line offset (multi-line) | `gy += lineIndex * lineHeight * scale` |
-| Text block extent | `min(gy)` to `max(gy + h*scale)` across all glyphs |
-| `textHeight` | `glyphExtentMax - glyphExtentMin` (not `lineHeight * scale`!) |
-| `textWidth` | Max line advance from `xAdvance * scale` sums |
 
-**Critical:** `textHeight` must reflect the glyph *extent*, not the line box.
-The extent is recomputed immediately after the perLine collection loop
-(before the vertex buffer build) so that both the vertex local coordinates
-and `modelMatrix()` use the same value. If `textHeight` is changed *after*
-the vertex loop, the coordinates mismatch and glyphs appear squashed.
+### `textHeight` vs `_layoutHeight`
 
-Local → screen transform via `modelMatrix()`:
+The SDF cell includes `spread + PAD` margins around the visible ink:
+
+- `textHeight` = full cell height including spread margins (used for vertex
+  coordinate normalization and `modelMatrix()` scale).
+- `_layoutHeight` = `textHeight - 2·(spread + PAD)·scale` → visible ink
+  height. Returned by `UISdfText.get height()` so the UI anchor system
+  (`setChildrenPos`) uses visible ink bounds, not padded cell bounds.
+
+### `textWidth` vs `_layoutWidth`
+
+- `textWidth` = maximum rendered line width (used normally).
+- `_layoutWidth` = column width for justification. Set to `maxWidth` only
+  when `justify !== 'left'`. When set, `textWidth` is replaced with the
+  column width so the text block spans the full intended column — center
+  and right alignment then shift glyphs into the correct position.
+
+### `advanceFor(ch)`
+
+Shared by `_buildGlyphBuffer`, word-wrap measurement, and layout. Returns:
+- Known glyph → `g.xAdvance`
+- Space → space advance (or fallback)
+- Tab (`\t`) → 4 × space advance
+- Unknown → `glyphSize * 0.5`
+
+Local → screen transform via `modelMatrix(offset?)`:
 ```typescript
-translate(position) * scale(textWidth, textHeight, 1)
+translate(position + offset) * scale(textWidth, textHeight, z)
 ```
 
-Positioned by the UI anchor system (e.g., `mid-center`) just like any `UIDrawable`.
+The optional `offset` parameter is folded into the translation **before** the
+scale, ensuring shadow/glow offsets are in screen pixels, not scaled by
+`textWidth/textHeight`.
 
 ### UV mapping
 
@@ -131,7 +197,6 @@ uy1 = (g.y + g.h) / atlasH;
 
 **Do NOT use `1 - g.y/atlasH`.** This engine does not set
 `UNPACK_FLIP_Y_WEBGL`; `texImage2D` puts image row 0 at texture t=0.
-The engine's own `sheet.frag` shader follows the same convention.
 
 ---
 
@@ -143,20 +208,57 @@ The engine's own `sheet.frag` shader follows the same convention.
 attribute vec4 vertexPos;     // location 0 (bound before linkProgram!)
 attribute vec2 texCoord;      // location 1
 varying mediump vec2 vTexCoord;
-// standard model * camera * projection transform
 ```
 
 ### Fragment (`sdf.frag`)
 
+#### Uniforms
+
+| Uniform | Type | Meaning |
+|---|---|---|
+| `texSampler` | `sampler2D` | SDF atlas texture |
+| `color` | `vec4` | Fill color (a = opacity) |
+| `outlineColor` | `vec4` | Outline color (a = opacity) |
+| `outlineWidth` | `float` | Outline width in **cell pixels** |
+| `softEdge` | `float` | Manual AA fallback when derivatives unavailable |
+| `spread` | `float` | SDF spread from metrics JSON |
+| `atlasSize` | `vec2` | Atlas dimensions for UV→px conversion |
+| `weight` | `float` | Faux bold/light: `edge = 0.5 - weight` |
+| `gamma` | `float` | Perceptual gamma on final alpha |
+
+#### Derivative AA
+
 ```glsl
-float distance = texture2D(texSampler, vTexCoord).r;
-float edge = 0.5;
-float alpha = smoothstep(edge - softEdge, edge + softEdge, distance);
-// Outline: smoothstep in band [edge - outlineWidth, edge]
-// Shadow: second drawPass with offset model matrix + blurred outline
+#ifdef GL_OES_standard_derivatives
+    vec2 uvPx = fwidth(vTexCoord) * atlasSize;
+    float pxRange = (2.0 * spread) / max(length(uvPx), 1e-5);
+    w = clamp(0.5 / pxRange, 0.0001, 0.5);
+#else
+    w = softEdge;
+#endif
 ```
 
-`softEdge = 0.08` is a good fixed value for the 64-px `GLYPH_SIZE`.
+`OES_standard_derivatives` is already requested at `state.ts:177`. The
+`softEdge` uniform is a fallback only.
+
+#### Alpha compositing
+
+```glsl
+float fillAlpha = alpha * color.a;
+float outAlpha = outlineAlpha * outlineColor.a;
+result.a = outAlpha + fillAlpha * (1.0 - outAlpha);
+```
+
+Both `color.a` and `outlineColor.a` are respected. Outline width in cell
+pixels is converted to SDF units internally as `outlineWidth / (2.0 * spread)`.
+
+#### Draw passes
+
+Shadow: second `drawPass` with offset model matrix and `shadowBlur` as outline width.
+Glow: zero-offset pass with `glowRadius` as outline width.
+Main: primary fill with `outlineWidth` as outline width.
+
+All passes go through `SdfText.rawDraw()` → `drawPass()`.
 
 ---
 
@@ -168,8 +270,7 @@ In `initShaderProgram()` (`src/classic/utils.ts`), call
 `gl.bindAttribLocation(program, i, attributes[i])` **before**
 `gl.linkProgram()`. AMD drivers (notably Radeon R9 200) may drop attribute
 locations that appear unused to the linker, returning `getAttribLocation`
-as `-1`. This causes `vTexCoord` to be `(0,0)`, making `texture2D` sample
-the origin of the atlas (usually black).
+as `-1`.
 
 ### Sampler binding order
 
@@ -179,14 +280,10 @@ gl.bindTexture(gl.TEXTURE_2D, atlasTexture.texture);
 gl.uniform1i(shader.unif.texSampler, 0);  // AFTER texture is bound
 ```
 
-Some drivers silently ignore a sampler if the texture isn't on the unit
-when `uniform1i` is called.
-
 ### LINEAR filtering on SDF atlas texture
 
-The atlas texture must use `gl.LINEAR` (min + mag) for `smoothstep` to
-produce anti-aliased edges. The engine's default `initTextures()` sets
-`gl.NEAREST`, so `SdfText`'s constructor overrides this:
+The atlas texture must use `gl.LINEAR` (min + mag) — `SdfText`'s constructor
+overrides this after the engine default `gl.NEAREST`:
 
 ```typescript
 this.gl.bindTexture(this.gl.TEXTURE_2D, this.atlasTexture.texture);
@@ -204,15 +301,29 @@ gl.vertexAttribPointer(attr.vertexPos, 2, gl.FLOAT, false, 16, 0);
 gl.vertexAttribPointer(attr.texCoord, 2, gl.FLOAT, false, 16, 8);
 ```
 
+### `_bufferDirty` flag
+
+`bufferData` is only called when the glyph buffer changed (after `setText`),
+not on every frame. Re-rendering unchanged text skips the GPU upload.
+
+### Scissor-test clipping
+
+Used by `UIContainer.clipChildren` to clip overflowing children (scroll,
+word-wrap overflow):
+
+- `state.ts` disables `SCISSOR_TEST` at frame start
+- `UIContainer.setChildrenPos()` writes `_uiClipRect` on all children when `clipChildren` is set
+- `SdfText.rawDraw()` checks `_uiClipRect`: enables scissor with flipped-Y
+  rect, draws, disables scissor — all within the single draw call
+- No state leak to other drawables
+
 ---
 
 ## 6. MANIFEST INTEGRATION
 
-Font metrics are loaded synchronously during `loadResources()`, matching
-the engine pattern for shaders/textures/animations.
+### Font metrics
 
 ```json
-// public/manifest.json
 {
   "sdfFonts": [
     { "name": "dejavusans", "metrics": "/res/dejavusans-sdf.json" }
@@ -223,16 +334,33 @@ the engine pattern for shaders/textures/animations.
 }
 ```
 
+Loaded synchronously during `loadResources()`:
 ```typescript
-// Loaded in state.ts loadResources():
 this.sdfFonts = await initSdfFonts(this.manifest.sdfFonts || [], ...);
-
-// Accessed synchronously in SdfText constructor:
-this.metrics = this.game.getSdfFont(atlasName);
+this.metrics = this.game.getSdfFont(atlasName);  // in SdfText constructor
 ```
 
-No runtime `fetch`, no `metricsPromise`, no `async` code path. If the JSON
-fails to load, `loadResources()` throws before the game starts.
+`initSdfFonts` warns if any loaded metrics are missing the `spread` field.
+
+### Shader uniforms
+
+```json
+{
+  "name": "sdf",
+  "vertex": "/shaders/sdf.vert",
+  "fragment": "/shaders/sdf.frag",
+  "attr": ["vertexPos", "texCoord"],
+  "unif": [
+    "modelMatrix", "cameraMatrix", "projectionMatrix",
+    "texSampler", "color", "outlineColor", "outlineWidth",
+    "softEdge", "spread", "atlasSize", "weight", "gamma"
+  ]
+}
+```
+
+Adding a new uniform requires updating **both** the manifest AND the shader
+source — `shader.unif.X` is derived from `getUniformLocation`, which returns
+`null` for undeclared names in the manifest.
 
 ---
 
@@ -240,50 +368,40 @@ fails to load, `loadResources()` throws before the game starts.
 
 ### Word wrapping
 
-`UISdfText.wrapTextAtPixelWidth()`:
+`_wrapAtPixelWidth(str, maxPx)` — instance method using `this.advanceFor()`:
 
 - Splits on `\n` first (hard line breaks)
-- Within each segment, word-wraps on spaces
-- Measures each word's pixel width via `measureWord()` (sums per-glyph `xAdvance * scale`)
+- Within each segment, word-wraps on spaces (ASCII space only; NBSP U+00A0
+  does NOT break)
+- Measures each word's pixel width via `this.advanceFor() * scale`
 - Pushes words to successive lines when `linePx + gap + wordPx > maxPx`
 
-The `maxWidth` argument to `spawnSdfText()` is in **screen pixels** (not
-character count — unlike the legacy `UIText`).
-
-### Multi-line support
-
-`_buildGlyphBuffer` tracks a `lineIndex` counter. Each glyph's `y` field
-in `perLine` stores its line index. The Y offset is computed as:
-
-```typescript
-gy = baseline * scale + yOffset * scale + lineIndex * lineHeight * scale;
-```
-
-`textHeight` accounts for the line count: `textHeight = maxExtent * lineCount`.
+`maxWidth` argument to `spawnSdfText()` is in **screen pixels**.
 
 ### Justification
 
 ```typescript
-infoText.setJustify('center');  // 'left' (default) | 'center' | 'right'
+text.setJustify('center');  // 'left' (default) | 'center' | 'right'
 ```
 
-Per-line: computes `lineWidth = sum(advances)` for each line, then shifts
-glyph `x` positions by `(maxWidth - lineWidth) / 2` (center) or
-`(maxWidth - lineWidth)` (right).
+Justification references the **column width** (`_layoutWidth = this.maxWidth`)
+rather than the longest rendered line. This means single-line text with
+`setJustify('center')` correctly centers within the column. Left-justify
+keeps the natural rendered width (`_layoutWidth = 0`).
+
+Per-line: computes line width, then shifts glyph positions by
+`(columnWidth - lineWidth) / 2` (center) or `(columnWidth - lineWidth)` (right).
+The `textWidth` is set to the column width, and `modelMatrix()` scales local
+coordinates so empty space to the column edge renders as transparent.
 
 ### Scale conversion from legacy UIText
-
-`UIText` uses a 32px glyph grid. `UISdfText` uses cell-pixel metrics (~18–25
-cell px per character). To get equivalent visual size, multiply the legacy
-scale by approximately **2.5**:
 
 ```typescript
 // UIText at scale 0.5 ≈ UISdfText at scale 1.25
 // UIText at scale 0.4 ≈ UISdfText at scale 1.0
 ```
 
-### `spawnButton` with SDF text
-
+`spawnButton` with `sdfText: true` auto-converts:
 ```typescript
 UI.spawnButton(w, h, color, onClick, {
     sdfText: true,
@@ -292,18 +410,30 @@ UI.spawnButton(w, h, color, onClick, {
 });
 ```
 
-The `sdfText` option causes `spawnButton` to create a `UISdfText` child
-instead of `UIText`, with internal scale multiplication.
-
-### Outline and shadow
+### Outline, shadow, glow
 
 ```typescript
-title.setOutline(0.12, [0.1, 0.05, 0, 1]);   // width in SDF units, RGBA color
-title.setShadow(2, 3, [0, 0, 0, 0.5], 1);      // offsetX, offsetY, color, blur
+title.setOutline(1, [0.1, 0.05, 0, 1]);        // 1 cell px, RGBA
+title.setShadow(2, 3, [0, 0, 0, 0.5], 2);       // offsetX, offsetY, color, blur
+title.setGlow(1.5, [1, 0.8, 0, 0.3]);           // radius, color
+text.setWeight(-0.08);                            // faux bold
+text.setGamma(1.4);                               // perceptual gamma
 ```
 
-Outline renders as a band around the edge in the fragment shader. Shadow
-is a second `drawPass` with an offset model matrix and wider outline blur.
+All dimensional values (outline width, shadow offset/blur, glow radius) are in
+**screen pixels** — the shader converts to SDF units internally using `spread`.
+
+### `snapToPixel`
+
+When `snapToPixel = true` and `ignoreCam = true`, `modelMatrix()` rounds the
+translation to whole device pixels. Eliminates sub-pixel blur for UI text
+positioned through fractional `_uiScale`.
+
+### Children with `_uiFixed`
+
+`UIElement._uiFixed = true` exempts a child from `UIContainer.setChildrenPos()`
+repositioning. Used for scrollbar track/thumb — they manage their own positions
+in the per-frame update callback.
 
 ---
 
@@ -311,33 +441,21 @@ is a second `drawPass` with an offset model matrix and wider outline blur.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| **No text visible, magenta rect appears** | SDF pipeline broken; green quads with solid shader confirm vertex pipeline | Proceed to shader/texture diagnostics |
-| **No text, green solid quads visible** | Fragment shader outputs transparent; check texCoord attribute location | `bindAttribLocation` before `linkProgram`; check `shader.attr.texCoord >= 0` |
-| **All black quads** | `texture2D` returns 0 | Atlas UVs sample empty background: verify UV range maps to glyph data region; check for `1 - g.y/atlasH` inversion bug |
-| **VertexCount = 0 after construction** | Metrics not loaded | Ensure `game.getSdfFont(name)` is available synchronously; `initSdfFonts` runs in `loadResources()` |
-| **Text squashed vertically** | `textHeight` changed after vertex loop | Compute glyph extent *before* building vertex data, not after |
-| **Glyphs rendered upside-down** | UV Y-axis inverted | Use `g.y/atlasH` (no `1 -`); this engine uses `texImage2D` without `UNPACK_FLIP_Y` |
-| **Glyphs on one pixel row** | `lineIndex` not applied | `gy += lineIndex * lineHeight * scale` in `_buildGlyphBuffer` |
-| **Text rendered ~3× too small** | Unit mismatch: old font-size units vs new cell-pixel units | Multiply scale by ~2.5 when migrating from `UIText` |
-| **Lines overlap (no vertical offset)** | `pg.y` stored but ignored | `gy` must include `pg.y * lineHeight * scale` |
-| **Justification has no effect** | Justify block runs before perLine is fully collected | Place justify block after the `\n`/char loop, before `textWidth` assignment |
-| **Atlas has all values = 1** | `maxDist` too large relative to glyph size | Use `maxDist = GLYPH_SIZE` (64), not canvas half-diagonal |
-| **Atlas has no glyph data** | BBox detection threshold wrong | Check `findBbox` — look for `byte ≠ 1` (not `byte > 128`) |
-| **Title clipped at top of screen** | `textHeight` too large, `gy` negative | Compute `textHeight` from glyph extent, not `lineHeight`; fix anchor to `mid-center` |
-
----
-
-## 9. DEBUGGING PIPELINE
-
-Systematically isolate each stage:
-
-1. **Check `vertexCount`**: `console.log` in `rawDraw` — if 0, text was never built
-2. **Check attribute locations**: `shader.attr.texCoord` should be ≥ 0 (not -1)
-3. **Swap to solid shader with glyph buffer**: green quads → vertex pipeline works
-4. **Swap to solid shader with full-bounds quad**: confirms `modelMatrix()` is correct
-5. **Hardcode fragment output to solid color**: confirms fragment shader executes
-6. **Output `vTexCoord` as color**: confirms varying interpolation (red/green gradient per glyph)
-7. **Sample atlas at fixed `vec2(0.5, 0.5)`**: confirms texture binding works globally
-8. **Output `texture2D(texSampler, vTexCoord).r` as grayscale**: glyph shapes should appear bright if UVs map correctly
-9. **Check `gl.getError()`** around `drawArrays`: `0x0501` = INVALID_VALUE, `0x0502` = INVALID_OPERATION
-10. **Check `CURRENT_PROGRAM`**: `gl.getParameter(gl.CURRENT_PROGRAM) === shader.program`
+| **No text visible, vertexCount=0** | Metrics not loaded | `game.getSdfFont(name)` available synchronously |
+| **All SDF text shifted up** | `_layoutHeight` not computed; anchor uses padded cell height | Set `_layoutHeight = textHeight - 2·(spread+2)·scale` |
+| **Left-justified button text gone / title off-center** | `_layoutWidth` forced `textWidth = columnW` for all text | Guard `_layoutWidth` to `justify !== 'left'` only |
+| **Justification has no visible effect** | Uses longest rendered line width, not column width | Use `_layoutWidth = maxWidth` as column reference |
+| **Camera zooms when scrolling panel** | `game.mouseWheel` is global | Add `_scrollContainers` guard in camera controller |
+| **Scrollbar moves with content** | `setChildrenPos` applies `scrollY` to all children | Set `_uiFixed = true` on scrollbar children |
+| **Atlas LINEAR filter bleeds adjacent glyphs** | Zero gutter between glyphs | `PAD=2` in generator |
+| **Shelf packer silently overflows** | No overflow check | Retry with `size *= 2`; hard-fail at `--max-size` |
+| **Shadow offset scaled by text size** | Post-translate after `S(textWidth, textHeight)` | Fold offset into `modelMatrix(offset?)` before scale |
+| **Wrap vs layout advance mismatch** | Different fallback values in `measureWord` vs `_buildGlyphBuffer` | Use shared `advanceFor()` |
+| **Box-drawing strokes thin at spread=4** | Interior field peaks at ~152/255 | Stay above `weight > 0.09` for box chars |
+| **Dither chars (░▒▓) render as mush** | SDF can't represent high-frequency checkerboards | Excluded; gate behind `--charset +dither` |
+| **Atlas .sig cache misses pointlessly** | Cache key doesn't account for missing outputs | Cache hit also verifies `.png`/`.json` exist |
+| **Generated atlas at 2048² instead of 1024²** | Cell sizes grew with spread=4 | Normal; ~340KB PNG at 2048² is acceptable |
+| **Text squashed vertically** | `textHeight` changed after vertex loop | Compute glyph extent before building vertex data |
+| **Glyphs rendered upside-down** | UV Y-axis inverted | `g.y/atlasH` (no `1 -`); no `UNPACK_FLIP_Y` |
+| **Glyphs on one pixel row** | `lineIndex` not applied | `gy += lineIndex * lineHeight * scale` |
+| **Text rendered ~3× too small** | Unit mismatch | Multiply scale by ~2.5 when migrating from `UIText` |
