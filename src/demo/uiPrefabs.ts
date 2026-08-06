@@ -129,6 +129,13 @@ function initTopBar(UI: UIManager): void {
     const roseE = UI.spawnText('E', axisFontScale, axisMaxW, [1.0, 1.0, 0.8, 1], [0, 0, 0, 0]);
     const roseS = UI.spawnText('S', axisFontScale, axisMaxW, [1.0, 1.0, 0.8, 1], [0, 0, 0, 0]);
     const roseW = UI.spawnText('W', axisFontScale, axisMaxW, [1.0, 1.0, 0.8, 1], [0, 0, 0, 0]);
+    const diagFontScale = 0.22 * _uiScale;
+    const diagMaxW = Math.ceil(4 * 32 * diagFontScale);
+    const diagColor: [number, number, number, number] = [1.0, 1.0, 0.8, 0.5];
+    const roseNE = UI.spawnText('NE', diagFontScale, diagMaxW, diagColor, [0, 0, 0, 0]);
+    const roseSE = UI.spawnText('SE', diagFontScale, diagMaxW, diagColor, [0, 0, 0, 0]);
+    const roseSW = UI.spawnText('SW', diagFontScale, diagMaxW, diagColor, [0, 0, 0, 0]);
+    const roseNW = UI.spawnText('NW', diagFontScale, diagMaxW, diagColor, [0, 0, 0, 0]);
     const axisX = UI.spawnText('X', axisFontScale, axisMaxW, [1.0, 0.3, 0.3, 1], [0, 0, 0, 0]);
     const axisY = UI.spawnText('Y', axisFontScale, axisMaxW, [0.3, 1.0, 0.3, 1], [0, 0, 0, 0]);
     const axisZ = UI.spawnText('Z', axisFontScale, axisMaxW, [0.4, 0.4, 1.0, 1], [0, 0, 0, 0]);
@@ -166,13 +173,22 @@ function initTopBar(UI: UIManager): void {
             const aL = 35 * _uiScale;
 
             roseN.setEnabled(true);
-            roseN.setPosition(rcX - 5 * _uiScale, rcY - rR - 14 * _uiScale);
+            roseN.setPosition(rcX - rR - 14 * _uiScale, rcY - rR / 2 - 12 * _uiScale);
             roseE.setEnabled(true);
-            roseE.setPosition(rcX + rR + 4, rcY - 6 * _uiScale);
+            roseE.setPosition(rcX + rR + 2, rcY - rR / 2 - 6 * _uiScale);
             roseS.setEnabled(true);
-            roseS.setPosition(rcX - 5 * _uiScale, rcY + rR + 4);
+            roseS.setPosition(rcX + rR + 2, rcY + rR / 2 + 2);
             roseW.setEnabled(true);
-            roseW.setPosition(rcX - rR - 14 * _uiScale, rcY - 6 * _uiScale);
+            roseW.setPosition(rcX - rR - 14 * _uiScale, rcY + rR / 2 + 2);
+
+            roseNE.setEnabled(true);
+            roseNE.setPosition(rcX - 7 * _uiScale, rcY - rR - 10 * _uiScale);
+            roseSE.setEnabled(true);
+            roseSE.setPosition(rcX + rR - 7 * _uiScale, rcY - 4 * _uiScale);
+            roseSW.setEnabled(true);
+            roseSW.setPosition(rcX - 7 * _uiScale, rcY + rR + 2);
+            roseNW.setEnabled(true);
+            roseNW.setPosition(rcX - rR - 7 * _uiScale, rcY - 4 * _uiScale);
 
             axisX.setEnabled(true);
             axisX.setPosition(axX + aL + 4, axY - aL / 2 - 8 * _uiScale);
@@ -215,6 +231,10 @@ function initTopBar(UI: UIManager): void {
             roseE.setEnabled(false);
             roseS.setEnabled(false);
             roseW.setEnabled(false);
+            roseNE.setEnabled(false);
+            roseSE.setEnabled(false);
+            roseSW.setEnabled(false);
+            roseNW.setEnabled(false);
             axisX.setEnabled(false);
             axisY.setEnabled(false);
             axisZ.setEnabled(false);
