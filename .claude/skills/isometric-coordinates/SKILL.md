@@ -59,25 +59,39 @@ correctly separating them.
 
 ### Iso ↔ cardinal / screen mapping
 
-In this engine, the iso-grid directions map to cardinal compass points and
-screen directions as follows (verify with the debug compass rose overlay):
+Cardinals are aligned with iso-grid axes (North = `−ty`, East = `+tx`, etc.).
+Verify orientations with the debug compass rose overlay:
 
-| Iso direction | Cardinal | Screen direction | Depth (`tx−ty`) |
+| Iso `(dtx, dty)` | Cardinal | Screen direction | Depth (`tx−ty`) |
 |:---|:---|:---|:---|
-| NE `(+tx, −ty)` | **N** | straight **UP** | Farthest |
-| SE `(+tx, +ty)` | **E** | straight **RIGHT** | Mid |
-| SW `(−tx, +ty)` | **S** | straight **DOWN** | Closest |
-| NW `(−tx, −ty)` | **W** | straight **LEFT** | Mid |
+| `(+tx, 0)` | **E** | right-up 2:1 | rising |
+| `(0, +ty)` | **S** | right-down 2:1 | rising |
+| `(−tx, 0)` | **W** | left-down 2:1 | falling |
+| `(0, −ty)` | **N** | left-up 2:1 | falling |
 
-Intercardinals (NE/SE/SW/NW in compass terms) map to the 2:1 diagonal screen
-vectors between these cardinals:
+The intercardinals (NE/SE/SW/NW in compass terms) are the tile-grid edges
+that run along the screen axes:
 
-| Compass | Iso `(dtx, dty)` | Screen vector |
-|:---|:---|:---|
-| **NE** | `(+1, 0)` | right-up 2:1 |
-| **SE** | `(0, +1)` | right-down 2:1 |
-| **SW** | `(−1, 0)` | left-down 2:1 |
-| **NW** | `(0, −1)` | left-up 2:1 |
+| Compass | Iso `(dtx, dty)` | Screen vector | Depth (`tx−ty`) |
+|:---|:---|:---|:---|
+| **NE** | `(+1, −1)` | straight UP | Farthest |
+| **SE** | `(+1, +1)` | straight RIGHT | Mid |
+| **SW** | `(−1, +1)` | straight DOWN | Closest |
+| **NW** | `(−1, −1)` | straight LEFT | Mid |
+
+### Screen projection formula
+
+The 2:1 dimetric projection (`scale(1, 0.5, 1) · Rz(−45°)`) means for any tile
+delta `(dtx, dty)` at tilemap scale `s`:
+
+```
+screen_x = s · (dtx + dty)
+screen_y = s · (dty − dtx) / 2
+```
+
+This is equivalent to an orthographic camera at elevation `asin(0.5)` = 30°.
+Spritesheets must be rendered at 30° elevation or the implied ground plane
+will not match the tile grid.
 
 ---
 
