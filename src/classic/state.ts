@@ -653,12 +653,12 @@ const game: GameState = {
             drawLine(roseCx - gx, roseCy - gx / 2, roseCx + gx, roseCy + gx / 2, gridColor);
             drawLine(roseCx - gx, roseCy + gx / 2, roseCx + gx, roseCy - gx / 2, gridColor);
 
-            // 4 cardinal spokes
+            // 4 cardinal spokes (iso-aligned: N = (0,-ty), E = (+tx,0), S = (0,+ty), W = (-tx,0))
             const spokeColor = [1.0, 1.0, 0.8, 0.85] as number[];
-            drawLine(roseCx, roseCy, roseCx, roseCy - roseR, spokeColor); // N = straight UP
-            drawLine(roseCx, roseCy, roseCx + roseR, roseCy, spokeColor); // E = straight RIGHT
-            drawLine(roseCx, roseCy, roseCx, roseCy + roseR, spokeColor); // S = straight DOWN
-            drawLine(roseCx, roseCy, roseCx - roseR, roseCy, spokeColor); // W = straight LEFT
+            drawLine(roseCx, roseCy, roseCx - roseR, roseCy - roseR / 2, spokeColor); // N = iso (0,-ty)
+            drawLine(roseCx, roseCy, roseCx + roseR, roseCy - roseR / 2, spokeColor); // E = iso (+tx,0)
+            drawLine(roseCx, roseCy, roseCx + roseR, roseCy + roseR / 2, spokeColor); // S = iso (0,+ty)
+            drawLine(roseCx, roseCy, roseCx - roseR, roseCy + roseR / 2, spokeColor); // W = iso (-tx,0)
 
             // XYZ axes
             drawLine(xyzCx, xyzCy, xyzCx + xyzLen, xyzCy - xyzLen / 2, [1.0, 0.3, 0.3, 0.9]); // X

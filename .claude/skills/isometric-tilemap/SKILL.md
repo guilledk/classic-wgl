@@ -47,24 +47,24 @@ On-screen:
 
 ### Iso ↔ cardinal / screen mapping
 
-The iso-grid directions map to cardinal compass points. Use the debug overlay
-("Footprints" toggle in DEV menu) to verify:
+Cardinals align with iso-grid axes. Verify with the debug compass rose
+overlay ("Footprints" toggle in DEV menu):
 
-| Iso direction | Cardinal | Screen | `(dtx, dty)` |
-|:---|:---|:---|:---|
-| NE | **N** | straight UP | `(+1, −1)` |
-| SE | **E** | straight RIGHT | `(+1, +1)` |
-| SW | **S** | straight DOWN | `(−1, +1)` |
-| NW | **W** | straight LEFT | `(−1, −1)` |
+| Iso `(dtx, dty)` | Cardinal | Screen vector |
+|:---|:---|:---|
+| `(+tx, 0)` | **E** | right-up 2:1 |
+| `(0, +ty)` | **S** | right-down 2:1 |
+| `(−tx, 0)` | **W** | left-down 2:1 |
+| `(0, −ty)` | **N** | left-up 2:1 |
 
-Intercardinals map to 2:1 diagonal screen vectors:
+Intercardinals run along the screen axes:
 
 | Compass | Iso | Screen vector |
 |:---|:---|:---|
-| NE | `(+1, 0)` | right-up 2:1 |
-| SE | `(0, +1)` | right-down 2:1 |
-| SW | `(−1, 0)` | left-down 2:1 |
-| NW | `(0, −1)` | left-up 2:1 |
+| NE | `(+1, −1)` | straight UP |
+| SE | `(+1, +1)` | straight RIGHT |
+| SW | `(−1, +1)` | straight DOWN |
+| NW | `(−1, −1)` | straight LEFT |
 
 ### The depth axis is `tx − ty`, NOT `tx + ty`
 
@@ -500,6 +500,62 @@ pathfinder.findPath(start, end).then((p) => {
 
 Without this, the agent snaps to tile vertices (e.g. `[100, 50]`) instead of
 tile centers (`[100.5, 50.5]`).
+
+### Agent direction → spritesheet row mapping
+
+Direction is computed in **tile coordinates** from the path delta:
+
+```typescript
+const delta = vec2.sub(target, start);
+const radians = Math.atan2(delta[1], delta[0]);  // atan2(dty, dtx)
+this.direction = radians * (180 / Math.PI);
+this.animIndex = Math.floor(this.direction / 45);
+if (this.animIndex < 0) this.animIndex = 8 + this.animIndex;
+```
+
+The `animDirs` array maps sector index → animation name suffix,
+using tile-aligned cardinal names (consistent with the engine's iso-grid):
+
+```typescript
+const animDirs = [
+    'East',     // 0: (+tx, 0)      → screen right-up   (atan2 +0°)
+    'SouthEast',// 1: (+tx, +ty)    → screen straight-right (+45°)
+    'South',    // 2: (0, +ty)      → screen right-down (+90°)
+    'SouthWest',// 3: (-tx, +ty)    → screen straight-down (+135°)
+    'West',     // 4: (-tx, 0)      → screen left-down  (±180°)
+    'NorthWest',// 5: (-tx, -ty)    → screen straight-left (−135°)
+    'North',    // 6: (0, -ty)      → screen left-up    (−90°)
+    'NorthEast',// 7: (+tx, -ty)    → screen straight-up (−45°)
+];
+```
+
+`anim.play('walk' + animDirs[this.animIndex])` → `walkNorth` etc.
+The manifest maps each animation name to a tile-range on the spritesheet.
+
+The manifest entries are ordered **North-first** (not East-first like
+`animDirs`). This is a deliberate offset — `animDirs` is the bridge
+between tile-space atan2 and the names. The manifest row order:
+
+| Manifest entry | Tiles | Row | `animDirs` idx |
+|:---|---:|---:|---:|
+| `walkNorth` | 0–19 | 0 | 6 |
+| `walkNorthWest` | 32–51 | 1 | 5 |
+| `walkWest` | 64–83 | 2 | 4 |
+| `walkSouthWest` | 96–115 | 3 | 3 |
+| `walkSouth` | 128–147 | 4 | 2 |
+| `walkSouthEast` | 160–179 | 5 | 1 |
+| `walkEast` | 192–211 | 6 | 0 |
+| `walkNorthEast` | 224–243 | 7 | 7 |
+
+Each walk row uses 20 frames out of 32 available columns — the remaining
+12 are transparent padding. Idle entries follow the same pattern starting
+at tile 256 (row 8).
+
+Per-tile pixel size: `tilePixelSize = [image.width / tileSetSize[0],
+image.height / tileSetSize[1]]`. For humanoid.png (2048², `[32,16]`),
+each tile is 64×128 px. The `frame` value in `state.json` is a flat
+tile index resolved per the same grid math (`col = frame % columns,
+row = floor(frame / columns)`).
 
 ---
 
