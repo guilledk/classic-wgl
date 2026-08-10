@@ -329,6 +329,22 @@ pub struct UiNode {
     pub kind: UiKind,
 }
 
+impl Default for UiNode {
+    fn default() -> Self {
+        UiNode {
+            parent: None,
+            children: Vec::new(),
+            size: Vec2::ZERO,
+            anchor: UiAnchor::TopLeft,
+            fixed: false,
+            clip_children: false,
+            scroll_y: 0.0,
+            clip_rect: Vec4::ZERO,
+            kind: UiKind::Container,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct UiChild {
     pub entity: hecs::Entity,
