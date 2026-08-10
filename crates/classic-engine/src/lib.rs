@@ -299,45 +299,7 @@ impl Engine {
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::STATIC_DRAW);
 
         // Upload tile data texture.
-        let tile_tex = {
-            let tex = unsafe { gfx.gl.create_texture() }.expect("create texture");
-            unsafe {
-                gfx.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-                gfx.gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA as i32,
-                    tw as i32,
-                    th as i32,
-                    0,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&tile_pixels)),
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_S,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_T,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-                gfx.gl.bind_texture(glow::TEXTURE_2D, None);
-            }
-            tex
-        };
+        let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
 
         // Store tile data on the component.
         if let Ok(mut tm) = self.world.get::<&mut Tilemap>(entity) {
@@ -3753,44 +3715,7 @@ impl Engine {
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
 
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &nav_data);
-        let tile_tex = {
-            let tex = unsafe { gfx.gl.create_texture() }.expect("create nav texture");
-            unsafe {
-                gfx.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-                gfx.gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA as i32,
-                    tw as i32,
-                    th as i32,
-                    0,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&tile_pixels)),
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_S,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_T,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-            }
-            tex
-        };
+        let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
 
         self.nav_gpu = Some(TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
 
@@ -3885,6 +3810,31 @@ impl Engine {
         }
     }
 
+    /// Upload RGBA `pixels` as a `NEAREST`-filtered `CLAMP_TO_EDGE` 2D texture.
+    /// Used for tilemap data and nav-mesh data textures.
+    fn upload_data_texture(
+        gl: &std::rc::Rc<glow::Context>,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> glow::Texture {
+        let tex = unsafe { gl.create_texture() }.expect("create data texture");
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D, 0, glow::RGBA as i32,
+                width as i32, height as i32, 0,
+                glow::RGBA, glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(pixels)),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+        }
+        tex
+    }
+
     /// Rebuild nav mesh GPU buffers from current NavMesh component data.
     fn rebuild_nav_gpu(&mut self) {
         let Some(nav_entity) = self.names.get("tilemapNavigation").copied() else {
@@ -3910,44 +3860,7 @@ impl Engine {
         let mesh_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
         let (tile_pixels, tw, th) = build_tile_texture(sx, sy, &data);
-        let tile_tex = {
-            let tex = unsafe { gfx.gl.create_texture() }.expect("create nav texture");
-            unsafe {
-                gfx.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-                gfx.gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA as i32,
-                    tw as i32,
-                    th as i32,
-                    0,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&tile_pixels)),
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_S,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_T,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-            }
-            tex
-        };
+        let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
         self.nav_gpu = Some(TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
     }
     /// Paint tiles or heights in the selection region after a drag ends.
@@ -4143,44 +4056,7 @@ impl Engine {
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
 
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &tiles);
-        let tile_tex = {
-            let tex = unsafe { gfx.gl.create_texture() }.expect("create texture");
-            unsafe {
-                gfx.gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-                gfx.gl.tex_image_2d(
-                    glow::TEXTURE_2D,
-                    0,
-                    glow::RGBA as i32,
-                    tw as i32,
-                    th as i32,
-                    0,
-                    glow::RGBA,
-                    glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(Some(&tile_pixels)),
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MIN_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_MAG_FILTER,
-                    glow::NEAREST as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_S,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-                gfx.gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_WRAP_T,
-                    glow::CLAMP_TO_EDGE as i32,
-                );
-            }
-            tex
-        };
+        let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
 
         if let Some(gpu) = self.tilemap_gpu.get_mut(entity_name) {
             gpu.mesh_buf = mesh_buf;
