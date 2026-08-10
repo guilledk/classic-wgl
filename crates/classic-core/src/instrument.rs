@@ -236,104 +236,14 @@ pub fn frame() -> u64 {
 }
 
 /// Print channel list + grammar to stderr for discovery.
+#[rustfmt::skip]
 pub fn channel_help() {
-    let channels: [Chan; CHAN_COUNT] = {
-        let mut arr = [Chan::Frame; CHAN_COUNT]; // dummy init
-        let mut i = 0;
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Frame;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Input;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Ui;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Layout;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Collision;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Click;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Render;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Gfx;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::GlState;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Text;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Iso;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Nav;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Path;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Ecs;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::State;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Editor;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Asset;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Camera;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Anim;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Test;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Golden;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Dump;
-            i += 1;
-        }
-        if i < CHAN_COUNT {
-            arr[i] = Chan::Platform;
-            i += 1;
-        }
-        arr
-    };
+    let channels: [Chan; CHAN_COUNT] = [
+        Chan::Frame, Chan::Input, Chan::Ui, Chan::Layout, Chan::Collision, Chan::Click,
+        Chan::Render, Chan::Gfx, Chan::GlState, Chan::Text, Chan::Iso, Chan::Nav,
+        Chan::Path, Chan::Ecs, Chan::State, Chan::Editor, Chan::Asset, Chan::Camera,
+        Chan::Anim, Chan::Test, Chan::Golden, Chan::Dump, Chan::Platform,
+    ];
 
     eprint!("CLASSIC_LOG channels ({total} total):", total = CHAN_COUNT);
     for ch in &channels {
