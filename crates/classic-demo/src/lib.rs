@@ -3,5 +3,5 @@
 //! Contains the `initXxx()` functions that build the demo from loaded entities.
 
 pub fn init() {
-    log::info!("classic-demo initialized");
+    classic_core::cl_info!(classic_core::instrument::Chan::Frame, "classic-demo initialized");
 }

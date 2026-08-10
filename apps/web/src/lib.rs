@@ -38,7 +38,7 @@ pub fn main() {
         }
     }
 
-    log::info!("classic-web starting");
+    classic_core::cl_info!(classic_core::instrument::Chan::Platform, "classic-web starting");
 
     #[cfg(target_arch = "wasm32")]
     {

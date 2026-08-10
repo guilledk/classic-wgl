@@ -538,9 +538,16 @@ impl Engine {
             let _ = std::fs::create_dir_all(dir);
             let path = format!("{dir}/{name}");
             if let Err(e) = std::fs::write(&path, data) {
-                log::warn!("save_file: failed to write {path}: {e}");
+                classic_core::cl_warn!(
+                    classic_core::instrument::Chan::Dump,
+                    "save_file: failed to write {path}: {e}"
+                );
             } else {
-                log::info!("save_file: wrote {path} ({} bytes)", data.len());
+                classic_core::cl_warn!(
+                    classic_core::instrument::Chan::Dump,
+                    "save_file: wrote {path} ({} bytes)",
+                    data.len()
+                );
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -622,6 +629,7 @@ impl Engine {
         }
 
         self.physics.begin_frame();
+        classic_core::cl_debug!(classic_core::instrument::Chan::Collision, "begin_frame");
         self.physics.mouse.position = Vec3::new(mp.x, mp.y, 0.0);
         self.physics.mouse.update_rect();
         self.physics.consumed_click = false;
@@ -820,6 +828,12 @@ impl Engine {
             items.push((tf.position.z, e, DrawKind::SdfText));
         }
         items.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        classic_core::cl_debug!(
+            classic_core::instrument::Chan::Render,
+            "render: {} draw items",
+            items.len()
+        );
 
         // Pre-compute entity debug names before we borrow gfx mutably,
         // so we can still look up names during the draw loop below.
@@ -1271,9 +1285,14 @@ impl Engine {
                 "update" => {
                     let _ = std::fs::create_dir_all(&baseline_dir);
                     if let Err(e) = std::fs::write(&baseline_path, &json) {
-                        log::warn!("golden: failed to write {}: {e}", baseline_path.display());
+                        classic_core::cl_warn!(
+                            classic_core::instrument::Chan::Golden,
+                            "golden: failed to write {}: {e}",
+                            baseline_path.display()
+                        );
                     } else {
-                        log::info!(
+                        classic_core::cl_info!(
+                            classic_core::instrument::Chan::Golden,
                             "golden: wrote {} ({} items)",
                             baseline_path.display(),
                             trace.items.len()
@@ -1284,9 +1303,15 @@ impl Engine {
                     match std::fs::read_to_string(&baseline_path) {
                         Ok(expected) => {
                             if let Err(diffs) = golden::compare_traces(&json, &expected) {
-                                log::error!("golden: baseline mismatch");
+                                classic_core::cl_error!(
+                                    classic_core::instrument::Chan::Golden,
+                                    "golden: baseline mismatch"
+                                );
                                 for d in &diffs {
-                                    log::warn!("  {d}");
+                                    classic_core::cl_warn!(
+                                        classic_core::instrument::Chan::Golden,
+                                        "  {d}"
+                                    );
                                 }
                                 self.test_failed = true;
                                 // Write actual trace to target/ so the CI artifact upload picks it up.
@@ -1295,14 +1320,16 @@ impl Engine {
                                 let actual_path = artifact_dir.join("baseline.actual.trace.jsonl");
                                 let _ = std::fs::write(&actual_path, &json);
                             } else {
-                                log::info!(
+                                classic_core::cl_info!(
+                                    classic_core::instrument::Chan::Golden,
                                     "golden: baseline trace matches ({})",
                                     trace.items.len()
                                 );
                             }
                         }
                         Err(_) => {
-                            log::error!(
+                            classic_core::cl_error!(
+                                classic_core::instrument::Chan::Golden,
                                 "golden: baseline not found at {}.  Run CLASSIC_GOLDEN=update to create it.",
                                 baseline_path.display(),
                             );
@@ -1345,9 +1372,17 @@ impl Engine {
                                 rt.height,
                                 image::ColorType::Rgba8,
                             ) {
-                                log::warn!("golden: failed to write {path}: {e}");
+                                classic_core::cl_warn!(
+                                    classic_core::instrument::Chan::Golden,
+                                    "golden: failed to write {path}: {e}"
+                                );
                             } else {
-                                log::info!("golden: wrote {path} ({}x{})", rt.width, rt.height);
+                                classic_core::cl_info!(
+                                    classic_core::instrument::Chan::Golden,
+                                    "golden: wrote {path} ({}x{})",
+                                    rt.width,
+                                    rt.height
+                                );
                             }
                         }
                         "check" => {
@@ -1376,7 +1411,8 @@ impl Engine {
                                         if dr > tol || dg > tol || db > tol || da > tol {
                                             diff_count += 1;
                                             if diff_count <= 10 {
-                                                log::warn!(
+                                                classic_core::cl_warn!(
+                                                    classic_core::instrument::Chan::Golden,
                                                     "  pixel[{i}]=[{},{},{},{}] expected=[{},{},{},{}]",
                                                     pixels[ai],
                                                     pixels[ai + 1],
@@ -1392,7 +1428,8 @@ impl Engine {
                                     }
                                     let pct = (diff_count as f64 / total as f64) * 100.0;
                                     if pct > 0.1 {
-                                        log::error!(
+                                        classic_core::cl_error!(
+                                            classic_core::instrument::Chan::Golden,
                                             "golden: pixel mismatch {}/{} ({:.2}%) > 0.1%",
                                             diff_count,
                                             total,
@@ -1400,7 +1437,8 @@ impl Engine {
                                         );
                                         self.test_failed = true;
                                     } else {
-                                        log::info!(
+                                        classic_core::cl_info!(
+                                            classic_core::instrument::Chan::Golden,
                                             "golden: pixels match ({} diffs out of {}, {:.2}%)",
                                             diff_count,
                                             total,
@@ -1409,7 +1447,8 @@ impl Engine {
                                     }
                                 }
                                 Err(_) => {
-                                    log::warn!(
+                                    classic_core::cl_warn!(
+                                        classic_core::instrument::Chan::Golden,
                                         "golden: no baseline PNG at {path}, skipping pixel check"
                                     );
                                 }
@@ -1418,7 +1457,10 @@ impl Engine {
                         _ => {}
                     }
                 } else {
-                    log::warn!("golden: CLASSIC_GOLDEN_PNG=1 but no offscreen render target");
+                    classic_core::cl_warn!(
+                        classic_core::instrument::Chan::Golden,
+                        "golden: CLASSIC_GOLDEN_PNG=1 but no offscreen render target"
+                    );
                 }
             }
         }
@@ -3986,7 +4028,10 @@ impl Engine {
             let tm = match self.world.get::<&Tilemap>(tm_entity) {
                 Ok(t) => t,
                 Err(_) => {
-                    log::info!("apply_editor_selection: no Tilemap component on entity");
+                    classic_core::cl_info!(
+                        classic_core::instrument::Chan::Editor,
+                        "apply_editor_selection: no Tilemap component on entity"
+                    );
                     return;
                 }
             };
@@ -3999,7 +4044,8 @@ impl Engine {
             let count = (to_x - from_x).max(0) * (to_y - from_y).max(0);
             (from_x, from_y, to_x, to_y, count)
         };
-        log::info!(
+        classic_core::cl_info!(
+            classic_core::instrument::Chan::Editor,
             "apply_editor_selection: target={} region=({},{})-({},{}) tile_count={}",
             self.editor_target,
             bx,
@@ -4008,8 +4054,20 @@ impl Engine {
             ey,
             tile_count
         );
+        classic_core::cl_debug!(
+            classic_core::instrument::Chan::Editor,
+            "target={} region=({},{})-({},{})",
+            self.editor_target,
+            bx,
+            by,
+            ex,
+            ey
+        );
         if tile_count == 0 {
-            log::info!("apply_editor_selection: tile_count=0, returning");
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Editor,
+                "apply_editor_selection: tile_count=0, returning"
+            );
             return;
         }
 
@@ -4030,7 +4088,8 @@ impl Engine {
                     }
                 }
             }
-            log::debug!(
+            classic_core::cl_debug!(
+                classic_core::instrument::Chan::Editor,
                 "painted height region ({},{})-({},{}) delta={} mode={}",
                 bx,
                 by,
@@ -4052,7 +4111,15 @@ impl Engine {
                     }
                 }
             }
-            log::debug!("painted tile region ({},{})-({},{}) id={}", bx, by, ex, ey, val);
+            classic_core::cl_debug!(
+                classic_core::instrument::Chan::Editor,
+                "painted tile region ({},{})-({},{}) id={}",
+                bx,
+                by,
+                ex,
+                ey,
+                val
+            );
             true
         } else if self.editor_target == "navMesh" {
             let val = self.editor_nav_tile;
@@ -4068,14 +4135,25 @@ impl Engine {
                     }
                 }
             }
-            log::debug!("painted nav region ({},{})-({},{}) id={}", bx, by, ex, ey, val);
+            classic_core::cl_debug!(
+                classic_core::instrument::Chan::Editor,
+                "painted nav region ({},{})-({},{}) id={}",
+                bx,
+                by,
+                ex,
+                ey,
+                val
+            );
             true
         } else {
             false
         };
 
         if updated {
-            log::info!("apply_editor_selection: paint done, rebuilding mesh");
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Editor,
+                "apply_editor_selection: paint done, rebuilding mesh"
+            );
             if self.editor_target == "navMesh" {
                 self.rebuild_nav_gpu();
             } else {
@@ -4085,7 +4163,8 @@ impl Engine {
                 }
             }
         } else {
-            log::info!(
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Editor,
                 "apply_editor_selection: editor_target={}, nothing to paint",
                 self.editor_target
             );
@@ -4094,16 +4173,25 @@ impl Engine {
 
     /// Rebuild the tilemap mesh from current data + heights and re-upload to GPU.
     fn rebuild_tilemap_mesh(&mut self, entity_name: &str) {
-        log::info!("rebuild_tilemap_mesh: entering for '{entity_name}'");
+        classic_core::cl_info!(
+            classic_core::instrument::Chan::Editor,
+            "rebuild_tilemap_mesh: entering for '{entity_name}'"
+        );
         let Some(&tm_entity) = self.names.get(entity_name) else {
-            log::warn!("rebuild_tilemap_mesh: entity '{entity_name}' not found");
+            classic_core::cl_warn!(
+                classic_core::instrument::Chan::Editor,
+                "rebuild_tilemap_mesh: entity '{entity_name}' not found"
+            );
             return;
         };
         let (size_x, size_y, tiles, heights, height_scale) = {
             let tm = match self.world.get::<&Tilemap>(tm_entity) {
                 Ok(t) => t,
                 Err(_) => {
-                    log::warn!("rebuild_tilemap_mesh: no Tilemap on '{entity_name}'");
+                    classic_core::cl_warn!(
+                        classic_core::instrument::Chan::Editor,
+                        "rebuild_tilemap_mesh: no Tilemap on '{entity_name}'"
+                    );
                     return;
                 }
             };
@@ -4113,7 +4201,10 @@ impl Engine {
         let gfx = match self.gfx.as_mut() {
             Some(g) => g,
             None => {
-                log::warn!("rebuild_tilemap_mesh: gfx not initialized");
+                classic_core::cl_warn!(
+                    classic_core::instrument::Chan::Editor,
+                    "rebuild_tilemap_mesh: gfx not initialized"
+                );
                 return;
             }
         };
@@ -4166,7 +4257,10 @@ impl Engine {
             gpu.mesh_buf = mesh_buf;
             gpu.vertex_count = vcount;
             gpu.tile_tex = tile_tex;
-            log::info!("rebuild_tilemap_mesh: {vcount} vertices uploaded for '{entity_name}'");
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Editor,
+                "rebuild_tilemap_mesh: {vcount} vertices uploaded for '{entity_name}'"
+            );
         }
     }
 
@@ -4380,7 +4474,10 @@ impl Engine {
                     .length()
                     .max(0.001);
                     agent.state = AgentState::FollowPath;
-                    log::debug!("nav: path found with {waypoint_count} waypoints");
+                    classic_core::cl_debug!(
+                        classic_core::instrument::Chan::Nav,
+                        "nav: path found with {waypoint_count} waypoints"
+                    );
                 }
             }
         });
@@ -4710,7 +4807,12 @@ impl Engine {
         // Process any step scheduled for this frame
         while self.test_step_index < steps.len() && steps[self.test_step_index].frame == frame {
             let step = &steps[self.test_step_index];
-            log::info!("[FRAME {}] STEP: {}", frame, step.log);
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Test,
+                "[FRAME {}] STEP: {}",
+                frame,
+                step.log
+            );
 
             // Execute actions
             for action in &step.actions {
@@ -4785,7 +4887,8 @@ impl Engine {
                         let is_enabled =
                             self.text_showcase_e.map(|e| !self.is_disabled(e)).unwrap_or(false);
                         if is_enabled != should_be_enabled {
-                            log::info!(
+                            classic_core::cl_info!(
+                                classic_core::instrument::Chan::Test,
                                 "  [UI] text showcase enabled={} expected={}",
                                 is_enabled,
                                 should_be_enabled
@@ -4805,7 +4908,8 @@ impl Engine {
                         let dz = (self.camera.position.z - ez).abs();
                         let ds = (self.camera.scale.x - es).abs();
                         if dx > pos_tol || dy > pos_tol || dz > pos_tol || ds > scale_tol {
-                            log::info!(
+                            classic_core::cl_info!(
+                                classic_core::instrument::Chan::Test,
                                 "  [Camera] pos=({:.1},{:.1},{:.1}) scale={:.2} expected pos=({},{},{}) scale={}",
                                 self.camera.position.x,
                                 self.camera.position.y,
@@ -4826,7 +4930,8 @@ impl Engine {
                         let is_visible =
                             self.names.get(name).map(|&e| !self.is_disabled(e)).unwrap_or(false);
                         if is_visible != should_be_visible {
-                            log::info!(
+                            classic_core::cl_info!(
+                                classic_core::instrument::Chan::Test,
                                 "  [Visible] '{}' visible={} expected={}",
                                 name,
                                 is_visible,
@@ -4853,7 +4958,8 @@ impl Engine {
                         if !passes {
                             if let Some(&e) = self.names.get(name) {
                                 if let Ok(tf) = self.world.get::<&Transform>(e) {
-                                    log::info!(
+                                    classic_core::cl_info!(
+                                        classic_core::instrument::Chan::Test,
                                         "  [Pos] '{}' pos=({:.1},{:.1}) expected=({},{}) tol={:.1}",
                                         name,
                                         tf.position.x,
@@ -4879,7 +4985,7 @@ impl Engine {
                     a.region.3,
                     a.expected,
                 );
-                log::info!("{}", result);
+                classic_core::cl_info!(classic_core::instrument::Chan::Test, "{}", result);
                 self.test_results.push(result);
                 if !passed {
                     self.test_should_close = true;
@@ -4941,7 +5047,12 @@ impl Engine {
             if !self.test_complete_reported {
                 let total = self.test_results.len();
                 let passed = self.test_results.iter().filter(|r| r.contains("PASS")).count();
-                log::info!("=== CLASSIC_TEST COMPLETE: {}/{} assertions passed ===", passed, total);
+                classic_core::cl_info!(
+                    classic_core::instrument::Chan::Test,
+                    "=== CLASSIC_TEST COMPLETE: {}/{} assertions passed ===",
+                    passed,
+                    total
+                );
                 self.test_complete_reported = true;
             }
             self.test_should_close = true;
@@ -4958,7 +5069,10 @@ impl Engine {
                 let idx = (y * tm.size_x + x) as usize;
                 let actual = tm.data.get(idx).copied().unwrap_or(999);
                 if actual != expected {
-                    log::info!("  tile({x},{y}) actual={actual} expected={expected}");
+                    classic_core::cl_info!(
+                        classic_core::instrument::Chan::Test,
+                        "  tile({x},{y}) actual={actual} expected={expected}"
+                    );
                     return false;
                 }
             }
@@ -4976,7 +5090,10 @@ impl Engine {
                 let idx = (y * (tm.size_x + 1) + x) as usize;
                 let actual = tm.height_data.get(idx).copied().unwrap_or(-999.0);
                 if (actual - expected).abs() > 0.01 {
-                    log::info!("  height({x},{y}) actual={actual:.1} expected={expected:.1}");
+                    classic_core::cl_info!(
+                        classic_core::instrument::Chan::Test,
+                        "  height({x},{y}) actual={actual:.1} expected={expected:.1}"
+                    );
                     return false;
                 }
             }
@@ -4989,7 +5106,10 @@ impl Engine {
     /// child position and the expected centered position.
     fn assert_ui_text_centered(&self, tolerance: f32) -> bool {
         let Some(mp) = self.menu_panel_e else {
-            log::info!("  [UI] no menu panel entity");
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Test,
+                "  [UI] no menu panel entity"
+            );
             return false;
         };
         let Some(menu_node) = self.world.get::<&UiNode>(mp).ok() else {
@@ -5023,7 +5143,8 @@ impl Engine {
             let dy = (child_tf.position.y - expected_y).abs();
 
             if dx > tolerance || dy > tolerance {
-                log::info!(
+                classic_core::cl_info!(
+                    classic_core::instrument::Chan::Test,
                     "  [UI] row {:?} text child @ ({:.1},{:.1}) expected ({:.1},{:.1}) \
                      child_size=({:.1},{:.1}) row_size=({:.1},{:.1}) dx={:.1} dy={:.1}",
                     row_e.id(),

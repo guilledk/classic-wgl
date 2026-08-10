@@ -146,7 +146,10 @@ impl HeadlessPlatform {
             let mut major = 0i32;
             let mut minor = 0i32;
             egl_check!(egl_initialize(display, &mut major, &mut minor), "eglInitialize");
-            log::info!("headless: EGL {major}.{minor}");
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Platform,
+                "headless: EGL {major}.{minor}"
+            );
 
             let config_attribs = [
                 EGL_SURFACE_TYPE,
@@ -203,7 +206,8 @@ impl HeadlessPlatform {
             };
 
             let ver = gl.version();
-            log::info!(
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Platform,
                 "headless: GL vendor={} version={}.{}",
                 ver.vendor_info,
                 ver.major,
@@ -262,7 +266,10 @@ impl Platform for HeadlessPlatform {
 
             if let Some(limit) = max_frames {
                 if frame_count >= limit {
-                    log::info!("headless: CLASSIC_FRAMES={limit} reached");
+                    classic_core::cl_info!(
+                        classic_core::instrument::Chan::Platform,
+                        "headless: CLASSIC_FRAMES={limit} reached"
+                    );
                     should_close = true;
                 } else {
                     // Override any test/golden prompt to close — CLASSIC_FRAMES

@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 /// Number of channels in the `Chan` enum (auto-derived from the last variant).
-pub const CHAN_COUNT: usize = Chan::Dump as usize + 1;
+pub const CHAN_COUNT: usize = Chan::Platform as usize + 1;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -40,6 +40,7 @@ pub enum Chan {
     Test,
     Golden,
     Dump,
+    Platform,
 }
 
 #[repr(u8)]
@@ -54,8 +55,10 @@ pub enum Level {
 }
 
 /// Per-channel level table. Indexed by `chan as usize`.
-/// All channels default to Off.
-static LEVELS: [AtomicU8; CHAN_COUNT] = [const { AtomicU8::new(0) }; CHAN_COUNT];
+/// Defaults to Info for all channels — so `cl_info!` works as a drop-in
+/// replacement for `log::info!` when `CLASSIC_LOG` is unset.
+/// Noise reduction requires explicit CLASSIC_LOG config.
+static LEVELS: [AtomicU8; CHAN_COUNT] = [const { AtomicU8::new(3) }; CHAN_COUNT];
 
 /// Global frame counter, incremented by the engine.
 static FRAME: AtomicU64 = AtomicU64::new(0);
@@ -69,9 +72,10 @@ static INITIALIZED: AtomicU8 = AtomicU8::new(0);
 // ---------------------------------------------------------------------------
 
 /// Reset the level table and initialization flag. Only for use in tests.
+/// Resets all channels to Off for test isolation.
 pub fn reset_for_test() {
     for i in 0..CHAN_COUNT {
-        LEVELS[i].store(0, Ordering::Relaxed);
+        LEVELS[i].store(0, Ordering::Relaxed); // Off
     }
     INITIALIZED.store(0, Ordering::Relaxed);
 }
@@ -181,6 +185,35 @@ pub fn init_from_env() {
     let raw = std::env::var("CLASSIC_LOG").unwrap_or_default();
     INITIALIZED.store(1, Ordering::Relaxed);
     init(&raw);
+}
+
+#[inline]
+pub fn chan_name(chan: Chan) -> &'static str {
+    match chan {
+        Chan::Frame => "frame",
+        Chan::Input => "input",
+        Chan::Ui => "ui",
+        Chan::Layout => "layout",
+        Chan::Collision => "collision",
+        Chan::Click => "click",
+        Chan::Render => "render",
+        Chan::Gfx => "gfx",
+        Chan::GlState => "glstate",
+        Chan::Text => "text",
+        Chan::Iso => "iso",
+        Chan::Nav => "nav",
+        Chan::Path => "path",
+        Chan::Ecs => "ecs",
+        Chan::State => "state",
+        Chan::Editor => "editor",
+        Chan::Asset => "asset",
+        Chan::Camera => "camera",
+        Chan::Anim => "anim",
+        Chan::Test => "test",
+        Chan::Golden => "golden",
+        Chan::Dump => "dump",
+        Chan::Platform => "platform",
+    }
 }
 
 #[inline]
@@ -295,7 +328,7 @@ macro_rules! cl_log {
     ($chan:expr, $lvl:expr, $($arg:tt)*) => {
         if $crate::instrument::enabled($chan, $crate::instrument::inst_level($lvl)) {
             log::log!(
-                target: concat!("classic::", stringify!($chan)),
+                target: $crate::instrument::chan_name($chan),
                 $lvl,
                 "[f{:06}] {}",
                 $crate::instrument::frame(),
@@ -314,7 +347,7 @@ macro_rules! cl_once {
             && !LATCH.swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             log::log!(
-                target: concat!("classic::", stringify!($chan)),
+                target: $crate::instrument::chan_name($chan),
                 $lvl,
                 "[f{:06}] {}",
                 $crate::instrument::frame(),
@@ -362,7 +395,7 @@ macro_rules! cl_every {
         if $crate::instrument::enabled($chan, $crate::instrument::inst_level($lvl)) {
             if $crate::instrument::frame().wrapping_rem($n) == 0 {
                 log::log!(
-                    target: concat!("classic::", stringify!($chan)),
+                    target: $crate::instrument::chan_name($chan),
                     $lvl,
                     "[f{:06}] {}",
                     $crate::instrument::frame(),
@@ -380,7 +413,7 @@ macro_rules! cl_first {
         if $crate::instrument::enabled($chan, $crate::instrument::inst_level($lvl)) {
             if $crate::instrument::frame() < $n {
                 log::log!(
-                    target: concat!("classic::", stringify!($chan)),
+                    target: $crate::instrument::chan_name($chan),
                     $lvl,
                     "[f{:06}] {}",
                     $crate::instrument::frame(),

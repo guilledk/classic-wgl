@@ -31,7 +31,11 @@ static REGISTRY: std::sync::LazyLock<RwLock<HashMap<&'static str, ComponentReg>>
 /// Register a component with its spawner, dumper, priority, and subsumes rules.
 pub fn register(reg: ComponentReg) {
     if REGISTRY.write().unwrap().insert(reg.name, reg).is_some() {
-        log::warn!("Component \"{}\" is already registered. Overwriting.", reg.name);
+        crate::cl_warn!(
+            crate::instrument::Chan::Ecs,
+            "Component \"{}\" is already registered. Overwriting.",
+            reg.name
+        );
     }
 }
 

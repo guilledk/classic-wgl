@@ -70,7 +70,10 @@ fn main() {
     use std::rc::Rc;
 
     env_logger::init();
-    log::info!("classic-wgl desktop starting");
+    classic_core::cl_info!(
+        classic_core::instrument::Chan::Platform,
+        "classic-wgl desktop starting"
+    );
 
     let config = classic_engine::env_config::EnvConfig::get();
 
@@ -85,7 +88,10 @@ fn main() {
 
         platform.run_loop(move |gl, input, vw, vh, delta, should_close| {
             if engine.is_none() {
-                log::info!("headless: initialising engine");
+                classic_core::cl_info!(
+                    classic_core::instrument::Chan::Platform,
+                    "headless: initialising engine"
+                );
                 let mut e = init_engine(gl);
                 if let Some(gfx) = e.gfx.as_mut() {
                     gfx.set_render_target(vw as u32, vh as u32);
@@ -126,7 +132,10 @@ fn main() {
         if let Some(e) = engine.as_mut() {
             if let Some(limit) = max_frames {
                 if frame_count >= limit {
-                    log::info!("CLASSIC_FRAMES={limit} reached, exiting");
+                    classic_core::cl_info!(
+                        classic_core::instrument::Chan::Platform,
+                        "CLASSIC_FRAMES={limit} reached, exiting"
+                    );
                     *should_close = true;
                     return;
                 }
