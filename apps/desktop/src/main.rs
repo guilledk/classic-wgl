@@ -15,53 +15,6 @@ const TREE_PNG: &[u8] = include_bytes!("../../../public/res/tree.png");
 const EDITOR_ICONS_PNG: &[u8] = include_bytes!("../../../public/res/editor_icons.png");
 const NAV_TILESET_PNG: &[u8] = include_bytes!("../../../public/res/nav_tileset.png");
 
-use std::rc::Rc;
-
-fn init_engine(gl: Rc<glow::Context>) -> classic_engine::Engine {
-    let mut e = classic_engine::Engine::new();
-    e.init_gfx(gl, MANIFEST_JSON);
-    e.load_state(STATE_JSON).expect("load state.json");
-    e.init_tilemap("tilemap", TILESET_PNG, MAP_DATA);
-    e.load_sdf_font("dejavusans-sdf", SDF_METRICS_JSON, SDF_ATLAS_PNG);
-    e.load_texture_png("semaphore01", SEMAPHORE01_PNG);
-    e.load_texture_png("semaphore02", SEMAPHORE02_PNG);
-    e.load_texture_png("house", HOUSE01_PNG);
-    e.load_texture_png("cursor", CURSOR_PNG);
-    e.load_texture_png("humanoid", HUMANOID_PNG);
-    e.load_texture_png("coolSnake", COOL_SNEK_PNG);
-    e.load_texture_png("tree", TREE_PNG);
-    e.load_texture_png("editorIcons", EDITOR_ICONS_PNG);
-    e.load_texture_png("navTileset", NAV_TILESET_PNG);
-    e.init_cursor();
-    e.init_camera_wasd();
-    e.init_animator_system();
-    e.init_agent_system();
-    e.init_footprint_colliders();
-    e.init_navigation(NAV_DATA);
-    e.init_debug_toggles();
-    e.init_ui();
-    e.init_tool_buttons();
-    e.init_height_widget();
-    e.init_light_widget();
-    e.init_tile_palette();
-    e.init_nav_palette();
-    e.init_nav_mesh_render();
-    e.init_editor_mode_control();
-    e.measure_all_ui_labels();
-    e.init_lighting();
-    e.init_text_showcase();
-    e.init_iso_coord_overlay();
-
-    let mut iso = classic_core::math::cartesian_to_iso_4().inverse();
-    iso = glam::Mat4::from_scale(glam::Vec3::new(45.0, 45.0, 1.0)) * iso;
-    let origin = iso.transform_point3(glam::Vec3::new(32.0, 13.0, 0.0));
-    e.camera.position.x = origin.x;
-    e.camera.position.y = origin.y;
-    e.show_grid = true;
-
-    e
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     use classic_platform::Platform;
@@ -91,7 +44,25 @@ fn main() {
                     classic_core::instrument::Chan::Platform,
                     "headless: initialising engine"
                 );
-                let mut e = init_engine(gl);
+                let mut e = classic_demo::init_engine(
+                    gl,
+                    MANIFEST_JSON,
+                    STATE_JSON,
+                    TILESET_PNG,
+                    MAP_DATA,
+                    NAV_DATA,
+                    SDF_ATLAS_PNG,
+                    SDF_METRICS_JSON,
+                    SEMAPHORE01_PNG,
+                    SEMAPHORE02_PNG,
+                    HOUSE01_PNG,
+                    CURSOR_PNG,
+                    HUMANOID_PNG,
+                    COOL_SNEK_PNG,
+                    TREE_PNG,
+                    EDITOR_ICONS_PNG,
+                    NAV_TILESET_PNG,
+                );
                 if let Some(gfx) = e.gfx.as_mut() {
                     gfx.set_render_target(vw as u32, vh as u32);
                 }
@@ -126,7 +97,25 @@ fn main() {
 
     platform.run_loop(move |gl, input, vw, vh, _delta, should_close| {
         if engine.is_none() {
-            engine = Some(init_engine(gl));
+            engine = Some(classic_demo::init_engine(
+                gl,
+                MANIFEST_JSON,
+                STATE_JSON,
+                TILESET_PNG,
+                MAP_DATA,
+                NAV_DATA,
+                SDF_ATLAS_PNG,
+                SDF_METRICS_JSON,
+                SEMAPHORE01_PNG,
+                SEMAPHORE02_PNG,
+                HOUSE01_PNG,
+                CURSOR_PNG,
+                HUMANOID_PNG,
+                COOL_SNEK_PNG,
+                TREE_PNG,
+                EDITOR_ICONS_PNG,
+                NAV_TILESET_PNG,
+            ));
         }
         if let Some(e) = engine.as_mut() {
             if let Some(limit) = max_frames {

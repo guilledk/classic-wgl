@@ -9,6 +9,7 @@ classic-gfx = { path = "../classic-gfx" }
 classic-engine = { path = "../classic-engine" }
 
 glam.workspace = true
+glow.workspace = true
 hecs.workspace = true
 anyhow.workspace = true
 log.workspace = true

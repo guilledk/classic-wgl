@@ -303,6 +303,7 @@ dependencies = [
  "classic-engine",
  "classic-gfx",
  "glam",
+ "glow",
  "hecs",
  "log",
 ]
