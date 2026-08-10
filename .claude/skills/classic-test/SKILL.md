@@ -14,7 +14,7 @@ description: >
     "run_test_frame", "build_test_scenario", "test_should_close",
     "test_editor_state", "test_drag_state", "UiTextCentered",
     "UiEnabled", "TestStep", "TileAssertion".
-compatibility: vitest 4.x (existing), RUST_LOG=info
+compatibility: RUST_LOG=info
 metadata:
     author: classic-wgl
     version: '1.0'
@@ -107,6 +107,11 @@ When all steps are done and no drag is in progress, the test reports
 enum TestAction {
     SetEditor { target: String, height_delta: i32, height_mode: String, tile_id: u32 },
     Drag { from: (f32, f32), to: (f32, f32), hold_frames: u64 },
+    MouseMove { to: (f32, f32) },
+    MouseClick { at: (f32, f32) },
+    KeyPress { key: String },
+    Wheel { dy: f32 },
+    Wait { frames: u64 },
     OpenMenu,
     EnableTextDemo,
 }
@@ -127,6 +132,9 @@ enum AssertKind {
     Tile,           // Check tile data in region matches expected (exact equality)
     UiTextCentered, // Check menu row labels are centered (expected = tolerance in px)
     UiEnabled,      // Check text_showcase_e entity has no Disabled marker (expected != 0 means enabled)
+    CameraAt,       // Check camera position matches expected (region = (x, y))
+    EntityVisible,  // Check entity is visible (in render list; expected != 0 means visible)
+    EntityPos,      // Check entity world position matches expected (region = (x, y))
 }
 ```
 
@@ -160,7 +168,11 @@ then all `assertions` are checked.  A step with `assertions` but no
 
 ## 3. Test Scenario Design
 
-Tests are defined in `build_test_scenario()`, which returns a `Vec<TestStep>`.
+Tests are defined in `build_test_scenario(name: &str)`, which returns a `Vec<TestStep>`.
+
+**Note**: the `name` parameter is currently **ignored** (`let _ = name;`).
+It exists as a stub for running named scenario subsets by env var
+(`CLASSIC_TEST=scenario_name`), but selection by name is not yet implemented.
 
 ### Frame Spacing Conventions
 
@@ -559,7 +571,7 @@ Engine::frame() called once per frame
 │   └─ Check completion → test_should_close
 ├─ SYNTH_DRAG (separate debug helper)
 ├─ Mouse wheel decay + clamp
-├─ CLASSIC_UI_DEBUG log ← retired; use CLASSIC_LOG=ui=trace
+├─ CLASSIC_UI_DEBUG log ← dumps all UI entity positions (first 120 frames)
 ├─ debug_frame += 1
 ├─ Selection end / apply_editor_selection (real user drag)
 ├─ Build render list (collect Sprites/Tilemaps/IsoSprites/UiRect/SdfText)
@@ -574,8 +586,8 @@ Engine::frame() called once per frame
 |---|---|---|
 | `CLASSIC_TEST` | `1` or scenario name | Enable test runner (specific scenario or all) |
 | `CLASSIC_FRAMES` | `80` | Frame limit (must exceed last test step) |
-| `CLASSIC_UI_DEBUG` | `1` | Retired — use `CLASSIC_LOG=ui=trace` instead |
-| `CLASSIC_SYNTH_DRAG` | start_frame | Retired — subsumed by `DragIso` test action |
+| `CLASSIC_UI_DEBUG` | `1` | Dumps all UI entity positions every frame (first 120 frames) |
+| `CLASSIC_SYNTH_DRAG` | start_frame | Retired — subsumed by `Drag` test action |
 | `CLASSIC_FIXED_DT` | e.g. `0.0167` | Fixed timestep (auto `1/60` under CLASSIC_TEST) |
 | `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | `640` / `360` | Forced viewport size |
 | `CLASSIC_LOG` | `all=info,gfx=trace` | Channel-gated logging (see classic-logging skill) |

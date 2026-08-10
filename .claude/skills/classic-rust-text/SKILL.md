@@ -32,8 +32,10 @@ Covers SDF font rendering in the Rust port: glyph buffer building
 
 ## 1. SDF Text Render Loop
 
-In `frame()`, after the main render list, all `(&Transform, &SdfTextRender)`
-entities are drawn:
+In `frame()`, SDF text renders inline as an arm (`DrawKind::SdfText`) inside
+the single z-sorted render loop. The render-list builder wraps each
+`(&Transform, &SdfTextRender)` entity, and the draw loop dispatches
+`gfx.draw_sdf()` directly — there is no separate post-pass.
 
 ```rust
 for (e, (tf, sdf)) in self.world.query::<(&Transform, &SdfTextRender)>().iter() {
@@ -267,3 +269,7 @@ if let Ok(mut sdf) = self.world.get::<&mut SdfTextRender>(e) {
 Available properties on `SdfTextRender`: `weight` (f32), `gamma` (f32),
 `outline_width` (f32), `outline_color` ([f32; 4]), `shadow_offset` ([f32; 2]),
 `shadow_color` ([f32; 4]), `shadow_blur` (f32).
+
+**Note**: `shadow_offset`, `shadow_color`, and `shadow_blur` are stored fields
+but are **not rendered** — the draw_sdf shader does not consume or apply them
+(they exist in the struct for future use).

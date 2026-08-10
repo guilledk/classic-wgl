@@ -176,12 +176,15 @@ entity and its parent chain.
 
 ## 6. Nav Mesh Entity Transform
 
-The `tilemapNavigation` entity loaded from `state.json` only has a
-`NavMesh` component — no `Transform`. The render query is
-`(&Transform, &NavMesh)`. Without a `Transform`, the entity never
-enters the render list.
+The `tilemapNavigation` entity loaded from `state.json` gets a
+`Transform` from the `IsometricNavMesh` spawner
+(`crates/classic-core/src/lib.rs:112`), but the Transform has zero scale
+(`Vec3::ZERO`) because `NavMesh` uses `#[serde(default)]` for
+position/scale. The render query is `(&Transform, &NavMesh)`. With zero
+scale the nav mesh is invisible; `init_nav_mesh_render` overwrites this
+Transform by copying position+scale from the parent tilemap entity.
 
-Fix: insert a `Transform` after loading:
+Fix (already in place in the spawner):
 ```rust
 let (pos, scl) = self.names.get("tilemap")
     .and_then(|&e| self.world.get::<&Transform>(e).ok())

@@ -187,8 +187,7 @@ ghost pass, or terrain depth writes fail on subsequent frames.
 ```rust
 // Flush stale GL errors
 while gl.get_error() != 0 {}
-// Set depth test
-gl.enable(glow::DEPTH_TEST);
+// Depth state (DEPTH_TEST remains DISABLED — see §10)
 gl.depth_func(glow::LEQUAL);
 gl.depth_mask(true);
 // Set blending for UI

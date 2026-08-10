@@ -310,7 +310,7 @@ it via LEQUAL but don't write depth themselves.
 | Condition         | Path            | Behaviour                                                      |
 | ----------------- | --------------- | -------------------------------------------------------------- |
 | `vTileId > 0.5`   | Wall face       | Flat `wallColor` ([0.3, 0.2, 0.15, 1.0])                       |
-| `vTileId < -0.01` | Sloped top face | Sprite-sheet lookup, then `rgb *= 1.0 + vTileId * slopeDarken` |
+| `vTileId < -0.01` | Sloped top face | **(REMOVED)** `slopeDarken` uniform no longer exists in frag shader; lighting system provides slope contrast (§16) |
 | Otherwise         | Flat top face   | Normal sprite-sheet lookup + selection overlay                 |
 
 `slopeDarken` uniform defaults to `0.4` — a 1-height-unit cliff darkens by
@@ -411,7 +411,7 @@ Boundary walls extend from Z=0 to Z = hThis × hs.
 
 ### Performance optimizations
 
-1. **Pre-sized Float32Array** — `new Float32Array(sizeX * sizeY * 180)` at
+1. **Pre-sized Float32Array** — `new Float32Array(sizeX * sizeY * 270)` at
    worst-case, direct index writes via `vi++`, no `Array.push()` intermediate
 2. **Buffer reuse** — `DYNAMIC_DRAW` + `bufferSubData` instead of
    `deleteBuffer`/`createBuffer` per rebuild
@@ -748,10 +748,10 @@ sprite.position[2] = h * tilemap.heightScale;
 
 ### GLSL100: no gl_VertexID
 
-`gl_VertexID` requires GLSL 300 es / WebGL2-only features. The existing shaders
-use GLSL 100 (`attribute`, `varying`). For per-vertex data in GLSL 100, use
+TS-only. `gl_VertexID` requires GLSL 300 es / WebGL2-only features. The existing TS
+shaders use GLSL 100 (`attribute`, `varying`). For per-vertex data in GLSL 100, use
 `mix` with `vertexPos.xy` to select corners branchlessly (see §5
-`direct_tex.vert`).
+`direct_tex.vert`). The Rust port uses GLSL 300 es where `gl_VertexID` IS available.
 
 ### Debug footprint state must be restored
 

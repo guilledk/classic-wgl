@@ -2,7 +2,7 @@
 name: classic-logging
 description: >
     CLASSIC_LOG channel-gated instrumentation system for classic-wgl's Rust port.
-    Covers the Chan enum (23 channels), atomic level table, env-var grammar,
+    Covers the Chan enum (22 channels — `Chan::Dump as usize + 1`), atomic level table, env-var grammar,
     macros (`cl_error!/warn!/info!/debug!/trace!/every!/first!/once!`),
     frame counter, native vs web backends, and per-channel level conventions.
     Use when adding log statements to the engine, debugging with selective
@@ -29,7 +29,7 @@ from `classic_core`, the native `env_logger` integration, and the web
 
 ## 1. Architecture
 
-### Chan enum (23 channels)
+### Chan enum (22 channels)
 
 ```rust
 pub enum Chan {
@@ -42,7 +42,8 @@ pub enum Chan {
 ### Level per-channel
 
 A static `[AtomicU8; CHAN_COUNT]` table stores each channel's current level.
-The `enabled(chan, level)` check performs one `Relaxed` atomic load —
+`CHAN_COUNT` is derived from the enum: `pub const CHAN_COUNT: usize = Chan::Dump as usize + 1;`
+(= 22). The `enabled(chan, level)` check performs one `Relaxed` atomic load —
 disabled channels cost virtually nothing.
 
 ### Frame counter
@@ -116,8 +117,10 @@ if instrument::enabled(chan, inst_level(level)) {
 ```
 
 `log::log!` uses the standard `target` filter feature — you can also filter by
-target prefix in `RUST_LOG` (e.g. `RUST_LOG=classic::ui=trace,info`). The
-`enabled()` check is an additional, cheaper gate that runs before the format
+target prefix in `RUST_LOG` (e.g. `RUST_LOG=classic::Chan::Ui=trace,info`).
+Note the target string emitted by the macros is `"classic::Chan::Ui"` (not
+`"classic::ui"`) because the `Chan` enum variant names are used directly.
+The `enabled()` check is an additional, cheaper gate that runs before the format
 args are evaluated.
 
 ---
