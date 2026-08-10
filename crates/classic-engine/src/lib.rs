@@ -689,9 +689,6 @@ impl Engine {
                 Engine::build_test_scenario(&name)
             });
             self.run_test_frame(&STEPS);
-            if self.test_should_close {
-                return;
-            }
         }
 
         // Wheel decay + clamp (matches TS: 1.4 * deltaTime, then [-1, 1])

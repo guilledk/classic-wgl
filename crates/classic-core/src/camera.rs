@@ -23,9 +23,11 @@ impl Camera {
     /// Compute the "fix point" — the scaled position re-centred on the viewport.
     /// This is what the camera-matrix translation negates.
     ///
-    /// port of `camera.ts:getFix()`.
+    /// Port of `camera.ts:getFix()`.
+    /// Formula: `fix = position * scale - size / [2, 2, 1]`
+    /// (This makes `position * scale` map to the viewport centre `size/2`.)
     pub fn fix(&self) -> Vec3 {
-        (self.position * self.scale - self.size) / Vec3::new(2.0, 2.0, 1.0)
+        self.position * self.scale - self.size / Vec3::new(2.0, 2.0, 1.0)
     }
 
     /// Build the camera view matrix.

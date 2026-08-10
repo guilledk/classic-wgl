@@ -264,6 +264,10 @@ impl Platform for HeadlessPlatform {
                 if frame_count >= limit {
                     log::info!("headless: CLASSIC_FRAMES={limit} reached");
                     should_close = true;
+                } else {
+                    // Override any test/golden prompt to close — CLASSIC_FRAMES
+                    // controls exit timing so golden capture runs after test completion.
+                    should_close = false;
                 }
                 frame_count += 1;
             }
