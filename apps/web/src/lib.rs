@@ -108,6 +108,7 @@ pub fn main() {
                 e.measure_all_ui_labels();
                 e.init_lighting();
                 e.init_text_showcase();
+                e.init_iso_coord_overlay();
 
                 // Position camera to show sprites near iso [32, 13]
                 let mut iso = classic_core::math::cartesian_to_iso_4().inverse();

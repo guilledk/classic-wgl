@@ -704,7 +704,6 @@ impl Engine {
         // Write back to platform so decay persists across frames.
         input.mouse_wheel = self.input.mouse_wheel;
 
-        self.ui_consumed_click = false;
         self.prev_mouse_down = self.input.is_mouse_down(0);
 
         let ui_debug = env_config::EnvConfig::get().ui_debug && self.debug_frame < 120;
@@ -739,6 +738,8 @@ impl Engine {
         }
         self.debug_frame += 1;
         classic_core::instrument::set_frame(self.debug_frame);
+
+        self.ui_consumed_click = false;
 
         if self.input.was_mouse_released(0) && !self.ui_consumed_click {
             let just_finished_selection = self.selection_mode == 1;
@@ -3849,8 +3850,8 @@ impl Engine {
         };
         let mut changed = false;
         if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
-            for ty in 0..sx {
-                for tx in 0..sy {
+            for ty in 0..sy {
+                for tx in 0..sx {
                     let idx = (ty * sx + tx) as usize;
                     let tidx = ty as usize * (sx as usize + 1) + tx as usize;
                     let h = hd.get(tidx).copied().unwrap_or(0.0);
@@ -3864,7 +3865,7 @@ impl Engine {
                             walkable = 0;
                         }
                     }
-                    if tx + 1 < sy {
+                    if tx + 1 < sx {
                         let h_next = hd
                             .get(ty as usize * (sx as usize + 1) + (tx + 1) as usize)
                             .copied()

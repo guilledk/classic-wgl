@@ -12,8 +12,8 @@
 /// No `CLASSIC_LOG` set → all channels off (zero-overhead checks).
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
-/// Number of channels in the `Chan` enum.
-pub const CHAN_COUNT: usize = 23;
+/// Number of channels in the `Chan` enum (auto-derived from the last variant).
+pub const CHAN_COUNT: usize = Chan::Dump as usize + 1;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -54,34 +54,8 @@ pub enum Level {
 }
 
 /// Per-channel level table. Indexed by `chan as usize`.
-static LEVELS: [AtomicU8; CHAN_COUNT] = const {
-    // All channels default to Off.
-    [
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-        AtomicU8::new(0),
-    ]
-};
+/// All channels default to Off.
+static LEVELS: [AtomicU8; CHAN_COUNT] = [const { AtomicU8::new(0) }; CHAN_COUNT];
 
 /// Global frame counter, incremented by the engine.
 static FRAME: AtomicU64 = AtomicU64::new(0);
@@ -138,10 +112,10 @@ pub fn init(spec: &str) {
 
         if let Some((name, level_str)) = token_body.split_once('=') {
             let name = name.trim();
-            let level = parse_level(level_str.trim());
+            let level = if negate { Level::Off } else { parse_level(level_str.trim()) };
             let all = name == "all";
             if all {
-                ops.push(Op { all: true, negate: false, targets: vec![], level });
+                ops.push(Op { all: true, negate, targets: vec![], level });
             } else {
                 let targets = resolve_channels(name, negate);
                 ops.push(Op { all: false, negate: false, targets, level });
@@ -161,11 +135,18 @@ pub fn init(spec: &str) {
         }
     }
 
-    // Apply: all=LEVEL first, then per-channel
+    // Apply: all=LEVEL first, then -all, then per-channel.
     for op in &ops {
         if op.all && !op.negate {
             for c in 0..CHAN_COUNT {
                 set_level_raw(c as u8, op.level);
+            }
+        }
+    }
+    for op in &ops {
+        if op.all && op.negate {
+            for c in 0..CHAN_COUNT {
+                set_level_raw(c as u8, Level::Off);
             }
         }
     }
