@@ -4,189 +4,194 @@ Guidance for AI coding agents (and humans) working on `classic-wgl`.
 
 ## What this is
 
-`classic.wgl` is a small, dependency-light WebGL2 game engine written in
-vanilla TypeScript, plus a retained-mode UI/layout layer built on top of it.
-There is no framework (no React/etc.) — the whole app is a single
-`<canvas>` bootstrapped by Vite. The only runtime dependency is `gl-matrix`.
+`classic-wgl` is a small isometric game engine with a retained-mode UI/layout
+layer, ported from TypeScript to Rust.  Two targets: **native** (winit+glutin,
+desktop GL) and **web** (web-sys+trunk, WebGL 2).  There is no framework — the
+whole app is a single `<canvas>` / winit window.  The main dependencies are
+`hecs`, `glam`, `glow`, `winit`, and `glutin`.
+
+The TypeScript original was deleted (`remove TypeScript engine and tooling`).
+A parity reference lives at `docs/TS-PARITY.md`.
 
 ## Commands
 
 ```bash
-npm i                 # install deps (Node 22; see default.nix for nix-shell)
-npm run dev           # start Vite dev server (opens browser, port 5173)
-npm run build         # production build to dist/
-npm run preview       # preview a production build
-npm run typecheck     # tsc --noEmit (strict mode) — run before finishing
-npm test              # vitest run (single pass)
-npm run test:watch    # vitest watch mode
-npm run test:coverage # vitest run --coverage (v8, scoped allowlist)
-npm run format        # prettier --write . (auto-format all source files)
-npm run format:check  # prettier --check . (CI check)
+# Build
+cargo build -p classic-desktop         # native binary
+cargo build --target wasm32-unknown-unknown -p classic-web   # wasm
+nix develop                             # enter dev shell (sets LD_LIBRARY_PATH + wasm linker)
+
+# Run
+cargo run -p classic-desktop            # native, interactive
+trunk serve apps/web/index.html         # web dev server
+trunk build apps/web/index.html --release  # web release
+
+# Test
+cargo test -- --test-threads=1          # all unit/integration tests
+CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop
+                                        # headless e2e + golden trace check (needs libEGL)
+
+# Lint
+cargo fmt --all -- --check              # formatting
+cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-demo --all-targets -- -D warnings
+
+# Assets (must run once after checkout / submodule update)
+npm ci && npm run assets                # generates public/res/ (gitignored, embedded via include_bytes!)
 ```
 
-CI (`.github/workflows/ci.yml`) runs `npm run format:check`, `npm run typecheck`,
-and `npm run test:coverage` on every push to `master` and every PR. Always run
-all three before considering a task done.
+CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
+`headless golden test` on every push to `master` / `rust-port` and every PR.  Run
+`cargo fmt -- --check`, `cargo clippy`, and `cargo test -- --test-threads=1`
+before considering a task done.
 
 ## Directory map
 
 ```
-src/
-  main.ts            entry point (sets document.title, imports demo/init.ts)
-  version.ts          derives APP_NAME/APP_VERSION from package.json
-  classic/            the engine core
-    ecs.ts             Entity / Component base classes
-    types.ts            all shared interfaces (IGameState, IEntity, ...)
-    registry.ts          component name -> constructor registry (for JSON load)
-    state.ts             the singleton `game` object + main RAF loop
-    camera.ts            2D camera
-    collision.ts          Shape/Circle/Polygon, Collider, PhysicsProvider (GJK + Quadtree)
-    transforms.ts         Transform -> Drawable -> Rectangle/Sprite/Text
-    animator.ts           Animator component (sprite-sheet frame stepping)
-    isometric.ts          Tilemap, IsometricNavMesh, IsoSprite, IsoAgent
-    pathfinder.ts         Web Worker: A* pathfinding over the nav mesh
-    ui.ts                 UIElement/UIContainer/UIArray/UIPadding/UIManager
-    utils.ts               fetch/shader/buffer/texture/animation helpers
-  demo/               application-specific demo code
-    init.ts              entry: init -> load resources -> load state ->
-                         run prefabs -> initUI() -> launch()
-    prefabs.ts           initX() functions that assemble built-in game objects
-    uiPrefabs.ts         demo UI tree built from ui.ts primitives
-  lib/                vendored, mostly-standalone algorithms
-    gjk.ts               GJK convex collision detection
-    quadtree.ts          generic spatial Quadtree<T extends Rect>
-    simplex-noise.ts     2D/3D/4D simplex noise
-  shaders/            GLSL sources (*.vert / *.frag), served at /shaders/*
-                       via a custom Vite plugin (see vite.config.ts)
-tests/                mirrors src/ 1:1 (tests/classic/*, tests/lib/*)
-  helpers/mockGame.ts   createMockGL / createMockPhysics / createMockGame
-public/               static assets + manifest.json (shaders/textures/
-                        animations) + state.json (persisted demo entities)
-                        + style.css; public/res/ is GENERATED (see Assets below)
-assets/               git submodule -> guilledk/classic-assets (source assets)
-scripts/copy-assets.mjs  copies assets/ into public/res/ (npm run assets)
-.prettierrc            Prettier config (4-space indent, single quotes, semicolons, 100-char width)
+Cargo.toml               workspace root (7 members)
+crates/
+  classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
+                          tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder
+  classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
+  classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
+  classic-engine/         Engine god-object: lib.rs (lifecycle), ui.rs (UIManager), golden.rs (traces),
+                          env_config.rs, testing/
+  classic-demo/           init_engine() bootstrap (stub — init_* prefabs still live in classic-engine)
+apps/
+  desktop/                native binary: include_bytes! assets, init_* calls, winit event loop
+  web/                    wasm cdylib: wasm-bindgen main, trunk build, canvas pointer-lock
+tests/
+  golden/                 baseline.{trace.jsonl,png} for render-trace + pixel golden checks
+public/
+  manifest.json           shader/texture/animation declarations (used by Rust loader)
+  state.json              persisted demo entities
+  map001.{txt,nav.txt}    tilemap + nav mesh data (base64 JSON arrays)
+assets/                   git submodule -> guilledk/classic-assets (source assets)
+scripts/
+  copy-assets.mjs         copies assets/demo/*.png + buildings/*/spritesheet.png -> public/res/
+  make-font-atlas.mjs     generates SDF font atlas from DejaVuSans.ttf
+docs/
+  TS-PARITY.md            formulas, LIGHT_PRESETS, dump key ordering, TS↔Rust divergence list
+plans/
+  opencode/               per-session plans and audit notes
 ```
 
 ## Architecture essentials
 
-- **ECS without a scheduler.** `Entity` (src/classic/ecs.ts) holds a list of
-  `Component`s. There is no per-frame "system" that iterates components by
-  type. Instead, components call `entity.registerCall(name, boundFn)` (e.g.
-  `'update'`, `'renderList'`, `'canvasResize'`) and the singleton `game`
-  object (src/classic/state.ts) dispatches these via
-  `registerCall`/`performCall`/`unregisterCall`. `destroyEntity` cleans up
-  everything an entity registered.
-- **The `game` singleton** (`state.ts`) is the "god object": input state,
-  timing, WebGL handles, camera, physics provider, entity map, and the main
-  `draw(now)` loop (physics -> `update` calls -> `renderList` calls, sorted
-  by `order()` -> `rawDraw()`). It's also exposed as `window.game` for
-  console debugging.
-- **Component registry** (`registry.ts`) maps a string name to a
-  constructor so `game.load('/state.json')` can deserialize entities without
-  `eval`. Every concrete `Component` subclass self-registers at the bottom
-  of its file via `registerComponent('Name', Class)`. **Importing a
-  component module for its side effects is required** before that component
-  type can be loaded from JSON — if you add a new component, register it and
-  make sure its module is imported somewhere in the load path (usually via
-  `init.ts` or another already-imported module).
-- **Prefab functions** (`prefabs.ts`) are the idiomatic way to build
-  gameplay: plain `initXxx()` functions that call `game.spawnEntity()`,
-  `entity.addComponent()`, and `entity.registerCall()`. There is no
-  declarative scene format beyond the runtime `state.json` dump.
-- **Resource manifest** (`public/manifest.json`) declares shaders (name +
-  vertex/fragment paths + attribute/uniform names), textures, and
-  animations; `game.loadResources()` / `utils.ts` (`initShaders`,
-  `initTextures`, `initAnimations`) consume it.
-- **Shaders** live in `src/shaders` as source but are fetched at runtime via
-  `/shaders/*` URLs. A custom Vite plugin in `vite.config.ts` serves them
-  from `src/shaders` in dev and emits them into `dist/shaders` on build —
-  don't try to `import` a shader file directly.
-- **UI layer** (`ui.ts`) is a small retained-mode layout system built by
-  extending the rendering primitives directly: `UIElement extends
-Rectangle`, `UIText extends Text`, `UISprite extends Sprite`. Layout is
-  triggered by `UIManager.markDirty()` / `refreshLayout()`, driven off the
-  `'canvasResize'` call.
-- **Isometric/pathfinding**: `isometric.ts` owns a `pathfinder.ts` Web
-  Worker (spun up via `new Worker(new URL('./pathfinder.ts',
-import.meta.url), { type: 'module' })`) and talks to it with an
-  id-correlated `initmap`/`updatemap`/`findpath` message protocol.
-- **Feature-local type augmentation**: files extend `IGameState` in place
-  via `declare module '/classic/types.js' { interface IGameState { ... } }`
-  (see `ui.ts`, `prefabs.ts`) instead of editing `types.ts` directly for
-  optional/feature-specific state.
+- **ECS via hecs.**  Components are plain `#[derive(Debug, Clone)]` structs in
+  `crates/classic-core/src/components/mod.rs`.  Entities are `hecs::Entity` handles.
+  There is no system scheduler; update logic lives in `Engine::on_update(FnMut(&mut Engine))`
+  closures registered by `init_*` prefabs.
+- **The `Engine` struct** (`crates/classic-engine/src/lib.rs`) is the god object:
+  `World`, `PhysicsProvider`, `Camera`, `Time`, `InputState`, `Gfx`, `UIManager`,
+  editor state, and test-harness state.  `Engine::frame(input, vw, vh, delta)` runs
+  once per render frame: physics → update closures → build render list → draw sorted items.
+- **Component registry** (`crates/classic-core/src/registry.rs`) is bidirectional:
+  `ComponentReg { name, spawn, dump, order, subsumes }`.  The `spawn` fn constructs a
+  component from JSON; the `dump` fn serializes it back.  `subsumes` prevents fan-out
+  duplicates (e.g. `IsoAgent ⊃ {IsoSprite, Transform}`).  Tests sharing the global
+  registry must use `--test-threads=1` (it's a global `RwLock<HashMap>`).
+- **Prefab functions** (`init_*` methods on `Engine`) are the idiomatic way to build
+  gameplay: they spawn entities, add components, register `on_update` closures, and
+  return `Engine` handles for later reference.
+- **GL rendering** (`classic-gfx/src/lib.rs`) provides 7 `draw_*` functions (`draw_tilemap`,
+  `draw_iso_sprite`, `draw_sprite`, `draw_rect`, `draw_sdf`, `draw_line_loop`, `draw_line_strip`).
+  Each binds a named shader, sets projection/camera/model uniforms, and draws.
+  **Important**: `begin_frame` does NOT enable `DEPTH_TEST` globally — tilemap/iso_sprite
+  toggle it within their scopes.  The UI/SDF phase runs with depth test off; layering is
+  purely draw-order (z-sort).  Enabling it globally depth-rejects UI under ortho projection.
+  See `classic-gfx` skill.
+- **UI layer** (`crates/classic-engine/src/ui.rs`) is a retained-mode layout system with
+  anchor-based positioning.  `UIManager` holds a root container and provides factory methods
+  (`spawn_container`, `spawn_sdf_text`, `spawn_array`, `spawn_padding`, `spawn_sprite`,
+  `spawn_button`).  Layout is `refresh_layout()` which walks the root tree recursively.
+  Colliders are synced via `add_collider_to_elem` → `PhysicsProvider` → `sync_colliders`.
+  See `classic-ui` skill.
+- **Isometric/pathfinding**: `classic-core/src/tilemap.rs` builds the 3D tilemap mesh;
+  `classic-core/src/pathfinder.rs` implements A* (single-threaded, no worker — the TS
+  Web Worker pattern was dropped).  See `classic-iso` skill.
+- **SDF text**: `classic-core/src/sdf_builder.rs` builds interleaved glyph buffers;
+  `classic-gfx` renders them with the `sdf` shader (`dejavusans-sdf` font atlas).
+  Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),
+  not a post-pass.  See `classic-text` skill.
 
 ## Conventions
 
-- 4-space indentation (enforced by Prettier), single quotes, semicolons everywhere.
-- `PascalCase` for classes/components; interfaces representing an abstract
-  contract are `I`-prefixed (`IEntity`, `IComponent`, `IGameState`,
-  `IShape`, `ICamera`, ...). `camelCase` for functions/methods/variables.
-  Private/internal fields are `_`-prefixed (`_callRegistry`, `_toCleanup`).
-  Prefab initializers follow `initXxx()`. True constants are
-  `SCREAMING_SNAKE_CASE`.
-- **All import specifiers use a `.js` extension, even for `.ts` source
-  files** (e.g. `import game from '/classic/state.js'`). This is
-  intentional and consistent across the whole codebase — don't switch to
-  `.ts` extensions.
-- Path aliases (defined in both `vite.config.ts` and `tsconfig.json`):
-  `/classic/*` -> `src/classic/*`, `/demo/*` -> `src/demo/*`,
-  `/lib/*` -> `src/lib/*`. Convention: use
-  the alias for cross-module imports, but use a relative import for a
-  module's own directory `types.js` (e.g. `import type { ... } from
-'./types.js'` from within `src/classic/`).
-- `type`-only imports use `import type { ... }` explicitly
-  (`verbatimModuleSyntax: true` in `tsconfig.json` requires this).
-- Abstract methods are implemented as base-class methods that `throw new
-Error('Abstract method must be overridden')` rather than using the
-  `abstract` keyword.
-- JSDoc-style `/** ... */` comments are used for file headers and
-  non-trivial exported functions, but not uniformly on every method —
-  match the density of the file you're editing.
+- Rust-stock: `cargo fmt` (default style, width 100 via `rustfmt.toml`), `cargo clippy` strict.
+- `PascalCase` for structs/enums, `snake_case` for fields/functions/variables.
+  Trait names are `PascalCase` (no `I` prefix — hecs uses `Component`, not `IComponent`).
+  `SCREAMING_SNAKE_CASE` for constants.  Prefab initializers follow `init_*()`.
+- Crate-prefixed imports preferred (`classic_core::`, `classic_gfx::`, `classic_engine::`).
+- `#[cfg(test)]` modules inline or in `tests/` directories mirroring the crate layout.
+- All `unsafe` is in `classic-gfx` (GL calls) and `classic-platform/headless.rs` (EGL FFI).
+  No other crate uses `unsafe`.
 
 ## Testing
 
-- Vitest with `jsdom` environment; tests live under `tests/` and mirror the
-  `src/` tree (`tests/classic/*.test.ts`, `tests/lib/*.test.ts`).
-- `test:coverage` scope is intentionally limited to core engine pieces —
-  see the `test.coverage.include` allowlist in `vite.config.ts` (currently
-  `src/lib/**`, `ecs.ts`, `camera.ts`, `collision.ts`, `utils.ts`,
-  `registry.ts`). Not every file needs 100% coverage; the demo/prefab/UI
-  layer is out of scope for coverage.
-- Use `tests/helpers/mockGame.ts` instead of touching real WebGL/DOM:
-    - `createMockGL()` — stub `WebGLRenderingContext` with only the methods
-      actually exercised.
-    - `createMockPhysics()` — stub `IPhysicsProvider`.
-    - `createMockGame(overrides?)` — minimal `IGameState`-shaped object,
-      override/spread as needed per test.
-      These are intentionally partial mocks force-cast to the real interface —
-      keep that pattern rather than building full fakes.
-- Typical test shape: define a tiny local `Component` subclass inline,
-  construct `Entity`s with a mock game, assert on both behavior and
-  internal bookkeeping. Use `toBeCloseTo(...)` for float/vector
-  comparisons. `registry.test.ts`-style specs call `clearRegistry()` in
-  `beforeEach` for isolation.
-- Run `npm run typecheck && npm test` (or `npm run test:coverage` to match
-  CI) before considering a change complete.
+- **Unit/integration tests**: `cargo test -- --test-threads=1` (threads=1 required
+  because the global component registry is shared state).  46 tests in `classic-core`
+  cover pathfinding, GJK, quadtree, camera, tile mesh building, SDF builder, dumper
+  round-trips, and camera math.
+- **classic-engine** and **classic-gfx** have no unit tests (no mock GL — deferred).
+- **CLASSIC_TEST e2e**: `CLASSIC_TEST=1 CLASSIC_FRAMES=60 cargo run -p classic-desktop`.
+  One scenario (12 assertions) testing height blend/set, tile painting, zero-delta,
+  menu text centering, and text demo visibility.  `build_test_scenario(name)` is defined
+  but the `name` parameter is currently ignored (one hardcoded scenario).
+  See `classic-testing` skill for the complete DSL.
+- **Golden trace**: `CLASSIC_GOLDEN=check|update` compares a render-trace `.jsonl`
+  against `tests/golden/baseline/baseline.trace.jsonl`.  Run with:
+  `CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop`.
+- **Pixel golden**: `CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=check` compares a pixel buffer
+  against `tests/golden/baseline/baseline.png` (not run in CI by default — software-
+  rasteriser version-dependent).
+- CI golden job needs: `submodules: recursive`, `npm ci && npm run assets` (for `public/res/`),
+  and `CLASSIC_FRAMES=60` (controls headless loop exit timing).
 
 ## Assets
 
-- Source game assets live in the `assets/` git submodule, pointing at
-  `guilledk/classic-assets`. See that repo's `AGENTS.md` for layout.
-- `public/res/` is GENERATED and gitignored. Regenerate it with:
-  `npm run assets` (also chained into `npm run dev` and `npm run build`).
-- `scripts/copy-assets.mjs` maps:
-    - `assets/demo/*.png` -> `public/res/<same name>.png`
-    - `assets/buildings/*/spritesheet.png` -> `public/res/<name>.png`
-- To update assets: bump/refresh the `assets/` submodule (`git submodule
-update --remote` or pin a tag), run `npm run assets`, and re-verify the demo.
-- `deploy.yml` checks out the submodule with `GH_PAT` (a repo-scoped token that
-  can read the private `classic-assets` repo) and runs `npm run assets` before
-  `vite build`.
+- Source game assets live in the `assets/` git submodule (private repo `guilledk/classic-assets`).
+- `public/res/` is GENERATED and gitignored.  Regenerate with: `npm run assets`.
+- `scripts/copy-assets.mjs` maps `assets/demo/*.png` → `public/res/<name>.png` and
+  `assets/buildings/*/spritesheet.png` → `public/res/<name>.png`.
+- `scripts/make-font-atlas.mjs` generates SDF font atlas + metrics JSON.
+- Rust apps embed assets at compile time via `include_bytes!`/`include_str!` (see
+  `apps/desktop/src/main.rs` and `apps/web/src/lib.rs`).
+- CI and deploy must run `npm run assets` before `cargo build` / `trunk build`.
+
+## CLASSIC_* environment variables
+
+| Var | Purpose | Default |
+|---|---|---|
+| `CLASSIC_TEST` | Enable e2e test runner | off |
+| `CLASSIC_FRAMES` | Max frames in headless mode | unlimited |
+| `CLASSIC_FIXED_DT` | Fixed delta time (auto 1/60 under test) | real dt |
+| `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Forced viewport | window size |
+| `CLASSIC_HEADLESS` | Surfaceless EGL, no window | off |
+| `CLASSIC_OFFSCREEN` | Render to FBO | off |
+| `CLASSIC_GOLDEN` | `check` or `update` golden trace | off |
+| `CLASSIC_GOLDEN_PNG` | Enable pixel PNG capture | off |
+| `CLASSIC_GOLDEN_TOL` | Pixel channel tolerance | 2 |
+| `CLASSIC_DUMP_DIR` | Native dump output dir | `./dump/` |
+| `CLASSIC_LOG` | Channel-gated logging (see `classic-debugging` skill) | off |
+| `CLASSIC_UI_DEBUG` | Per-frame UI entity dump (first 120 frames) | off |
 
 ## Git / PR notes
 
-- Default branch is `master` (CI triggers on push to `master` and all PRs).
-- Commit messages in this repo are short, lowercase, imperative
-  (`fix npx vite build`, `add Vitest test harness and CI`) — no
-  conventional-commit prefixes.
+- Default branch is `master` (CI triggers on push to `master` / `rust-port` and all PRs).
+- Commit messages are short, lowercase, imperative (`fix nav walkability transpose`).
+- Submodule `assets/` requires a repo-scoped token (`GH_PAT` secret) in CI for checkout.
+
+## Skills
+
+Engine skills (in `.claude/skills/`):
+
+| Skill | Covers |
+|---|---|
+| `classic-iso` | Iso coords, tilemap, depth formula, sprite occlusion, mesh gen (Rust-only) |
+| `classic-ui` | UIManager, anchor layout, collider sync, set_enabled, spawn_button |
+| `classic-text` | SdfText renderer, atlas generator, is_ui justify, scissor clipping |
+| `classic-gfx` | draw_* functions, GL state contract, GlBuffer, begin_frame, z-clipping |
+| `classic-physics` | PhysicsProvider, click/hover/enter/exit dispatch, selection, pathfinder |
+| `classic-ecs` | hecs patterns, component model, registry, update_fns, camera math |
+| `classic-platform` | Native/web/headless backends, InputState, window/keyboard/mouse |
+| `classic-testing` | CLASSIC_TEST v2, golden harness, mock GL, scenario authoring workflow |
+| `classic-debugging` | CLASSIC_LOG channels, JSON format, runtime toggles, debugging playbook |
