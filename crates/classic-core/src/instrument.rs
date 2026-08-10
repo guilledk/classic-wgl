@@ -68,6 +68,14 @@ static INITIALIZED: AtomicU8 = AtomicU8::new(0);
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Reset the level table and initialization flag. Only for use in tests.
+pub fn reset_for_test() {
+    for i in 0..CHAN_COUNT {
+        LEVELS[i].store(0, Ordering::Relaxed);
+    }
+    INITIALIZED.store(0, Ordering::Relaxed);
+}
+
 /// Parse a `CLASSIC_LOG` spec string and apply levels.
 ///
 /// Grammar tokens are comma-separated:

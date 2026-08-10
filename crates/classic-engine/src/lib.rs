@@ -140,6 +140,12 @@ pub enum DrawKind {
 }
 
 impl Engine {
+    /// Create an Engine without a GL context — useful for testing non-rendering
+    /// subsystems (UI layout, collision dispatch, tilemap math, etc.).
+    pub fn new_for_test() -> Self {
+        Self::new()
+    }
+
     pub fn new() -> Self {
         classic_core::register_all_components();
         classic_core::instrument::init_from_env();
