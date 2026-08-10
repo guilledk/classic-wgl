@@ -1,0 +1,23 @@
+[package]
+name = "classic-desktop"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "classic-desktop"
+path = "src/main.rs"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+classic-core = { path = "../../crates/classic-core" }
+classic-gfx = { path = "../../crates/classic-gfx" }
+classic-platform = { path = "../../crates/classic-platform", features = ["native"] }
+classic-engine = { path = "../../crates/classic-engine" }
+classic-demo = { path = "../../crates/classic-demo" }
+
+glam.workspace = true
+glow.workspace = true
+pollster.workspace = true
+winit.workspace = true
+env_logger.workspace = true
+log.workspace = true
+anyhow.workspace = true

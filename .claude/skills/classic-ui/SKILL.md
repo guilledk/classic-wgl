@@ -771,3 +771,36 @@ col.addHandler('exit', () => void)        → void
 col.clickPriority = number                 → higher dispatches first in overlaps
 col.consumesClick = boolean                → true prevents map interactions
 ```
+
+## 11. Z-LAYERING AND PANEL OVERLAYS (Rust port)
+
+All UI elements default to `z = -1000` (from `UIManager.zlayer` at
+`crates/classic-engine/src/ui.rs:83`). The render list sorts descending by z,
+so higher z = drawn first = background.
+
+### SDF text in the render loop
+
+SDF text is no longer a separate post-UiRect pass. `SdfTextRender` entities
+are added to the main `items: Vec<(f32, Entity, DrawKind)>` list with sort key
+`tf.position.z`, and drawn inline via `DrawKind::SdfText` in the match loop.
+This means SDF text **respects the same z-sort order** as UiRect and Sprites.
+
+### Panel overlays
+
+When a UI panel (menu, dropdown, modal) needs to render on top of other UI
+elements and occlude their text:
+
+1. Set the panel's `Transform.position.z` to a value **lower** (more negative)
+   than the background elements.
+2. Set the z on **all child entities** (button containers, SDF text labels)
+   to the same z value.
+3. Use the backdrop (click-outside-to-close) at an intermediate z.
+
+Example from `init_tool_buttons` (`classic-engine/src/lib.rs:~1900`):
+- DEV/agent buttons: `z = -1000` (default)
+- Backdrop: `z = -1050` (between buttons and menu)
+- Menu panel + rows + row labels: `z = -1100` (foreground)
+
+Set z both at spawn time AND in the per-frame `on_update` closure that
+re-positions elements (both must use the explicit z value, not
+`tf.position.z` which would preserve the default -1000).

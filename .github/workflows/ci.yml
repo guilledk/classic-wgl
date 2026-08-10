@@ -2,28 +2,56 @@ name: CI
 
 on:
     push:
-        branches: [master]
+        branches: [master, rust-port]
     pull_request:
-        branches: ['**']
+        branches: [master, rust-port]
+
+env:
+    CARGO_TERM_COLOR: always
 
 jobs:
-    test:
+    lint:
+        name: lint (fmt + clippy)
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
-
-            - uses: actions/setup-node@v4
+            - uses: dtolnay/rust-toolchain@stable
               with:
-                  node-version: 22
-                  cache: npm
+                  components: rustfmt, clippy
+            - run: cargo fmt --all -- --check
+            - run: cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-demo --all-targets -- -D warnings
 
-            - run: npm ci
+    test:
+        name: test
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - run: cargo test -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-demo -- --test-threads=1
 
-            - name: Typecheck
-              run: npm run typecheck
+    wasm-check:
+        name: wasm check
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - run: cargo check --target wasm32-unknown-unknown -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-demo
 
-            - name: Check formatting
-              run: npm run format:check
+    golden:
+        name: golden test (headless EGL)
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - run: sudo apt-get update -qq && sudo apt-get install -y -qq libegl1-mesa-dev libgl1-mesa-dri libgbm-dev libx11-dev
+            - run: cargo build -p classic-desktop
+            - env:
+                  LIBGL_ALWAYS_SOFTWARE: 1
+                  EGL_PLATFORM: surfaceless
+              run: CLASSIC_HEADLESS=1 CLASSIC_TEST=all CLASSIC_GOLDEN=check RUST_LOG=info ./target/debug/classic-desktop
+            - uses: actions/upload-artifact@v4
+              if: failure()
+              with:
+                  name: golden-artifacts
+                  path: target/classic-test/
 
-            - name: Test with coverage
-              run: npm run test:coverage

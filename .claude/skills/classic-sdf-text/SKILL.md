@@ -459,3 +459,33 @@ in the per-frame update callback.
 | **Glyphs rendered upside-down** | UV Y-axis inverted | `g.y/atlasH` (no `1 -`); no `UNPACK_FLIP_Y` |
 | **Glyphs on one pixel row** | `lineIndex` not applied | `gy += lineIndex * lineHeight * scale` |
 | **Text rendered ~3× too small** | Unit mismatch | Multiply scale by ~2.5 when migrating from `UIText` |
+
+## 9. RUST PORT ARCHITECTURE (SDF text in main render loop)
+
+In the Rust port (`crates/classic-engine/src/lib.rs`), SDF text rendering
+has been restructured:
+
+- **Before**: SDF text was a dedicated post-render pass. After all `UiRect`,
+  `Tilemap`, `IsoSprite`, and `Sprite` draws, a separate loop walked all
+  `SdfTextRender` entities and drew them. This meant SDF text **always**
+  rendered on top of all other 2D elements, regardless of z-order.
+
+- **Now**: `SdfTextRender` entities are added to the main `items` list
+  alongside `UiRect`/`Sprite`/etc., with sort key `tf.position.z`. The
+  dirty-check, glyph-buffer rebuild, and draw logic moved into a
+  `DrawKind::SdfText` arm in the existing match loop. SDF text draws at its
+  correct z-position relative to other UI elements.
+
+### Implications
+
+- **Set `tf.position.z`** on SDF text entities to control their draw order.
+  Default is `-1000` (from `UIManager.zlayer`). For overlay panels, set the
+  SDF text child labels to the same lower z as the panel rect.
+- **The glyph buffer dirty-check + rebuild runs inline** in the draw loop.
+  This is fine — the check is cheap (string compare + float compare) and
+  rebuilds only happen when text content or scale changes.
+- **The `justify` x-offset logic** is unchanged: UI text (`parent.is_some()`)
+  always uses `x_off = 0` because the anchor system handles positioning;
+  non-UI text applies Left/Center/Right offsets.
+- **Clip rect + scissor test** logic is unchanged: each SdfText entity checks
+  `UiNode.clip_rect`, enables `SCISSOR_TEST` if non-zero, draws, disables.

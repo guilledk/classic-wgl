@@ -290,3 +290,24 @@ for (const c of entity.components) {
     if (c instanceof IsoSprite) { iso = c as IsoSprite; break; }
 }
 ```
+
+## 8. DEPTH TEST DISABLED FOR UI (Rust-port gotcha)
+
+`begin_frame` in `crates/classic-gfx/src/lib.rs:~428` sets `depthFunc(LEQUAL)` and
+`depthMask(true)` but **does not** call `glEnable(DEPTH_TEST)`. The
+`draw_tilemap` and `draw_iso_sprite` functions both `glEnable(DEPTH_TEST)`
+inside their unsafe blocks then `glDisable(DEPTH_TEST)` at the end, leaving
+depth test **off** for the remainder of the frame.
+
+**Consequence**: the entire UiRect + SdfText phase runs with depth test
+disabled. UI layering relies **exclusively** on draw order (z-sort) + alpha
+blending, not depth occlusion.
+
+**Do NOT globally enable DEPTH_TEST** in `begin_frame` to "fix" UI layering.
+The tilemap renders at `z=20000` and UI at `z=-1000`. Under the orthographic
+projection (`near=-10000, far=10000`), these map to wildly different depth
+values, and with LEQUAL the UI would get completely depth-rejected.
+
+Instead, control layering via explicit z values and the single z-sorted
+render list (SDF text merged into the main loop — see classic-sdf-text).
+Lower z (more negative) = drawn later = on top.
