@@ -421,6 +421,20 @@ impl UIManager {
         self.mark_dirty();
     }
 
+    /// Attach multiple children to a container, all with the same anchor pair.
+    pub fn add_children(
+        &mut self,
+        world: &mut World,
+        container: hecs::Entity,
+        children: &[hecs::Entity],
+        self_anchor: UiAnchor,
+        child_anchor: UiAnchor,
+    ) {
+        for &child in children {
+            self.container_add_child(world, container, child, self_anchor, child_anchor);
+        }
+    }
+
     /// Convenience: add child to root container.
     pub fn root_add_child(
         &mut self,

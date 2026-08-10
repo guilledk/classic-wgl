@@ -1689,7 +1689,8 @@ impl Engine {
                                 let h_ne = at(ftx + 1, fty);
                                 let h_sw = at(ftx, fty + 1);
                                 let h_se = at(ftx + 1, fty + 1);
-                                let hi = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, px, py);
+                                let hi =
+                                    bilinear_height(&tm.height_data, tm.size_x, tm.size_y, px, py);
                                 let target_z = hi * tm.height_scale;
 
                                 // Speed factor from steepness
@@ -2503,52 +2504,10 @@ impl Engine {
         }
 
         // Wire children to container so set_enabled propagates.
-        ui.container_add_child(
+        ui.add_children(
             &mut self.world,
             container,
-            h_minus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            h_plus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            s_minus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            s_plus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            mode_btn,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            h_label,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            s_label,
+            &[h_minus, h_plus, s_minus, s_plus, mode_btn, h_label, s_label],
             UiAnchor::TopLeft,
             UiAnchor::TopLeft,
         );
@@ -2854,66 +2813,20 @@ impl Engine {
         }
 
         // Wire children to container so set_enabled propagates.
-        ui.container_add_child(
+        ui.add_children(
             &mut self.world,
             container,
-            prev_btn,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            next_btn,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            az_minus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            az_plus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            el_minus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            el_plus,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            preset_label,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            az_label,
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-        ui.container_add_child(
-            &mut self.world,
-            container,
-            el_label,
+            &[
+                prev_btn,
+                next_btn,
+                az_minus,
+                az_plus,
+                el_minus,
+                el_plus,
+                preset_label,
+                az_label,
+                el_label,
+            ],
             UiAnchor::TopLeft,
             UiAnchor::TopLeft,
         );
@@ -3822,15 +3735,28 @@ impl Engine {
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             gl.tex_image_2d(
-                glow::TEXTURE_2D, 0, glow::RGBA as i32,
-                width as i32, height as i32, 0,
-                glow::RGBA, glow::UNSIGNED_BYTE,
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(Some(pixels)),
             );
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
         }
         tex
     }
