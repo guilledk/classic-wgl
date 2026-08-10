@@ -32,7 +32,9 @@ jobs:
               run: cargo install trunk --locked
 
             - name: Build web app
-              run: trunk build apps/web/index.html --release
+              run: |
+                cd apps/web
+                trunk build index.html --release
 
             - uses: peaceiris/actions-gh-pages@v4
               with:
