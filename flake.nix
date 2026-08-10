@@ -15,7 +15,6 @@
 
         rust-toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
-        # The set of native libs needed by winit + glutin on Linux
         nativeBuildInputs = with pkgs; [
           pkg-config
           udev
@@ -25,20 +24,19 @@
           wayland
           mesa
           libGL
-          xorg.libX11
-          xorg.libXcursor
-          xorg.libXrandr
-          xorg.libXi
+          libx11          # was xorg.libX11 (deprecated)
+          libxcursor      # was xorg.libXcursor
+          libxrandr       # was xorg.libXrandr
+          libxi           # was xorg.libXi
         ];
 
-        # Rust toolchain with all components
         rustDeps = with pkgs; [
           rust-toolchain
           rust-analyzer
           wasm-bindgen-cli
-          binaryen          # wasm-opt
-          trunk             # wasm dev server + builder
-          lld               # wasm32-unknown-unknown linker
+          binaryen
+          trunk
+          lld
         ];
       in
       {
@@ -46,28 +44,30 @@
           buildInputs = nativeBuildInputs ++ rustDeps;
 
           shellHook = ''
-            # Ensure wasm32 target is available
             if ! rustup target list --installed | grep -q wasm32-unknown-unknown; then
               echo "› Installing wasm32-unknown-unknown target…"
               rustup target add wasm32-unknown-unknown
             fi
 
             export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER="${pkgs.lld}/bin/lld"
+
+            # X11/GL linking is handled by classic-platform's build.rs via
+            # pkg-config (which Nix wraps to find libs from nativeBuildInputs).
             export RUSTFLAGS="-D warnings"
+            export LD_LIBRARY_PATH="${pkgs.libxkbcommon}/lib:${pkgs.libx11}/lib:${pkgs.mesa}/lib:${pkgs.libGL}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
             echo "┌─────────────────────────────────────────┐"
             echo "│  classic-wgl Rust dev shell             │"
-            echo "│  cargo build         native debug       │"
-            echo "│  trunk build         web release        │"
-            echo "│  trunk serve         web dev server     │"
-            echo "│  cargo test          native tests       │"
-            echo "│  cargo clippy        lint               │"
-            echo "│  cargo fmt           format             │"
+            echo "│  cargo run -p classic-desktop           │"
+            echo "│  cargo build -p classic-desktop         │"
+            echo "│  trunk serve            web dev         │"
+            echo "│  cargo test -- --test-threads=1         │"
+            echo "│  cargo clippy --all-targets             │"
+            echo "│  cargo fmt --all -- --check             │"
             echo "└─────────────────────────────────────────┘"
           '';
         };
 
-        # Additional shell with Node for running the TS golden harness
         devShells.full = pkgs.mkShell {
           buildInputs = nativeBuildInputs ++ rustDeps ++ (with pkgs; [ nodejs_22 ]);
         };

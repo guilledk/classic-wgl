@@ -42,13 +42,20 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
+              with:
+                  submodules: recursive
+                  token: ${{ secrets.GH_PAT }}
+            - uses: actions/setup-node@v4
+              with: { node-version: 22, cache: npm }
+            - run: npm ci
+            - run: npm run assets
             - uses: dtolnay/rust-toolchain@stable
             - run: sudo apt-get update -qq && sudo apt-get install -y -qq libegl1-mesa-dev libgl1-mesa-dri libgbm-dev libx11-dev
             - run: cargo build -p classic-desktop
             - env:
                   LIBGL_ALWAYS_SOFTWARE: 1
                   EGL_PLATFORM: surfaceless
-              run: CLASSIC_HEADLESS=1 CLASSIC_TEST=all CLASSIC_GOLDEN=check RUST_LOG=info ./target/debug/classic-desktop
+              run: CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check RUST_LOG=info ./target/debug/classic-desktop
             - uses: actions/upload-artifact@v4
               if: failure()
               with:

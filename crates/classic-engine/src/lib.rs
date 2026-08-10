@@ -1255,28 +1255,50 @@ impl Engine {
         if let Some(t) = self.trace.take() {
             let trace = t.finish();
             let json = golden::serialize_trace(&trace);
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let baseline_dir = cwd.join("tests/golden/baseline");
+            let baseline_path = baseline_dir.join("baseline.trace.jsonl");
             match config.golden_mode.as_str() {
                 "update" => {
-                    let dir = "tests/golden/baseline";
-                    let _ = std::fs::create_dir_all(dir);
-                    let path = format!("{dir}/baseline.trace.jsonl");
-                    if let Err(e) = std::fs::write(&path, &json) {
-                        log::warn!("golden: failed to write {path}: {e}");
+                    let _ = std::fs::create_dir_all(&baseline_dir);
+                    if let Err(e) = std::fs::write(&baseline_path, &json) {
+                        log::warn!("golden: failed to write {}: {e}", baseline_path.display());
                     } else {
-                        log::info!("golden: wrote {path} ({} lines)", trace.items.len());
+                        log::info!(
+                            "golden: wrote {} ({} items)",
+                            baseline_path.display(),
+                            trace.items.len()
+                        );
                     }
                 }
                 "check" => {
-                    let path = "tests/golden/baseline/baseline.trace.jsonl";
-                    let expected = std::fs::read_to_string(path).unwrap_or_default();
-                    if let Err(diffs) = golden::compare_traces(&json, &expected) {
-                        log::error!("golden: baseline mismatch");
-                        for d in &diffs {
-                            log::warn!("  {d}");
+                    match std::fs::read_to_string(&baseline_path) {
+                        Ok(expected) => {
+                            if let Err(diffs) = golden::compare_traces(&json, &expected) {
+                                log::error!("golden: baseline mismatch");
+                                for d in &diffs {
+                                    log::warn!("  {d}");
+                                }
+                                self.test_failed = true;
+                                // Write actual trace to target/ so the CI artifact upload picks it up.
+                                let artifact_dir = cwd.join("target/classic-test");
+                                let _ = std::fs::create_dir_all(&artifact_dir);
+                                let actual_path = artifact_dir.join("baseline.actual.trace.jsonl");
+                                let _ = std::fs::write(&actual_path, &json);
+                            } else {
+                                log::info!(
+                                    "golden: baseline trace matches ({})",
+                                    trace.items.len()
+                                );
+                            }
                         }
-                        self.test_failed = true;
-                    } else {
-                        log::info!("golden: baseline trace matches ({})", trace.items.len());
+                        Err(_) => {
+                            log::error!(
+                                "golden: baseline not found at {}.  Run CLASSIC_GOLDEN=update to create it.",
+                                baseline_path.display(),
+                            );
+                            self.test_failed = true;
+                        }
                     }
                 }
                 _ => {}
@@ -4900,10 +4922,7 @@ impl Engine {
                 log::info!("=== CLASSIC_TEST COMPLETE: {}/{} assertions passed ===", passed, total);
                 self.test_complete_reported = true;
             }
-            let config = env_config::EnvConfig::get();
-            if config.golden_mode.is_empty() {
-                self.test_should_close = true;
-            }
+            self.test_should_close = true;
         }
     }
 
