@@ -118,10 +118,8 @@ impl WebPlatform {
                 if i.focused {
                     // Pointer locked: clientX/Y are frozen; accumulate
                     // movement deltas to track a virtual cursor position.
-                    i.mouse_pos.x =
-                        (i.mouse_pos.x + e.movement_x() as f32 * s).clamp(0.0, cw);
-                    i.mouse_pos.y =
-                        (i.mouse_pos.y + e.movement_y() as f32 * s).clamp(0.0, ch);
+                    i.mouse_pos.x = (i.mouse_pos.x + e.movement_x() as f32 * s).clamp(0.0, cw);
+                    i.mouse_pos.y = (i.mouse_pos.y + e.movement_y() as f32 * s).clamp(0.0, ch);
                 } else {
                     i.mouse_pos.x = (e.client_x() as f32 * s).clamp(0.0, cw);
                     i.mouse_pos.y = (e.client_y() as f32 * s).clamp(0.0, ch);

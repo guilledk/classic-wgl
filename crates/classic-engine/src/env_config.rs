@@ -32,6 +32,8 @@ pub struct EnvConfig {
     pub dump_on_exit: bool,
     /// CLASSIC_TEST_FAILFAST: abort on first assertion failure.
     pub failfast: bool,
+    /// CLASSIC_TEST_FILE: path to a JSON test-scenario file.
+    pub test_file: String,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -64,6 +66,7 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         },
         dump_on_exit: read_bool("CLASSIC_DUMP_ON_EXIT"),
         failfast: read_bool("CLASSIC_TEST_FAILFAST"),
+        test_file: read("CLASSIC_TEST_FILE"),
         test,
     }
 });

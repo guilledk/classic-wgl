@@ -1,0 +1,126 @@
+[
+    {
+        "frame": 2,
+        "actions": ["openMenu"],
+        "assertions": [],
+        "log": "open dev menu panel"
+    },
+    {
+        "frame": 4,
+        "actions": [],
+        "assertions": [
+            {"kind": "uiTextCentered", "region": [0, 0, 0, 0], "expected": 2.0, "log": "menu item text labels centered within rows (tolerance=2px)"}
+        ],
+        "log": "verify menu text centered"
+    },
+    {
+        "frame": 5,
+        "actions": [{"setEditor": {"target": "height", "heightDelta": 2, "heightMode": "blend", "tileId": 0}}],
+        "assertions": [],
+        "log": "set height editor: blend mode, delta=2"
+    },
+    {
+        "frame": 5,
+        "actions": [{"drag": {"from": [10.0, 10.0], "to": [14.0, 14.0], "holdFrames": 4}}],
+        "assertions": [],
+        "log": "drag (10,10)→(14,14), hold=4"
+    },
+    {
+        "frame": 13,
+        "actions": [],
+        "assertions": [
+            {"kind": "height", "region": [10, 10, 14, 14], "expected": 3.0, "log": "height(10,10-14,14)=3.0 (blend +2)"},
+            {"kind": "height", "region": [0, 0, 2, 2], "expected": 1.0, "log": "height(0,0-2,2)=1.0 (untouched)"},
+            {"kind": "height", "region": [16, 10, 18, 12], "expected": 1.0, "log": "height(16,10-18,12)=1.0 (untouched)"}
+        ],
+        "log": "assert blend region changed, adjacent regions untouched"
+    },
+    {
+        "frame": 16,
+        "actions": [{"setEditor": {"target": "height", "heightDelta": 5, "heightMode": "set", "tileId": 0}}],
+        "assertions": [],
+        "log": "set height editor: set mode, value=5"
+    },
+    {
+        "frame": 16,
+        "actions": [{"drag": {"from": [10.0, 10.0], "to": [14.0, 14.0], "holdFrames": 4}}],
+        "assertions": [],
+        "log": "drag (10,10)→(14,14), hold=4"
+    },
+    {
+        "frame": 24,
+        "actions": [],
+        "assertions": [
+            {"kind": "height", "region": [10, 10, 14, 14], "expected": 5.0, "log": "height(10,10-14,14)=5.0 (set mode)"},
+            {"kind": "height", "region": [0, 0, 2, 2], "expected": 1.0, "log": "height(0,0-2,2)=1.0 (untouched)"}
+        ],
+        "log": "assert set mode applied correct values"
+    },
+    {
+        "frame": 27,
+        "actions": [{"setEditor": {"target": "height", "heightDelta": 3, "heightMode": "blend", "tileId": 0}}],
+        "assertions": [],
+        "log": "set height editor: blend mode, delta=3"
+    },
+    {
+        "frame": 27,
+        "actions": [{"drag": {"from": [20.0, 10.0], "to": [22.0, 12.0], "holdFrames": 4}}],
+        "assertions": [],
+        "log": "drag (20,10)→(22,12), hold=4"
+    },
+    {
+        "frame": 35,
+        "actions": [],
+        "assertions": [
+            {"kind": "height", "region": [20, 10, 22, 12], "expected": 4.0, "log": "height(20,10-22,12)=4.0 (1+3 blend)"},
+            {"kind": "height", "region": [10, 10, 11, 11], "expected": 5.0, "log": "height(10,10-11,11)=5.0 (unchanged from set)"}
+        ],
+        "log": "assert blend region correct, set region untouched"
+    },
+    {
+        "frame": 38,
+        "actions": [{"setEditor": {"target": "tilemap", "heightDelta": 0, "heightMode": "", "tileId": 7}}],
+        "assertions": [],
+        "log": "set tile editor: tile_id=7"
+    },
+    {
+        "frame": 38,
+        "actions": [{"drag": {"from": [8.0, 8.0], "to": [9.0, 9.0], "holdFrames": 3}}],
+        "assertions": [],
+        "log": "drag single tile (8,8)→(9,9)"
+    },
+    {
+        "frame": 45,
+        "actions": [],
+        "assertions": [
+            {"kind": "tile", "region": [8, 8, 9, 9], "expected": 7.0, "log": "tile(8,8-9,9)=7"},
+            {"kind": "tile", "region": [10, 10, 11, 11], "expected": 9.0, "log": "tile(10,10-11,11)=9 (untouched)"}
+        ],
+        "log": "assert tile paint correct, adjacent unchanged"
+    },
+    {
+        "frame": 48,
+        "actions": [
+            {"setEditor": {"target": "height", "heightDelta": 0, "heightMode": "blend", "tileId": 0}},
+            {"drag": {"from": [25.0, 10.0], "to": [26.0, 10.0], "holdFrames": 2}}
+        ],
+        "assertions": [
+            {"kind": "height", "region": [25, 10, 26, 11], "expected": 1.0, "log": "height(25,10)=1.0 (zero delta, unchanged)"}
+        ],
+        "log": "zero-delta blend: no change expected"
+    },
+    {
+        "frame": 52,
+        "actions": ["enableTextDemo"],
+        "assertions": [],
+        "log": "enable text demo panel"
+    },
+    {
+        "frame": 54,
+        "actions": [],
+        "assertions": [
+            {"kind": "uiEnabled", "region": [0, 0, 0, 0], "expected": 1.0, "log": "text showcase container enabled"}
+        ],
+        "log": "verify text demo enabled"
+    }
+]

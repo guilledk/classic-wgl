@@ -19,6 +19,7 @@ pub enum TestAction {
         #[serde(rename = "tileId")]
         tile_id: u32,
     },
+    #[serde(rename = "drag")]
     Drag {
         from: (f32, f32),
         to: (f32, f32),
@@ -30,27 +31,15 @@ pub enum TestAction {
     #[serde(rename = "enableTextDemo")]
     EnableTextDemo,
     #[serde(rename = "mouseMove")]
-    MouseMove {
-        x: f32,
-        y: f32,
-    },
+    MouseMove { x: f32, y: f32 },
     #[serde(rename = "mouseClick")]
-    MouseClick {
-        x: f32,
-        y: f32,
-        button: u32,
-    },
+    MouseClick { x: f32, y: f32, button: u32 },
     #[serde(rename = "keyPress")]
-    KeyPress {
-        key: String,
-        pressed: bool,
-    },
-    Wheel {
-        amount: f32,
-    },
-    Wait {
-        frames: u64,
-    },
+    KeyPress { key: String, pressed: bool },
+    #[serde(rename = "wheel")]
+    Wheel { amount: f32 },
+    #[serde(rename = "wait")]
+    Wait { frames: u64 },
 }
 
 /// Kinds of assertions the test runner supports.
