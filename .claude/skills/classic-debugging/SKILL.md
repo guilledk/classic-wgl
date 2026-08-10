@@ -1,0 +1,454 @@
+---
+name: classic-debugging
+description: >
+    Debugging tooling and diagnostic workflows for classic-wgl's Rust port.
+    Covers CLASSIC_LOG channel-gated logging, log levels and macros,
+    channel reference, golden trace diffing, state dump inspection,
+    headless CI debugging, and a step-by-step debugging playbook.
+    Trigger phrases: "CLASSIC_LOG", "cl_info", "cl_debug", "cl_trace",
+    "cl_scope", "cl_every", "channel logging", "golden diff",
+    "state dump", "headless", "debug playbook", "frame counter".
+compatibility: log 0.4, env_logger 0.11, web_sys::console
+metadata:
+    author: classic-wgl
+    version: '1.0'
+allowed-tools: Read, Grep, Glob, Bash(git *), Edit
+---
+
+# Skill: classic-debugging
+
+Definitive reference for diagnosing problems in `classic-wgl`. Covers logging
+infrastructure (`CLASSIC_LOG`), golden-trace comparison, state dump inspection,
+headless CI runs, and a structured playbook for common issues.
+
+For macro-level details and adding new channels, see the `classic-logging`
+skill. This document focuses on diagnostic workflows and runtime tooling.
+
+---
+
+## 1. CLASSIC_LOG Quick Reference
+
+### Grammar
+
+```
+CLASSIC_LOG=ui,collision=trace          # ui=info (default), collision=trace
+CLASSIC_LOG=all=info,gfx=trace,-nav     # everything info, gfx trace, nav off
+CLASSIC_LOG=help                        # prints channel list + grammar, continues
+CLASSIC_LOG=<unset>                     # all channels at Info (default gate)
+```
+
+Tokens are comma-separated. Each token is `chan`, `chan=LEVEL`, `-chan`, `all`,
+or `all=LEVEL`. Order matters: `all` directives apply first, then `-all`,
+then per-channel overrides. Unknown channel names emit a `log::warn!`
+listing valid names.
+
+### All 23 Channels
+
+| Channel | Description |
+|---|---|
+| `frame` | Frame begin/end, FPS, delta timing |
+| `input` | Raw input events (key presses, mouse/wheel, cursor lock) |
+| `ui` | UI element creation, hover, enabled state, draw submission |
+| `layout` | Layout tree walks, dirty propagation, anchor resolution |
+| `collision` | Quadtree insert/query, collider registration, enter/exit events |
+| `click` | Click dispatch, priority prescan, consumed-click guards |
+| `render` | Render-list construction, sort order, draw-kind selection |
+| `gfx` | Shader binds, texture upload, buffer allocation, draw calls |
+| `glstate` | GL state transitions (depth, blend, cull, viewport) |
+| `text` | SDF glyph buffer rebuilds, font load, text GpuCache invalidations |
+| `iso` | Iso coordinate transforms, depth calculations, sprite occlusion |
+| `nav` | Nav mesh queries, tile walkability checks |
+| `path` | A* pathfinder execution (open/closed sets, cost) |
+| `ecs` | Entity spawn/despawn, component insert/remove, world queries |
+| `state` | State serialization (dump/load), registry lookups |
+| `editor` | Editor mode transitions, tool activation, tile painting |
+| `asset` | Texture/manifest loading, shader compilation |
+| `camera` | Camera matrix recalc, zoom/pan, fix-point math |
+| `anim` | Animator frame advance, direction lookup |
+| `test` | CLASSIC_TEST step execution, assertions |
+| `golden` | Golden trace capture, comparison, mismatch reporting |
+| `dump` | State-dump file I/O, sidecar writes |
+| `platform` | Platform backend lifecycle, context creation, swap buffers |
+
+### Convenience Aliases
+
+| Alias | Expands to |
+|---|---|
+| `physics` | `collision` + `click` |
+| `draw` / `render-all` | `render` + `gfx` + `glstate` |
+| `editor-all` | `editor` + `camera` |
+| `anim` / `animation` / `animator` | `anim` |
+
+### Web Equivalent
+
+On wasm, `?classic_log=` query parameter on the page URL serves the same
+role as the `CLASSIC_LOG` env var. Example:
+
+```
+http://localhost:8080/?classic_log=all=trace,-frame,-render
+```
+
+The WebLogger installed in `apps/web/src/lib.rs` sets `log::max_level` to
+`Trace` so all channel output reaches the console.
+
+---
+
+## 2. Log Macros
+
+Every macro emits `[fNNNNNN] prefix:\n` with the current frame counter and
+the channel name as the log target.
+
+### Level Macros
+
+```rust
+cl_error!(Chan::Gfx, "shader compile failed: {err}");
+cl_warn!(Chan::Ecs, "unknown component '{name}'");
+cl_info!(Chan::Asset, "loaded texture '{name}' {w}x{h}");
+cl_debug!(Chan::Ui, "layout dirty, refreshing");
+cl_trace!(Chan::Render, "draw sprite '{name}' at z={z}");
+```
+
+### Throttle Macros
+
+```rust
+cl_every!(Chan::Frame, 60, log::Level::Info, "fps={fps}");  // every 60th frame
+cl_first!(Chan::Ui, 120, log::Level::Debug, "size={size:?}"); // first 120 frames
+cl_once!(Chan::Gfx, log::Level::Warn, "unusual GL state");    // once ever
+```
+
+Note: `cl_every!` and `cl_first!` take `log::Level` (the standard crate enum),
+not `instrument::Level`.
+
+### Scope Macro
+
+```rust
+let _s = cl_scope!(Chan::Render, "draw_items");
+// → [f000042] → draw_items
+// ... (scope body) ...
+// → [f000042] ⤷ draw_items (124μs)
+```
+
+Returns `Option<ClScope>` — `None` when the channel is disabled (zero
+allocation). The guard logs elapsed microseconds on drop.
+
+---
+
+## 3. Log Levels and Conventions
+
+| Level | Guidelines |
+|---|---|
+| `Error` | Unrecoverable errors: missing resources, shader compilation failure, GL context loss |
+| `Warn` | Recoverable anomalies: unknown channel name, GL error drain, unexpected-but-handled state |
+| `Info` | One-shot lifecycle events: texture load, state load, dump save, FPS report (throttled) |
+| `Debug` | State transitions: editor target change, resize, set_enabled, UI tree rebuild |
+| `Trace` | Per-frame detail: draw calls, collision queries, glyph buffer rebuilds, individual input events |
+
+**Default gate**: when `CLASSIC_LOG` is unset, all channels are at `Info`
+level. This means `cl_info!` works as a drop-in diagnostic tool without
+any env-var configuration.
+
+**Noise rule**: Per-frame `Trace`-level logs must use `cl_every!` or
+`cl_first!` to avoid flooding the console.
+
+### Typical Diagnostic Env-Var Patterns
+
+```bash
+# Click not firing: trace entire dispatch pipeline
+CLASSIC_LOG=physics=trace,-frame
+
+# Entity not visible: check ECS + render list
+CLASSIC_LOG=ecs=trace,render=trace,-frame
+
+# Layout broken: trace layout tree walk
+CLASSIC_LOG=layout=trace,ui=trace,-frame
+
+# Pathfinder not finding route: dump A* state
+CLASSIC_LOG=path=trace,nav=debug,-frame
+
+# Texture missing / black screen: trace asset + GFX
+CLASSIC_LOG=asset=debug,gfx=trace,glstate=trace,-frame
+```
+
+---
+
+## 4. Runtime Control
+
+### Native
+
+`CLASSIC_LOG` is read once at `Engine::new()` time via `init_from_env()`.
+No runtime toggles exist — the atomic level table is set at startup and
+can only be reset in tests via `reset_for_test()`.
+
+When `CLASSIC_LOG` is set, `env_logger`'s max level is bumped to `Trace`
+so the channel-gated output passes through. If you use `RUST_LOG`, add
+the channel target prefixes:
+
+```bash
+RUST_LOG=info,classic::Chan::Gfx=trace CLASSIC_LOG=gfx=trace cargo run -p classic-desktop
+```
+
+### Web
+
+`?classic_log=` query param is parsed in `apps/web/src/lib.rs` before
+`Engine::new()`. Change the URL and reload to toggle channels.
+
+---
+
+## 5. Golden Trace Diffing
+
+### Overview
+
+Golden traces capture a deterministic JSONL record of every draw call:
+model matrices, textures, sort order, camera state, per-kind draw counts.
+
+- **Reference**: `tests/golden/<scenario>/<tag>.trace.jsonl`
+- **Actual**: `target/classic-test/<scenario>/<tag>.actual.trace.jsonl`
+
+Traces are structural, not pixel-based — they compare the logic, not the
+GPU output. This means golden trace checks pass identically on any platform
+(native, headless EGL, CI).
+
+### Running
+
+```bash
+# Compare: fail if actual deviates from baseline
+CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check \
+  cargo run -p classic-desktop
+
+# Update: overwrite baseline with current output
+CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=update \
+  cargo run -p classic-desktop
+```
+
+### JSONL Format
+
+One JSON object per line. The first line is the header:
+
+```json
+{"tag":"baseline","frame":42,"viewport":[1280.0,720.0],"camera":{...},"counts":{"IsoSprite":3,"Tilemap":1}}
+```
+
+Subsequent lines are `TraceItem` records:
+
+```json
+{"order":-12.5,"kind":"IsoSprite","name":"tree_01","model":[...16 floats...],"camera_ignored":false,"texture":"tree.png","frame":0.0}
+```
+
+### Interpreting Mismatches
+
+Diffs are emitted as `- expected[n]` / `+ actual[n]` line pairs. Common
+causes:
+
+| Symptom | Likely Cause |
+|---|---|
+| `order` values shifted by a constant | Iso sort formula changed (depth bias, tilemap size in sort key) |
+| `model` matrix values differ | Camera matrix order change, coordinate transform refactor, fix-point math |
+| Item missing from trace | Entity not spawned, `Disabled` component set, render-list filter changed |
+| Extra item in trace | New entity added, old one no longer properly excluded |
+| `name` changed | `DebugName` component missing or renamed |
+| `counts` mismatch (e.g. `IsoSprite: 2` vs `3`) | Extra or missing `IsoSprite` in render list |
+| Header-only mismatch (viewport or camera) | CLASSIC_WIDTH/HEIGHT changed, camera init changed |
+
+When updating the baseline (`CLASSIC_GOLDEN=update`), review the `.actual.trace.jsonl`
+carefully before committing the new baseline — golden tests are a contract: the
+committed baseline is authoritative.
+
+### Pixel Golden (CLASSIC_GOLDEN_PNG=1)
+
+Optional per-pixel comparison against `tests/golden/<scenario>/<tag>.png`.
+Per-channel tolerance is `CLASSIC_GOLDEN_TOL` (default 2). Not enabled by
+default in CI because software-rasteriser output is version-dependent.
+
+---
+
+## 6. State Dump Inspection
+
+### Triggering
+
+- **F9**: dump `state.json` (entity/components registry dump)
+- **Shift+F9**: additionally dump sidecar files (tilemap, nav mesh, height data)
+
+### Files Produced
+
+| File | Content |
+|---|---|
+| `state.json` | Full entity state: `{"entities": {"<name>": {"components": [...]}}}` |
+| `map001.txt` | Base64-encoded JSON array of tilemap data |
+| `map001.nav.txt` | Base64-encoded JSON array of nav mesh data |
+| `map001.height.txt` | Base64-encoded JSON array of height data |
+
+### Output Directory
+
+- **Native**: `./dump/` (overridable via `CLASSIC_DUMP_DIR`)
+- **Web**: triggers a `Blob` download in the browser
+
+### Structure of state.json
+
+```json
+{
+  "entities": {
+    "tilemap": {
+      "components": [
+        {"type": "Tilemap", "position": [0,0,0], "scale": [1,1,1], "sizeX": 20, "sizeY": 20, ...},
+        {"type": "DebugName", "text": "tilemap"}
+      ]
+    }
+  }
+}
+```
+
+Component types appear in `type`-first order (the `"type"` key is always
+first, matching the TS positional-loading contract). Key order within a
+component's JSON object equals the constructor argument order.
+
+### Diagnostic Uses
+
+1. **Entity not visible**: check the dumped state for `Disabled` component
+   or missing/zeroed `IsoSprite`/`Sprite` component
+2. **Tilemap corrupted**: inspect `map001.txt` for correct tile data shape
+3. **Navigation broken**: verify `map001.nav.txt` has walkable tiles where expected
+4. **Height interpolation wrong**: examine `map001.height.txt` vertex grid values
+
+### CLASSIC_UI_DEBUG
+
+Set `CLASSIC_UI_DEBUG=1` to dump UI entity positions every frame (first 120
+frames). Each line is a compact JSON object with elem ID, position, size,
+anchor, parent chain, and visibility. Useful when diagnosing UI layout
+positioning issues.
+
+---
+
+## 7. Headless CI Debugging
+
+### Key Env Vars
+
+| Var | Effect |
+|---|---|
+| `CLASSIC_HEADLESS=1` | Surfaceless EGL render path, no window, dynamic libEGL load |
+| `CLASSIC_OFFSCREEN=1` | Render to FBO (implied by headless) |
+| `CLASSIC_FRAMES=60` | Exit after N frames (prevents infinite loop in CI) |
+| `CLASSIC_FIXED_DT=0.0166` | Fixed delta time (auto-set to 1/60 under CLASSIC_TEST) |
+| `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Force logical viewport dimensions |
+
+### Headless Command
+
+```bash
+CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check \
+  cargo run -p classic-desktop
+```
+
+### Common Issues
+
+| Symptom | Cause |
+|---|---|
+| `libEGL.so: cannot open shared object file` | No EGL library in LD_LIBRARY_PATH; use `nix develop` |
+| No GL context created | Headless requires a working EGL implementation on the host |
+| Golden mismatch in CI but local passes | CI runs a different viewport size or mesa version; check CLASSIC_WIDTH/HEIGHT |
+| CI exits with exit code 0 despite mismatch | Golden mode must be `check` (not unset); CI should set `CLASSIC_GOLDEN=check` |
+
+---
+
+## 8. Debugging Playbook
+
+### Click Not Firing
+
+1. Enable `CLASSIC_LOG=physics=trace` to trace collision queries and click
+   dispatch end-to-end.
+2. Check that the target entity has a `Collider` component and the collider's
+   `enabled` flag is `true`.
+3. Confirm no parent entity has `Disabled` (disabled propagates down the
+   hierarchy).
+4. Verify `consumesClick` — if a higher-priority entity consumed the click,
+   lower ones never see it. The prescan (TS parity: pre-scan is a no-op in
+   Rust) and the `ui_consumed_click` flag gate dispatch.
+5. Check that the mouse position correctly maps to iso coordinates (use
+   `iso=trace` channel; verify `mouseIsoPos` is within expected tile range).
+6. Confirm the entity is in the quadtree — disabled colliders are skipped
+   in `begin_frame()`.
+
+### Entity Not Visible
+
+1. Enable `CLASSIC_LOG=ecs=trace,render=trace`.
+2. Check for `Disabled` component on the entity or any ancestor.
+3. Verify `IsoSprite` / `Sprite` has correct `position` (not off-screen
+   or behind camera) and non-zero `scale`.
+4. Check the render list sort order — entity may be behind terrain if
+   its `order` value is lower than tiles at the same iso depth.
+5. Confirm the texture is loaded (`asset=debug` channel).
+6. For `IsoSprite`: verify `tilemap` field references a valid `Tilemap`
+   entity name — the render loop uses this to compute iso position.
+
+### Layout Wrong (UI Element Misplaced)
+
+1. Enable `CLASSIC_LOG=layout=trace,ui=debug`.
+2. Enable `CLASSIC_UI_DEBUG=1` to inspect per-frame positions.
+3. Verify the anchor constraints align with expectations:
+   - `LeftAnchor` + `RightAnchor` → width-constrained centering
+   - `TopAnchor` + `BottomAnchor` → height-constrained centering
+   - Single anchor only → element positioned at that edge
+4. Check `parent` reference — layout tree must form a connected hierarchy.
+   Only the top bar is attached to root; other widgets position themselves
+   independently.
+5. Confirm `refresh_layout()` is called and `dirty` flag propagates up
+   the layout tree.
+6. SDF text uses `text_height` for vertical centering — verify the font
+   atlas is loaded and glyph metrics are non-zero.
+
+### Path Empty (No Route Found)
+
+1. Enable `CLASSIC_LOG=path=trace,nav=debug`.
+2. Verify `IsometricNavMesh` component exists on `tilemapNavigation` entity
+   and `data` array has correct dimensions.
+3. Check the start and end tiles are walkable (nav mesh value allows
+   traversal). Blocked tiles block A* entirely.
+4. Confirm the nav mesh uses the same coordinate convention as the tilemap
+   (both share `sizeX` / `sizeY`).
+5. Check for out-of-bounds start/end — pathfinder returns empty path for
+   coordinates outside the nav mesh.
+
+### Texture Missing / Black Screen
+
+1. Enable `CLASSIC_LOG=asset=debug,gfx=trace,glstate=trace`.
+2. Verify `public/res/` was generated: run `npm run assets`. Missing assets
+   cause `include_bytes!` compile errors, but stale assets may embed zero-byte
+   or outdated files.
+3. Check GL state contract: `begin_frame` does NOT enable `DEPTH_TEST`
+   globally. Tilemap and iso_sprite shaders enable it within their scopes.
+   Enabling it globally depth-rejects UI under ortho projection.
+4. For missing textures: confirm the texture name in the manifest matches
+   the filename in `public/res/`.
+5. Verify the shader compiles: check for GLSL 300 es syntax in the
+   vertex/fragment sources (no GLSL 100 `attribute`/`varying`/`texture2D`).
+6. On web: check browser console for `WebGL 2.0 not supported` — the engine
+   requires WebGL 2.
+
+### Golden Trace Mismatch
+
+1. Run with `CLASSIC_GOLDEN=update` to regenerate the actual trace.
+2. Diff the files: `diff tests/golden/baseline/baseline.trace.jsonl target/classic-test/...`.
+3. Identify the first mismatched line — all subsequent lines are often
+   cascading failures from the first deviation.
+4. Common root causes: sort order formula change (affects `order` field
+   for every item), camera matrix order change (affects all `model`
+   matrices), entity count change in render list.
+
+---
+
+## 9. Known-Divergent / Non-Functional
+
+Items below are deliberately incomplete or differ from the TypeScript
+original and will produce no diagnostics when broken:
+
+| Item | Status |
+|---|---|
+| **SDF shadow/glow passes** | Fields (`outline`, `shadow`) in UISdfText are stored but not rendered. Rust only runs a single SDF draw; TS ran secondary passes for shadow, glow, and outline. |
+| **Bitmap `UIText`** | Not ported. The TS engine used a traditional glyph-map text renderer for dev UI. All text in Rust is SDF. |
+| **`consumesClick` prescan** | TS ran a two-pass dispatch: first pass set a `uiConsumedClick` flag, second pass checked it. Rust collapses this, using `consumed_click` on the dispatch path directly. No equivalent of the TS prescan exists. |
+| **Entity destruction** | `world.despawn` is never called. Instead, entities are marked with a `Disabled` component and their colliders are skipped in the quadtree insertion. |
+| **Collider in quadtree (disabled)** | TS inserted all colliders (including disabled) into the quadtree and filtered them at query time. Rust skips disabled colliders at insertion time in `begin_frame()`. This is a deliberate optimisation and can affect click dispatch when toggling collider enabled state within a frame. |
+| **Camera matrix order** | TS does `S(scale) * T(-fix)`; Rust does `T(-fix) * S(scale)`. Both look correct because the fix-point formula compensates, but the raw model matrices differ. Golden traces will show this divergence in `model` fields. |
+| **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(sizeX + 1) * (sizeY + 1)` (vertex grid, one height per vertex). Dumped `map001.height.txt` will have different array lengths between TS and Rust. |
+| **Root UI tree** | TS attached all UI elements to a single root container and walked the full tree for layout. Rust only attaches the top bar to root; other panels position themselves independently. `CLASSIC_UI_DEBUG` will show fewer elements in the layout tree walk. |
+| **Web Worker pathfinder** | TS ran A* on a Web Worker for non-blocking path computation. Rust runs A* synchronously on the main thread. |
+| **`classic_log` hot-reload** | Channels are parsed once at startup. There is no runtime reload or live toggle — changing channels requires a process restart (or page reload on web). |
+
