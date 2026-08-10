@@ -25,10 +25,6 @@ impl Transform {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Disabled;
 
-/// Cursor marker component — entity follows the mouse position.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Cursor;
-
 /// Debug identity component — a stable human-readable name for an entity.
 /// Used by logging, golden traces, and UI debug output.
 #[derive(Clone, Debug)]
@@ -63,28 +59,6 @@ pub struct SpriteRender {
     pub anchor: Vec2,
 }
 
-/// Render bitmap text (monospaced glyph sheet → FBO → quad).
-/// Port of `Text` from `transforms.ts`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BitmapText {
-    /// Bitmap font texture name.
-    pub texture_font: String,
-    /// Max number of glyph columns x rows.
-    pub max_char_size: [u32; 2],
-    /// Number of glyphs in the sheet (cols, rows).
-    pub font_size: Vec2,
-    /// Glyph pixel size.
-    pub glyph_size: [u32; 2],
-    /// The ordered glyph string for the font.
-    pub glyph_str: String,
-    /// Text content to render.
-    pub text: String,
-    pub color: [f32; 4],
-    pub bgcolor: [f32; 4],
-    pub ignore_cam: bool,
-}
-
-/// Render SDF text.
 /// Port of `SdfText` from `sdfText.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SdfTextRender {

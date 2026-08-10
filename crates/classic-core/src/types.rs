@@ -32,20 +32,6 @@ pub enum ColliderEvent {
     SelectionTemp,
 }
 
-/// Call names — the phases of the frame where behaviour runs.
-///
-/// Port of `CallName` from `types.ts:50-51`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Call {
-    Update,
-    RenderList,
-    CanvasResize,
-    SelectionBegin,
-    SelectionEnd,
-    /// Custom / user-defined call name.
-    Custom(&'static str),
-}
-
 /// A manifest entry for a shader.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct ShaderInfo {

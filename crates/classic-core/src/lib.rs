@@ -5,7 +5,6 @@ pub mod instrument;
 pub mod math;
 pub mod pathfinder;
 pub mod registry;
-pub mod scripts;
 pub mod sdf_builder;
 pub mod tilemap;
 pub mod types;

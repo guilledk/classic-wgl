@@ -73,8 +73,6 @@ pub struct Engine {
     pub editor_height: i32,
     pub height_scale_multiplier: i32,
     pub height_edit_mode: String,
-    pub editor_tile_x: i32,
-    pub editor_tile_y: i32,
     pub selection_mode: i32,
     pub selection_begin_screen: glam::Vec3,
     pub panel_menu_open: bool,
@@ -109,7 +107,6 @@ pub struct Engine {
     sdf_text_gpu: HashMap<hecs::Entity, SdfTextGpu>,
     last_vw: f32,
     last_vh: f32,
-    prev_mouse_down: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -176,8 +173,6 @@ impl Engine {
             editor_height: 0,
             height_scale_multiplier: 1,
             height_edit_mode: "blend".into(),
-            editor_tile_x: 0,
-            editor_tile_y: 0,
             selection_mode: -1,
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
             panel_menu_open: false,
@@ -211,7 +206,6 @@ impl Engine {
             sdf_text_gpu: HashMap::new(),
             last_vw: 0.0,
             last_vh: 0.0,
-            prev_mouse_down: false,
         }
     }
 
@@ -720,8 +714,6 @@ impl Engine {
         *mw = (*mw).clamp(-1.0, 1.0);
         // Write back to platform so decay persists across frames.
         input.mouse_wheel = self.input.mouse_wheel;
-
-        self.prev_mouse_down = self.input.is_mouse_down(0);
 
         let ui_debug = env_config::EnvConfig::get().ui_debug && self.debug_frame < 120;
         if ui_debug {
@@ -3609,7 +3601,6 @@ impl Engine {
     /// Tilemap editor selection visual + painting is handled by the drag
     /// pipeline in `frame()` (selection_mode tracking + apply_editor_selection).
     /// This method is kept as a no-op placeholder for the init call site.
-    pub fn init_tilemap_editor(&mut self) {}
 
     /// Tile palette: shows the tileset texture with click-to-select and a selector overlay.
     pub fn init_tile_palette(&mut self) {

@@ -43,7 +43,6 @@ fn init_engine(gl: Rc<glow::Context>) -> classic_engine::Engine {
     e.init_tool_buttons();
     e.init_height_widget();
     e.init_light_widget();
-    e.init_tilemap_editor();
     e.init_tile_palette();
     e.init_nav_palette();
     e.init_nav_mesh_render();
