@@ -1480,13 +1480,6 @@ impl Engine {
                         tm.height_scale,
                     )
                 };
-
-                let at = |tx: i32, ty: i32| -> f32 {
-                    let tx = tx.clamp(0, size_x) as usize;
-                    let ty = ty.clamp(0, size_y) as usize;
-                    hd.get(ty * (size_x as usize + 1) + tx).copied().unwrap_or(0.0)
-                };
-
                 for (_e, (iso_sprite, tf)) in self.world.query::<(&IsoSprite, &Transform)>().iter()
                 {
                     // ---- footprint polygon ----
@@ -1494,18 +1487,7 @@ impl Engine {
                     for pt in &iso_sprite.footprint {
                         let px = tf.position.x + pt.x;
                         let py = tf.position.y + pt.y;
-                        let ftx = px.floor() as i32;
-                        let fty = py.floor() as i32;
-                        let fx = px - ftx as f32;
-                        let fy = py - fty as f32;
-                        let h_nw = at(ftx, fty);
-                        let h_ne = at(ftx + 1, fty);
-                        let h_sw = at(ftx, fty + 1);
-                        let h_se = at(ftx + 1, fty + 1);
-                        let h = h_nw
-                            + (h_ne - h_nw) * fx
-                            + (h_sw - h_nw) * fy
-                            + (h_nw - h_ne - h_sw + h_se) * fx * fy;
+                        let h = bilinear_height(&hd, size_x, size_y, px, py);
 
                         let mut v = glam::Vec3::new(px, py, 0.0);
                         v = iso_to_cart_world.transform_point3(v);
@@ -1536,18 +1518,7 @@ impl Engine {
                     // ---- anchor crosshair ----
                     let ax = tf.position.x;
                     let ay = tf.position.y;
-                    let aftx = ax.floor() as i32;
-                    let afty = ay.floor() as i32;
-                    let afx = ax - aftx as f32;
-                    let afy = ay - afty as f32;
-                    let ah_nw = at(aftx, afty);
-                    let ah_ne = at(aftx + 1, afty);
-                    let ah_sw = at(aftx, afty + 1);
-                    let ah_se = at(aftx + 1, afty + 1);
-                    let ah = ah_nw
-                        + (ah_ne - ah_nw) * afx
-                        + (ah_sw - ah_nw) * afy
-                        + (ah_nw - ah_ne - ah_sw + ah_se) * afx * afy;
+                    let ah = bilinear_height(&hd, size_x, size_y, ax, ay);
 
                     let mut anchor_world = glam::Vec3::new(ax, ay, 0.0);
                     anchor_world = iso_to_cart_world.transform_point3(anchor_world);
@@ -1575,14 +1546,7 @@ impl Engine {
                                 let mut v = glam::Vec3::new(ix, iy, 0.0);
                                 v = iso_to_cart_world.transform_point3(v);
                                 v += tilemap_pos;
-                                let ftx = ix.floor() as i32;
-                                let fty = iy.floor() as i32;
-                                let fx = ix - ftx as f32;
-                                let fy = iy - fty as f32;
-                                let h = at(ftx, fty) * (1.0 - fx) * (1.0 - fy)
-                                    + at(ftx + 1, fty) * fx * (1.0 - fy)
-                                    + at(ftx, fty + 1) * (1.0 - fx) * fy
-                                    + at(ftx + 1, fty + 1) * fx * fy;
+                                let h = bilinear_height(&hd, size_x, size_y, ix, iy);
                                 v.y -= h * hs;
                                 ring_verts.extend_from_slice(&[v.x, v.y, v.z]);
                             }
@@ -1763,10 +1727,7 @@ impl Engine {
                                 let h_ne = at(ftx + 1, fty);
                                 let h_sw = at(ftx, fty + 1);
                                 let h_se = at(ftx + 1, fty + 1);
-                                let hi = h_nw
-                                    + (h_ne - h_nw) * fx
-                                    + (h_sw - h_nw) * fy
-                                    + (h_nw - h_ne - h_sw + h_se) * fx * fy;
+                                let hi = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, px, py);
                                 let target_z = hi * tm.height_scale;
 
                                 // Speed factor from steepness
@@ -1914,30 +1875,13 @@ impl Engine {
             let sx = tm.size_x;
             let sy = tm.size_y;
             let hs = tm.height_scale;
-            let at = |tx: i32, ty: i32| -> f32 {
-                let tx = tx.clamp(0, sx) as usize;
-                let ty = ty.clamp(0, sy) as usize;
-                hd.get(ty * (sx as usize + 1) + tx).copied().unwrap_or(0.0)
-            };
 
             let mut world_verts: Vec<glam::Vec3> = Vec::with_capacity(footprint.len());
             for pt in &footprint {
                 let px = sprite_iso_pos.x + pt.x;
                 let py = sprite_iso_pos.y + pt.y;
 
-                let ftx = px.floor() as i32;
-                let fty = py.floor() as i32;
-                let fx = px - ftx as f32;
-                let fy = py - fty as f32;
-
-                let h_nw = at(ftx, fty);
-                let h_ne = at(ftx + 1, fty);
-                let h_sw = at(ftx, fty + 1);
-                let h_se = at(ftx + 1, fty + 1);
-                let h = h_nw
-                    + (h_ne - h_nw) * fx
-                    + (h_sw - h_nw) * fy
-                    + (h_nw - h_ne - h_sw + h_se) * fx * fy;
+                let h = bilinear_height(hd, sx, sy, px, py);
 
                 let mut v = glam::Vec3::new(px, py, 0.0);
                 v = iso_to_cart_world.transform_point3(v);
@@ -1957,13 +1901,7 @@ impl Engine {
             // Set sprite z-offset from terrain height (matches TS prefabs.ts:367).
             let px = sprite_iso_pos.x;
             let py = sprite_iso_pos.y;
-            let ftx = px.floor() as i32;
-            let fty = py.floor() as i32;
-            let fx = px - ftx as f32;
-            let fy = py - fty as f32;
-            let h_top = at(ftx, fty) + (at(ftx + 1, fty) - at(ftx, fty)) * fx;
-            let h_bot = at(ftx, fty + 1) + (at(ftx + 1, fty + 1) - at(ftx, fty + 1)) * fx;
-            let terrain_z = (h_top + (h_bot - h_top) * fy) * hs;
+            let terrain_z = bilinear_height(hd, sx, sy, px, py) * hs;
 
             if let Ok(mut tf) = self.world.get::<&mut Transform>(entity) {
                 tf.position.z = terrain_z;
