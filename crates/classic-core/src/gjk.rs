@@ -1,3 +1,7 @@
+//! # Skill: `classic-physics`
+//!
+//! **Read `.claude/skills/classic-physics/SKILL.md` before working on this module.**
+//!
 //! GJK (Gilbert-Johnson-Keerthi) collision detection.
 //!
 //! Port of `src/lib/gjk.ts`.

@@ -1,3 +1,7 @@
+//! # Skill: `classic-ui`
+//!
+//! **Read `.claude/skills/classic-ui/SKILL.md` before working on this module.**
+//!
 //! Retained-mode UI layout manager.
 //!
 //! Port of `UIManager` + `UIContainer` from `src/classic/ui.ts`.

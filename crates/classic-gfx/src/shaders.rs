@@ -1,3 +1,7 @@
+//! # Skill: `classic-gfx`
+//!
+//! **Read `.claude/skills/classic-gfx/SKILL.md` before working on this module.**
+//!
 /// Embedded shader sources.
 pub const DIRECT_VERT: &str = include_str!("shaders/direct.vert");
 pub const DIRECT_TEX_VERT: &str = include_str!("shaders/direct_tex.vert");

@@ -1,3 +1,7 @@
+//! # Skill: `classic-physics`
+//!
+//! **Read `.claude/skills/classic-physics/SKILL.md` before working on this module.**
+//!
 //! A* pathfinding over a 2D grid of walkable/blocked cells.
 //!
 //! Port of the algorithm from `src/classic/pathfinder.ts` (web worker),

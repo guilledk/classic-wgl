@@ -1,3 +1,7 @@
+//! # Skill: `classic-platform`
+//!
+//! **Read `.claude/skills/classic-platform/SKILL.md` before working on this module.**
+//!
 //! Surfaceless EGL renderer — no window, no compositor.
 //!
 //! Used for CI golden-test runs and headless debugging with

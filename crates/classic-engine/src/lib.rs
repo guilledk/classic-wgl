@@ -1,4 +1,17 @@
-//! classic-engine: Runtime that wires core + gfx + platform.
+//! # classic-engine — the game engine
+//!
+//! God-object orchestrator.  Contains the `Engine` struct, frame lifecycle,
+//! prefab init-* builders, editor tools, and the CLASSIC_TEST runner.
+//!
+//! **Skills to read before working here:**
+//! - [classic-ecs](.claude/skills/classic-ecs/SKILL.md) — ECS patterns, components, update_fns
+//! - [classic-ui](.claude/skills/classic-ui/SKILL.md) — UIManager, layout, collider integration
+//! - [classic-physics](.claude/skills/classic-physics/SKILL.md) — click dispatch, selection, pathfinding
+//! - [classic-iso](.claude/skills/classic-iso/SKILL.md) — iso coords, sprite rendering, nav mesh
+//! - [classic-gfx](.claude/skills/classic-gfx/SKILL.md) — draw_*, GL state, DEPTH_TEST contract
+//! - [classic-text](.claude/skills/classic-text/SKILL.md) — SdfText, glyph buffers, justify
+//! - [classic-testing](.claude/skills/classic-testing/SKILL.md) — CLASSIC_TEST, golden harness
+//! - [classic-debugging](.claude/skills/classic-debugging/SKILL.md) — CLASSIC_LOG, debugging playbook
 
 pub mod env_config;
 pub mod golden;
@@ -145,6 +158,9 @@ impl Engine {
     }
 
     pub fn new() -> Self {
+        // Component registry is a global RwLock<HashMap>. Tests that share
+        // it must use --test-threads=1. spawn/load order determines entity
+        // IDs, which affects golden trace stability.
         classic_core::register_all_components();
         classic_core::instrument::init_from_env();
         Self {
@@ -285,6 +301,9 @@ impl Engine {
         //         heights[(ty * (size_x + 1) + tx) as usize] = h.max(0.0).floor();
         //     }
         // }
+        // height_data stride is (size_x + 1) — vertex grid, not tile grid.
+        // The TS used sizeX * sizeY (tile-based). Rust uses (sizeX+1)*(sizeY+1)
+        // to avoid off-by-one edge cases. See docs/TS-PARITY.md.
         let heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
 
         let height_scale = tile_pixel_size[0] as f32;
@@ -402,6 +421,10 @@ impl Engine {
             .unwrap_or_else(|_| format!("e#{:?}", entity.id()))
     }
 
+    // "type" must be the first key in each dumped component object.
+    // The TS positional loader relies on this: it splices out "type"
+    // and passes remaining values as positional constructor args.
+    // See docs/TS-PARITY.md for the per-component key ordering.
     /// Serialise all named entities to a state JSON string (TS-compatible format).
     pub fn dump_state(&self) -> String {
         let entities = self.dump_state_value();
@@ -589,9 +612,14 @@ impl Engine {
         self.physics.mouse.position = Vec3::new(mp.x, mp.y, 0.0);
         self.physics.mouse.update_rect();
         self.physics.consumed_click = false;
+        // mouse_clicked MUST be set before perform_calls. Without it,
+        // collider click handlers fire every frame on hover, not just on press.
         self.physics.mouse_clicked = self.input.was_mouse_pressed(0);
+        // perform_calls dispatches clicks, enter/exit events, and selection.
         self.physics.perform_calls();
 
+        // ui_consumed_click blocks map editing on UI palette clicks.
+        // Set AFTER perform_calls; reset AFTER the final release-path guard.
         if self.physics.consumed_click {
             self.ui_consumed_click = true;
         }
@@ -617,6 +645,9 @@ impl Engine {
             self.physics.update_selection(self.selection_begin_screen, Vec3::new(mp.x, mp.y, 0.0));
         }
 
+        // Frame ordering: wheel must be routed BEFORE on_update closures.
+        // Camera on_update runs first in registration order and would consume
+        // the wheel; routing here lets the text-demo panel zero it first.
         // Route mouse wheel: if over the text demo container, apply scroll
         // and zero the wheel so the camera on_update doesn't also zoom.
         // Must run BEFORE on_update closures (camera runs first in order).
@@ -648,6 +679,11 @@ impl Engine {
             }
         }
 
+        // Take-restore dance: closures fire with &mut Engine, but the Vec
+        // is owned by Engine. Taking means closures can call on_update()
+        // without borrow conflicts. Restoring preserves them for next frame.
+        // Handlers use iter_mut(), NOT std::mem::take — they must survive
+        // across frames (click, enter, exit, selection).
         let mut fns = std::mem::take(&mut self.update_fns);
         for f in fns.iter_mut() {
             f(self);
@@ -667,6 +703,8 @@ impl Engine {
             self.run_test_frame(&STEPS);
         }
 
+        // Wheel decay matches TS: 1.4 * delta, then [-1, 1] clamp.
+        // Without write-back, decay resets to zero every frame.
         // Wheel decay + clamp (matches TS: 1.4 * deltaTime, then [-1, 1])
         let mw = &mut self.input.mouse_wheel;
         *mw = (mw.abs() - 1.4 * self.time.delta).max(0.0) * mw.signum();
@@ -710,6 +748,9 @@ impl Engine {
         self.debug_frame += 1;
         classic_core::instrument::set_frame(self.debug_frame);
 
+        // Reset here, after the last read in the mouse-release guard.
+        // If reset earlier (e.g. at the top of frame()), click-through
+        // protection on editor-paint is dead.
         self.ui_consumed_click = false;
 
         if self.input.was_mouse_released(0) && !self.ui_consumed_click {
@@ -781,6 +822,8 @@ impl Engine {
             }
             items.push((tf.position.z, e, DrawKind::SdfText));
         }
+        // Descending sort by sort-key (z-order or iso-order).
+        // Uses sort_by (not sort_unstable_by) for deterministic golden traces.
         items.sort_by(|a, b| b.0.total_cmp(&a.0));
 
         classic_core::cl_debug!(
@@ -801,6 +844,9 @@ impl Engine {
         let vh2 = gfx.viewport_h;
         self.camera.size = Vec3::new(vp, vh2, 0.0);
 
+        // begin_frame sets depthFunc/depthMask but does NOT glEnable(DEPTH_TEST).
+        // draw_tilemap/draw_iso_sprite toggle it locally. UI/SDF runs without it.
+        // Enabling it globally depth-rejects all UI under ortho projection.
         gfx.begin_frame();
         let cam = self.camera.matrix();
 
@@ -817,6 +863,9 @@ impl Engine {
             ));
         }
 
+        // Model matrix z MUST stay inside [-10000, 10000] — the orthographic
+        // projection clips everything outside. The sort key can differ from
+        // the model z. Cursor uses sort_z=-20000 but model_z=-10000.
         for (order, entity, kind) in &items {
             let Ok(tf) = self.world.get::<&Transform>(*entity) else {
                 continue;

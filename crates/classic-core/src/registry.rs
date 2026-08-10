@@ -1,3 +1,7 @@
+//! # Skill: `classic-ecs`
+//!
+//! **Read `.claude/skills/classic-ecs/SKILL.md` before working on this module.**
+//!
 use std::collections::HashMap;
 use std::sync::RwLock;
 

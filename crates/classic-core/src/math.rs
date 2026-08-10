@@ -1,3 +1,7 @@
+//! # Skill: `classic-iso`
+//!
+//! **Read `.claude/skills/classic-iso/SKILL.md` before working on this module.**
+//!
 use glam::{Mat3, Mat4, Vec3};
 
 /// Cartesian-to-isometric transformation matrix (3x3).

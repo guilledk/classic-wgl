@@ -1,3 +1,7 @@
+//! # Skill: `classic-ecs`
+//!
+//! **Read `.claude/skills/classic-ecs/SKILL.md` before working on this module.**
+//!
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 

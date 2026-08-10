@@ -1,3 +1,7 @@
+//! # Skill: `classic-testing`
+//!
+//! **Read `.claude/skills/classic-testing/SKILL.md` before working on this module.**
+///
 /// Render-trace golden harness.
 ///
 /// Captures a deterministic, frame-by-frame record of every draw call

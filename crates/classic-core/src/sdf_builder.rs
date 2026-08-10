@@ -1,3 +1,7 @@
+//! # Skill: `classic-text`
+//!
+//! **Read `.claude/skills/classic-text/SKILL.md` before working on this module.**
+//!
 //! SDF font glyph-buffer builder.
 //!
 //! Port of `SdfText::_buildGlyphBuffer()` from `src/classic/sdfText.ts:189-311`.

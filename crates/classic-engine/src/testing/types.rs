@@ -1,3 +1,7 @@
+//! # Skill: `classic-testing`
+//!
+//! **Read `.claude/skills/classic-testing/SKILL.md` before working on this module.**
+//!
 //! Test types for the CLASSIC_TEST framework.
 
 use serde::Deserialize;

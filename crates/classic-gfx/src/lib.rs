@@ -1,3 +1,7 @@
+//! # Skill: `classic-gfx`
+//!
+//! **Read `.claude/skills/classic-gfx/SKILL.md` before working on this module.**
+//!
 //! classic-gfx: OpenGL ES 3.0 / WebGL2 graphics layer.
 //!
 //! Shader compilation, texture upload, shared quad buffers, and draw-call
@@ -584,6 +588,9 @@ impl Gfx {
         unsafe {
             gl.enable(glow::DEPTH_TEST);
 
+            // Two-pass ghost rendering: PASS 1 draws sprites behind terrain (ALWAYS,
+            // depth_mask=off), PASS 2 draws normally (LEQUAL, depth_mask=on).
+            // Must restore depth_mask(true) + depth_func(LEQUAL) after both passes.
             // Ghost pass: visible through occluding terrain
             s.uniform_1f(gl, "ghostAlpha", 0.4);
             gl.depth_func(glow::ALWAYS);
@@ -676,6 +683,9 @@ impl Gfx {
 
     // -- shader-source resolution ------------------------------------------
 
+    // draw_tilemap enables DEPTH_TEST locally, then disables it on exit.
+    // This is the ONLY place DEPTH_TEST is enabled. begin_frame leaves it off.
+    // UI rendering relies on draw-order (not depth) for layering.
     /// Draw the isometric tilemap terrain.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_tilemap(

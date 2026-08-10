@@ -1,3 +1,7 @@
+//! # Skill: `classic-physics`
+//!
+//! **Read `.claude/skills/classic-physics/SKILL.md` before working on this module.**
+//!
 //! Generic spatial quadtree.
 //!
 //! Port of `src/lib/quadtree.ts`.

@@ -1,3 +1,7 @@
+//! # Skill: `classic-iso`
+//!
+//! **Read `.claude/skills/classic-iso/SKILL.md` before working on this module.**
+//!
 //! Isometric tilemap mesh generation.
 //!
 //! Port of `buildMesh()`, `uploadToGPU()` and helpers from `src/classic/isometric.ts`.

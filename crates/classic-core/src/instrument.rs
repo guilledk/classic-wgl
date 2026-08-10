@@ -1,3 +1,7 @@
+//! # Skill: `classic-debugging`
+//!
+//! **Read `.claude/skills/classic-debugging/SKILL.md` before working on this module.**
+//!
 /// Per-subsystem logging channels with atomic level gating.
 ///
 /// ## Grammar for `CLASSIC_LOG`

@@ -1,3 +1,7 @@
+//! # Skill: `classic-platform`
+//!
+//! **Read `.claude/skills/classic-platform/SKILL.md` before working on this module.**
+//!
 //! classic-platform: Windowing, GL context, and asset I/O.
 //!
 //! Two backends:
