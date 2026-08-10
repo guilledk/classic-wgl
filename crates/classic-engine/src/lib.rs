@@ -5054,6 +5054,14 @@ impl Engine {
                     total
                 );
                 self.test_complete_reported = true;
+
+                // Auto-dump state on exit when CLASSIC_DUMP_ON_EXIT is set.
+                if env_config::EnvConfig::get().dump_on_exit {
+                    let _ = self.dump_state();
+                    let _ = self.dump_map_data();
+                    let _ = self.dump_nav_data();
+                    let _ = self.dump_height_data();
+                }
             }
             self.test_should_close = true;
         }

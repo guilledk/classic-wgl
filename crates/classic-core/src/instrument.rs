@@ -184,6 +184,11 @@ pub fn init_from_env() {
     }
     let raw = std::env::var("CLASSIC_LOG").unwrap_or_default();
     INITIALIZED.store(1, Ordering::Relaxed);
+    if !raw.is_empty() {
+        // CLASSIC_LOG overrides default; set log level to Trace so
+        // channel-gated output passes through the log crate filter.
+        log::set_max_level(log::LevelFilter::Trace);
+    }
     init(&raw);
 }
 
@@ -232,16 +237,117 @@ pub fn frame() -> u64 {
 
 /// Print channel list + grammar to stderr for discovery.
 pub fn channel_help() {
-    eprintln!("CLASSIC_LOG channels ({} total):", CHAN_COUNT);
-    eprintln!("  Frame, Input, Ui, Layout, Collision, Click, Render, Gfx, GlState,");
-    eprintln!("  Text, Iso, Nav, Path, Ecs, State, Editor, Asset, Camera, Anim,");
-    eprintln!("  Test, Golden, Dump");
+    let channels: [Chan; CHAN_COUNT] = {
+        let mut arr = [Chan::Frame; CHAN_COUNT]; // dummy init
+        let mut i = 0;
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Frame;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Input;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Ui;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Layout;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Collision;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Click;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Render;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Gfx;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::GlState;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Text;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Iso;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Nav;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Path;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Ecs;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::State;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Editor;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Asset;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Camera;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Anim;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Test;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Golden;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Dump;
+            i += 1;
+        }
+        if i < CHAN_COUNT {
+            arr[i] = Chan::Platform;
+            i += 1;
+        }
+        arr
+    };
+
+    eprint!("CLASSIC_LOG channels ({total} total):", total = CHAN_COUNT);
+    for ch in &channels {
+        eprint!(" {}", chan_name(*ch));
+    }
+    eprintln!();
+    eprintln!("  Aliases: physics→collision+click  draw→render+gfx+glstate");
+    eprintln!("           editor-all→editor+camera  anim/animation→Anim");
     eprintln!();
     eprintln!("Grammar:");
     eprintln!("  CLASSIC_LOG=ui,collision=trace       # ui=info (default), collision=trace");
     eprintln!("  CLASSIC_LOG=all=info,gfx=trace,-nav  # all info, gfx trace, nav off");
     eprintln!("  CLASSIC_LOG=help                     # print this help");
-    eprintln!("  CLASSIC_LOG=<empty>                  # all channels off (default)");
+    eprintln!("  CLASSIC_LOG=<empty>                  # all channels at info (default)");
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +526,54 @@ macro_rules! cl_first {
                     format_args!($($arg)*)
                 );
             }
+        }
+    };
+}
+
+/// RAII scope guard that logs entry and exit with elapsed time.
+pub struct ClScope {
+    chan: Chan,
+    label: &'static str,
+    start: std::time::Instant,
+}
+
+impl Drop for ClScope {
+    fn drop(&mut self) {
+        let elapsed = self.start.elapsed();
+        log::log!(
+            target: chan_name(self.chan),
+            log::Level::Info,
+            "[f{:06}] ⤷ {} ({:.0}μs)",
+            crate::instrument::frame(),
+            self.label,
+            elapsed.as_micros()
+        );
+    }
+}
+
+/// Log entry into a named scope, returning a guard that logs exit with elapsed μs.
+///
+/// ```ignore
+/// let _scope = cl_scope!(Chan::Render, "draw_items");
+/// ```
+#[macro_export]
+macro_rules! cl_scope {
+    ($chan:expr, $label:expr) => {
+        if $crate::instrument::enabled($chan, $crate::instrument::Level::Info) {
+            log::log!(
+                target: $crate::instrument::chan_name($chan),
+                log::Level::Info,
+                "[f{:06}] → {}",
+                $crate::instrument::frame(),
+                $label
+            );
+            Some($crate::instrument::ClScope {
+                chan: $chan,
+                label: $label,
+                start: std::time::Instant::now(),
+            })
+        } else {
+            None
         }
     };
 }

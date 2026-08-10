@@ -11,7 +11,12 @@ pub fn main() {
             true
         }
         fn log(&self, record: &log::Record) {
-            let msg = format!("{}", record.args());
+            let msg = format!(
+                "[{target} {lvl}] {args}",
+                target = record.target(),
+                lvl = record.level(),
+                args = record.args(),
+            );
             match record.level() {
                 log::Level::Error => web_sys::console::error_1(&msg.into()),
                 log::Level::Warn => web_sys::console::warn_1(&msg.into()),
