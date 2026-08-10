@@ -60,6 +60,43 @@ struct SdfTextGpu {
 
 use testing::types::{AssertKind, TestAction, TestStep};
 
+/// Editor tool state — aggregated so widget closures can share a single
+/// `Rc<RefCell<EditorState>>` instead of 11 individual `Rc<Cell>` / `Rc<RefCell>`.
+#[derive(Clone, Debug)]
+pub struct EditorState {
+    pub target: String,
+    pub tile: u32,
+    pub nav_tile: u32,
+    pub height: i32,
+    pub height_scale: i32,
+    pub height_mode: String,
+    pub panel_menu_open: bool,
+    pub agent_selected: bool,
+    pub debug_footprints: bool,
+    pub light_preset: String,
+    pub light_azimuth: f32,
+    pub light_elevation: f32,
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            target: "none".into(),
+            tile: 0,
+            nav_tile: 0,
+            height: 0,
+            height_scale: 1,
+            height_mode: "blend".into(),
+            panel_menu_open: false,
+            agent_selected: false,
+            debug_footprints: false,
+            light_preset: "sunny".into(),
+            light_azimuth: 45.0,
+            light_elevation: 45.0,
+        }
+    }
+}
+
 pub struct Engine {
     pub gfx: Option<Gfx>,
     pub world: hecs::World,
@@ -72,26 +109,15 @@ pub struct Engine {
     pub scroll_speed: f32,
     pub input: InputState,
     pub show_grid: bool,
-    pub debug_footprints: bool,
-    pub agent_selected: bool,
+    pub editor: EditorState,
     pub light_ambient: [f32; 3],
     pub light_dir: [f32; 3],
     pub light_color: [f32; 3],
     pub animations: HashMap<String, AnimationData>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
     pub ui: Option<ui::UIManager>,
-    pub editor_target: String,
-    pub editor_tile: u32,
-    pub editor_nav_tile: u32,
-    pub editor_height: i32,
-    pub height_scale_multiplier: i32,
-    pub height_edit_mode: String,
     pub selection_mode: i32,
     pub selection_begin_screen: glam::Vec3,
-    pub panel_menu_open: bool,
-    pub light_preset: String,
-    pub light_azimuth: f32,
-    pub light_elevation: f32,
     pub tile_palette_e: Option<hecs::Entity>,
     pub nav_palette_e: Option<hecs::Entity>,
     pub height_widget_e: Option<hecs::Entity>,
@@ -175,26 +201,28 @@ impl Engine {
             scroll_speed: 600.0,
             input: InputState::new(),
             show_grid: false,
-            debug_footprints: false,
-            agent_selected: false,
             light_ambient: [0.15, 0.15, 0.2],
             light_dir: [0.45, -0.35, 0.82],
             light_color: [1.0, 0.95, 0.85],
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
             ui: None,
-            editor_target: "none".into(),
-            editor_tile: 0,
-            editor_nav_tile: 0,
-            editor_height: 0,
-            height_scale_multiplier: 1,
-            height_edit_mode: "blend".into(),
+            editor: EditorState {
+                target: "none".into(),
+                tile: 0,
+                nav_tile: 0,
+                height: 0,
+                height_scale: 1,
+                height_mode: "blend".into(),
+                panel_menu_open: false,
+                agent_selected: false,
+                debug_footprints: false,
+                light_preset: "sunny".into(),
+                light_azimuth: 45.0,
+                light_elevation: 45.0,
+            },
             selection_mode: -1,
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
-            panel_menu_open: false,
-            light_preset: "sunny".into(),
-            light_azimuth: 45.0,
-            light_elevation: 45.0,
             tile_palette_e: None,
             nav_palette_e: None,
             height_widget_e: None,
@@ -652,7 +680,7 @@ impl Engine {
         // and zero the wheel so the camera on_update doesn't also zoom.
         // Must run BEFORE on_update closures (camera runs first in order).
         if self.input.mouse_wheel.abs() > 0.01
-            && self.editor_target == "textDemo"
+            && self.editor.target == "textDemo"
             && self.text_showcase_e.is_some()
         {
             if let Some(ref ui) = self.ui {
@@ -1470,7 +1498,7 @@ impl Engine {
 
         // (SDF text is now rendered inline above, in z-order.)
         // ---- debug: footprint polygons + anchor crosshairs ----
-        if self.debug_footprints {
+        if self.editor.debug_footprints {
             let x_cross: [f32; 12] =
                 [-8.0, -8.0, 0.0, 8.0, 8.0, 0.0, -8.0, 8.0, 0.0, 8.0, -8.0, 0.0];
             let x_cross_buf =
@@ -1542,7 +1570,7 @@ impl Engine {
                 }
 
                 // Selection ring around selected agent (yellow diamond).
-                if self.agent_selected {
+                if self.editor.agent_selected {
                     if let Some(agent_e) = self.names.get("navAgent").copied() {
                         if let Ok(agent_tf) = self.world.get::<&Transform>(agent_e) {
                             let pos = agent_tf.position;
@@ -1925,8 +1953,8 @@ impl Engine {
     pub fn init_debug_toggles(&mut self) {
         self.on_update(|engine| {
             if engine.input.was_key_pressed("KeyF") {
-                engine.debug_footprints = !engine.debug_footprints;
-                engine.show_grid = engine.debug_footprints;
+                engine.editor.debug_footprints = !engine.editor.debug_footprints;
+                engine.show_grid = engine.editor.debug_footprints;
             }
             // F9: dump state.json
             if engine.input.was_key_pressed("F9") {
@@ -1964,18 +1992,18 @@ impl Engine {
             return;
         };
         let d = glam::Vec3::new(dir_unnorm[0], dir_unnorm[1], dir_unnorm[2]).normalize();
-        self.light_preset = key.into();
+        self.editor.light_preset = key.into();
         self.light_ambient = ambient;
         self.light_dir = [d.x, d.y, d.z];
         self.light_color = color;
-        self.light_azimuth = d.x.atan2(-d.y).to_degrees();
-        self.light_elevation = d.z.asin().to_degrees();
+        self.editor.light_azimuth = d.x.atan2(-d.y).to_degrees();
+        self.editor.light_elevation = d.z.asin().to_degrees();
     }
 
     /// Recompute light direction from azimuth/elevation angles.
     pub fn update_light_direction(&mut self) {
-        let az = self.light_azimuth.to_radians();
-        let el = self.light_elevation.to_radians();
+        let az = self.editor.light_azimuth.to_radians();
+        let el = self.editor.light_elevation.to_radians();
         let d = glam::Vec3::new(el.cos() * az.sin(), -el.cos() * az.cos(), el.sin()).normalize();
         self.light_dir = [d.x, d.y, d.z];
     }
@@ -2071,7 +2099,6 @@ impl Engine {
     /// and backdrop for click-outside-to-close.
     #[allow(clippy::too_many_lines)]
     pub fn init_tool_buttons(&mut self) {
-        use std::cell::Cell;
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -2099,11 +2126,7 @@ impl Engine {
         let n = menu_targets.len() as f32;
         let menu_h = n * menu_item_h + menu_gap * (n - 1.0) + menu_padding * 2.0;
 
-        // Shared state used by click handlers + on_update sync
-        let is_open = Rc::new(Cell::new(false));
-        let editor_tgt = Rc::new(RefCell::new(String::from("none")));
-        let agent_sel = Rc::new(Cell::new(false));
-        let dbg_feet = Rc::new(Cell::new(false));
+        let editor_rc = Rc::new(RefCell::new(EditorState::default()));
 
         // Spawn all UI entities inside a block so the ui borrow is released
         // before calling set_enabled (which borrows self).
@@ -2123,8 +2146,7 @@ impl Engine {
             // Agent [A] button
             let ag;
             {
-                let ags = agent_sel.clone();
-                let et = editor_tgt.clone();
+                let es = editor_rc.clone();
                 ag = ui.spawn_button(
                     &mut self.world,
                     &mut self.physics,
@@ -2138,8 +2160,9 @@ impl Engine {
                         hover: true,
                         click_priority: 1,
                         click_action: Some(Box::new(move || {
-                            ags.set(!ags.get());
-                            *et.borrow_mut() = "none".into();
+                            let mut s = es.borrow_mut();
+                            s.agent_selected = !s.agent_selected;
+                            s.target = "none".into();
                             true
                         })),
                         ..Default::default()
@@ -2158,9 +2181,7 @@ impl Engine {
             // DEV button sprite
             let dev;
             {
-                let iso = is_open.clone();
-                let et = editor_tgt.clone();
-                let ag_d = agent_sel.clone();
+                let es = editor_rc.clone();
                 dev = ui.spawn_button(
                     &mut self.world,
                     &mut self.physics,
@@ -2173,11 +2194,12 @@ impl Engine {
                         sprite_tile_set: [4.0, 4.0],
                         hover: true,
                         click_action: Some(Box::new(move || {
-                            iso.set(!iso.get());
-                            if !iso.get() {
-                                *et.borrow_mut() = "none".into();
+                            let mut s = es.borrow_mut();
+                            s.panel_menu_open = !s.panel_menu_open;
+                            if !s.panel_menu_open {
+                                s.target = "none".into();
                             }
-                            ag_d.set(false);
+                            s.agent_selected = false;
                             true
                         })),
                         ..Default::default()
@@ -2200,23 +2222,21 @@ impl Engine {
             for (idx, (label, target)) in menu_targets.iter().enumerate() {
                 let row_w = menu_w - menu_padding * 2.0;
                 let t_str = (*target).to_string();
-                let et = editor_tgt.clone();
-                let ags = agent_sel.clone();
-                let iso = is_open.clone();
-                let df = dbg_feet.clone();
+                let es = editor_rc.clone();
 
                 let click_fn: Box<dyn FnMut() -> bool> = if t_str == "_footprints" {
                     Box::new(move || {
-                        df.set(!df.get());
-                        iso.set(false);
+                        let mut s = es.borrow_mut();
+                        s.debug_footprints = !s.debug_footprints;
+                        s.panel_menu_open = false;
                         true
                     })
                 } else {
                     Box::new(move || {
-                        let mut t = et.borrow_mut();
-                        *t = if *t == t_str { "none".into() } else { t_str.clone() };
-                        ags.set(false);
-                        iso.set(false);
+                        let mut s = es.borrow_mut();
+                        s.target = if s.target == t_str { "none".into() } else { t_str.clone() };
+                        s.agent_selected = false;
+                        s.panel_menu_open = false;
                         true
                     })
                 };
@@ -2277,7 +2297,7 @@ impl Engine {
             // Backdrop with click handler at lowest priority
             let bd;
             {
-                let iso = is_open.clone();
+                let es = editor_rc.clone();
                 bd = ui.spawn_container(&mut self.world, 800.0, 600.0, [0.0, 0.0, 0.0, 0.01]);
                 // Render on top of DEV/agent buttons but behind menu panel.
                 if let Ok(mut tf) = self.world.get::<&mut Transform>(bd) {
@@ -2290,7 +2310,7 @@ impl Engine {
                     bp_pid,
                     classic_core::collision::HandlerKind::Click,
                     move || {
-                        iso.set(false);
+                        es.borrow_mut().panel_menu_open = false;
                         true
                     },
                 );
@@ -2306,21 +2326,22 @@ impl Engine {
 
         let items = item_rows.clone();
         let targets: Vec<String> = menu_targets.iter().map(|t| t.1.to_string()).collect();
-        let iso2 = is_open.clone();
-        let et2 = editor_tgt.clone();
-        let ag2 = agent_sel.clone();
-        let df2 = dbg_feet.clone();
+        let editor_rc_clone = editor_rc.clone();
 
         // Per-frame: position elements, sync Rc state → engine, toggle visibility
         self.on_update(move |engine| {
             // Sync shared state → engine (before ui borrow)
-            engine.editor_target = et2.borrow().clone();
-            engine.agent_selected = ag2.get();
-            engine.debug_footprints = df2.get();
-            let open = iso2.get();
-            engine.panel_menu_open = open;
-            engine.set_enabled(menu_panel, open);
-            engine.set_enabled(backdrop, open);
+            {
+                let es = editor_rc_clone.borrow();
+                engine.editor.target = es.target.clone();
+                engine.editor.agent_selected = es.agent_selected;
+                engine.editor.debug_footprints = es.debug_footprints;
+                engine.editor.panel_menu_open = es.panel_menu_open;
+                let open = es.panel_menu_open;
+                drop(es);
+                engine.set_enabled(menu_panel, open);
+                engine.set_enabled(backdrop, open);
+            }
 
             let Some(ref mut ui) = engine.ui else { return };
             let vw = ui.viewport_w;
@@ -2335,8 +2356,11 @@ impl Engine {
             ui.layout_standalone(btn_arr, &mut engine.world);
 
             // Update agent button color based on selection state
-            let ag_color: [f32; 4] =
-                if ag2.get() { [0.1, 0.6, 0.1, 0.8] } else { [0.3, 0.3, 0.3, 0.6] };
+            let ag_color: [f32; 4] = if editor_rc_clone.borrow().agent_selected {
+                [0.1, 0.6, 0.1, 0.8]
+            } else {
+                [0.3, 0.3, 0.3, 0.6]
+            };
             ui.set_button_base_color(agent_btn, ag_color);
 
             // Position menu panel
@@ -2379,12 +2403,12 @@ impl Engine {
             for (row_e, idx) in &items {
                 let target = &targets[*idx];
                 let color: [f32; 4] = if target == "_footprints" {
-                    if engine.debug_footprints {
+                    if engine.editor.debug_footprints {
                         [0.2, 0.35, 0.6, 1.0]
                     } else {
                         [0.15, 0.15, 0.15, 1.0]
                     }
-                } else if engine.editor_target == *target {
+                } else if engine.editor.target == *target {
                     [0.2, 0.35, 0.6, 1.0]
                 } else {
                     [0.15, 0.15, 0.15, 1.0]
@@ -2398,7 +2422,6 @@ impl Engine {
     /// plus a set/blend mode toggle.
     #[allow(clippy::too_many_lines)]
     pub fn init_height_widget(&mut self) {
-        use std::cell::Cell;
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -2410,9 +2433,7 @@ impl Engine {
         let widget_h: f32 = row_h * 3.0 + gap * 4.0;
         let _border: f32 = 0.0;
 
-        let h_val = Rc::new(Cell::new(0i32));
-        let h_scale = Rc::new(Cell::new(1i32));
-        let h_mode = Rc::new(RefCell::new(String::from("blend")));
+        let editor_rc = Rc::new(RefCell::new(EditorState::default()));
 
         let Some(ref mut ui) = self.ui else { return };
 
@@ -2422,7 +2443,7 @@ impl Engine {
         // Row 1: height value +/-
         let h_minus;
         {
-            let hv = h_val.clone();
+            let es = editor_rc.clone();
             h_minus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2435,7 +2456,7 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        hv.set(hv.get() - 1);
+                        es.borrow_mut().height -= 1;
                         true
                     })),
                     ..Default::default()
@@ -2452,7 +2473,7 @@ impl Engine {
         );
         let h_plus;
         {
-            let hv = h_val.clone();
+            let es = editor_rc.clone();
             h_plus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2465,7 +2486,7 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        hv.set(hv.get() + 1);
+                        es.borrow_mut().height += 1;
                         true
                     })),
                     ..Default::default()
@@ -2476,7 +2497,7 @@ impl Engine {
         // Row 2: scale multiplier s-/s+
         let s_minus;
         {
-            let hs = h_scale.clone();
+            let es = editor_rc.clone();
             s_minus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2489,7 +2510,8 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        hs.set((hs.get() - 1).max(1));
+                        let mut s = es.borrow_mut();
+                        s.height_scale = (s.height_scale - 1).max(1);
                         true
                     })),
                     ..Default::default()
@@ -2506,7 +2528,7 @@ impl Engine {
         );
         let s_plus;
         {
-            let hs = h_scale.clone();
+            let es = editor_rc.clone();
             s_plus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2519,7 +2541,7 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        hs.set(hs.get() + 1);
+                        es.borrow_mut().height_scale += 1;
                         true
                     })),
                     ..Default::default()
@@ -2530,7 +2552,7 @@ impl Engine {
         // Row 3: set/blend mode toggle
         let mode_btn;
         {
-            let hm = h_mode.clone();
+            let es = editor_rc.clone();
             mode_btn = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2543,8 +2565,9 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        let mut m = hm.borrow_mut();
-                        *m = if *m == "set" { "blend".into() } else { "set".into() };
+                        let mut s = es.borrow_mut();
+                        s.height_mode =
+                            if s.height_mode == "set" { "blend".into() } else { "set".into() };
                         true
                     })),
                     ..Default::default()
@@ -2572,9 +2595,7 @@ impl Engine {
         let s_pl_e = s_plus;
         let s_lb_e = s_label;
         let md_e = mode_btn;
-        let hv2 = h_val.clone();
-        let hs2 = h_scale.clone();
-        let hm2 = h_mode.clone();
+        let editor_rc_clone = editor_rc.clone();
 
         self.on_update(move |engine| {
             let Some(ref _ui) = engine.ui else { return };
@@ -2588,12 +2609,15 @@ impl Engine {
             let cy3 = row_h * 2.0 + gap * 3.0;
 
             // Sync Rc state → engine
-            engine.editor_height = hv2.get();
-            engine.height_scale_multiplier = hs2.get();
-            engine.height_edit_mode = hm2.borrow().clone();
+            {
+                let es = editor_rc_clone.borrow();
+                engine.editor.height = es.height;
+                engine.editor.height_scale = es.height_scale;
+                engine.editor.height_mode = es.height_mode.clone();
+            }
 
             // Apply height scale to tilemap when it changes
-            let prev_hs = hs2.get();
+            let prev_hs = editor_rc_clone.borrow().height_scale;
             if let Some(_e) = engine.names.get("tilemap").copied() {
                 if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(_e) {
                     tm.height_scale = tm.tile_pixel_size[0] as f32 * prev_hs as f32;
@@ -2634,16 +2658,16 @@ impl Engine {
 
             // Update labels
             if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(h_lb_e) {
-                sdf.text = engine.editor_height.to_string();
+                sdf.text = engine.editor.height.to_string();
             }
             if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(s_lb_e) {
-                sdf.text = format!("x{}", engine.height_scale_multiplier);
+                sdf.text = format!("x{}", engine.editor.height_scale);
             }
             // Update mode button text (stored on the child entity, not the container)
             if let Ok(node) = engine.world.get::<&classic_core::components::UiNode>(md_e) {
                 if let Some(child) = node.children.first() {
                     if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(child.entity) {
-                        sdf.text = engine.height_edit_mode.clone();
+                        sdf.text = engine.editor.height_mode.clone();
                     }
                 }
             }
@@ -2653,7 +2677,6 @@ impl Engine {
     /// Light config widget: preset cycle + azimuth/elevation adjustment buttons.
     #[allow(clippy::too_many_lines)]
     pub fn init_light_widget(&mut self) {
-        use std::cell::Cell;
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -2674,10 +2697,7 @@ impl Engine {
         const AZ_STEP: f32 = 15.0;
         const EL_STEP: f32 = 10.0;
 
-        let preset = Rc::new(RefCell::new(String::from("sunny")));
-        let last_applied_preset = Rc::new(RefCell::new(String::from("sunny")));
-        let azimuth = Rc::new(Cell::new(45.0f32));
-        let elevation = Rc::new(Cell::new(45.0f32));
+        let editor_rc = Rc::new(RefCell::new(EditorState::default()));
 
         let Some(ref mut ui) = self.ui else { return };
 
@@ -2687,7 +2707,7 @@ impl Engine {
         // Row 1: preset cycle << >>
         let prev_btn;
         {
-            let pr = preset.clone();
+            let es = editor_rc.clone();
             prev_btn = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2700,11 +2720,12 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        let cur = pr.borrow().clone();
-                        let idx = PRESET_ORDER.iter().position(|&p| p == cur).unwrap_or(0);
+                        let mut s = es.borrow_mut();
+                        let idx =
+                            PRESET_ORDER.iter().position(|&p| p == s.light_preset).unwrap_or(0);
                         let prev =
                             PRESET_ORDER[(idx + PRESET_ORDER.len() - 1) % PRESET_ORDER.len()];
-                        *pr.borrow_mut() = prev.into();
+                        s.light_preset = prev.into();
                         true
                     })),
                     ..Default::default()
@@ -2721,7 +2742,7 @@ impl Engine {
         );
         let next_btn;
         {
-            let pr = preset.clone();
+            let es = editor_rc.clone();
             next_btn = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2734,10 +2755,11 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        let cur = pr.borrow().clone();
-                        let idx = PRESET_ORDER.iter().position(|&p| p == cur).unwrap_or(0);
+                        let mut s = es.borrow_mut();
+                        let idx =
+                            PRESET_ORDER.iter().position(|&p| p == s.light_preset).unwrap_or(0);
                         let next = PRESET_ORDER[(idx + 1) % PRESET_ORDER.len()];
-                        *pr.borrow_mut() = next.into();
+                        s.light_preset = next.into();
                         true
                     })),
                     ..Default::default()
@@ -2756,8 +2778,7 @@ impl Engine {
         );
         let az_minus;
         {
-            let az = azimuth.clone();
-            let pr = preset.clone();
+            let es = editor_rc.clone();
             az_minus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2770,8 +2791,9 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        az.set((az.get() - AZ_STEP + 360.0) % 360.0);
-                        *pr.borrow_mut() = "custom".into();
+                        let mut s = es.borrow_mut();
+                        s.light_azimuth = (s.light_azimuth - AZ_STEP + 360.0) % 360.0;
+                        s.light_preset = "custom".into();
                         true
                     })),
                     ..Default::default()
@@ -2780,8 +2802,7 @@ impl Engine {
         }
         let az_plus;
         {
-            let az = azimuth.clone();
-            let pr = preset.clone();
+            let es = editor_rc.clone();
             az_plus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2794,8 +2815,9 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        az.set((az.get() + AZ_STEP) % 360.0);
-                        *pr.borrow_mut() = "custom".into();
+                        let mut s = es.borrow_mut();
+                        s.light_azimuth = (s.light_azimuth + AZ_STEP) % 360.0;
+                        s.light_preset = "custom".into();
                         true
                     })),
                     ..Default::default()
@@ -2814,8 +2836,7 @@ impl Engine {
         );
         let el_minus;
         {
-            let el = elevation.clone();
-            let pr = preset.clone();
+            let es = editor_rc.clone();
             el_minus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2828,8 +2849,9 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        el.set((el.get() - EL_STEP).max(0.0));
-                        *pr.borrow_mut() = "custom".into();
+                        let mut s = es.borrow_mut();
+                        s.light_elevation = (s.light_elevation - EL_STEP).max(0.0);
+                        s.light_preset = "custom".into();
                         true
                     })),
                     ..Default::default()
@@ -2838,8 +2860,7 @@ impl Engine {
         }
         let el_plus;
         {
-            let el = elevation.clone();
-            let pr = preset.clone();
+            let es = editor_rc.clone();
             el_plus = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
@@ -2852,8 +2873,9 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_action: Some(Box::new(move || {
-                        el.set((el.get() + EL_STEP).min(90.0));
-                        *pr.borrow_mut() = "custom".into();
+                        let mut s = es.borrow_mut();
+                        s.light_elevation = (s.light_elevation + EL_STEP).min(90.0);
+                        s.light_preset = "custom".into();
                         true
                     })),
                     ..Default::default()
@@ -2893,10 +2915,7 @@ impl Engine {
         let el_l = el_label;
         let el_m = el_minus;
         let el_p = el_plus;
-        let pr2 = preset.clone();
-        let last_preset_clone = last_applied_preset.clone();
-        let az2 = azimuth.clone();
-        let el2 = elevation.clone();
+        let editor_rc_clone = editor_rc.clone();
 
         self.on_update(move |engine| {
             let Some(ref _ui) = engine.ui else { return };
@@ -2910,28 +2929,28 @@ impl Engine {
             let cy3 = row_h * 2.0 + gap * 3.0;
 
             // Sync Rc state → engine (only when preset actually changes)
-            let cur_preset = pr2.borrow().clone();
-            let mut last = last_preset_clone.borrow_mut();
-            if cur_preset != *last {
+            let es = editor_rc_clone.borrow();
+            let cur_preset = es.light_preset.clone();
+            let cur_az = es.light_azimuth;
+            let cur_el = es.light_elevation;
+            drop(es);
+
+            if cur_preset != engine.editor.light_preset {
                 if cur_preset == "custom" {
-                    engine.light_azimuth = az2.get();
-                    engine.light_elevation = el2.get();
+                    engine.editor.light_azimuth = cur_az;
+                    engine.editor.light_elevation = cur_el;
                     engine.update_light_direction();
-                    engine.light_preset = "custom".into();
+                    engine.editor.light_preset = "custom".into();
                 } else {
                     engine.apply_light_preset(&cur_preset);
                 }
-                *last = cur_preset;
-            } else if cur_preset == "custom" {
-                let new_az = az2.get();
-                let new_el = el2.get();
-                if (new_az - engine.light_azimuth).abs() > 0.1
-                    || (new_el - engine.light_elevation).abs() > 0.1
-                {
-                    engine.light_azimuth = new_az;
-                    engine.light_elevation = new_el;
-                    engine.update_light_direction();
-                }
+            } else if cur_preset == "custom"
+                && ((cur_az - engine.editor.light_azimuth).abs() > 0.1
+                    || (cur_el - engine.editor.light_elevation).abs() > 0.1)
+            {
+                engine.editor.light_azimuth = cur_az;
+                engine.editor.light_elevation = cur_el;
+                engine.update_light_direction();
             }
 
             if let Ok(mut tf) = engine.world.get::<&mut Transform>(con_e) {
@@ -2983,7 +3002,7 @@ impl Engine {
             ui::UIManager::position_children_of(el_p, &mut engine.world);
 
             if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(pl_e) {
-                let name = match engine.light_preset.as_str() {
+                let name = match engine.editor.light_preset.as_str() {
                     "sunny" => "Sunny Day",
                     "cloudy" => "Cloudy",
                     "dawn" => "Dawn / Dusk",
@@ -2993,10 +3012,10 @@ impl Engine {
                 sdf.text = name.into();
             }
             if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(az_l) {
-                sdf.text = format!("az: {}deg", engine.light_azimuth.round() as i32);
+                sdf.text = format!("az: {}deg", engine.editor.light_azimuth.round() as i32);
             }
             if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(el_l) {
-                sdf.text = format!("el: {}deg", engine.light_elevation.round() as i32);
+                sdf.text = format!("el: {}deg", engine.editor.light_elevation.round() as i32);
             }
         });
     }
@@ -3004,7 +3023,7 @@ impl Engine {
     /// Toggle visibility of tool panels based on `editor_target`.
     pub fn init_editor_mode_control(&mut self) {
         self.on_update(|engine| {
-            let target = engine.editor_target.clone();
+            let target = engine.editor.target.clone();
             if let Some(e) = engine.tile_palette_e {
                 engine.set_enabled(e, target == "tilemap");
             }
@@ -3515,7 +3534,7 @@ impl Engine {
 
         self.on_update(move |engine| {
             let Some(ref _ui) = engine.ui else { return };
-            if engine.editor_target != "tilemap" {
+            if engine.editor.target != "tilemap" {
                 return;
             }
             let vw = _ui.viewport_w;
@@ -3537,7 +3556,7 @@ impl Engine {
                     let lx = ((mx - px) / t_size[0]).floor() as u32;
                     let ly = ((my - py) / t_size[1]).floor() as u32;
                     let tile_idx = lx + ly * tiles_per_row;
-                    engine.editor_tile = tile_idx.min(max_tile);
+                    engine.editor.tile = tile_idx.min(max_tile);
                     lx2.set(lx);
                     ly2.set(ly);
                 }
@@ -3609,7 +3628,7 @@ impl Engine {
 
         self.on_update(move |engine| {
             let Some(ref _ui) = engine.ui else { return };
-            if engine.editor_target != "navMesh" {
+            if engine.editor.target != "navMesh" {
                 return;
             }
             let vw = _ui.viewport_w;
@@ -3628,7 +3647,7 @@ impl Engine {
                 if mx >= px && mx <= px + palette_w && my >= py && my <= py + palette_h {
                     let lx = ((mx - px) / ts[0]).floor() as u32;
                     let ly = ((my - py) / ts[1]).floor() as u32;
-                    engine.editor_nav_tile = (lx + ly * tiles_per_row).min(max_tile);
+                    engine.editor.nav_tile = (lx + ly * tiles_per_row).min(max_tile);
                     lx2.set(lx);
                     ly2.set(ly);
                 }
@@ -3862,7 +3881,7 @@ impl Engine {
         classic_core::cl_info!(
             classic_core::instrument::Chan::Editor,
             "apply_editor_selection: target={} region=({},{})-({},{}) tile_count={}",
-            self.editor_target,
+            self.editor.target,
             bx,
             by,
             ex,
@@ -3872,7 +3891,7 @@ impl Engine {
         classic_core::cl_debug!(
             classic_core::instrument::Chan::Editor,
             "target={} region=({},{})-({},{})",
-            self.editor_target,
+            self.editor.target,
             bx,
             by,
             ex,
@@ -3886,9 +3905,9 @@ impl Engine {
             return;
         }
 
-        let updated = if self.editor_target == "height" {
-            let val = self.editor_height as f32;
-            let is_set = self.height_edit_mode == "set";
+        let updated = if self.editor.target == "height" {
+            let val = self.editor.height as f32;
+            let is_set = self.editor.height_mode == "set";
             if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
                 for y in by..ey {
                     for x in bx..ex {
@@ -3910,12 +3929,12 @@ impl Engine {
                 by,
                 ex,
                 ey,
-                self.editor_height,
-                self.height_edit_mode,
+                self.editor.height,
+                self.editor.height_mode,
             );
             true
-        } else if self.editor_target == "tilemap" {
-            let val = self.editor_tile;
+        } else if self.editor.target == "tilemap" {
+            let val = self.editor.tile;
             if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
                 for y in by..ey {
                     for x in bx..ex {
@@ -3936,8 +3955,8 @@ impl Engine {
                 val
             );
             true
-        } else if self.editor_target == "navMesh" {
-            let val = self.editor_nav_tile;
+        } else if self.editor.target == "navMesh" {
+            let val = self.editor.nav_tile;
             if let Some(&nav_e) = self.names.get("tilemapNavigation") {
                 if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_e) {
                     for y in by..ey {
@@ -3969,11 +3988,11 @@ impl Engine {
                 classic_core::instrument::Chan::Editor,
                 "apply_editor_selection: paint done, rebuilding mesh"
             );
-            if self.editor_target == "navMesh" {
+            if self.editor.target == "navMesh" {
                 self.rebuild_nav_gpu();
             } else {
                 self.rebuild_tilemap_mesh("tilemap");
-                if self.editor_target == "height" {
+                if self.editor.target == "height" {
                     self.sync_nav_heights();
                 }
             }
@@ -3981,7 +4000,7 @@ impl Engine {
             classic_core::cl_info!(
                 classic_core::instrument::Chan::Editor,
                 "apply_editor_selection: editor_target={}, nothing to paint",
-                self.editor_target
+                self.editor.target
             );
         }
     }
@@ -4219,7 +4238,7 @@ impl Engine {
 
             let _dist = (((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay)) as f32).sqrt();
 
-            if !engine.agent_selected {
+            if !engine.editor.agent_selected {
                 return;
             }
 
@@ -4335,10 +4354,10 @@ impl Engine {
         // on this frame see the corrected state (tool_buttons on_update
         // resets editor_target via Rc sync earlier in the frame).
         if let Some((ref target, hd, ref mode, tid)) = self.test_editor_state {
-            self.editor_target = target.clone();
-            self.editor_height = hd;
-            self.height_edit_mode = mode.clone();
-            self.editor_tile = tid;
+            self.editor.target = target.clone();
+            self.editor.height = hd;
+            self.editor.height_mode = mode.clone();
+            self.editor.tile = tid;
             // Re-enable panels that editor_mode_control on_update may have disabled
             if target == "textDemo" {
                 if let Some(e) = self.text_showcase_e {
@@ -4361,10 +4380,10 @@ impl Engine {
             for action in &step.actions {
                 match action {
                     TestAction::SetEditor { target, height_delta, height_mode, tile_id } => {
-                        self.editor_target = target.clone();
-                        self.editor_height = *height_delta;
-                        self.height_edit_mode = height_mode.clone();
-                        self.editor_tile = *tile_id;
+                        self.editor.target = target.clone();
+                        self.editor.height = *height_delta;
+                        self.editor.height_mode = height_mode.clone();
+                        self.editor.tile = *tile_id;
                         self.test_editor_state =
                             Some((target.clone(), *height_delta, height_mode.clone(), *tile_id));
                     }
@@ -4378,13 +4397,13 @@ impl Engine {
                         ));
                     }
                     TestAction::OpenMenu => {
-                        self.panel_menu_open = true;
+                        self.editor.panel_menu_open = true;
                         if let Some(mp) = self.menu_panel_e {
                             self.set_enabled(mp, true);
                         }
                     }
                     TestAction::EnableTextDemo => {
-                        self.editor_target = "textDemo".into();
+                        self.editor.target = "textDemo".into();
                         self.test_editor_state = Some(("textDemo".into(), 0, "set".into(), 0));
                         if let Some(e) = self.text_showcase_e {
                             self.set_enabled(e, true);
@@ -4531,8 +4550,10 @@ impl Engine {
                 classic_core::cl_info!(classic_core::instrument::Chan::Test, "{}", result);
                 self.test_results.push(result);
                 if !passed {
-                    self.test_should_close = true;
                     self.test_failed = true;
+                    if env_config::EnvConfig::get().failfast {
+                        self.test_should_close = true;
+                    }
                 }
             }
 
@@ -4541,10 +4562,10 @@ impl Engine {
 
         // Re-apply editor state every frame (tool_buttons on_update resets it via Rc sync)
         if let Some((ref target, hd, ref mode, tid)) = self.test_editor_state {
-            self.editor_target = target.clone();
-            self.editor_height = hd;
-            self.height_edit_mode = mode.clone();
-            self.editor_tile = tid;
+            self.editor.target = target.clone();
+            self.editor.height = hd;
+            self.editor.height_mode = mode.clone();
+            self.editor.tile = tid;
         }
 
         // Process active drag
