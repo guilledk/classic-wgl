@@ -78,8 +78,8 @@ static INITIALIZED: AtomicU8 = AtomicU8::new(0);
 /// Reset the level table and initialization flag. Only for use in tests.
 /// Resets all channels to Off for test isolation.
 pub fn reset_for_test() {
-    for i in 0..CHAN_COUNT {
-        LEVELS[i].store(0, Ordering::Relaxed); // Off
+    for level in &LEVELS[..] {
+        level.store(0, Ordering::Relaxed); // Off
     }
     INITIALIZED.store(0, Ordering::Relaxed);
 }

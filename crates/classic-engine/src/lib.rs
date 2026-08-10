@@ -3462,8 +3462,6 @@ impl Engine {
     /// Records the selected tile position for height/tile painting.
     /// Tilemap editor selection visual + painting is handled by the drag
     /// pipeline in `frame()` (selection_mode tracking + apply_editor_selection).
-    /// This method is kept as a no-op placeholder for the init call site.
-
     /// Tile palette: shows the tileset texture with click-to-select and a selector overlay.
     pub fn init_tile_palette(&mut self) {
         let Some(&tm_entity) = self.names.get("tilemap") else { return };
