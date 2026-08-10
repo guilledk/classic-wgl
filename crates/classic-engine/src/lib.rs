@@ -101,6 +101,7 @@ pub struct Engine {
     test_complete_reported: bool,
     pub test_should_close: bool,
     pub test_failed: bool,
+    pub golden_capture_frame: u64,
     update_fns: Vec<UpdateFn>,
     #[allow(dead_code)]
     trace: Option<golden::TraceCollector>,
@@ -203,6 +204,7 @@ impl Engine {
             test_complete_reported: false,
             test_should_close: false,
             test_failed: false,
+            golden_capture_frame: 55, // default: one frame after default scenario's last step (54)
             update_fns: Vec::new(),
             trace: None,
             tilemap_gpu: HashMap::new(),
@@ -694,6 +696,10 @@ impl Engine {
                 let name = env_config::EnvConfig::get().test.clone();
                 Engine::build_test_scenario(&name)
             });
+            // Set golden capture frame to 1 frame after the last test step.
+            if let Some(last) = STEPS.last() {
+                self.golden_capture_frame = last.frame + 1;
+            }
             self.run_test_frame(&STEPS);
         }
 
@@ -831,9 +837,8 @@ impl Engine {
         let cam = self.camera.matrix();
 
         // Create trace collector when golden mode is active and we're on the capture frame.
-        let golden_capture_frame: u64 = 55;
         let golden_active = !config.golden_mode.is_empty();
-        if golden_active && self.debug_frame == golden_capture_frame {
+        if golden_active && self.debug_frame == self.golden_capture_frame {
             self.trace = Some(golden::TraceCollector::new(
                 "baseline",
                 vp,
@@ -4432,15 +4437,26 @@ impl Engine {
 
     // ---- CLASSIC_TEST runner ----
 
-    fn build_test_scenario(name: &str) -> Vec<TestStep> {
-        let _ = name; // reserved for named scenarios
+    fn build_test_scenario(_name: &str) -> Vec<TestStep> {
+        // If CLASSIC_TEST_FILE is set, load from that JSON file.
+        if let Ok(path) = std::env::var("CLASSIC_TEST_FILE") {
+            match std::fs::read_to_string(&path) {
+                Ok(json) => {
+                    return serde_json::from_str(&json)
+                        .unwrap_or_else(|e| panic!("CLASSIC_TEST_FILE {}: {}", path, e));
+                }
+                Err(e) => panic!("cannot read CLASSIC_TEST_FILE {}: {}", path, e),
+            }
+        }
+        // Single hardcoded scenario (data-driven file loading above takes
+        // precedence when CLASSIC_TEST_FILE is set).
         vec![
             // 0: open dev menu, wait a frame for layout, verify text is centered
             TestStep {
                 frame: 2,
                 actions: vec![TestAction::OpenMenu],
                 assertions: vec![],
-                log: "open dev menu panel",
+                log: "open dev menu panel".into(),
             },
             TestStep {
                 frame: 4,
@@ -4449,9 +4465,9 @@ impl Engine {
                     kind: AssertKind::UiTextCentered,
                     region: (0, 0, 0, 0),
                     expected: 2.0,
-                    log: "menu item text labels centered within rows (tolerance=2px)",
+                    log: "menu item text labels centered within rows (tolerance=2px)".into(),
                 }],
-                log: "verify menu text centered",
+                log: "verify menu text centered".into(),
             },
             // 1: set height editor to blend mode, delta=2
             TestStep {
@@ -4463,7 +4479,7 @@ impl Engine {
                     tile_id: 0,
                 }],
                 assertions: vec![],
-                log: "set height editor: blend mode, delta=2",
+                log: "set height editor: blend mode, delta=2".into(),
             },
             // 2: drag (10,10)→(14,14) — blend adds 2 to default 1 → expect 3.0
             TestStep {
@@ -4474,7 +4490,7 @@ impl Engine {
                     hold_frames: 4,
                 }],
                 assertions: vec![],
-                log: "drag (10,10)→(14,14), hold=4",
+                log: "drag (10,10)→(14,14), hold=4".into(),
             },
             // 3: wait for mesh rebuild, assert region changed
             TestStep {
@@ -4485,22 +4501,22 @@ impl Engine {
                         kind: AssertKind::Height,
                         region: (10, 10, 14, 14),
                         expected: 3.0,
-                        log: "height(10,10-14,14)=3.0 (blend +2)",
+                        log: "height(10,10-14,14)=3.0 (blend +2)".into(),
                     },
                     TileAssertion {
                         kind: AssertKind::Height,
                         region: (0, 0, 2, 2),
                         expected: 1.0,
-                        log: "height(0,0-2,2)=1.0 (untouched)",
+                        log: "height(0,0-2,2)=1.0 (untouched)".into(),
                     },
                     TileAssertion {
                         kind: AssertKind::Height,
                         region: (16, 10, 18, 12),
                         expected: 1.0,
-                        log: "height(16,10-18,12)=1.0 (untouched)",
+                        log: "height(16,10-18,12)=1.0 (untouched)".into(),
                     },
                 ],
-                log: "assert blend region changed, adjacent regions untouched",
+                log: "assert blend region changed, adjacent regions untouched".into(),
             },
             // 4: switch to set mode, apply value 5
             TestStep {
@@ -4512,7 +4528,7 @@ impl Engine {
                     tile_id: 0,
                 }],
                 assertions: vec![],
-                log: "set height editor: set mode, value=5",
+                log: "set height editor: set mode, value=5".into(),
             },
             // 5: drag (10,10)→(14,14) again — set to 5.0
             TestStep {
@@ -4523,7 +4539,7 @@ impl Engine {
                     hold_frames: 4,
                 }],
                 assertions: vec![],
-                log: "drag (10,10)→(14,14), hold=4",
+                log: "drag (10,10)→(14,14), hold=4".into(),
             },
             // 6: assert set mode results
             TestStep {
@@ -4534,16 +4550,16 @@ impl Engine {
                         kind: AssertKind::Height,
                         region: (10, 10, 14, 14),
                         expected: 5.0,
-                        log: "height(10,10-14,14)=5.0 (set mode)",
+                        log: "height(10,10-14,14)=5.0 (set mode)".into(),
                     },
                     TileAssertion {
                         kind: AssertKind::Height,
                         region: (0, 0, 2, 2),
                         expected: 1.0,
-                        log: "height(0,0-2,2)=1.0 (untouched)",
+                        log: "height(0,0-2,2)=1.0 (untouched)".into(),
                     },
                 ],
-                log: "assert set mode applied correct values",
+                log: "assert set mode applied correct values".into(),
             },
             // 7: blend different region with delta=3 (new tiles: 1+3=4)
             TestStep {
@@ -4555,7 +4571,7 @@ impl Engine {
                     tile_id: 0,
                 }],
                 assertions: vec![],
-                log: "set height editor: blend mode, delta=3",
+                log: "set height editor: blend mode, delta=3".into(),
             },
             // 8: drag (20,10)→(22,12)
             TestStep {
@@ -4566,7 +4582,7 @@ impl Engine {
                     hold_frames: 4,
                 }],
                 assertions: vec![],
-                log: "drag (20,10)→(22,12), hold=4",
+                log: "drag (20,10)→(22,12), hold=4".into(),
             },
             // 9: verify blend on adjacent region, original region unchanged
             TestStep {
@@ -4577,16 +4593,16 @@ impl Engine {
                         kind: AssertKind::Height,
                         region: (20, 10, 22, 12),
                         expected: 4.0,
-                        log: "height(20,10-22,12)=4.0 (1+3 blend)",
+                        log: "height(20,10-22,12)=4.0 (1+3 blend)".into(),
                     },
                     TileAssertion {
                         kind: AssertKind::Height,
                         region: (10, 10, 11, 11),
                         expected: 5.0,
-                        log: "height(10,10-11,11)=5.0 (unchanged from set)",
+                        log: "height(10,10-11,11)=5.0 (unchanged from set)".into(),
                     },
                 ],
-                log: "assert blend region correct, set region untouched",
+                log: "assert blend region correct, set region untouched".into(),
             },
             // 10: tile editor — set tile id to 7
             TestStep {
@@ -4598,7 +4614,7 @@ impl Engine {
                     tile_id: 7,
                 }],
                 assertions: vec![],
-                log: "set tile editor: tile_id=7",
+                log: "set tile editor: tile_id=7".into(),
             },
             // 11: drag single tile (8,8)→(9,9)
             TestStep {
@@ -4609,7 +4625,7 @@ impl Engine {
                     hold_frames: 3,
                 }],
                 assertions: vec![],
-                log: "drag single tile (8,8)→(9,9)",
+                log: "drag single tile (8,8)→(9,9)".into(),
             },
             // 12: verify tile data changed
             TestStep {
@@ -4620,16 +4636,16 @@ impl Engine {
                         kind: AssertKind::Tile,
                         region: (8, 8, 9, 9),
                         expected: 7.0,
-                        log: "tile(8,8-9,9)=7",
+                        log: "tile(8,8-9,9)=7".into(),
                     },
                     TileAssertion {
                         kind: AssertKind::Tile,
                         region: (10, 10, 11, 11),
                         expected: 9.0,
-                        log: "tile(10,10-11,11)=9 (untouched)",
+                        log: "tile(10,10-11,11)=9 (untouched)".into(),
                     },
                 ],
-                log: "assert tile paint correct, adjacent unchanged",
+                log: "assert tile paint correct, adjacent unchanged".into(),
             },
             // 13: zero-delta blend (should log tile_count=0, no asserts needed)
             TestStep {
@@ -4647,16 +4663,16 @@ impl Engine {
                     kind: AssertKind::Height,
                     region: (25, 10, 26, 11),
                     expected: 1.0,
-                    log: "height(25,10)=1.0 (zero delta, unchanged)",
+                    log: "height(25,10)=1.0 (zero delta, unchanged)".into(),
                 }],
-                log: "zero-delta blend: no change expected",
+                log: "zero-delta blend: no change expected".into(),
             },
             // 7: enable text demo panel, verify container becomes visible
             TestStep {
                 frame: 52,
                 actions: vec![TestAction::EnableTextDemo],
                 assertions: vec![],
-                log: "enable text demo panel",
+                log: "enable text demo panel".into(),
             },
             TestStep {
                 frame: 54,
@@ -4665,9 +4681,9 @@ impl Engine {
                     kind: AssertKind::UiEnabled,
                     region: (0, 0, 0, 0),
                     expected: 1.0,
-                    log: "text showcase container enabled",
+                    log: "text showcase container enabled".into(),
                 }],
-                log: "verify text demo enabled",
+                log: "verify text demo enabled".into(),
             },
         ]
     }
@@ -4804,7 +4820,8 @@ impl Engine {
                         dx <= pos_tol && dy <= pos_tol && dz <= pos_tol && ds <= scale_tol
                     }
                     AssertKind::EntityVisible => {
-                        let name = if a.log.is_empty() { "entity" } else { a.log };
+                        let name = if a.log.is_empty() { "entity" } else { &a.log };
+                        // Use log as entity name; fall back on assertion for the report.
                         let should_be_visible = a.expected != 0.0;
                         let is_visible =
                             self.names.get(name).map(|&e| !self.is_disabled(e)).unwrap_or(false);
@@ -4819,7 +4836,8 @@ impl Engine {
                         is_visible == should_be_visible
                     }
                     AssertKind::EntityPos => {
-                        let name = if a.log.is_empty() { "entity" } else { a.log };
+                        let name = if a.log.is_empty() { "entity" } else { &a.log };
+                        // Use log as entity name; fall back on assertion for the report.
                         let tol = if a.expected <= 0.0 { 1.0 } else { a.expected };
                         let ex = a.region.0 as f32;
                         let ey = a.region.1 as f32;

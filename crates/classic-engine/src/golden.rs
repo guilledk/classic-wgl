@@ -139,10 +139,28 @@ impl TraceCollector {
     }
 }
 
-/// Serialise a render trace as one JSON object per line (`.jsonl`).
+/// Serialise a render trace as multi-line JSONL:
+/// header line (tag, frame, viewport, camera, counts) +
+/// one line per `TraceItem`.
 pub fn serialize_trace(trace: &RenderTrace) -> String {
-    let mut out = serde_json::to_string(trace).expect("serialize RenderTrace");
+    let mut out = String::new();
+    // Header: everything except items
+    let header = serde_json::json!({
+        "tag": trace.tag,
+        "frame": trace.frame,
+        "viewport": trace.viewport,
+        "camera": trace.camera,
+        "counts": trace.counts,
+    });
+    let header_str = serde_json::to_string(&header).expect("serialize header");
+    out.push_str(&header_str);
     out.push('\n');
+
+    for item in &trace.items {
+        let line = serde_json::to_string(item).expect("serialize item");
+        out.push_str(&line);
+        out.push('\n');
+    }
     out
 }
 
