@@ -18,6 +18,11 @@ pub fn apply_light_preset(engine: &mut Engine, state: &DemoStateRef, key: &str) 
         "cloudy" => Some(("Cloudy", [0.35, 0.35, 0.4], [0.0, -0.2, 1.0], [0.7, 0.72, 0.78])),
         "dawn" => Some(("Dawn / Dusk", [0.2, 0.15, 0.25], [0.5, 0.2, 0.3], [1.0, 0.4, 0.2])),
         "night" => Some(("Night", [0.1, 0.12, 0.25], [-0.2, -0.5, 0.8], [0.3, 0.4, 0.7])),
+        // Airless: almost no ambient fill (nothing scatters sunlight
+        // without an atmosphere) and a hard, slightly cool white sun low
+        // on the horizon.  The extreme terminator contrast is what makes
+        // crater relief legible.
+        "lunar" => Some(("Lunar", [0.20, 0.20, 0.25], [0.42, 0.30, 0.60], [0.88, 0.86, 0.83])),
         _ => None,
     };
     let Some((_name, ambient, dir_unnorm, color)) = preset else {

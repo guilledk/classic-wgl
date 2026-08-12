@@ -1,0 +1,70 @@
+{
+    "entities": {
+        "camController": {
+            "components": []
+        },
+        "tilemap": {
+            "components": [
+                {
+                    "type": "Tilemap",
+                    "position": [0, 0, 0],
+                    "scale": [45, 45, 1],
+                    "sizeX": 400,
+                    "sizeY": 400,
+                    "tileSet": "lunarTileset",
+                    "tilePixelSize": [32, 32],
+                    "maxTile": 24,
+                    "data": null
+                }
+            ]
+        },
+
+        "cursor": {
+            "components": [
+                {
+                    "type": "Sprite",
+                    "position": [0, 0, -10000],
+                    "scale": [2, 2, 1],
+                    "texture": "cursor",
+                    "ignoreCam": true,
+                    "frame": 0,
+                    "tileSetSize": [1, 1],
+                    "anchor": [0, 0]
+                }
+            ]
+        },
+
+        "tilemapNavigation": {
+            "components": [
+                {
+                    "type": "IsometricNavMesh",
+                    "map": "tilemap",
+                    "sizeX": 400,
+                    "sizeY": 400,
+                    "data": null
+                }
+            ]
+        },
+        "navAgent": {
+            "components": [
+                {
+                    "type": "Animator",
+                    "target": "navAgent.IsoAgent",
+                    "speed": 1
+                },
+                {
+                    "type": "IsoAgent",
+                    "position": [100.5, 100.5, 0],
+                    "scale": [1, 1, 1],
+                    "texture": "humanoid",
+                    "tilemap": "tilemap",
+                    "frame": 333,
+                    "tileSetSize": [32, 16],
+                    "anchor": [0.5, 0.98],
+                    "speed": 2.6,
+                    "animSpeed": 1
+                }
+            ]
+        }
+    }
+}

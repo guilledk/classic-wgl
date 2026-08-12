@@ -1,5 +1,14 @@
 use wasm_bindgen::prelude::*;
 
+/// Read a query-string parameter from the page URL.
+#[cfg(target_arch = "wasm32")]
+fn query_param(name: &str) -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let search = search.strip_prefix('?').unwrap_or(&search);
+    let prefix = format!("{name}=");
+    search.split('&').find_map(|p| p.strip_prefix(&prefix).map(|v| v.to_string()))
+}
+
 #[wasm_bindgen(start)]
 pub fn main() {
     console_error_panic_hook::set_once();
@@ -29,40 +38,36 @@ pub fn main() {
     log::set_logger(&WebLogger).ok();
     log::set_max_level(log::LevelFilter::Trace);
 
-    // Read ?classic_log= query param for channel configuration on web.
-    if let Some(window) = web_sys::window() {
-        let search = window.location().search().unwrap_or_default();
-        if let Some(qp) = search.strip_prefix("?classic_log=").or_else(|| {
-            search.strip_prefix("?").and_then(|s| {
-                s.split('&')
-                    .find(|p| p.starts_with("classic_log="))
-                    .map(|p| &p["classic_log=".len()..])
-            })
-        }) {
-            classic_core::instrument::init(qp);
-        }
-    }
-
     classic_core::cl_info!(classic_core::instrument::Chan::Platform, "classic-web starting");
 
     #[cfg(target_arch = "wasm32")]
     {
-        const MANIFEST_JSON: &str = include_str!("../../../public/manifest.json");
-        const STATE_JSON: &str = include_str!("../../../public/state.json");
-        const TILESET_PNG: &[u8] = include_bytes!("../../../public/res/road_tileset.png");
-        const MAP_DATA: &str = include_str!("../../../public/map001.txt");
-        const NAV_DATA: &str = include_str!("../../../public/map001.nav.txt");
-        const SDF_ATLAS_PNG: &[u8] = include_bytes!("../../../public/res/dejavusans-sdf.png");
-        const SDF_METRICS_JSON: &str = include_str!("../../../public/res/dejavusans-sdf.json");
-        const SEMAPHORE01_PNG: &[u8] = include_bytes!("../../../public/res/semaphore01.png");
-        const SEMAPHORE02_PNG: &[u8] = include_bytes!("../../../public/res/semaphore02.png");
-        const HOUSE01_PNG: &[u8] = include_bytes!("../../../public/res/house01.png");
-        const CURSOR_PNG: &[u8] = include_bytes!("../../../public/res/cursor.png");
-        const HUMANOID_PNG: &[u8] = include_bytes!("../../../public/res/humanoid.png");
-        const COOL_SNEK_PNG: &[u8] = include_bytes!("../../../public/res/cool_snek.png");
-        const TREE_PNG: &[u8] = include_bytes!("../../../public/res/tree.png");
-        const EDITOR_ICONS_PNG: &[u8] = include_bytes!("../../../public/res/editor_icons.png");
-        const NAV_TILESET_PNG: &[u8] = include_bytes!("../../../public/res/nav_tileset.png");
+        // `?classic_log=` configures channel logging; `?scene=` picks the
+        // scene (the native `CLASSIC_SCENE` env var has no web equivalent).
+        if let Some(spec) = query_param("classic_log") {
+            classic_core::instrument::init(&spec);
+        }
+        let scene = classic_demo::Scene::parse(&query_param("scene").unwrap_or_default());
+
+        const ASSETS: classic_demo::DemoAssets<'static> = classic_demo::DemoAssets {
+            manifest_json: include_str!("../../../public/manifest.json"),
+            state_json: include_str!("../../../public/state.json"),
+            state_lunar_json: include_str!("../../../public/state_lunar.json"),
+            tileset_png: include_bytes!("../../../public/res/road_tileset.png"),
+            map_data: include_str!("../../../public/map001.txt"),
+            nav_data: include_str!("../../../public/map001.nav.txt"),
+            sdf_atlas_png: include_bytes!("../../../public/res/dejavusans-sdf.png"),
+            sdf_metrics_json: include_str!("../../../public/res/dejavusans-sdf.json"),
+            semaphore01_png: include_bytes!("../../../public/res/semaphore01.png"),
+            semaphore02_png: include_bytes!("../../../public/res/semaphore02.png"),
+            house_png: include_bytes!("../../../public/res/house01.png"),
+            cursor_png: include_bytes!("../../../public/res/cursor.png"),
+            humanoid_png: include_bytes!("../../../public/res/humanoid.png"),
+            cool_snek_png: include_bytes!("../../../public/res/cool_snek.png"),
+            tree_png: include_bytes!("../../../public/res/tree.png"),
+            editor_icons_png: include_bytes!("../../../public/res/editor_icons.png"),
+            nav_tileset_png: include_bytes!("../../../public/res/nav_tileset.png"),
+        };
 
         use classic_platform::web::WebPlatform;
         use classic_platform::Platform;
@@ -79,25 +84,7 @@ pub fn main() {
 
         platform.run_loop(move |gl, input, vw, vh, _delta, should_close| {
             if engine.is_none() {
-                engine = Some(classic_demo::init_engine(
-                    gl,
-                    MANIFEST_JSON,
-                    STATE_JSON,
-                    TILESET_PNG,
-                    MAP_DATA,
-                    NAV_DATA,
-                    SDF_ATLAS_PNG,
-                    SDF_METRICS_JSON,
-                    SEMAPHORE01_PNG,
-                    SEMAPHORE02_PNG,
-                    HOUSE01_PNG,
-                    CURSOR_PNG,
-                    HUMANOID_PNG,
-                    COOL_SNEK_PNG,
-                    TREE_PNG,
-                    EDITOR_ICONS_PNG,
-                    NAV_TILESET_PNG,
-                ));
+                engine = Some(classic_demo::init_engine(gl, &ASSETS, scene));
             }
             if let Some(e) = engine.as_mut() {
                 e.frame(input, vw, vh, _delta);
