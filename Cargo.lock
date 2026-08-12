@@ -306,6 +306,8 @@ dependencies = [
  "glow",
  "hecs",
  "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
