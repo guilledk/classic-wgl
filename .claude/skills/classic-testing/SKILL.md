@@ -19,9 +19,10 @@ description: >
 
 The `CLASSIC_TEST` env-var triggers the automated end-to-end test runner inside
 the normal desktop binary.  When `CLASSIC_TEST` is set to any non-empty
-non-zero value, `Engine::frame()` enters test mode: it loads a test scenario
-(a sequence of scheduled `TestStep` values), begins executing actions and
-assertions frame-by-frame, and sets `test_should_close` when the scenario
+non-zero value, `classic-demo` registers a per-frame runner via
+`Engine::set_test_runner` (see `classic-demo/src/testing.rs`): it loads a test
+scenario (a sequence of scheduled `TestStep` values), begins executing actions
+and assertions frame-by-frame, and sets `test_should_close` when the scenario
 completes or the first assertion fails.
 
 Key lifecycle properties:
@@ -29,8 +30,8 @@ Key lifecycle properties:
 - **Delta time**: automatically fixed to `1/60` when `CLASSIC_TEST` is active
   (unless `CLASSIC_FIXED_DT` overrides it).  This makes frame scheduling
   deterministic.
-- **Frame counter**: `Engine::debug_frame` increments every `frame()` call,
-  starting from 0.  Test steps fire when `debug_frame` equals `step.frame`.
+- **Frame counter**: `Engine::frame_number()` increments every `frame()` call,
+  starting from 0.  Test steps fire when `frame_number()` equals `step.frame`.
 - **Completion**: once all steps are processed and any active drag has
   finished, `test_should_close` is set.  On assertion failure, it is
   also set immediately.  On headless, this terminates the `run_loop`.
@@ -318,7 +319,7 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
 ### Test module layout
 
 - `classic-core/tests/` — integration tests (instrument, registry).
-- `classic-engine/src/testing/` — test types and scenario builder.
+- `classic-demo/src/testing.rs` — test types, scenario builder, and the runner.
 - `classic-gfx/src/golden.rs` — trace types, serialization, comparison.
 - `tests/golden/` — committed baselines (trace JSONL, PNG).
 
