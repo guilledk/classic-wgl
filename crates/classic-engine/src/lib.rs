@@ -29,6 +29,7 @@ use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
+use classic_core::terrain::lunar::LunarTerrain;
 use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 use classic_core::types::AnimationData;
 use classic_core::types::SdfFontMetrics;
@@ -79,6 +80,16 @@ pub struct Engine {
     pub ui: Option<ui::UIManager>,
     pub selection_mode: i32,
     pub selection_begin_screen: glam::Vec3,
+    /// Height scale the tilemap mesh was built with, before the height
+    /// widget's multiplier.  Recorded so the widget can scale relative to it
+    /// instead of assuming `tile_pixel_size[0]`, which is wrong for any scene
+    /// that overrides the scale (see `init_tilemap_generated`).
+    pub base_height_scale: f32,
+    /// Height difference between adjacent tiles above which `sync_nav_heights`
+    /// marks a tile impassable.  The flat demo map edits heights in integer
+    /// steps, hence the default of 2.0; generated terrain is continuous and
+    /// needs a much finer threshold to match the slope rule it was built with.
+    pub nav_slope_threshold: f32,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
     pre_update_hooks: Vec<UpdateFn>,
@@ -159,6 +170,8 @@ impl Engine {
             ui: None,
             selection_mode: -1,
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
+            base_height_scale: 32.0,
+            nav_slope_threshold: 2.0,
             nav_gpu: None,
             debug_frame: 0,
             pre_update_hooks: Vec::new(),
@@ -228,37 +241,93 @@ impl Engine {
     }
 
     /// Build and upload the tilemap mesh + tile data texture for a named entity.
+    /// Build and upload the tilemap mesh + tile data texture for a named
+    /// entity, from a PNG tileset and base64-encoded map data.
+    ///
+    /// Terrain is flat (height 1.0 everywhere), matching the TS
+    /// `heightData.fill(1)`.  For procedurally generated terrain see
+    /// [`Engine::init_tilemap_generated`].
     pub fn init_tilemap(&mut self, entity_name: &str, tileset_png: &[u8], map_data_b64: &str) {
         let entity = *self.names.get(entity_name).expect("tilemap entity");
 
-        // Extract tilemap data before mutable borrows.
-        let (tile_set_name, size_x, size_y, tile_pixel_size) = {
+        let (tile_set_name, size_x, size_y) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.tile_set.clone(), tm.size_x, tm.size_y, tm.tile_pixel_size)
+            (tm.tile_set.clone(), tm.size_x, tm.size_y)
         };
 
-        // Load tileset texture.
         self.load_texture_png(&tile_set_name, tileset_png);
 
-        // Decode map data.
         let tiles = Self::decode_map_data(map_data_b64);
-
-        // Generate height data — flat 1.0 matches TS `heightData.fill(1)`.
-        // (Simplex noise terrain preserved below for later re-enable.)
-        // let s = classic_core::simplex_noise::SimplexNoise::new("demo");
-        // let mut heights = vec![0.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
-        // for ty in 0..=size_y {
-        //     for tx in 0..=size_x {
-        //         let h = classic_core::simplex_noise::noise_range(&s, tx as f32, ty as f32, 0.0, 4.0);
-        //         heights[(ty * (size_x + 1) + tx) as usize] = h.max(0.0).floor();
-        //     }
-        // }
         // height_data stride is (size_x + 1) — vertex grid, not tile grid.
         // The TS used sizeX * sizeY (tile-based). Rust uses (sizeX+1)*(sizeY+1)
         // to avoid off-by-one edge cases. See docs/TS-PARITY.md.
         let heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
 
-        let height_scale = tile_pixel_size[0] as f32;
+        self.finish_tilemap_init(entity_name, entity, tiles, heights, None);
+    }
+
+    /// Build and upload a tilemap from procedurally generated terrain, with
+    /// an in-memory RGBA tileset instead of a PNG.
+    ///
+    /// `height_scale` overrides the default (`tile_pixel_size[0]`).  Generated
+    /// terrain has a far larger height range than the flat demo map, so the
+    /// default scale would exaggerate the relief and stretch the mouse-picking
+    /// parallax solve.
+    pub fn init_tilemap_generated(
+        &mut self,
+        entity_name: &str,
+        terrain: &LunarTerrain,
+        tileset_rgba: &[u8],
+        tileset_w: u32,
+        tileset_h: u32,
+        height_scale: Option<f32>,
+    ) {
+        let entity = *self.names.get(entity_name).expect("tilemap entity");
+
+        let (tile_set_name, size_x, size_y) = {
+            let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
+            (tm.tile_set.clone(), tm.size_x, tm.size_y)
+        };
+        assert_eq!(
+            (terrain.size_x, terrain.size_y),
+            (size_x, size_y),
+            "generated terrain size does not match the '{entity_name}' Tilemap component"
+        );
+
+        if let Some(gfx) = self.gfx.as_mut() {
+            gfx.add_texture_rgba8(&tile_set_name, tileset_rgba, tileset_w, tileset_h);
+        }
+
+        self.finish_tilemap_init(
+            entity_name,
+            entity,
+            terrain.tiles.clone(),
+            terrain.heights.clone(),
+            height_scale,
+        );
+    }
+
+    /// Shared tail of the `init_tilemap*` family: build the mesh and tile-data
+    /// texture, upload both, write the data back onto the component, and
+    /// register the mouse-to-iso parallax solve.
+    ///
+    /// The parallax closure must be registered exactly once per tilemap, which
+    /// is the main reason this is factored out rather than duplicated.
+    fn finish_tilemap_init(
+        &mut self,
+        entity_name: &str,
+        entity: hecs::Entity,
+        tiles: Vec<u32>,
+        heights: Vec<f32>,
+        height_scale: Option<f32>,
+    ) {
+        let (tile_set_name, size_x, size_y, tile_pixel_size) = {
+            let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
+            (tm.tile_set.clone(), tm.size_x, tm.size_y, tm.tile_pixel_size)
+        };
+
+        let height_scale = height_scale.unwrap_or(tile_pixel_size[0] as f32);
+        self.base_height_scale = height_scale;
         let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights, height_scale);
 
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &tiles);
@@ -1245,7 +1314,7 @@ impl Engine {
             let trace = t.finish();
             let json = golden::serialize_trace(&trace);
             let cwd = std::env::current_dir().unwrap_or_default();
-            let baseline_dir = cwd.join("tests/golden/baseline");
+            let baseline_dir = cwd.join(&config.golden_dir);
             let baseline_path = baseline_dir.join("baseline.trace.jsonl");
             match config.golden_mode.as_str() {
                 "update" => {
@@ -1328,7 +1397,7 @@ impl Engine {
                     let tol = config.golden_tol;
                     match config.golden_mode.as_str() {
                         "update" => {
-                            let dir = "tests/golden/baseline";
+                            let dir = config.golden_dir.as_str();
                             let _ = std::fs::create_dir_all(dir);
                             let path = format!("{dir}/baseline.png");
                             if let Err(e) = image::save_buffer(
@@ -1352,8 +1421,8 @@ impl Engine {
                             }
                         }
                         "check" => {
-                            let path = "tests/golden/baseline/baseline.png";
-                            match image::open(path) {
+                            let path = format!("{}/baseline.png", config.golden_dir);
+                            match image::open(&path) {
                                 Ok(img) => {
                                     let expected = img.to_rgba8();
                                     let total = (rt.width * rt.height) as usize;
@@ -1549,47 +1618,32 @@ impl Engine {
             };
             tm.height_data.clone()
         };
+        let threshold = self.nav_slope_threshold;
+        let stride = sx as usize + 1;
+        let at = |tx: i32, ty: i32| -> f32 {
+            hd.get(ty as usize * stride + tx as usize).copied().unwrap_or(0.0)
+        };
+
         let mut changed = false;
         if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
             for ty in 0..sy {
                 for tx in 0..sx {
                     let idx = (ty * sx + tx) as usize;
-                    let tidx = ty as usize * (sx as usize + 1) + tx as usize;
-                    let h = hd.get(tidx).copied().unwrap_or(0.0);
+                    let h = at(tx, ty);
                     let mut walkable: u32 = 1;
-                    if tx > 0 {
-                        let h_prev = hd
-                            .get(ty as usize * (sx as usize + 1) + (tx - 1) as usize)
-                            .copied()
-                            .unwrap_or(0.0);
-                        if (h - h_prev).abs() > 2.0 {
-                            walkable = 0;
-                        }
-                    }
-                    if tx + 1 < sx {
-                        let h_next = hd
-                            .get(ty as usize * (sx as usize + 1) + (tx + 1) as usize)
-                            .copied()
-                            .unwrap_or(0.0);
-                        if (h - h_next).abs() > 2.0 {
-                            walkable = 0;
-                        }
-                    }
-                    if ty > 0 {
-                        let h_prev = hd
-                            .get((ty - 1) as usize * (sx as usize + 1) + tx as usize)
-                            .copied()
-                            .unwrap_or(0.0);
-                        if (h - h_prev).abs() > 2.0 {
-                            walkable = 0;
-                        }
-                    }
-                    if ty + 1 < sx {
-                        let h_next = hd
-                            .get((ty + 1) as usize * (sx as usize + 1) + tx as usize)
-                            .copied()
-                            .unwrap_or(0.0);
-                        if (h - h_next).abs() > 2.0 {
+                    // The four orthogonal neighbours.  The `ty + 1` bound
+                    // previously compared against `sx`, so on any non-square
+                    // map the southern edge was tested against the wrong
+                    // dimension — invisible while the demo map was both
+                    // square and perfectly flat.
+                    let neighbours = [
+                        (tx > 0).then(|| at(tx - 1, ty)),
+                        (tx + 1 < sx).then(|| at(tx + 1, ty)),
+                        (ty > 0).then(|| at(tx, ty - 1)),
+                        (ty + 1 < sy).then(|| at(tx, ty + 1)),
+                    ];
+                    for n in neighbours.into_iter().flatten() {
+                        if (h - n).abs() > threshold {
                             walkable = 0;
                         }
                     }
@@ -1657,13 +1711,17 @@ impl Engine {
             };
             (nav.size_x, nav.size_y, nav.data.clone())
         };
-        let hs = self
+        // Take the terrain's own heights, exactly as `init_nav_mesh_render`
+        // does.  Rebuilding the overlay on a flat grid instead left it
+        // detached from the surface after any nav edit — unnoticeable on the
+        // flat demo map, glaring over a crater field.
+        let (hs, heights) = self
             .names
             .get("tilemap")
             .and_then(|&e| self.world.get::<&Tilemap>(e).ok())
-            .map(|tm| tm.height_scale)
-            .unwrap_or(64.0);
-        let heights = vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)];
+            .map(|tm| (tm.height_scale, tm.height_data.clone()))
+            .filter(|(_, h)| h.len() == (sx as usize + 1) * (sy as usize + 1))
+            .unwrap_or_else(|| (64.0, vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)]));
         let Some(gfx) = self.gfx.as_mut() else { return };
 
         let (mesh_data, vcount) = build_mesh(sx, sy, &data, &heights, hs);
@@ -1781,94 +1839,31 @@ impl Engine {
     /// Initialize navigation: load nav mesh data from `map001.nav.txt`,
     /// sync walkable flags from the parent tilemap heights, and wire the
     /// click-to-move handler that computes A* paths for the nav agent.
+    /// Load navigation data from a base64-encoded map file and wire
+    /// click-to-move.
     pub fn init_navigation(&mut self, nav_data_b64: &str) {
+        self.init_navigation_data(Engine::decode_map_data(nav_data_b64));
+    }
+
+    /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked) and
+    /// wire click-to-move.
+    ///
+    /// Used by generated scenes, which derive walkability from real terrain
+    /// slope during generation and so must not have it recomputed here.
+    pub fn init_navigation_data(&mut self, nav_tiles: Vec<u32>) {
         let nav_entity = self.names.get("tilemapNavigation").copied();
-        let tilemap_entity = self.names.get("tilemap").copied();
         let agent_entity = self.names.get("navAgent").copied();
 
         let Some(nav_entity) = nav_entity else { return };
-        let Some(tilemap_entity) = tilemap_entity else { return };
         let Some(agent_entity) = agent_entity else { return };
+        let Some(tilemap_entity) = self.names.get("tilemap").copied() else { return };
 
-        // 1. Decode nav map data (same base64 JSON format as tilemap data).
-        let nav_tiles = Engine::decode_map_data(nav_data_b64);
-
-        // 2. Sync nav mesh walkable flags from parent tilemap heights.
-        //    With flat terrain (height=1 everywhere) this is a no-op, but
-        //    the logic is here for when varied heights are re-enabled.
-        {
-            let tm_entity = tilemap_entity;
-            if let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) {
-                if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
-                    let s_x = nav.size_x;
-                    let s_y = nav.size_y;
-                    let hd = &tm.height_data;
-                    let mut changed = false;
-                    for ty in 0..s_y {
-                        for tx in 0..s_x {
-                            let idx = (ty * s_x + tx) as usize;
-                            let h = hd
-                                .get((ty * (tm.size_x + 1) + tx) as usize)
-                                .copied()
-                                .unwrap_or(0.0);
-                            let mut walkable: u32 = 1;
-                            if tx > 0 {
-                                let h_prev = hd
-                                    .get((ty * (tm.size_x + 1) + tx - 1) as usize)
-                                    .copied()
-                                    .unwrap_or(0.0);
-                                if (h - h_prev).abs() > 2.0 {
-                                    walkable = 0;
-                                }
-                            }
-                            if tx + 1 < s_x {
-                                let h_next = hd
-                                    .get((ty * (tm.size_x + 1) + tx + 1) as usize)
-                                    .copied()
-                                    .unwrap_or(0.0);
-                                if (h - h_next).abs() > 2.0 {
-                                    walkable = 0;
-                                }
-                            }
-                            if ty > 0 {
-                                let h_prev = hd
-                                    .get(((ty - 1) * (tm.size_x + 1) + tx) as usize)
-                                    .copied()
-                                    .unwrap_or(0.0);
-                                if (h - h_prev).abs() > 2.0 {
-                                    walkable = 0;
-                                }
-                            }
-                            if ty + 1 < s_y {
-                                let h_next = hd
-                                    .get(((ty + 1) * (tm.size_x + 1) + tx) as usize)
-                                    .copied()
-                                    .unwrap_or(0.0);
-                                if (h - h_next).abs() > 2.0 {
-                                    walkable = 0;
-                                }
-                            }
-                            if nav.data.len() > idx {
-                                if nav.data[idx] != walkable {
-                                    changed = true;
-                                }
-                                nav.data[idx] = walkable;
-                            }
-                        }
-                    }
-                    if changed {
-                        log::debug!(
-                            "nav mesh sync changed {} tiles",
-                            nav.data.iter().filter(|&&v| v == 0).count()
-                        );
-                    }
-                }
-            }
-        }
-
-        // Overwrite nav data with decoded map (nav is authoritative for passability).
+        // The supplied grid is authoritative for passability.  A block here
+        // used to re-derive walkability from tilemap heights and then discard
+        // the result on the very next line; `sync_nav_heights` is now the one
+        // place that does that, and only in response to a height edit.
         if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
-            nav.data = nav_tiles.to_vec();
+            nav.data = nav_tiles;
         }
 
         // 3. Wire click-to-move.  Each frame, if the mouse was just
@@ -1902,6 +1897,20 @@ impl Engine {
 
             // Bounds check.
             if cx < 0 || cx >= s_x || cy < 0 || cy >= s_y {
+                return;
+            }
+
+            // Reject impassable destinations before running A*.  Without this
+            // the search cannot succeed but still has to exhaust every
+            // reachable cell before it can say so — 21 ms on a 400x400 map,
+            // a dropped frame, on every click against a crater wall.  It also
+            // happens to be the behaviour you want: clicking a cliff should
+            // do nothing rather than walk to somewhere adjacent to it.
+            if nav_data.get((cy * s_x + cx) as usize).copied().unwrap_or(0) == 0 {
+                classic_core::cl_debug!(
+                    classic_core::instrument::Chan::Path,
+                    "click-to-move: ({cx}, {cy}) is impassable, ignoring"
+                );
                 return;
             }
 
