@@ -3712,7 +3712,7 @@ impl Engine {
     }
 
     /// After height edits, recalculate nav mesh walkability and rebuild GPU resources.
-    fn sync_nav_heights(&mut self) {
+    pub fn sync_nav_heights(&mut self) {
         let Some(nav_entity) = self.names.get("tilemapNavigation").copied() else {
             return;
         };
@@ -3828,7 +3828,7 @@ impl Engine {
     }
 
     /// Rebuild nav mesh GPU buffers from current NavMesh component data.
-    fn rebuild_nav_gpu(&mut self) {
+    pub fn rebuild_nav_gpu(&mut self) {
         let Some(nav_entity) = self.names.get("tilemapNavigation").copied() else {
             return;
         };
@@ -4006,7 +4006,7 @@ impl Engine {
     }
 
     /// Rebuild the tilemap mesh from current data + heights and re-upload to GPU.
-    fn rebuild_tilemap_mesh(&mut self, entity_name: &str) {
+    pub fn rebuild_tilemap_mesh(&mut self, entity_name: &str) {
         classic_core::cl_info!(
             classic_core::instrument::Chan::Editor,
             "rebuild_tilemap_mesh: entering for '{entity_name}'"
@@ -4063,7 +4063,7 @@ impl Engine {
 
     /// Helper: add or remove Disabled marker component to toggle entity visibility.
     /// Recursively sets children and syncs collider enabled state.
-    fn set_enabled(&mut self, entity: hecs::Entity, enabled: bool) {
+    pub fn set_enabled(&mut self, entity: hecs::Entity, enabled: bool) {
         // Collect collider PIDs before ECS mutations (avoids borrow conflict)
         let pids: Vec<u32> = if let Some(ref ui) = self.ui {
             ui.collect_collider_pids(&self.world, entity)
@@ -4093,7 +4093,7 @@ impl Engine {
     }
 
     /// Check whether an entity (or any of its ancestors) is disabled.
-    fn is_disabled(&self, entity: hecs::Entity) -> bool {
+    pub fn is_disabled(&self, entity: hecs::Entity) -> bool {
         if self.world.get::<&classic_core::components::Disabled>(entity).is_ok() {
             return true;
         }
