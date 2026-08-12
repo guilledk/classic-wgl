@@ -34,6 +34,7 @@ pub enum Chan {
     Text,
     Iso,
     Nav,
+    Terrain,
     Path,
     Ecs,
     State,
@@ -211,6 +212,7 @@ pub fn chan_name(chan: Chan) -> &'static str {
         Chan::Text => "text",
         Chan::Iso => "iso",
         Chan::Nav => "nav",
+        Chan::Terrain => "terrain",
         Chan::Path => "path",
         Chan::Ecs => "ecs",
         Chan::State => "state",
@@ -245,7 +247,7 @@ pub fn channel_help() {
     let channels: [Chan; CHAN_COUNT] = [
         Chan::Frame, Chan::Input, Chan::Ui, Chan::Layout, Chan::Collision, Chan::Click,
         Chan::Render, Chan::Gfx, Chan::GlState, Chan::Text, Chan::Iso, Chan::Nav,
-        Chan::Path, Chan::Ecs, Chan::State, Chan::Editor, Chan::Asset, Chan::Camera,
+        Chan::Terrain, Chan::Path, Chan::Ecs, Chan::State, Chan::Editor, Chan::Asset, Chan::Camera,
         Chan::Anim, Chan::Test, Chan::Golden, Chan::Dump, Chan::Platform,
     ];
 
@@ -303,6 +305,7 @@ fn resolve_channels(name: &str, _negate: bool) -> Vec<Chan> {
         "text" => vec![Chan::Text],
         "iso" => vec![Chan::Iso],
         "nav" => vec![Chan::Nav],
+        "terrain" | "gen" => vec![Chan::Terrain],
         "path" => vec![Chan::Path],
         "ecs" => vec![Chan::Ecs],
         "state" => vec![Chan::State],
@@ -313,6 +316,7 @@ fn resolve_channels(name: &str, _negate: bool) -> Vec<Chan> {
         "test" => vec![Chan::Test],
         "golden" => vec![Chan::Golden],
         "dump" => vec![Chan::Dump],
+        "platform" => vec![Chan::Platform],
         // Alias groups for convenience
         "physics" => vec![Chan::Collision, Chan::Click],
         "render-all" | "draw" => vec![Chan::Render, Chan::Gfx, Chan::GlState],

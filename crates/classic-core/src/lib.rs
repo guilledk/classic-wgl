@@ -6,6 +6,7 @@ pub mod math;
 pub mod pathfinder;
 pub mod registry;
 pub mod sdf_builder;
+pub mod terrain;
 pub mod tilemap;
 pub mod types;
 
