@@ -223,3 +223,30 @@ Both representations produce the same flat heights (all 1.0) for the demo.
 | **Collider click priority** | `consumesClick` pre-scan sets `uiConsumedClick` | Pre-scan is a no-op; dispatch path sets `consumed_click` |
 | **Entity destruction** | `destroyEntity` | `world.despawn` is never called (visibility = `Disabled` marker) |
 | **Root UI tree** | All UI elements attached to a root container; layout walks the full tree | Only the top bar is attached to root; all other widgets position themselves |
+
+---
+
+## Rust-only: procedural terrain
+
+`crates/classic-core/src/terrain/` has no TypeScript ancestor.  It exists to
+generate the `lunar` demo scene (`CLASSIC_SCENE=lunar`) and is documented in
+full by the `classic-terrain` skill.  Notes relevant to parity:
+
+- The TS `Tilemap.data` comment "null = auto-generate noise" described a
+  feature that was never implemented on either side.  The Rust `lunar` scene
+  supersedes it: `data` is `null` in `state_lunar.json`, and terrain, tiles and
+  nav data are all installed by `classic_demo::scenes::lunar::init_lunar_terrain` after
+  `load_state`.
+- `SimplexNoise` was a faithful TS port but had no callers.  It now underpins
+  the generator; `Random::next_f64` was fixed to honour its documented `[0, 1)`
+  range (it divided the top 16 bits of the LCG state by 32768 instead of
+  65536, returning `[0, 2)` and biasing the Fisher-Yates shuffle in
+  `build_perm`).  This changes simplex output for a given seed relative to the
+  TS implementation.
+- `build_mesh` now emits **smooth per-vertex normals** for top faces instead of
+  per-face normals.  On level terrain every face normal is already `+Z`, so
+  flat scenes — including the demo golden baseline — are bit-identical; on
+  generated terrain, per-face normals made the triangulation visible as a
+  herringbone of facets.
+- The `lunar` light preset (near-zero ambient, hard low sun) is an addition to
+  `LIGHT_PRESETS`; the four TS presets are unchanged.

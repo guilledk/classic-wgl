@@ -336,6 +336,13 @@ both endpoints.
   `mouse_iso_pos` to integer grid cells.
 - On click (when the agent is selected), `find_path` is called with the
   current nav data as `&[i32]`.
+- **Impassable destinations are rejected before the search runs**: if
+  `nav_data[cy * size_x + cx] == 0` the click is ignored and `find_path` is
+  never called.  Without this, a click on a cliff makes A* exhaust every
+  reachable cell before it can return `None` — 3 ms on a 200x200 map, 21 ms on
+  a 400x400 map, a dropped frame.  Rejecting early is also the correct
+  behaviour (clicking a wall should do nothing, not walk to somewhere
+  adjacent).
 - Waypoints are offset by +0.5 to centre them within tiles (matching TS
   behaviour).
 - The first waypoint is replaced with the agent's exact floating-point
@@ -408,5 +415,9 @@ texture from the current `NavMesh::data`.  This uses the same `build_mesh` /
   priority values rather than relying on PID ordering.
 
 - **No timeout/abort for long paths**: `find_path` has no iteration limit or
-  timeout.  On very large grids (1000×1000) with complex obstacle mazes, it
-  will explore the entire reachable space before returning `None`.
+  timeout, and runs synchronously on the render thread.  On very large grids
+  with complex obstacle mazes it will explore the entire reachable space
+  before returning `None` — measured 3 ms (exhaustive) at 200x200 vs 21 ms at
+  400x400.  The impassable-destination pre-check removes the only routine
+  trigger, but beyond roughly 600x600 a real solution (iteration budget, or
+  moving A* off the render thread as the TS Web Worker did) is required.
