@@ -815,6 +815,18 @@ impl Engine {
         self.collider_names.get(&pid).cloned()
     }
 
+    /// Read the light uniforms (ambient, direction, color).
+    pub fn get_light(&self) -> ([f32; 3], [f32; 3], [f32; 3]) {
+        (self.light_ambient, self.light_dir, self.light_color)
+    }
+
+    /// Set the light uniforms (ambient, direction, color).
+    pub fn set_light(&mut self, ambient: [f32; 3], dir: [f32; 3], color: [f32; 3]) {
+        self.light_ambient = ambient;
+        self.light_dir = dir;
+        self.light_color = color;
+    }
+
     /// Save a file, handling both native (filesystem) and web (Blob download).
     pub fn save_file(&self, name: &str, data: &str) {
         #[cfg(not(target_arch = "wasm32"))]

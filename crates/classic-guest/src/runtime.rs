@@ -380,6 +380,65 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "mouse_down",
+            |mut caller: Caller<'_, GuestHost>, btn: i32| -> i32 {
+                caller.data_mut().mouse_down(btn)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "mouse_released",
+            |mut caller: Caller<'_, GuestHost>, btn: i32| -> i32 {
+                caller.data_mut().mouse_released(btn)
+            },
+        )?;
+
+        linker.func_wrap(m, "mouse_wheel", |mut caller: Caller<'_, GuestHost>| -> f64 {
+            caller.data_mut().mouse_wheel()
+        })?;
+
+        linker.func_wrap(
+            m,
+            "key_up",
+            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
+                let key = abi::read_str(&caller, ptr, len);
+                caller.data_mut().key_up(&key)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "get_light",
+            |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
+                let (a, d, c) = caller.data_mut().get_light();
+                let mut buf = Vec::with_capacity(72);
+                for v in a.iter().chain(d.iter()).chain(c.iter()) {
+                    buf.extend_from_slice(&v.to_le_bytes());
+                }
+                abi::write_bytes(&mut caller, out_ptr, &buf);
+                1
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "set_light",
+            |mut caller: Caller<'_, GuestHost>,
+             a0: f64,
+             a1: f64,
+             a2: f64,
+             d0: f64,
+             d1: f64,
+             d2: f64,
+             c0: f64,
+             c1: f64,
+             c2: f64|
+             -> i32 { caller.data_mut().set_light(a0, a1, a2, d0, d1, d2, c0, c1, c2) },
+        )?;
+
         Ok(())
     }
 }

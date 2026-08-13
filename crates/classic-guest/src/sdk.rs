@@ -210,4 +210,62 @@ impl GuestHost {
     pub fn pick_at(&mut self, x: f64, y: f64) -> String {
         self.engine().pick_at(x as f32, y as f32).unwrap_or_default()
     }
+
+    /// Whether a mouse button is held (0 = left, 1 = right, 2 = middle).
+    pub fn mouse_down(&mut self, button: i32) -> i32 {
+        if button < 0 {
+            return 0;
+        }
+        self.engine().input.is_mouse_down(button as usize) as i32
+    }
+
+    /// Whether a mouse button was released this frame.
+    pub fn mouse_released(&mut self, button: i32) -> i32 {
+        if button < 0 {
+            return 0;
+        }
+        self.engine().input.was_mouse_released(button as usize) as i32
+    }
+
+    /// The current mouse wheel value (decays to zero each frame).
+    pub fn mouse_wheel(&mut self) -> f64 {
+        self.engine().input.mouse_wheel as f64
+    }
+
+    /// Whether a key was released this frame (edge-triggered).
+    pub fn key_up(&mut self, key: &str) -> i32 {
+        self.engine().input.was_key_released(key) as i32
+    }
+
+    /// Read the light uniforms, as three `[f64; 3]` (ambient, direction, color).
+    pub fn get_light(&mut self) -> ([f64; 3], [f64; 3], [f64; 3]) {
+        let (a, d, c) = self.engine().get_light();
+        (
+            [a[0] as f64, a[1] as f64, a[2] as f64],
+            [d[0] as f64, d[1] as f64, d[2] as f64],
+            [c[0] as f64, c[1] as f64, c[2] as f64],
+        )
+    }
+
+    /// Set the light uniforms (ambient, direction, color).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_light(
+        &mut self,
+        a0: f64,
+        a1: f64,
+        a2: f64,
+        d0: f64,
+        d1: f64,
+        d2: f64,
+        c0: f64,
+        c1: f64,
+        c2: f64,
+    ) -> i32 {
+        self.engine_mut().set_light(
+            [a0 as f32, a1 as f32, a2 as f32],
+            [d0 as f32, d1 as f32, d2 as f32],
+            [c0 as f32, c1 as f32, c2 as f32],
+        );
+        1
+    }
 }

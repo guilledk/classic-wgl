@@ -51,12 +51,18 @@ imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `ui_consumed_click` | `() -> i32` | whether a UI element consumed this frame's click |
 | `delta` / `elapsed` | `() -> f64` | frame time |
 | `was_pressed` | `(btn: i32) -> i32` | mouse press (0=left…) |
+| `mouse_down` | `(btn: i32) -> i32` | mouse held |
+| `mouse_released` | `(btn: i32) -> i32` | mouse released this frame |
+| `mouse_wheel` | `() -> f64` | current wheel value (decays to 0) |
 | `key_down` | `(key_ptr, key_len) -> i32` | key held |
+| `key_up` | `(key_ptr, key_len) -> i32` | key released this frame |
 | `was_key_pressed` | `(key_ptr, key_len) -> i32` | key pressed this frame (edge-triggered) |
 | `generate_terrain` | `(kind_ptr, kind_len, seed_ptr, seed_len, height_scale: f64) -> i32` | generate/install a named terrain (generic engine prefab; `kind = "lunar"` today) |
 | `get_camera` | `(out_ptr) -> i32` | writes `[x, y, scale]` (three f64) |
 | `set_camera` | `(x: f64, y: f64, scale: f64) -> i32` | set camera position + uniform scale |
 | `pick_at` | `(x: f64, y: f64, out_ptr, out_cap) -> i32` | name of the top gameplay entity under a screen point (bytes written, `0` if none) |
+| `get_light` | `(out_ptr) -> i32` | writes 9 f64 (ambient, direction, color) |
+| `set_light` | `(a0..a2, d0..d2, c0..c2: f64) -> i32` | set light uniforms |
 | `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into

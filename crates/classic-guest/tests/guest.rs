@@ -183,3 +183,51 @@ fn pick_at_returns_entity_under_point() {
     assert_eq!(engine.pick_at(100.0, 100.0), Some("tree".to_string()));
     assert_eq!(engine.pick_at(500.0, 500.0), None);
 }
+
+#[test]
+fn guest_set_light_updates_uniforms() {
+    let mut engine = Engine::new_for_test();
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "set_light" (func $set_light
+                (param f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (func (export "update") (param f64)
+                (drop (call $set_light
+                    (f64.const 0.1) (f64.const 0.2) (f64.const 0.3)
+                    (f64.const 0.4) (f64.const 0.5) (f64.const 0.6)
+                    (f64.const 0.7) (f64.const 0.8) (f64.const 0.9)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+
+    assert_eq!(engine.get_light(), ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]));
+}
+
+#[test]
+fn guest_mouse_down_and_key_up_trigger_action() {
+    let mut engine = Engine::new_for_test();
+    engine.input.mouse_down[0] = true;
+    engine.input.keys_released.insert("KeyR".to_string(), true);
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "mouse_down" (func $md (param i32) (result i32)))
+            (import "env" "key_up" (func $ku (param i32 i32) (result i32)))
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "KeyR")
+            (data (i32.const 16) "marker")
+            (func (export "update") (param f64)
+                (if (call $md (i32.const 0))
+                    (then
+                        (if (call $ku (i32.const 0) (i32.const 4))
+                            (then (drop (call $spawn (i32.const 16) (i32.const 6)))))))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+    assert!(engine.has_name("marker"));
+}
