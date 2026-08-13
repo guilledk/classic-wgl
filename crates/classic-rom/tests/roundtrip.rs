@@ -11,7 +11,7 @@ fn sample_files() -> Vec<(&'static str, &'static [u8])> {
     vec![
         ("manifest.json", b"{\"format_version\":1}".as_slice()),
         ("res/textures/a.png", b"\x89PNG-fake".as_slice()),
-        ("scripts/main.rhai", b"fn update(ctx) {}".as_slice()),
+        ("code/main.wasm", b"\0asm".as_slice()),
     ]
 }
 
@@ -87,7 +87,7 @@ fn tar_zst_roundtrip() {
 fn list_is_sorted_and_complete() {
     let archive = RomArchive::from_bytes(&build_tar_gz()).unwrap();
     let names = archive.list();
-    assert_eq!(names, vec!["manifest.json", "res/textures/a.png", "scripts/main.rhai"]);
+    assert_eq!(names, vec!["code/main.wasm", "manifest.json", "res/textures/a.png"]);
 }
 
 #[test]

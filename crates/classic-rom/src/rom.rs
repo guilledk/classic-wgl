@@ -18,7 +18,7 @@ pub struct Rom {
     pub manifest: RomManifest,
     /// Raw `manifest.json` text, round-tripped verbatim by [`Rom::pack`].
     pub manifest_json: String,
-    /// Name-keyed resource blobs (textures, fonts, scripts).
+    /// Name-keyed resource blobs (textures, fonts, code modules).
     pub resources: ResourceSet,
     /// The serialized entity graph (`state.json`).
     pub state: String,
@@ -58,8 +58,8 @@ impl Rom {
                 writer.write_all(metrics)?;
             }
         }
-        for entry in &self.manifest.scripts {
-            if let Some(src) = self.resources.scripts().get(&entry.name) {
+        for entry in &self.manifest.code {
+            if let Some(src) = self.resources.code().get(&entry.name) {
                 writer.start_file(crate::rom_path(&entry.src), opts)?;
                 writer.write_all(src)?;
             }
@@ -77,7 +77,7 @@ mod tests {
     const MANIFEST_JSON: &str = r#"{
         "format_version": 1,
         "entrypoint": "demo",
-        "scripts": [{"name": "main", "src": "scripts/main.rhai"}],
+        "code": [{"name": "main", "src": "/code/main.wasm"}],
         "shaders": [],
         "textures": [{"name": "humanoid", "src": "/res/humanoid.png"}],
         "sdfFonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
@@ -89,7 +89,7 @@ mod tests {
         let mut resources = ResourceSet::default();
         resources.insert(ResourceKind::Texture, "humanoid", b"png-bytes".to_vec());
         resources.insert(ResourceKind::Font, "dejavusans", b"{\"name\":\"dejavusans\"}".to_vec());
-        resources.insert(ResourceKind::Script, "main", b"fn update(ctx) {}".to_vec());
+        resources.insert(ResourceKind::Code, "main", b"\0asm".to_vec());
 
         Rom {
             manifest,
@@ -112,10 +112,7 @@ mod tests {
             loaded.resources.get(ResourceKind::Texture, "humanoid"),
             Some(b"png-bytes".as_slice())
         );
-        assert_eq!(
-            loaded.resources.get(ResourceKind::Script, "main"),
-            Some(b"fn update(ctx) {}".as_slice())
-        );
+        assert_eq!(loaded.resources.get(ResourceKind::Code, "main"), Some(b"\0asm".as_slice()));
     }
 
     #[test]

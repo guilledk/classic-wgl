@@ -1,11 +1,11 @@
-//! The resource set a ROM bundles: textures, fonts, shaders, and scripts,
+//! The resource set a ROM bundles: textures, fonts, shaders, and code modules,
 //! keyed by name.
 //!
 //! A [`ResourceSet`] can be produced from a [`RomArchive`] (the shipped-ROM
 //! path) or from an [`AssetLoader`] (the loose-files / embedded dev path),
 //! driven by a [`RomManifest`].  Shader sources are resolved separately by a
 //! named shader registry (Part 3 of the ROM plan), so `from_archive` /
-//! `from_loader` populate textures, fonts, and scripts only.
+//! `from_loader` populate textures, fonts, and code modules only.
 
 use std::collections::BTreeMap;
 
@@ -19,7 +19,7 @@ pub enum ResourceKind {
     Texture,
     Font,
     Shader,
-    Script,
+    Code,
 }
 
 /// Name-keyed byte blobs, grouped by kind.
@@ -28,7 +28,7 @@ pub struct ResourceSet {
     textures: BTreeMap<String, Vec<u8>>,
     fonts: BTreeMap<String, Vec<u8>>,
     shaders: BTreeMap<String, Vec<u8>>,
-    scripts: BTreeMap<String, Vec<u8>>,
+    code: BTreeMap<String, Vec<u8>>,
 }
 
 impl ResourceSet {
@@ -45,7 +45,7 @@ impl ResourceSet {
 
     /// The total number of resources across all categories.
     pub fn len(&self) -> usize {
-        self.textures.len() + self.fonts.len() + self.shaders.len() + self.scripts.len()
+        self.textures.len() + self.fonts.len() + self.shaders.len() + self.code.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -64,8 +64,8 @@ impl ResourceSet {
         &self.shaders
     }
 
-    pub fn scripts(&self) -> &BTreeMap<String, Vec<u8>> {
-        &self.scripts
+    pub fn code(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.code
     }
 
     /// Build a resource set by reading manifest-declared resources out of a
@@ -97,8 +97,8 @@ impl ResourceSet {
         for entry in &manifest.manifest.sdf_fonts {
             set.fonts.insert(entry.name.clone(), load(crate::rom_path(&entry.metrics))?);
         }
-        for entry in &manifest.scripts {
-            set.scripts.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
+        for entry in &manifest.code {
+            set.code.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
         Ok(set)
     }
@@ -108,7 +108,7 @@ impl ResourceSet {
             ResourceKind::Texture => &self.textures,
             ResourceKind::Font => &self.fonts,
             ResourceKind::Shader => &self.shaders,
-            ResourceKind::Script => &self.scripts,
+            ResourceKind::Code => &self.code,
         }
     }
 
@@ -117,7 +117,7 @@ impl ResourceSet {
             ResourceKind::Texture => &mut self.textures,
             ResourceKind::Font => &mut self.fonts,
             ResourceKind::Shader => &mut self.shaders,
-            ResourceKind::Script => &mut self.scripts,
+            ResourceKind::Code => &mut self.code,
         }
     }
 }
@@ -135,7 +135,7 @@ mod tests {
     const MANIFEST_JSON: &str = r#"{
         "format_version": 1,
         "entrypoint": "demo",
-        "scripts": [{"name": "main", "src": "scripts/main.rhai"}],
+        "code": [{"name": "main", "src": "code/main.wasm"}],
         "shaders": [],
         "textures": [{"name": "humanoid", "src": "res/humanoid.png"}],
         "sdfFonts": [{"name": "dejavusans", "metrics": "res/dejavusans-sdf.json"}],
@@ -153,7 +153,7 @@ mod tests {
         for (name, data) in [
             ("res/humanoid.png", b"png".as_slice()),
             ("res/dejavusans-sdf.json", b"{}".as_slice()),
-            ("scripts/main.rhai", b"fn update(ctx) {}".as_slice()),
+            ("code/main.wasm", b"\0asm".as_slice()),
         ] {
             writer.start_file(name, opts).unwrap();
             writer.write_all(data).unwrap();
@@ -163,12 +163,12 @@ mod tests {
     }
 
     #[test]
-    fn from_archive_populates_textures_fonts_scripts() {
+    fn from_archive_populates_textures_fonts_code() {
         let set = ResourceSet::from_archive(&test_archive(), &test_manifest()).unwrap();
         assert_eq!(set.len(), 3);
         assert_eq!(set.get(ResourceKind::Texture, "humanoid"), Some(b"png".as_slice()));
         assert_eq!(set.get(ResourceKind::Font, "dejavusans"), Some(b"{}".as_slice()));
-        assert_eq!(set.get(ResourceKind::Script, "main"), Some(b"fn update(ctx) {}".as_slice()));
+        assert_eq!(set.get(ResourceKind::Code, "main"), Some(b"\0asm".as_slice()));
     }
 
     #[test]
@@ -184,11 +184,11 @@ mod tests {
         static ASSETS: &[(&str, &[u8])] = &[
             ("res/humanoid.png", b"png".as_slice()),
             ("res/dejavusans-sdf.json", b"{}".as_slice()),
-            ("scripts/main.rhai", b"fn update(ctx) {}".as_slice()),
+            ("code/main.wasm", b"\0asm".as_slice()),
         ];
         let loader = EmbeddedAssetLoader::new(ASSETS);
         let set = ResourceSet::from_loader(&loader, &test_manifest()).unwrap();
         assert_eq!(set.len(), 3);
-        assert_eq!(set.get(ResourceKind::Script, "main"), Some(b"fn update(ctx) {}".as_slice()));
+        assert_eq!(set.get(ResourceKind::Code, "main"), Some(b"\0asm".as_slice()));
     }
 }

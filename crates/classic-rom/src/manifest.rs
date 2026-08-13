@@ -2,13 +2,13 @@
 //!
 //! A ROM's `manifest.json` extends the engine's existing [`Manifest`]
 //! (shaders/textures/fonts/animations) with the fields a self-contained ROM
-//! needs: a format version, an entrypoint, and the bundled script list.
+//! needs: a format version, an entrypoint, and the bundled code module list.
 
 use classic_core::types::Manifest;
 
-/// A single bundled script in a ROM manifest.
+/// A single bundled code (WASM) module in a ROM manifest.
 #[derive(Clone, Debug, serde::Deserialize)]
-pub struct ScriptManifestEntry {
+pub struct CodeEntry {
     pub name: String,
     pub src: String,
 }
@@ -23,7 +23,7 @@ pub struct RomManifest {
     #[serde(default)]
     pub entrypoint: String,
     #[serde(default)]
-    pub scripts: Vec<ScriptManifestEntry>,
+    pub code: Vec<CodeEntry>,
     /// Whether this ROM ships the host toolchain (editor HUD, widgets, debug
     /// overlays, test runner).  Bare gameplay ROMs leave this false and skip
     /// the editor; the demo/lunar ROMs opt in.
@@ -44,7 +44,7 @@ mod tests {
         let json = r#"{
             "format_version": 1,
             "entrypoint": "demo",
-            "scripts": [{"name": "main", "src": "scripts/main.rhai"}],
+            "code": [{"name": "main", "src": "code/main.wasm"}],
             "shaders": [],
             "textures": [{"name": "humanoid", "src": "/res/humanoid.png"}],
             "sdfFonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
@@ -53,8 +53,8 @@ mod tests {
         let m: RomManifest = serde_json::from_str(json).unwrap();
         assert_eq!(m.format_version, 1);
         assert_eq!(m.entrypoint, "demo");
-        assert_eq!(m.scripts.len(), 1);
-        assert_eq!(m.scripts[0].name, "main");
+        assert_eq!(m.code.len(), 1);
+        assert_eq!(m.code[0].name, "main");
         assert_eq!(m.manifest.textures.len(), 1);
         assert_eq!(m.manifest.textures[0].name, "humanoid");
         assert_eq!(m.manifest.sdf_fonts[0].name, "dejavusans");
