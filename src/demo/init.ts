@@ -9,6 +9,7 @@ import {
     initHeightEditorLogic,
     initAgent,
     generateDemoSlopes,
+    initFootprintColliders,
 } from './prefabs.js';
 import { initUI } from './uiPrefabs.js';
 import { initLighting } from '/classic/lighting.js';
@@ -32,6 +33,7 @@ async function initContext(): Promise<void> {
     initHeightEditorLogic();
     initAgent();
     generateDemoSlopes();
+    initFootprintColliders();
 
     initUI();
     initLighting();
@@ -41,7 +43,7 @@ async function initContext(): Promise<void> {
     // Centre camera on demo slope area around tile (90, 85)
     const isoToWorld = mat4.clone(isoToCartesian4);
     mat4.scale(isoToWorld, isoToWorld, [45, 45, 1]);
-    const centre = vec3.fromValues(90, 85, 0);
+    const centre = vec3.fromValues(0, 0, 0);
     vec3.transformMat4(centre, centre, isoToWorld);
     game.camera.position[0] = centre[0];
     game.camera.position[1] = centre[1];

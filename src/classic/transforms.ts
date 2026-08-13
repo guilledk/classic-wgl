@@ -245,7 +245,7 @@ export class Sprite extends Drawable {
             this.tileSetSize as number[],
         );
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.useIsoDepth, 0.0);
-        this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, 0.0);
+        this.gl.uniform4fv(this.game.shaders.imageSheet.unif.isoDepthCorners, [0.0, 0.0, 0.0, 0.0]);
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.ghostAlpha, 0.0);
 
         this.gl.drawElements(
@@ -493,6 +493,9 @@ export class Text extends Drawable {
         );
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
         this.appendText(str);
+
+        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+        this.gl.viewport(0, 0, this.gl.drawingBufferWidth, this.gl.drawingBufferHeight);
     }
 
     setMaxCharSize(cols: number, rows: number = 1): void {

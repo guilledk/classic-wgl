@@ -26,6 +26,7 @@ declare module '/classic/types.js' {
         showGrid?: boolean;
         lightAzimuth?: number;
         lightElevation?: number;
+        debugFootprints?: boolean;
     }
 }
 
@@ -50,6 +51,7 @@ export function initUI(): void {
     game.editorHeight = 0;
     game.heightScaleMultiplier = 1;
     game.heightEditMode = 'blend';
+    game.debugFootprints = false;
 
     initTopBar(UI);
     initToolButtons(UI);
@@ -86,6 +88,41 @@ function initTopBar(UI: UIManager): void {
 
     let lastFPS = 0;
     let timeAccumulator = 0;
+
+    const coordFontScale = 0.3 * _uiScale;
+    const coordMaxW = Math.ceil(12 * 32 * coordFontScale);
+    const txCoord = UI.spawnText(
+        'X:0.0',
+        coordFontScale,
+        coordMaxW,
+        [1.0, 0.3, 0.3, 1],
+        [0, 0, 0, 0],
+    );
+    const tyCoord = UI.spawnText(
+        'Y:0.0',
+        coordFontScale,
+        coordMaxW,
+        [0.3, 1.0, 0.3, 1],
+        [0, 0, 0, 0],
+    );
+    const tzCoord = UI.spawnText(
+        'Z:0',
+        coordFontScale,
+        coordMaxW,
+        [0.4, 0.4, 1.0, 1],
+        [0, 0, 0, 0],
+    );
+
+    const axisFontScale = 0.35 * _uiScale;
+    const axisMaxW = Math.ceil(4 * 32 * axisFontScale);
+    const roseN = UI.spawnText('N', axisFontScale, axisMaxW, [1.0, 1.0, 0.8, 1], [0, 0, 0, 0]);
+    const roseE = UI.spawnText('E', axisFontScale, axisMaxW, [1.0, 1.0, 0.8, 1], [0, 0, 0, 0]);
+    const roseS = UI.spawnText('S', axisFontScale, axisMaxW, [1.0, 1.0, 0.8, 1], [0, 0, 0, 0]);
+    const roseW = UI.spawnText('W', axisFontScale, axisMaxW, [1.0, 1.0, 0.8, 1], [0, 0, 0, 0]);
+    const axisX = UI.spawnText('X', axisFontScale, axisMaxW, [1.0, 0.3, 0.3, 1], [0, 0, 0, 0]);
+    const axisY = UI.spawnText('Y', axisFontScale, axisMaxW, [0.3, 1.0, 0.3, 1], [0, 0, 0, 0]);
+    const axisZ = UI.spawnText('Z', axisFontScale, axisMaxW, [0.4, 0.4, 1.0, 1], [0, 0, 0, 0]);
+
     UI.root.entity.registerCall('update', () => {
         timeAccumulator += game.deltaTime;
         if (timeAccumulator >= 0.2) {
@@ -97,6 +134,80 @@ function initTopBar(UI: UIManager): void {
             fpsText.setTextColor([0, 0.6, 0, 1]);
         } else {
             fpsText.setTextColor([0.8, 0, 0, 1]);
+        }
+
+        if (game.debugFootprints) {
+            const ox = 310 * _uiScale;
+            const oy = 40 * _uiScale;
+            const rowH = Math.round(16 * _uiScale);
+
+            txCoord.setEnabled(true);
+            txCoord.setPosition(ox, oy);
+            tyCoord.setEnabled(true);
+            tyCoord.setPosition(ox, oy + rowH);
+            tzCoord.setEnabled(true);
+            tzCoord.setPosition(ox, oy + rowH * 2);
+
+            const rcX = 100 * _uiScale;
+            const rcY = 65 * _uiScale;
+            const rR = 28 * _uiScale;
+            const axX = 200 * _uiScale;
+            const axY = 65 * _uiScale;
+            const aL = 35 * _uiScale;
+
+            roseN.setEnabled(true);
+            roseN.setPosition(rcX - 5 * _uiScale, rcY - rR - 14 * _uiScale);
+            roseE.setEnabled(true);
+            roseE.setPosition(rcX + rR + 4, rcY - 6 * _uiScale);
+            roseS.setEnabled(true);
+            roseS.setPosition(rcX - 5 * _uiScale, rcY + rR + 4);
+            roseW.setEnabled(true);
+            roseW.setPosition(rcX - rR - 14 * _uiScale, rcY - 6 * _uiScale);
+
+            axisX.setEnabled(true);
+            axisX.setPosition(axX + aL + 4, axY - aL / 2 - 8 * _uiScale);
+            axisY.setEnabled(true);
+            axisY.setPosition(axX + aL + 4, axY + aL / 2 - 10 * _uiScale);
+            axisZ.setEnabled(true);
+            axisZ.setPosition(axX - 5 * _uiScale, axY - aL - 16 * _uiScale);
+
+            const tm = game.getEntity('tilemap')?.getComponent(Tilemap);
+            if (tm) {
+                const px = tm.mouseIsoPos[0];
+                const py = tm.mouseIsoPos[1];
+                txCoord.setText('X:' + px.toFixed(1));
+                tyCoord.setText('Y:' + py.toFixed(1));
+
+                const ftx = Math.floor(px);
+                const fty = Math.floor(py);
+                const fx = px - ftx;
+                const fy = py - fty;
+                const hd = tm.heightData;
+                const sX = tm.sizeX;
+                const sY = tm.sizeY;
+                const at = (tx: number, ty: number) =>
+                    hd[
+                        Math.min(Math.max(tx, 0), sX - 1) + Math.min(Math.max(ty, 0), sY - 1) * sX
+                    ] ?? 0;
+                const hNW = at(ftx, fty);
+                const hNE = at(ftx + 1, fty);
+                const hSW = at(ftx, fty + 1);
+                const hSE = at(ftx + 1, fty + 1);
+                const h =
+                    hNW + (hNE - hNW) * fx + (hSW - hNW) * fy + (hNW - hNE - hSW + hSE) * fx * fy;
+                tzCoord.setText('Z:' + (h * tm.heightScale).toFixed(0));
+            }
+        } else {
+            txCoord.setEnabled(false);
+            tyCoord.setEnabled(false);
+            tzCoord.setEnabled(false);
+            roseN.setEnabled(false);
+            roseE.setEnabled(false);
+            roseS.setEnabled(false);
+            roseW.setEnabled(false);
+            axisX.setEnabled(false);
+            axisY.setEnabled(false);
+            axisZ.setEnabled(false);
         }
     });
 
@@ -172,6 +283,15 @@ function initToolButtons(UI: UIManager): void {
                 isOpen = false;
             },
             isActive: () => game.editorTarget === 'light',
+        },
+        {
+            label: 'Footprints',
+            action: () => {
+                game.debugFootprints = !(game.debugFootprints ?? false);
+                game.uiConsumedClick = true;
+                isOpen = false;
+            },
+            isActive: () => game.debugFootprints ?? false,
         },
     ];
 

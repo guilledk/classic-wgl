@@ -5,7 +5,8 @@ import { Drawable } from '/classic/transforms.js';
 import { isoToCartesian4, cartesianToIso4 } from '/classic/utils.js';
 import { Animator } from '/classic/animator.js';
 import { registerComponent } from '/classic/registry.js';
-import type { IEntity, ITexture, ComponentData, IAnimation } from './types.js';
+import { Collider, Polygon } from '/classic/collision.js';
+import type { IEntity, ITexture, ComponentData, IAnimation, ICollider } from './types.js';
 
 import { mat4, mat3, vec2, vec3 } from 'gl-matrix';
 
@@ -706,6 +707,17 @@ export class IsoSprite extends IsometricDrawable {
     tileSetSize: Vec2Like;
     anchor: Vec2Like;
     tilePixelSize: [number, number];
+    footprint: Vec2Like[];
+    _footprintCollider: ICollider | null = null;
+
+    static defaultFootprint(): Vec2Like[] {
+        return [
+            [0.5, -0.5],
+            [0.5, 0.5],
+            [-0.5, 0.5],
+            [-0.5, -0.5],
+        ];
+    }
 
     constructor(
         entity: IEntity,
@@ -716,6 +728,7 @@ export class IsoSprite extends IsometricDrawable {
         frame: number,
         tileSetSize: Vec2Like,
         anchor: Vec2Like,
+        footprint?: Vec2Like[],
     ) {
         super(entity, position, scale, tilemap);
         this.texture = this.game.getTexture(texture);
@@ -727,6 +740,54 @@ export class IsoSprite extends IsometricDrawable {
             this.texture.image.width / (tileSetSize[0] as number),
             this.texture.image.height / (tileSetSize[1] as number),
         ];
+
+        this.footprint = footprint ?? IsoSprite.defaultFootprint();
+    }
+
+    getDepth(): number {
+        let minV = Infinity;
+        for (const pt of this.footprint) {
+            const d = (this.position[0] + pt[0] - this.position[1] - pt[1]) / 400.0;
+            if (d < minV) minV = d;
+        }
+        return minV + 0.5 - this.position[2] / 14500.0 - 0.005;
+    }
+
+    attachCollider(): ICollider {
+        const hd = this.tilemap.heightData;
+        const sW = this.tilemap.sizeX;
+        const sH = this.tilemap.sizeY;
+        const hs = this.tilemap.heightScale;
+
+        const at = (tx: number, ty: number) =>
+            hd[Math.min(Math.max(tx, 0), sW - 1) + Math.min(Math.max(ty, 0), sH - 1) * sW] ?? 0;
+
+        const worldVerts: [number, number, number][] = this.footprint.map((pt) => {
+            const px = this.position[0] + pt[0];
+            const py = this.position[1] + pt[1];
+            const ftx = Math.floor(px);
+            const fty = Math.floor(py);
+            const fx = px - ftx;
+            const fy = py - fty;
+            const hNW = at(ftx, fty);
+            const hNE = at(ftx + 1, fty);
+            const hSW = at(ftx, fty + 1);
+            const hSE = at(ftx + 1, fty + 1);
+            const h = hNW + (hNE - hNW) * fx + (hSW - hNW) * fy + (hNW - hNE - hSW + hSE) * fx * fy;
+
+            const v = vec3.fromValues(px, py, 0);
+            this.tilemap.isoToCartesian(v);
+            vec3.add(v, v, this.tilemap.position);
+            v[1] -= h * hs;
+            return [v[0], v[1], 0] as [number, number, number];
+        });
+
+        this._footprintCollider = this.entity.addComponent(
+            Collider,
+            new Polygon(this.game, [0, 0, 0], [1, 1, 1], 0, worldVerts),
+        ) as ICollider;
+
+        return this._footprintCollider;
     }
 
     dump(): ComponentData {
@@ -736,6 +797,7 @@ export class IsoSprite extends IsometricDrawable {
         minObj.frame = this.frame;
         minObj.tileSetSize = this.tileSetSize;
         minObj.anchor = this.anchor;
+        minObj.footprint = this.footprint;
         return minObj;
     }
 
@@ -814,12 +876,33 @@ export class IsoSprite extends IsometricDrawable {
 
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.useIsoDepth, 1.0);
 
-        const depth =
+        const baseDepth =
             (this.position[0] - this.position[1]) / 400.0 +
             0.5 -
             this.position[2] / 14500.0 -
-            0.001;
-        this.gl.uniform1f(this.game.shaders.imageSheet.unif.isoDepth, depth);
+            0.005;
+        const rawDepths = new Float32Array(4);
+        for (let i = 0; i < 4; i++) {
+            const d =
+                (this.position[0] +
+                    this.footprint[i][0] -
+                    this.position[1] -
+                    this.footprint[i][1]) /
+                    400.0 +
+                0.5 -
+                this.position[2] / 14500.0 -
+                0.005;
+            rawDepths[i] = Math.min(d, baseDepth);
+        }
+        // footprint: [NE, SE, SW, NW]. shader: x=SW(bottom-left), y=SE(bottom-right),
+        // z=NW(top-left), w=NE(top-right)
+        const minFootprintDepth = Math.min(rawDepths[0], rawDepths[1], rawDepths[2], rawDepths[3]);
+        const cornerDepths = new Float32Array(4);
+        cornerDepths[0] = minFootprintDepth;
+        cornerDepths[1] = minFootprintDepth;
+        cornerDepths[2] = rawDepths[3];
+        cornerDepths[3] = rawDepths[0];
+        this.gl.uniform4fv(this.game.shaders.imageSheet.unif.isoDepthCorners, cornerDepths);
 
         this.gl.enable(this.gl.DEPTH_TEST);
 
@@ -832,7 +915,7 @@ export class IsoSprite extends IsometricDrawable {
         // Normal pass: on top of terrain
         this.gl.uniform1f(this.game.shaders.imageSheet.unif.ghostAlpha, 0.0);
         this.gl.depthFunc(this.gl.LEQUAL);
-        this.gl.depthMask(true);
+        this.gl.depthMask(false);
         this.gl.drawElements(this.gl.TRIANGLES, 6, this.gl.UNSIGNED_SHORT, 0);
 
         this.gl.disable(this.gl.DEPTH_TEST);
