@@ -10,10 +10,11 @@ sandbox (fuel + memory), and how the ROM wires it in.
 
 ## 1. Why WASM (not a scripting language)
 
-rhai was tried and retired.  A ROM is meant to be a *full game like a real game
-ROM*: guest code is compiled to `.wasm` (Rust/C/Zig/AssemblyScript), giving
-near-native speed, hardware memory isolation, and one artifact for both native
-and web.  See `plans/opencode/2026-08-14-wasm-guest-system.md`.
+An interpreted scripting layer was tried and retired.  A ROM is meant to be a
+*full game like a real game ROM*: guest code is compiled to `.wasm`
+(Rust/C/Zig/AssemblyScript), giving near-native speed, hardware memory
+isolation, and one artifact for both native and web.  See
+`plans/opencode/2026-08-14-wasm-guest-system.md`.
 
 ## 2. Crate layout
 

@@ -1,9 +1,9 @@
 //! The host-side SDK: bridges guest host-imports to the engine.
 //!
-//! [`GuestHost`] is a thin raw-pointer bridge over [`classic_engine::Engine`]
-//! (the same shape as the retired rhai `GameCtx`).  It also owns the wasmi
-//! [`StoreLimits`] used to cap guest linear memory.  The heavy lifting lives in
-//! safe `Engine` methods; only the pointer deref is `unsafe`.
+//! [`GuestHost`] is a thin raw-pointer bridge over [`classic_engine::Engine`].
+//! It also owns the wasmi [`StoreLimits`] used to cap guest linear memory.  The
+//! heavy lifting lives in safe `Engine` methods; only the pointer deref is
+//! `unsafe`.
 
 use classic_core::instrument::Chan;
 use classic_engine::Engine;
