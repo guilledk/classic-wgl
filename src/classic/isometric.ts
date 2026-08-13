@@ -7,7 +7,7 @@ import { Animator } from '/classic/animator.js';
 import { registerComponent } from '/classic/registry.js';
 import type { IEntity, ITexture, ComponentData, IAnimation } from './types.js';
 
-import { mat4, vec2, vec3 } from 'gl-matrix';
+import { mat4, mat3, vec2, vec3 } from 'gl-matrix';
 
 type Vec3Like = vec3 | [number, number, number] | number[];
 type Vec2Like = vec2 | [number, number] | number[];
@@ -36,6 +36,7 @@ export class Tilemap extends Drawable {
     _meshVertCount: number = 0;
     _meshDirty: boolean = true;
     _needsBufferResize: boolean = true;
+    _normalMatrix = mat3.create();
 
     constructor(
         entity: IEntity,
@@ -197,6 +198,12 @@ export class Tilemap extends Drawable {
 
         this._cartesianToIso = mat4.clone(cartesianToIso4);
         mat4.scale(this._cartesianToIso, this._cartesianToIso, this.invScale);
+
+        const iso3 = mat3.create();
+        mat3.fromMat4(iso3, this._isoToCartesian);
+        const invIso3 = mat3.create();
+        mat3.invert(invIso3, iso3);
+        mat3.transpose(this._normalMatrix, invIso3);
     }
 
     cartesianToIso(v: vec3): void {
@@ -285,7 +292,8 @@ export class Tilemap extends Drawable {
         const sY = this.sizeY;
         const hs = this.heightScale;
 
-        const maxVerts = sX * sY * 180; // worst case: face + 4 walls = 30 vertices = 180 floats
+        const VERT_FLOATS = 9;
+        const maxVerts = sX * sY * 270; // worst case: face + 4 walls = 30 vertices × 9 floats
         const verts = new Float32Array(maxVerts);
         let vi = 0;
 
@@ -293,6 +301,43 @@ export class Tilemap extends Drawable {
         const my = new Float32Array(sY + 1);
         for (let i = 0; i <= sX; i++) mx[i] = i / sX;
         for (let i = 0; i <= sY; i++) my[i] = i / sY;
+
+        function pushVert(
+            x: number,
+            y: number,
+            z: number,
+            mxv: number,
+            myv: number,
+            tid: number,
+            nx: number,
+            ny: number,
+            nz: number,
+        ): void {
+            verts[vi++] = x;
+            verts[vi++] = y;
+            verts[vi++] = z;
+            verts[vi++] = mxv;
+            verts[vi++] = myv;
+            verts[vi++] = tid;
+            verts[vi++] = nx;
+            verts[vi++] = ny;
+            verts[vi++] = nz;
+        }
+
+        function writeTriNormal(
+            dx1: number,
+            dy1: number,
+            dz1: number,
+            dx2: number,
+            dy2: number,
+            dz2: number,
+        ): [number, number, number] {
+            const nx = dy1 * dz2 - dz1 * dy2;
+            const ny = dz1 * dx2 - dx1 * dz2;
+            const nz = dx1 * dy2 - dy1 * dx2;
+            const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+            return [nx / len, ny / len, nz / len];
+        }
 
         for (let ty = 0; ty < sY; ty++) {
             for (let tx = 0; tx < sX; tx++) {
@@ -328,209 +373,64 @@ export class Tilemap extends Drawable {
                 const mxSE = mx[tx + 1];
                 const mySE = my[ty + 1];
 
-                verts[vi++] = tx;
-                verts[vi++] = ty;
-                verts[vi++] = zNW;
-                verts[vi++] = mxNW;
-                verts[vi++] = myNW;
-                verts[vi++] = faceTileId;
-                verts[vi++] = tx + 1;
-                verts[vi++] = ty;
-                verts[vi++] = zNE;
-                verts[vi++] = mxNE;
-                verts[vi++] = myNE;
-                verts[vi++] = faceTileId;
-                verts[vi++] = tx;
-                verts[vi++] = ty + 1;
-                verts[vi++] = zSW;
-                verts[vi++] = mxSW;
-                verts[vi++] = mySW;
-                verts[vi++] = faceTileId;
-                verts[vi++] = tx + 1;
-                verts[vi++] = ty;
-                verts[vi++] = zNE;
-                verts[vi++] = mxNE;
-                verts[vi++] = myNE;
-                verts[vi++] = faceTileId;
-                verts[vi++] = tx + 1;
-                verts[vi++] = ty + 1;
-                verts[vi++] = zSE;
-                verts[vi++] = mxSE;
-                verts[vi++] = mySE;
-                verts[vi++] = faceTileId;
-                verts[vi++] = tx;
-                verts[vi++] = ty + 1;
-                verts[vi++] = zSW;
-                verts[vi++] = mxSW;
-                verts[vi++] = mySW;
-                verts[vi++] = faceTileId;
+                // Top face triangle 1: NW -> NE -> SW
+                let tn = writeTriNormal(1, 0, zNE - zNW, 0, 1, zSW - zNW);
+                pushVert(tx, ty, zNW, mxNW, myNW, faceTileId, tn[0], tn[1], tn[2]);
+                pushVert(tx + 1, ty, zNE, mxNE, myNE, faceTileId, tn[0], tn[1], tn[2]);
+                pushVert(tx, ty + 1, zSW, mxSW, mySW, faceTileId, tn[0], tn[1], tn[2]);
+
+                // Top face triangle 2: NE -> SE -> SW
+                tn = writeTriNormal(0, 1, zSE - zNE, -1, 1, zSW - zNE);
+                pushVert(tx + 1, ty, zNE, mxNE, myNE, faceTileId, tn[0], tn[1], tn[2]);
+                pushVert(tx + 1, ty + 1, zSE, mxSE, mySE, faceTileId, tn[0], tn[1], tn[2]);
+                pushVert(tx, ty + 1, zSW, mxSW, mySW, faceTileId, tn[0], tn[1], tn[2]);
 
                 const wallTileId = tid || 1;
 
                 if (tx + 1 >= sX && hThis > 0) {
                     const zTop = hThis * hs;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxNE;
-                    verts[vi++] = myNE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxNE;
-                    verts[vi++] = myNE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxSE;
-                    verts[vi++] = mySE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxNE;
-                    verts[vi++] = myNE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxSE;
-                    verts[vi++] = mySE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxSE;
-                    verts[vi++] = mySE;
-                    verts[vi++] = wallTileId;
+                    pushVert(tx + 1, ty, 0, mxNE, myNE, wallTileId, -1, 0, 0);
+                    pushVert(tx + 1, ty, zTop, mxNE, myNE, wallTileId, -1, 0, 0);
+                    pushVert(tx + 1, ty + 1, 0, mxSE, mySE, wallTileId, -1, 0, 0);
+                    pushVert(tx + 1, ty, zTop, mxNE, myNE, wallTileId, -1, 0, 0);
+                    pushVert(tx + 1, ty + 1, zTop, mxSE, mySE, wallTileId, -1, 0, 0);
+                    pushVert(tx + 1, ty + 1, 0, mxSE, mySE, wallTileId, -1, 0, 0);
                 }
 
                 if (ty + 1 >= sY && hThis > 0) {
                     const zTop = hThis * hs;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxSW;
-                    verts[vi++] = mySW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxSW;
-                    verts[vi++] = mySW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxSE;
-                    verts[vi++] = mySE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxSW;
-                    verts[vi++] = mySW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxSE;
-                    verts[vi++] = mySE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxSE;
-                    verts[vi++] = mySE;
-                    verts[vi++] = wallTileId;
+                    pushVert(tx, ty + 1, 0, mxSW, mySW, wallTileId, 0, 1, 0);
+                    pushVert(tx, ty + 1, zTop, mxSW, mySW, wallTileId, 0, 1, 0);
+                    pushVert(tx + 1, ty + 1, 0, mxSE, mySE, wallTileId, 0, 1, 0);
+                    pushVert(tx, ty + 1, zTop, mxSW, mySW, wallTileId, 0, 1, 0);
+                    pushVert(tx + 1, ty + 1, zTop, mxSE, mySE, wallTileId, 0, 1, 0);
+                    pushVert(tx + 1, ty + 1, 0, mxSE, mySE, wallTileId, 0, 1, 0);
                 }
 
                 if (tx === 0 && hThis > 0) {
                     const zTop = hThis * hs;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxSW;
-                    verts[vi++] = mySW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxSW;
-                    verts[vi++] = mySW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxNW;
-                    verts[vi++] = myNW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty + 1;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxSW;
-                    verts[vi++] = mySW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxNW;
-                    verts[vi++] = myNW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxNW;
-                    verts[vi++] = myNW;
-                    verts[vi++] = wallTileId;
+                    pushVert(tx, ty + 1, 0, mxSW, mySW, wallTileId, 1, 0, 0);
+                    pushVert(tx, ty + 1, zTop, mxSW, mySW, wallTileId, 1, 0, 0);
+                    pushVert(tx, ty, 0, mxNW, myNW, wallTileId, 1, 0, 0);
+                    pushVert(tx, ty + 1, zTop, mxSW, mySW, wallTileId, 1, 0, 0);
+                    pushVert(tx, ty, zTop, mxNW, myNW, wallTileId, 1, 0, 0);
+                    pushVert(tx, ty, 0, mxNW, myNW, wallTileId, 1, 0, 0);
                 }
 
                 if (ty === 0 && hThis > 0) {
                     const zTop = hThis * hs;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxNE;
-                    verts[vi++] = myNE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxNE;
-                    verts[vi++] = myNE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxNW;
-                    verts[vi++] = myNW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx + 1;
-                    verts[vi++] = ty;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxNE;
-                    verts[vi++] = myNE;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty;
-                    verts[vi++] = zTop;
-                    verts[vi++] = mxNW;
-                    verts[vi++] = myNW;
-                    verts[vi++] = wallTileId;
-                    verts[vi++] = tx;
-                    verts[vi++] = ty;
-                    verts[vi++] = 0;
-                    verts[vi++] = mxNW;
-                    verts[vi++] = myNW;
-                    verts[vi++] = wallTileId;
+                    pushVert(tx + 1, ty, 0, mxNE, myNE, wallTileId, 0, -1, 0);
+                    pushVert(tx + 1, ty, zTop, mxNE, myNE, wallTileId, 0, -1, 0);
+                    pushVert(tx, ty, 0, mxNW, myNW, wallTileId, 0, -1, 0);
+                    pushVert(tx + 1, ty, zTop, mxNE, myNE, wallTileId, 0, -1, 0);
+                    pushVert(tx, ty, zTop, mxNW, myNW, wallTileId, 0, -1, 0);
+                    pushVert(tx, ty, 0, mxNW, myNW, wallTileId, 0, -1, 0);
                 }
             }
         }
 
         const floatCount = vi;
-        this._meshVertCount = floatCount / 6;
+        this._meshVertCount = floatCount / VERT_FLOATS;
 
         if (this._meshVertBuffer == null || this._needsBufferResize) {
             if (this._meshVertBuffer != null) this.gl.deleteBuffer(this._meshVertBuffer);
@@ -555,7 +455,7 @@ export class Tilemap extends Drawable {
         if (this.mapDataTexture == null) return;
 
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this._meshVertBuffer);
-        const stride = 6 * 4;
+        const stride = 9 * 4;
         const shader = this.game.shaders.isoTilemap;
 
         this.gl.vertexAttribPointer(shader.attr.vertexPos, 3, this.gl.FLOAT, false, stride, 0);
@@ -566,6 +466,9 @@ export class Tilemap extends Drawable {
 
         this.gl.vertexAttribPointer(shader.attr.tileId, 1, this.gl.FLOAT, false, stride, 20);
         this.gl.enableVertexAttribArray(shader.attr.tileId);
+
+        this.gl.vertexAttribPointer(shader.attr.normal, 3, this.gl.FLOAT, false, stride, 24);
+        this.gl.enableVertexAttribArray(shader.attr.normal);
 
         shader.bind();
 
@@ -595,7 +498,11 @@ export class Tilemap extends Drawable {
         this.gl.uniform4fv(shader.unif.selectionColor, this.game.selectionColor);
 
         this.gl.uniform4fv(shader.unif.wallColor, [0.3, 0.2, 0.15, 1.0]);
-        this.gl.uniform1f(shader.unif.slopeDarken, 0.4);
+
+        this.gl.uniformMatrix3fv(shader.unif.normalMatrix, false, this._normalMatrix);
+        this.gl.uniform3fv(shader.unif.ambientColor, game.lightAmbient ?? [0.2, 0.2, 0.25]);
+        this.gl.uniform3fv(shader.unif.lightDirection, game.lightDir ?? [0.45, -0.35, 0.82]);
+        this.gl.uniform3fv(shader.unif.lightColor, game.lightColor ?? [0.8, 0.75, 0.65]);
 
         this.gl.enable(this.gl.DEPTH_TEST);
         this.gl.drawArrays(this.gl.TRIANGLES, 0, this._meshVertCount);
@@ -609,6 +516,7 @@ export class IsometricNavMesh extends Tilemap {
     _resolves: Record<number, (value: unknown) => void>;
     _rejects: Record<number, (reason?: unknown) => void>;
     _worker: Worker;
+    _navReady: boolean = false;
 
     constructor(
         entity: IEntity,
@@ -656,6 +564,8 @@ export class IsometricNavMesh extends Tilemap {
                     data: this.data,
                 }).then((ret) => {
                     console.assert(ret === 'ok', 'Isometric Nav Mesh initialization error');
+                    this._navReady = true;
+                    this.syncHeights();
                 });
             });
     }
@@ -705,7 +615,9 @@ export class IsometricNavMesh extends Tilemap {
         }
         if (changed) {
             this.uploadToGPU();
-            this.updateMap([0, 0], [sX, sY], this.data);
+            if (this._navReady) {
+                this.updateMap([0, 0], [sX, sY], this.data);
+            }
         }
     }
 
