@@ -1,7 +1,10 @@
 //! classic-demo: Application-specific prefabs, editor tools and UI bootstrap.
 //!
 //! Provides [`init_engine`] — the single source of truth for the demo's
-//! startup sequence (used by both native and web targets).
+//! startup sequence (used by both native and web targets).  It takes a loaded
+//! [`classic_rom::Rom`]; the engine hydrates shaders/resources/state, and the
+//! scene assemblers (`scenes::demo` / `scenes::lunar`, selected by the ROM's
+//! `entrypoint`) add their terrain/nav/view setup on top.
 //!
 //! The engine (`classic-engine`) is generic: it owns the world, camera, input,
 //! gfx and tilemap/nav plumbing.  Everything here — the editor HUD, tool
@@ -9,13 +12,12 @@
 //! scenes — is demo content, built as free functions over `&mut Engine` +
 //! shared `DemoState` and registered through the engine's hook surface.
 //!
-//! Two scenes are available, selected by name:
+//! Two scenes ship as ROMs:
 //!
-//! - `demo` — the original hand-authored map loaded from `state.json`
-//!   (tile/nav data inlined).
+//! - `demo` — the original hand-authored map (tile/nav data inlined).
 //! - `lunar` — a procedurally generated lunar surface (see
-//!   `classic_core::terrain::lunar`).  Uses `state_lunar.json`, which reuses
-//!   the same entity names so the whole editor toolchain keeps working.
+//!   `classic_core::terrain::lunar`).  Reuses the same entity names so the
+//!   whole editor toolchain keeps working.
 
 pub mod editor;
 pub mod hud;
@@ -32,61 +34,36 @@ use classic_core::cl_info;
 use classic_core::instrument::Chan;
 use classic_core::terrain::lunar::LunarParams;
 use classic_engine::Engine;
-use classic_rom::{AssetLoader, ResourceSet, RomManifest};
+use classic_rom::Rom;
 
 use crate::state::{DemoState, DemoStateRef};
 
-/// Scene selector.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Scene {
-    #[default]
-    Demo,
-    Lunar,
+/// True when the ROM's `entrypoint` names the procedurally generated lunar
+/// scene (anything else — including the default empty entrypoint — is the
+/// hand-authored demo scene).
+fn is_lunar(rom: &Rom) -> bool {
+    matches!(rom.manifest.entrypoint.as_str(), "lunar" | "moon")
 }
 
-impl Scene {
-    /// Parse a scene name from `CLASSIC_SCENE` / the `?scene=` query param.
-    /// Anything unrecognised falls back to [`Scene::Demo`].
-    pub fn parse(name: &str) -> Self {
-        match name.trim().to_ascii_lowercase().as_str() {
-            "lunar" | "moon" => Scene::Lunar,
-            _ => Scene::Demo,
-        }
-    }
-}
-
-/// Full demo engine bootstrap for the named scene.
+/// Full demo engine bootstrap for a loaded ROM.
 ///
-/// Resources are resolved through an [`AssetLoader`] (the apps supply an
-/// embedded map at compile time): the `manifest.json` is parsed, a
-/// [`ResourceSet`] is built from it, and the engine hydrates shaders,
-/// textures, fonts and animations from that set.
-pub fn init_engine(gl: Rc<glow::Context>, loader: &dyn AssetLoader, scene: Scene) -> Engine {
-    let manifest: RomManifest =
-        serde_json::from_str(&loader.load_string("/manifest.json").expect("load manifest.json"))
-            .expect("parse manifest.json");
-    let resources =
-        ResourceSet::from_loader(loader, &manifest).expect("build resource set from manifest");
-
+/// `load_rom` hydrates shaders, resources and the entity graph; the scene
+/// assemblers (`scenes::demo` / `scenes::lunar`) add their terrain/nav/view
+/// setup, and the shared host layer (editor HUD, widgets, lighting, hooks,
+/// test runner) is installed on top.
+pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
     let mut e = Engine::new();
-    e.init_gfx(gl, &manifest, &resources);
+    e.load_rom(gl, rom);
 
     let state: DemoStateRef = Rc::new(RefCell::new(DemoState::default()));
+    let lunar = is_lunar(rom);
 
-    match scene {
-        Scene::Demo => {
-            let state_json = loader.load_string("/state.json").expect("load state.json");
-            e.load_state(&state_json).expect("load state.json");
-            e.init_tilemap("tilemap");
-        }
-        Scene::Lunar => {
-            let state_json =
-                loader.load_string("/state_lunar.json").expect("load state_lunar.json");
-            e.load_state(&state_json).expect("load state_lunar.json");
-            // Generates terrain, nav data and the tileset texture, and
-            // installs all three.  Must precede `init_navigation`.
-            scenes::lunar::init_lunar_terrain(&mut e, &state, LunarParams::default());
-        }
+    if lunar {
+        // Generates terrain, nav data and the tileset texture, and installs
+        // all three.  Must precede `hydrate_nav`.
+        scenes::lunar::init_lunar_terrain(&mut e, &state, LunarParams::default());
+    } else {
+        scenes::demo::hydrate_terrain(&mut e);
     }
 
     prefabs::init_cursor(&mut e);
@@ -95,16 +72,10 @@ pub fn init_engine(gl: Rc<glow::Context>, loader: &dyn AssetLoader, scene: Scene
     prefabs::init_agent_system(&mut e);
     prefabs::init_footprint_colliders(&mut e);
 
-    match scene {
-        Scene::Demo => e.init_navigation(),
-        // The generator already derived walkability from real terrain slope
-        // and guaranteed every spawn is mutually reachable; re-deriving it
-        // from the coarse height rule here would undo that.
-        Scene::Lunar => {
-            let nav =
-                state.borrow().lunar.as_ref().map(|s| s.terrain.nav.clone()).unwrap_or_default();
-            e.init_navigation_data(nav);
-        }
+    if lunar {
+        scenes::lunar::hydrate_nav(&mut e, &state);
+    } else {
+        scenes::demo::hydrate_nav(&mut e);
     }
 
     prefabs::init_debug_toggles(&mut e, &state);
@@ -137,28 +108,12 @@ pub fn init_engine(gl: Rc<glow::Context>, loader: &dyn AssetLoader, scene: Scene
     }
     testing::install(&mut e, &state);
 
-    match scene {
-        Scene::Demo => {
-            let mut iso = classic_core::math::cartesian_to_iso_4().inverse();
-            iso = glam::Mat4::from_scale(glam::Vec3::new(45.0, 45.0, 1.0)) * iso;
-            let origin = iso.transform_point3(glam::Vec3::new(32.0, 13.0, 0.0));
-            e.camera.position.x = origin.x;
-            e.camera.position.y = origin.y;
-            e.show_grid = true;
-        }
-        Scene::Lunar => {
-            // Zoom out: at scale 1.0 a 45px tile fills the view with ~28 tiles,
-            // which shows none of the terrain the generator produces.
-            e.camera.scale = glam::Vec3::new(0.32, 0.32, 1.0);
-            scenes::lunar::focus_camera_on_spawn(&mut e, &state);
-            // Airless lighting: near-zero ambient and a hard low sun, which is
-            // what makes the crater relief legible.
-            lighting::apply_light_preset(&mut e, &state, "lunar");
-            // The editor grid overlay fights the natural surface.
-            e.show_grid = false;
-        }
+    if lunar {
+        scenes::lunar::setup_view(&mut e, &state);
+    } else {
+        scenes::demo::setup_view(&mut e);
     }
 
-    cl_info!(Chan::Frame, "classic-demo initialized ({scene:?} scene)");
+    cl_info!(Chan::Frame, "classic-demo initialized (entrypoint={})", rom.manifest.entrypoint);
     e
 }

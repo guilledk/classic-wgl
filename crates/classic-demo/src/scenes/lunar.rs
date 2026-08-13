@@ -411,3 +411,27 @@ pub fn focus_camera_on_spawn(engine: &mut Engine, state: &DemoStateRef) {
     engine.camera.position.x = origin.x;
     engine.camera.position.y = origin.y;
 }
+
+/// Install the generated navigation grid and wire click-to-move.
+///
+/// The generator already derived walkability from real terrain slope and
+/// guaranteed every spawn is mutually reachable; re-deriving it from the
+/// coarse height rule here would undo that.
+pub fn hydrate_nav(engine: &mut Engine, state: &DemoStateRef) {
+    let nav = state.borrow().lunar.as_ref().map(|s| s.terrain.nav.clone()).unwrap_or_default();
+    engine.init_navigation_data(nav);
+}
+
+/// Zoom out for the generated terrain, centre on the first spawn, and apply
+/// the airless lunar light preset.
+pub fn setup_view(engine: &mut Engine, state: &DemoStateRef) {
+    // Zoom out: at scale 1.0 a 45px tile fills the view with ~28 tiles, which
+    // shows none of the terrain the generator produces.
+    engine.camera.scale = glam::Vec3::new(0.32, 0.32, 1.0);
+    focus_camera_on_spawn(engine, state);
+    // Airless lighting: near-zero ambient and a hard low sun, which is what
+    // makes the crater relief legible.
+    crate::lighting::apply_light_preset(engine, state, "lunar");
+    // The editor grid overlay fights the natural surface.
+    engine.show_grid = false;
+}
