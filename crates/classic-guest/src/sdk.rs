@@ -268,4 +268,57 @@ impl GuestHost {
         );
         1
     }
+
+    /// Spawn a named screen-space solid-color rectangle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_rect(
+        &mut self,
+        name: &str,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> i32 {
+        self.engine_mut().spawn_rect(
+            name,
+            x as f32,
+            y as f32,
+            w as f32,
+            h as f32,
+            [r as f32, g as f32, b as f32, a as f32],
+        ) as i32
+    }
+
+    /// Spawn a named screen-space SDF text label.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_text(
+        &mut self,
+        name: &str,
+        x: f64,
+        y: f64,
+        text: &str,
+        scale: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> i32 {
+        self.engine_mut().spawn_text(
+            name,
+            x as f32,
+            y as f32,
+            text,
+            scale as f32,
+            [r as f32, g as f32, b as f32, a as f32],
+        ) as i32
+    }
+
+    /// Update a named SDF text label's string.
+    pub fn set_text(&mut self, name: &str, text: &str) -> i32 {
+        self.engine_mut().set_text(name, text) as i32
+    }
 }

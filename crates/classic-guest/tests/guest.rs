@@ -231,3 +231,39 @@ fn guest_mouse_down_and_key_up_trigger_action() {
     rt.update(&mut engine, 0.016).unwrap();
     assert!(engine.has_name("marker"));
 }
+
+#[test]
+fn spawn_rect_text_and_set_text() {
+    let mut engine = Engine::new_for_test();
+    assert!(engine.spawn_rect("bar", 10.0, 20.0, 100.0, 50.0, [1.0, 0.0, 0.0, 1.0]));
+    assert!(engine.spawn_text("label", 0.0, 0.0, "hello", 2.0, [1.0, 1.0, 1.0, 1.0]));
+    assert!(engine.set_text("label", "world"));
+
+    let label = *engine.names.get("label").unwrap();
+    let sdf = engine.world.get::<&classic_core::components::SdfTextRender>(label).unwrap();
+    assert_eq!(sdf.text, "world");
+    assert_eq!(engine.get_pos("bar"), Some((10.0, 20.0, 0.0)));
+}
+
+#[test]
+fn guest_spawn_rect_wiring() {
+    let mut engine = Engine::new_for_test();
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "spawn_rect" (func $spawn_rect
+                (param i32 i32 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "bar")
+            (func (export "update") (param f64)
+                (drop (call $spawn_rect (i32.const 0) (i32.const 3)
+                    (f64.const 10.0) (f64.const 20.0) (f64.const 100.0) (f64.const 50.0)
+                    (f64.const 1.0) (f64.const 0.0) (f64.const 0.0) (f64.const 1.0)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+
+    assert!(engine.has_name("bar"));
+    assert_eq!(engine.get_pos("bar"), Some((10.0, 20.0, 0.0)));
+}

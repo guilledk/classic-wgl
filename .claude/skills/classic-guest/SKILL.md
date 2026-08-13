@@ -63,6 +63,9 @@ imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `pick_at` | `(x: f64, y: f64, out_ptr, out_cap) -> i32` | name of the top gameplay entity under a screen point (bytes written, `0` if none) |
 | `get_light` | `(out_ptr) -> i32` | writes 9 f64 (ambient, direction, color) |
 | `set_light` | `(a0..a2, d0..d2, c0..c2: f64) -> i32` | set light uniforms |
+| `spawn_rect` | `(name, x, y, w, h, r, g, b, a) -> i32` | spawn a named screen-space solid-color rectangle |
+| `spawn_text` | `(name, x, y, text, scale, r, g, b, a) -> i32` | spawn a named screen-space SDF text label |
+| `set_text` | `(name, text) -> i32` | update a named SDF text label's string |
 | `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into

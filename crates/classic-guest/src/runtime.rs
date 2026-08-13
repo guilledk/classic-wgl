@@ -439,6 +439,63 @@ impl WasmiRuntime {
              -> i32 { caller.data_mut().set_light(a0, a1, a2, d0, d1, d2, c0, c1, c2) },
         )?;
 
+        linker.func_wrap(
+            m,
+            "spawn_rect",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             x: f64,
+             y: f64,
+             w: f64,
+             h: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().spawn_rect(&name, x, y, w, h, r, g, b, a)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "spawn_text",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             x: f64,
+             y: f64,
+             text_ptr: i32,
+             text_len: i32,
+             scale: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                let text = abi::read_str(&caller, text_ptr, text_len);
+                caller.data_mut().spawn_text(&name, x, y, &text, scale, r, g, b, a)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "set_text",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             text_ptr: i32,
+             text_len: i32|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                let text = abi::read_str(&caller, text_ptr, text_len);
+                caller.data_mut().set_text(&name, &text)
+            },
+        )?;
+
         Ok(())
     }
 }

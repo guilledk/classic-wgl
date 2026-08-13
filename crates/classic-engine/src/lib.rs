@@ -827,6 +827,77 @@ impl Engine {
         self.light_color = color;
     }
 
+    /// Spawn a named screen-space solid-color rectangle (a HUD element).
+    pub fn spawn_rect(
+        &mut self,
+        name: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = self.world.spawn((
+            Transform::new(glam::Vec3::new(x, y, 0.0), glam::Vec3::new(w, h, 1.0)),
+            RectRender { color, ignore_cam: true },
+        ));
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+        true
+    }
+
+    /// Spawn a named screen-space SDF text label.
+    pub fn spawn_text(
+        &mut self,
+        name: &str,
+        x: f32,
+        y: f32,
+        text: &str,
+        scale: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = self.world.spawn((
+            Transform::new(glam::Vec3::new(x, y, 0.0), glam::Vec3::new(scale, scale, 1.0)),
+            SdfTextRender {
+                atlas_name: "dejavusans".into(),
+                color,
+                bgcolor: [0.0, 0.0, 0.0, 0.0],
+                outline_color: [0.0, 0.0, 0.0, 0.0],
+                outline_width: 0.0,
+                shadow_offset: [1.0, 1.0],
+                shadow_color: [0.0, 0.0, 0.0, 0.0],
+                shadow_blur: 0.0,
+                ignore_cam: true,
+                text: text.to_string(),
+                justify: classic_core::components::TextJustify::Left,
+                weight: 0.0,
+                gamma: 1.0,
+            },
+        ));
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+        true
+    }
+
+    /// Update a named SDF text label's string.
+    pub fn set_text(&mut self, name: &str, text: &str) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        if let Ok(mut sdf) = self.world.get::<&mut SdfTextRender>(entity) {
+            sdf.text = text.to_string();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Save a file, handling both native (filesystem) and web (Blob download).
     pub fn save_file(&self, name: &str, data: &str) {
         #[cfg(not(target_arch = "wasm32"))]
