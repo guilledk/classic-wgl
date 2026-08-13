@@ -345,6 +345,24 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "get_camera",
+            |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
+                let (x, y, s) = caller.data_mut().get_camera();
+                abi::write_f64_triple(&mut caller, out_ptr, x, y, s);
+                1
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "set_camera",
+            |mut caller: Caller<'_, GuestHost>, x: f64, y: f64, scale: f64| -> i32 {
+                caller.data_mut().set_camera(x, y, scale)
+            },
+        )?;
+
         Ok(())
     }
 }

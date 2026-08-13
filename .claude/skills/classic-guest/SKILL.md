@@ -54,6 +54,8 @@ imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `key_down` | `(key_ptr, key_len) -> i32` | key held |
 | `was_key_pressed` | `(key_ptr, key_len) -> i32` | key pressed this frame (edge-triggered) |
 | `generate_terrain` | `(kind_ptr, kind_len, seed_ptr, seed_len, height_scale: f64) -> i32` | generate/install a named terrain (generic engine prefab; `kind = "lunar"` today) |
+| `get_camera` | `(out_ptr) -> i32` | writes `[x, y, scale]` (three f64) |
+| `set_camera` | `(x: f64, y: f64, scale: f64) -> i32` | set camera position + uniform scale |
 | `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into

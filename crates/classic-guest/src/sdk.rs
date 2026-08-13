@@ -193,4 +193,16 @@ impl GuestHost {
     pub fn find_path(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) -> Vec<(i32, i32)> {
         self.engine().find_path((sx, sy), (ex, ey)).unwrap_or_default()
     }
+
+    /// Read the camera position (x, y) and uniform scale.
+    pub fn get_camera(&mut self) -> (f64, f64, f64) {
+        let (x, y, s) = self.engine().get_camera();
+        (x as f64, y as f64, s as f64)
+    }
+
+    /// Set the camera position (x, y) and uniform scale.
+    pub fn set_camera(&mut self, x: f64, y: f64, scale: f64) -> i32 {
+        self.engine_mut().set_camera(x as f32, y as f32, scale as f32);
+        1
+    }
 }

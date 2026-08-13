@@ -154,3 +154,20 @@ fn generate_terrain_unknown_kind_returns_false() {
     let mut engine = Engine::new_for_test();
     assert!(!engine.generate_terrain("bogus", "x", 1.0));
 }
+
+#[test]
+fn guest_set_camera_moves_the_view() {
+    let mut engine = Engine::new_for_test();
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "set_camera" (func $set_camera (param f64 f64 f64) (result i32)))
+            (func (export "update") (param f64)
+                (drop (call $set_camera (f64.const 100.0) (f64.const 200.0) (f64.const 2.5)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+
+    assert_eq!(engine.get_camera(), (100.0, 200.0, 2.5));
+}

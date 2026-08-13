@@ -783,6 +783,19 @@ impl Engine {
         pathfinder::find_path(&nav_i32, nav.size_x, nav.size_y, from, to)
     }
 
+    /// Read the camera position (x, y) and uniform scale.
+    pub fn get_camera(&self) -> (f32, f32, f32) {
+        (self.camera.position.x, self.camera.position.y, self.camera.scale.x)
+    }
+
+    /// Set the camera position (x, y) and uniform scale.
+    pub fn set_camera(&mut self, x: f32, y: f32, scale: f32) {
+        self.camera.position.x = x;
+        self.camera.position.y = y;
+        self.camera.scale.x = scale;
+        self.camera.scale.y = scale;
+    }
+
     /// Save a file, handling both native (filesystem) and web (Blob download).
     pub fn save_file(&self, name: &str, data: &str) {
         #[cfg(not(target_arch = "wasm32"))]
