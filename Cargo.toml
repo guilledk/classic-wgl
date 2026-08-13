@@ -6,6 +6,7 @@ members = [
     "crates/classic-platform",
     "crates/classic-engine",
     "crates/classic-rom",
+    "crates/classic-guest",
     "crates/classic-demo",
     "apps/desktop",
     "apps/web",
@@ -55,6 +56,9 @@ ruzstd = "0.9"
 
 # Component registry (distributed slice)
 linkme = "0.3"
+
+# Guest code runtime (WASM interpreter for ROM guest modules)
+wasmi = "0.41"
 
 # Safe GPU data casting
 bytemuck = { version = "1", features = ["derive"] }

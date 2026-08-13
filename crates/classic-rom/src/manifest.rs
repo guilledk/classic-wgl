@@ -29,6 +29,11 @@ pub struct RomManifest {
     /// the editor; the demo/lunar ROMs opt in.
     #[serde(default)]
     pub host_features: bool,
+    /// Whether the ROM's guest code is trusted.  Untrusted guests (default)
+    /// run sandboxed with fuel metering + memory caps; trusted ROMs skip the
+    /// slow path (e.g. browser WebAssembly on web).
+    #[serde(default)]
+    pub trusted: bool,
 }
 
 fn default_format_version() -> u32 {
@@ -69,5 +74,6 @@ mod tests {
         }"#;
         let m: RomManifest = serde_json::from_str(json).unwrap();
         assert!(!m.host_features);
+        assert!(!m.trusted);
     }
 }
