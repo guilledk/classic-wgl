@@ -29,14 +29,14 @@ fn guest_can_spawn_and_move_entities() {
     let mut rt = runtime_from_wat(
         r#"(module
             (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
-            (import "env" "set_pos" (func $set_pos (param i32 i32 f64 f64) (result i32)))
+            (import "env" "set_pos" (func $set_pos (param i32 i32 f64 f64 f64) (result i32)))
             (import "env" "log" (func $log (param i32 i32)))
             (memory (export "memory") 1)
             (data (i32.const 0) "unit")
             (data (i32.const 16) "hello")
             (func (export "update") (param f64)
                 (drop (call $spawn (i32.const 0) (i32.const 4)))
-                (drop (call $set_pos (i32.const 0) (i32.const 4) (f64.const 10.0) (f64.const 20.0)))
+                (drop (call $set_pos (i32.const 0) (i32.const 4) (f64.const 10.0) (f64.const 20.0) (f64.const 3.0)))
                 (call $log (i32.const 16) (i32.const 5))))"#,
         &GuestLimits::default(),
     )
@@ -45,7 +45,7 @@ fn guest_can_spawn_and_move_entities() {
     rt.update(&mut engine, 0.016).unwrap();
 
     assert!(engine.has_name("unit"));
-    assert_eq!(engine.get_pos("unit"), Some((10.0, 20.0)));
+    assert_eq!(engine.get_pos("unit"), Some((10.0, 20.0, 3.0)));
 }
 
 #[test]

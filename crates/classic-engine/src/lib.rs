@@ -22,7 +22,7 @@ use std::rc::Rc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap, UiNode,
+    Animator, DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap, UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -669,26 +669,57 @@ impl Engine {
         Ok(())
     }
 
-    /// Read a named entity's 2D position (from its `Transform`).
-    pub fn get_pos(&self, name: &str) -> Option<(f32, f32)> {
+    /// Read a named entity's position (from its `Transform`).
+    pub fn get_pos(&self, name: &str) -> Option<(f32, f32, f32)> {
         let entity = *self.names.get(name)?;
-        self.world.get::<&Transform>(entity).ok().map(|tf| (tf.position.x, tf.position.y))
+        self.world
+            .get::<&Transform>(entity)
+            .ok()
+            .map(|tf| (tf.position.x, tf.position.y, tf.position.z))
     }
 
-    /// Write a named entity's 2D position (into its `Transform`, creating a
+    /// Write a named entity's position (into its `Transform`, creating a
     /// default one if the entity has none yet).
-    pub fn set_pos(&mut self, name: &str, x: f32, y: f32) -> bool {
+    pub fn set_pos(&mut self, name: &str, x: f32, y: f32, z: f32) -> bool {
         let Some(&entity) = self.names.get(name) else { return false };
         if self.world.get::<&Transform>(entity).is_err() {
             let _ = self.world.insert_one(
                 entity,
-                Transform::new(glam::Vec3::new(x, y, 0.0), glam::Vec3::new(1.0, 1.0, 1.0)),
+                Transform::new(glam::Vec3::new(x, y, z), glam::Vec3::new(1.0, 1.0, 1.0)),
             );
             return true;
         }
         if let Ok(mut tf) = self.world.get::<&mut Transform>(entity) {
             tf.position.x = x;
             tf.position.y = y;
+            tf.position.z = z;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The iso tile coordinates under the mouse cursor (from the tilemap).
+    pub fn mouse_iso(&self) -> Option<(f32, f32)> {
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+        Some((tm.mouse_iso_pos.x, tm.mouse_iso_pos.y))
+    }
+
+    /// Terrain height (in world z units) at the given iso tile coordinate.
+    pub fn height_at(&self, x: f32, y: f32) -> f32 {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
+        let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return 0.0 };
+        bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
+    }
+
+    /// Set a named entity's `Animator` to play a looping animation.
+    pub fn set_anim(&mut self, name: &str, anim: &str) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
+            a.animation = Some(anim.to_string());
+            a.playing = true;
+            a.repeat = true;
             true
         } else {
             false

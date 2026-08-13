@@ -196,9 +196,15 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "set_pos",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32, x: f64, y: f64| -> i32 {
+            |mut caller: Caller<'_, GuestHost>,
+             ptr: i32,
+             len: i32,
+             x: f64,
+             y: f64,
+             z: f64|
+             -> i32 {
                 let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().set_pos(&name, x, y)
+                caller.data_mut().set_pos(&name, x, y, z)
             },
         )?;
 
@@ -207,10 +213,10 @@ impl WasmiRuntime {
             "get_pos",
             |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32, out_ptr: i32| -> i32 {
                 let name = abi::read_str(&caller, ptr, len);
-                let Some((x, y)) = caller.data_mut().get_pos(&name) else {
+                let Some((x, y, z)) = caller.data_mut().get_pos(&name) else {
                     return 0;
                 };
-                abi::write_f64_pair(&mut caller, out_ptr, x, y);
+                abi::write_f64_triple(&mut caller, out_ptr, x, y, z);
                 1
             },
         )?;
@@ -219,6 +225,49 @@ impl WasmiRuntime {
             let (x, y) = caller.data_mut().mouse();
             abi::write_f64_pair(&mut caller, out_ptr, x, y);
             1
+        })?;
+
+        linker.func_wrap(
+            m,
+            "mouse_iso",
+            |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
+                let Some((x, y)) = caller.data_mut().mouse_iso() else {
+                    return 0;
+                };
+                abi::write_f64_pair(&mut caller, out_ptr, x, y);
+                1
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "height_at",
+            |mut caller: Caller<'_, GuestHost>, x: f64, y: f64| -> f64 {
+                caller.data_mut().height_at(x, y)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "set_anim",
+            |mut caller: Caller<'_, GuestHost>,
+             ptr: i32,
+             len: i32,
+             anim_ptr: i32,
+             anim_len: i32|
+             -> i32 {
+                let name = abi::read_str(&caller, ptr, len);
+                let anim = abi::read_str(&caller, anim_ptr, anim_len);
+                caller.data_mut().set_anim(&name, &anim)
+            },
+        )?;
+
+        linker.func_wrap(m, "agent_selected", |mut caller: Caller<'_, GuestHost>| -> i32 {
+            caller.data_mut().agent_selected()
+        })?;
+
+        linker.func_wrap(m, "ui_consumed_click", |mut caller: Caller<'_, GuestHost>| -> i32 {
+            caller.data_mut().ui_consumed_click()
         })?;
 
         linker.func_wrap(m, "delta", |mut caller: Caller<'_, GuestHost>| -> f64 {

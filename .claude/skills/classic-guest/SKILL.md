@@ -41,9 +41,14 @@ imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `names` | `(out_ptr, out_cap) -> i32` | JSON array of names |
 | `get` / `get_comp` | `(name, [comp], out_ptr, out_cap) -> i32` | dump JSON |
 | `set` / `set_comp` | `(name, [comp], json_ptr, json_len) -> i32` | set from JSON |
-| `set_pos` | `(name_ptr, name_len, x: f64, y: f64) -> i32` | write 2D position |
-| `get_pos` | `(name_ptr, name_len, out_ptr) -> i32` | writes `[x, y]` as two f64 |
-| `mouse` | `(out_ptr) -> i32` | writes `[x, y]` as two f64 |
+| `set_pos` | `(name_ptr, name_len, x: f64, y: f64, z: f64) -> i32` | write 3D position |
+| `get_pos` | `(name_ptr, name_len, out_ptr) -> i32` | writes `[x, y, z]` as three f64 |
+| `mouse` | `(out_ptr) -> i32` | screen mouse pos `[x, y]` |
+| `mouse_iso` | `(out_ptr) -> i32` | iso tile coords under cursor `[x, y]` |
+| `height_at` | `(x: f64, y: f64) -> f64` | terrain height (world z) at an iso tile |
+| `set_anim` | `(name_ptr, name_len, anim_ptr, anim_len) -> i32` | set the entity's `Animator` to play a looping animation |
+| `agent_selected` | `() -> i32` | editor agent-tool flag |
+| `ui_consumed_click` | `() -> i32` | whether a UI element consumed this frame's click |
 | `delta` / `elapsed` | `() -> f64` | frame time |
 | `was_pressed` | `(btn: i32) -> i32` | mouse press (0=left…) |
 | `key_down` | `(key_ptr, key_len) -> i32` | key held |
@@ -52,7 +57,8 @@ imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into
 guest linear memory.  Functions returning bytes write into a caller-provided
 `out_ptr`/`out_cap` buffer and return bytes written (`-1` if too small).
-Position/mouse pairs are written as two little-endian `f64`s (16 bytes).
+Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
+`[x, y, z]`; `mouse`/`mouse_iso` are 2-f64 `[x, y]`).
 
 ## 4. Sandbox (untrusted guests)
 

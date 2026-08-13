@@ -120,17 +120,42 @@ impl GuestHost {
         }
     }
 
-    pub fn set_pos(&mut self, name: &str, x: f64, y: f64) -> i32 {
-        self.engine_mut().set_pos(name, x as f32, y as f32) as i32
+    pub fn set_pos(&mut self, name: &str, x: f64, y: f64, z: f64) -> i32 {
+        self.engine_mut().set_pos(name, x as f32, y as f32, z as f32) as i32
     }
 
-    pub fn get_pos(&mut self, name: &str) -> Option<(f64, f64)> {
-        self.engine().get_pos(name).map(|(x, y)| (x as f64, y as f64))
+    pub fn get_pos(&mut self, name: &str) -> Option<(f64, f64, f64)> {
+        self.engine().get_pos(name).map(|(x, y, z)| (x as f64, y as f64, z as f64))
     }
 
     pub fn mouse(&mut self) -> (f64, f64) {
         let p = self.engine().input.mouse_pos;
         (p.x as f64, p.y as f64)
+    }
+
+    /// The iso tile coordinates under the mouse cursor.
+    pub fn mouse_iso(&mut self) -> Option<(f64, f64)> {
+        self.engine().mouse_iso().map(|(x, y)| (x as f64, y as f64))
+    }
+
+    /// Terrain height (world z) at an iso tile coordinate.
+    pub fn height_at(&mut self, x: f64, y: f64) -> f64 {
+        self.engine().height_at(x as f32, y as f32) as f64
+    }
+
+    /// Set a named entity's animator to play a looping animation.
+    pub fn set_anim(&mut self, name: &str, anim: &str) -> i32 {
+        self.engine_mut().set_anim(name, anim) as i32
+    }
+
+    /// Whether the editor's agent tool is active.
+    pub fn agent_selected(&mut self) -> i32 {
+        self.engine().agent_selected as i32
+    }
+
+    /// Whether a UI element consumed this frame's click.
+    pub fn ui_consumed_click(&mut self) -> i32 {
+        self.engine().ui_consumed_click as i32
     }
 
     pub fn delta(&mut self) -> f64 {

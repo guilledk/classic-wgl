@@ -62,3 +62,18 @@ pub fn write_f64_pair(caller: &mut Caller<'_, GuestHost>, ptr: i32, a: f64, b: f
     buf[8..16].copy_from_slice(&b.to_le_bytes());
     write_bytes(caller, ptr, &buf)
 }
+
+/// Write three `f64`s (24 bytes) into guest memory.
+pub fn write_f64_triple(
+    caller: &mut Caller<'_, GuestHost>,
+    ptr: i32,
+    a: f64,
+    b: f64,
+    c: f64,
+) -> i32 {
+    let mut buf = [0u8; 24];
+    buf[0..8].copy_from_slice(&a.to_le_bytes());
+    buf[8..16].copy_from_slice(&b.to_le_bytes());
+    buf[16..24].copy_from_slice(&c.to_le_bytes());
+    write_bytes(caller, ptr, &buf)
+}
