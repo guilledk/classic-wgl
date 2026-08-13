@@ -75,6 +75,8 @@ export default defineConfig({
                 'src/classic/collision.ts',
                 'src/classic/utils.ts',
                 'src/classic/registry.ts',
+                'src/classic/loader.ts',
+                'src/classic/consoleLog.ts',
             ],
         },
     },

@@ -9,6 +9,8 @@ import type {
     IBuffer,
     IAnimation,
     GameBuffers,
+    Manifest,
+    ProgressCallback,
 } from './types.js';
 
 // ============================================================================
@@ -91,16 +93,94 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
 
 const loadingLabel = document.getElementById('loader');
 
+/**
+ * Optional sink for the loading screen. When a loader registers one (see
+ * src/classic/loader.ts), loader messages are routed through it instead of the
+ * bare #loader element, keeping the engine decoupled from the overlay.
+ */
+export interface LoaderSink {
+    error(message: string): void;
+    finish(): void;
+}
+
+let loaderSink: LoaderSink | null = null;
+
+export function setLoaderSink(sink: LoaderSink | null): void {
+    loaderSink = sink;
+}
+
 export function setLoaderLabel(msg: string): void {
+    if (loaderSink) {
+        loaderSink.error(msg);
+        return;
+    }
     if (loadingLabel) {
         loadingLabel.innerHTML = msg;
     }
 }
 
 export function deleteLoaderLabel(): void {
+    if (loaderSink) {
+        loaderSink.finish();
+        return;
+    }
     if (loadingLabel) {
         loadingLabel.remove();
     }
+}
+
+// ============================================================================
+// Slow-load test helper
+// ============================================================================
+
+/**
+ * Optional per-step delay applied during resource loading. Disabled by default;
+ * the demo's `?slow` load test (src/demo/loadTest.ts) switches it on so the
+ * loading bar crawl is easy to watch.
+ */
+let loadSleepMs = 0;
+
+export function setLoadSleepMs(ms: number): void {
+    loadSleepMs = Math.max(0, Math.floor(ms));
+}
+
+export function getLoadSleepMs(): number {
+    return loadSleepMs;
+}
+
+export function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Delays the configured amount when the `?slow` load test is active. */
+export function slowSleep(): Promise<void> {
+    return loadSleepMs > 0 ? sleep(loadSleepMs) : Promise.resolve();
+}
+
+// ============================================================================
+// Load progress weighting
+// ============================================================================
+
+// Estimated effort of each load phase, in arbitrary weight units. These are
+// derived from the number of real operations (network fetches, GPU compiles)
+// each phase performs, and are combined with the manifest structure in
+// estimateManifestWeight to compute the total cost of loadResources().
+
+export const MANIFEST_WEIGHT = 2; // fetching manifest.json
+export const SHADER_FETCH_WEIGHT = 2; // vertex + fragment source fetches
+export const SHADER_COMPILE_WEIGHT = 1; // compile + link
+export const BUFFERS_WEIGHT = 1;
+export const TEXTURE_WEIGHT = 1; // image download + upload
+export const ANIMATIONS_WEIGHT = 1;
+
+export function estimateManifestWeight(manifest: Manifest): number {
+    return (
+        MANIFEST_WEIGHT +
+        manifest.shaders.length * (SHADER_FETCH_WEIGHT + SHADER_COMPILE_WEIGHT) +
+        BUFFERS_WEIGHT +
+        manifest.textures.length * TEXTURE_WEIGHT +
+        ANIMATIONS_WEIGHT
+    );
 }
 
 // ============================================================================
@@ -229,8 +309,17 @@ export class Shader implements IShader {
 export async function initShaders(
     gl: WebGLRenderingContext,
     shaderManifest: ShaderInfo[],
+    onProgress?: ProgressCallback,
 ): Promise<Record<string, Shader>> {
     const shaders: Record<string, Shader> = {};
+
+    const stepTotal = shaderManifest.length * (SHADER_FETCH_WEIGHT + SHADER_COMPILE_WEIGHT);
+    let stepDone = 0;
+    const report = (label: string) => {
+        if (onProgress) {
+            onProgress(label, stepDone / stepTotal);
+        }
+    };
 
     for (const shaderInfo of shaderManifest) {
         const name = shaderInfo.name;
@@ -244,8 +333,15 @@ export async function initShaders(
             shaderInfo.unif,
         );
 
+        report(`Fetching shader: ${name}`);
+        await slowSleep();
         await shaders[name].fetchCode();
+        stepDone += SHADER_FETCH_WEIGHT;
+
+        report(`Compiling shader: ${name}`);
+        await slowSleep();
         shaders[name].compile();
+        stepDone += SHADER_COMPILE_WEIGHT;
     }
 
     return shaders;
@@ -346,7 +442,10 @@ export async function loadTexture(
     const texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, texture);
 
-    const image = await loadImage(url);
+    const image = await loadImage(url).catch((err) => {
+        console.error('Failed to load texture:', url, err);
+        throw err;
+    });
 
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
 
@@ -386,12 +485,23 @@ export class Texture implements ITexture {
 export async function initTextures(
     gl: WebGLRenderingContext,
     textureManifest: TextureManifestEntry[],
+    onProgress?: ProgressCallback,
 ): Promise<Record<string, Texture>> {
     const textures: Record<string, Texture> = {};
 
+    let stepDone = 0;
+    const report = (label: string) => {
+        if (onProgress) {
+            onProgress(label, stepDone / textureManifest.length);
+        }
+    };
+
     for (const tex of textureManifest) {
         textures[tex.name] = new Texture(gl, tex.name, tex.src);
+        report(`Loading texture: ${tex.name}`);
+        await slowSleep();
         await textures[tex.name].load();
+        stepDone += 1;
     }
 
     return textures;
