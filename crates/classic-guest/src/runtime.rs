@@ -297,6 +297,31 @@ impl WasmiRuntime {
 
         linker.func_wrap(
             m,
+            "was_key_pressed",
+            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
+                let key = abi::read_str(&caller, ptr, len);
+                caller.data_mut().was_key_pressed(&key)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "generate_terrain",
+            |mut caller: Caller<'_, GuestHost>,
+             kind_ptr: i32,
+             kind_len: i32,
+             seed_ptr: i32,
+             seed_len: i32,
+             height_scale: f64|
+             -> i32 {
+                let kind = abi::read_str(&caller, kind_ptr, kind_len);
+                let seed = abi::read_str(&caller, seed_ptr, seed_len);
+                caller.data_mut().generate_terrain(&kind, &seed, height_scale)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
             "find_path",
             |mut caller: Caller<'_, GuestHost>,
              sx: i32,

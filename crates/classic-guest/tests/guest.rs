@@ -125,3 +125,32 @@ fn guest_find_path_import_is_wired() {
 
     rt.update(&mut engine, 0.016).unwrap();
 }
+
+#[test]
+fn guest_was_key_pressed_triggers_action() {
+    let mut engine = Engine::new_for_test();
+    engine.input.keys_pressed.insert("KeyR".to_string(), true);
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "was_key_pressed" (func $wp (param i32 i32) (result i32)))
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "KeyR")
+            (data (i32.const 16) "marker")
+            (func (export "update") (param f64)
+                (if (call $wp (i32.const 0) (i32.const 4))
+                    (then (drop (call $spawn (i32.const 16) (i32.const 6)))))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+    assert!(engine.has_name("marker"));
+}
+
+#[test]
+fn generate_terrain_unknown_kind_returns_false() {
+    let mut engine = Engine::new_for_test();
+    assert!(!engine.generate_terrain("bogus", "x", 1.0));
+}

@@ -103,7 +103,6 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
         editor::init_tool_buttons(&mut e, &state);
         editor::init_height_widget(&mut e, &state);
         lighting::init_light_widget(&mut e, &state);
-        scenes::lunar::init_lunar_widget(&mut e, &state);
         editor::init_tile_palette(&mut e, &state);
         editor::init_nav_palette(&mut e, &state);
         e.init_nav_mesh_render();

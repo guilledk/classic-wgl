@@ -177,6 +177,17 @@ impl GuestHost {
         self.engine().input.is_key_down(key) as i32
     }
 
+    /// Whether a key was pressed this frame (edge-triggered).
+    pub fn was_key_pressed(&mut self, key: &str) -> i32 {
+        self.engine().input.was_key_pressed(key) as i32
+    }
+
+    /// Generate a named terrain (see `classic_core::terrain::generate`) and
+    /// install or regenerate it — the generic terrain prefab.
+    pub fn generate_terrain(&mut self, kind: &str, seed: &str, height_scale: f64) -> i32 {
+        self.engine_mut().generate_terrain(kind, seed, height_scale as f32) as i32
+    }
+
     /// A* path over the nav mesh from `(sx, sy)` to `(ex, ey)` as integer tile
     /// coordinates (empty if no path exists).
     pub fn find_path(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) -> Vec<(i32, i32)> {
