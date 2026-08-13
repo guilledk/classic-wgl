@@ -345,23 +345,10 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
                 engine.show_grid = s.editor.debug_footprints;
             }
         }
-        // F9: dump state.json
+        // F9: dump state.json (tile/nav/height data is inlined).
         if engine.input.was_key_pressed("F9") {
             let state_json = engine.dump_state();
             engine.save_file("state.json", &state_json);
-            let shift =
-                engine.input.is_key_down("ShiftLeft") || engine.input.is_key_down("ShiftRight");
-            if shift {
-                if let Some(map_data) = engine.dump_map_data() {
-                    engine.save_file("map001.txt", &map_data);
-                }
-                if let Some(nav_data) = engine.dump_nav_data() {
-                    engine.save_file("map001.nav.txt", &nav_data);
-                }
-                if let Some(h_data) = engine.dump_height_data() {
-                    engine.save_file("map001.height.txt", &h_data);
-                }
-            }
         }
     });
 }

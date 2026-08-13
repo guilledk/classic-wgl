@@ -417,9 +417,6 @@ fn run_frame(
 
             if EnvConfig::get().dump_on_exit {
                 let _ = engine.dump_state();
-                let _ = engine.dump_map_data();
-                let _ = engine.dump_nav_data();
-                let _ = engine.dump_height_data();
             }
         }
         engine.test_should_close = true;

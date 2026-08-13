@@ -20,7 +20,6 @@ pub mod ui;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use base64::Engine as _;
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
     AgentState, DebugName, IsoAgent, IsoSprite, NavMesh, RectRender, SdfTextRender, Tilemap, UiNode,
@@ -232,32 +231,21 @@ impl Engine {
     }
 
     /// Decode base64-encoded JSON array into tile data.
-    pub fn decode_map_data(base64_str: &str) -> Vec<u32> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(base64_str.trim().as_bytes())
-            .expect("base64 decode map data");
-        let json: Vec<u32> = serde_json::from_slice(&bytes).expect("parse map data JSON");
-        json
-    }
-
     /// Build and upload the tilemap mesh + tile data texture for a named entity.
-    /// Build and upload the tilemap mesh + tile data texture for a named
-    /// entity, from a PNG tileset and base64-encoded map data.
-    ///
-    /// Terrain is flat (height 1.0 everywhere), matching the TS
-    /// `heightData.fill(1)`.  For procedurally generated terrain see
+    /// The tile data comes from the entity's `Tilemap.data` (loaded inline from
+    /// `state.json`), and terrain is flat (height 1.0 everywhere), matching the
+    /// TS `heightData.fill(1)`.  For procedurally generated terrain see
     /// [`Engine::init_tilemap_generated`].
-    pub fn init_tilemap(&mut self, entity_name: &str, tileset_png: &[u8], map_data_b64: &str) {
+    pub fn init_tilemap(&mut self, entity_name: &str, tileset_png: &[u8]) {
         let entity = *self.names.get(entity_name).expect("tilemap entity");
 
-        let (tile_set_name, size_x, size_y) = {
+        let (tile_set_name, size_x, size_y, tiles) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.tile_set.clone(), tm.size_x, tm.size_y)
+            (tm.tile_set.clone(), tm.size_x, tm.size_y, tm.data.clone())
         };
 
         self.load_texture_png(&tile_set_name, tileset_png);
 
-        let tiles = Self::decode_map_data(map_data_b64);
         // height_data stride is (size_x + 1) — vertex grid, not tile grid.
         // The TS used sizeX * sizeY (tile-based). Rust uses (sizeX+1)*(sizeY+1)
         // to avoid off-by-one edge cases. See docs/TS-PARITY.md.
@@ -534,36 +522,6 @@ impl Engine {
         }
 
         serde_json::Value::Object(entities)
-    }
-
-    /// Dump tile data as base64-encoded JSON array (for `map001.txt`-style sidecar).
-    pub fn dump_map_data(&self) -> Option<String> {
-        let &e = self.names.get("tilemap")?;
-        let Ok(tm) = self.world.get::<&Tilemap>(e) else { return None };
-        let json = serde_json::to_string(&tm.data).ok()?;
-        let b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json.as_bytes());
-        Some(b64)
-    }
-
-    /// Dump nav mesh data as base64-encoded JSON array (for `map001.nav.txt`-style sidecar).
-    pub fn dump_nav_data(&self) -> Option<String> {
-        let &e = self.names.get("tilemapNavigation")?;
-        let Ok(nm) = self.world.get::<&NavMesh>(e) else { return None };
-        let json = serde_json::to_string(&nm.data).ok()?;
-        let b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json.as_bytes());
-        Some(b64)
-    }
-
-    /// Dump height data as base64-encoded JSON array.
-    pub fn dump_height_data(&self) -> Option<String> {
-        let &e = self.names.get("tilemap")?;
-        let Ok(tm) = self.world.get::<&Tilemap>(e) else { return None };
-        let json = serde_json::to_string(&tm.height_data).ok()?;
-        let b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json.as_bytes());
-        Some(b64)
     }
 
     /// Save a file, handling both native (filesystem) and web (Blob download).
@@ -1836,13 +1794,16 @@ impl Engine {
         false
     }
 
-    /// Initialize navigation: load nav mesh data from `map001.nav.txt`,
-    /// sync walkable flags from the parent tilemap heights, and wire the
-    /// click-to-move handler that computes A* paths for the nav agent.
-    /// Load navigation data from a base64-encoded map file and wire
-    /// click-to-move.
-    pub fn init_navigation(&mut self, nav_data_b64: &str) {
-        self.init_navigation_data(Engine::decode_map_data(nav_data_b64));
+    /// Initialize navigation from the nav mesh entity's inline `NavMesh.data`
+    /// (loaded from `state.json`) and wire click-to-move.
+    pub fn init_navigation(&mut self) {
+        let nav_entity = self.names.get("tilemapNavigation").copied();
+        let Some(nav_entity) = nav_entity else { return };
+        let nav_data = {
+            let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) else { return };
+            nav.data.clone()
+        };
+        self.init_navigation_data(nav_data);
     }
 
     /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked) and

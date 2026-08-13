@@ -11,8 +11,8 @@
 //!
 //! Two scenes are available, selected by name:
 //!
-//! - `demo` — the original hand-authored map loaded from `state.json` +
-//!   `map001.txt`.
+//! - `demo` — the original hand-authored map loaded from `state.json`
+//!   (tile/nav data inlined).
 //! - `lunar` — a procedurally generated lunar surface (see
 //!   `classic_core::terrain::lunar`).  Uses `state_lunar.json`, which reuses
 //!   the same entity names so the whole editor toolchain keeps working.
@@ -49,8 +49,6 @@ pub struct DemoAssets<'a> {
     /// Scene description for the procedural `lunar` scene.
     pub state_lunar_json: &'a str,
     pub tileset_png: &'a [u8],
-    pub map_data: &'a str,
-    pub nav_data: &'a str,
     pub sdf_atlas_png: &'a [u8],
     pub sdf_metrics_json: &'a str,
     pub semaphore01_png: &'a [u8],
@@ -93,7 +91,7 @@ pub fn init_engine(gl: Rc<glow::Context>, assets: &DemoAssets, scene: Scene) -> 
     match scene {
         Scene::Demo => {
             e.load_state(assets.state_json).expect("load state.json");
-            e.init_tilemap("tilemap", assets.tileset_png, assets.map_data);
+            e.init_tilemap("tilemap", assets.tileset_png);
         }
         Scene::Lunar => {
             e.load_state(assets.state_lunar_json).expect("load state_lunar.json");
@@ -112,7 +110,7 @@ pub fn init_engine(gl: Rc<glow::Context>, assets: &DemoAssets, scene: Scene) -> 
     prefabs::init_footprint_colliders(&mut e);
 
     match scene {
-        Scene::Demo => e.init_navigation(assets.nav_data),
+        Scene::Demo => e.init_navigation(),
         // The generator already derived walkability from real terrain slope
         // and guaranteed every spawn is mutually reachable; re-deriving it
         // from the coarse height rule here would undo that.

@@ -6,6 +6,7 @@ pub mod math;
 pub mod pathfinder;
 pub mod registry;
 pub mod sdf_builder;
+pub mod serde_base64;
 pub mod terrain;
 pub mod tilemap;
 pub mod types;
@@ -149,7 +150,8 @@ fn dumper_tilemap(world: &hecs::World, entity: hecs::Entity) -> Option<serde_jso
         serde_json::json!([tm.tile_pixel_size[0], tm.tile_pixel_size[1]]),
     );
     m.insert("maxTile".into(), tm.max_tile.into());
-    m.insert("data".into(), tm.data_url.as_deref().unwrap_or("").into());
+    m.insert("data".into(), serde_base64::encode_u32(&tm.data).into());
+    m.insert("heightData".into(), serde_base64::encode_f32(&tm.height_data).into());
     // heightScale is only emitted if non-zero (TS parity: it's optional)
     if tm.height_scale != 0.0 {
         m.insert("heightScale".into(), tm.height_scale.into());
@@ -211,6 +213,6 @@ fn dumper_navmesh(world: &hecs::World, entity: hecs::Entity) -> Option<serde_jso
     m.insert("map".into(), n.map_entity.as_str().into());
     m.insert("sizeX".into(), n.size_x.into());
     m.insert("sizeY".into(), n.size_y.into());
-    m.insert("data".into(), n.data_url.as_deref().unwrap_or("").into());
+    m.insert("data".into(), serde_base64::encode_u32(&n.data).into());
     Some(serde_json::Value::Object(m))
 }

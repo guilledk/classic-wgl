@@ -42,7 +42,6 @@ fn tilemap_dumper_round_trip_keys() {
         tile_set: "tileSet".into(),
         tile_pixel_size: [32, 32],
         max_tile: 32,
-        data_url: Some("map001.txt".into()),
         data: vec![1, 2, 3],
         height_data: vec![1.0; 9],
         height_scale: 32.0,
@@ -69,11 +68,11 @@ fn tilemap_dumper_round_trip_keys() {
     assert_eq!(val["tileSet"], "tileSet");
     assert_eq!(val["tilePixelSize"], serde_json::json!([32, 32]));
     assert_eq!(val["maxTile"], 32);
-    assert_eq!(val["data"], "map001.txt");
+    assert_eq!(val["data"], classic_core::serde_base64::encode_u32(&[1, 2, 3]));
     assert_eq!(val["heightScale"], 32.0);
 
-    // height_data should NOT be in the dump (it's a sidecar)
-    assert!(val.get("heightData").is_none());
+    // height_data is inlined (base64), no longer a sidecar.
+    assert_eq!(val["heightData"], classic_core::serde_base64::encode_f32(&[1.0; 9]));
 }
 
 #[test]
@@ -171,7 +170,6 @@ fn navmesh_dumper_uses_map_key() {
         map_entity: "tilemap".into(),
         tile_set: "".into(),
         data: vec![0, 1, 1, 0],
-        data_url: Some("map001.nav.txt".into()),
         size_x: 200,
         size_y: 200,
     };
@@ -185,7 +183,7 @@ fn navmesh_dumper_uses_map_key() {
 
     assert_eq!(val["type"], "IsometricNavMesh");
     assert_eq!(val["map"], "tilemap");
-    assert_eq!(val["data"], "map001.nav.txt");
+    assert_eq!(val["data"], classic_core::serde_base64::encode_u32(&[0, 1, 1, 0]));
     // NavMesh dumper should NOT emit position/scale (matches TS)
     assert!(val.get("position").is_none());
     assert!(val.get("scale").is_none());

@@ -54,8 +54,6 @@ pub fn main() {
             state_json: include_str!("../../../public/state.json"),
             state_lunar_json: include_str!("../../../public/state_lunar.json"),
             tileset_png: include_bytes!("../../../public/res/road_tileset.png"),
-            map_data: include_str!("../../../public/map001.txt"),
-            nav_data: include_str!("../../../public/map001.nav.txt"),
             sdf_atlas_png: include_bytes!("../../../public/res/dejavusans-sdf.png"),
             sdf_metrics_json: include_str!("../../../public/res/dejavusans-sdf.json"),
             semaphore01_png: include_bytes!("../../../public/res/semaphore01.png"),
