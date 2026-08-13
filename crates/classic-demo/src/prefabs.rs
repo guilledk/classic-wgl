@@ -160,39 +160,44 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
             (s.position, s.footprint.clone())
         };
 
-        // Per-vertex bilinear height lookup.
-        let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-        let hd = &tm.height_data;
-        let sx = tm.size_x;
-        let sy = tm.size_y;
-        let hs = tm.height_scale;
+        // Per-vertex bilinear height lookup, shape build, and z-offset — all
+        // done under a single immutable world borrow, released before the
+        // collider registration below (which needs `&mut self`).
+        let result = {
+            let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
+            let hd = &tm.height_data;
+            let sx = tm.size_x;
+            let sy = tm.size_y;
+            let hs = tm.height_scale;
 
-        let mut world_verts: Vec<glam::Vec3> = Vec::with_capacity(footprint.len());
-        for pt in &footprint {
-            let px = sprite_iso_pos.x + pt.x;
-            let py = sprite_iso_pos.y + pt.y;
+            let mut world_verts: Vec<glam::Vec3> = Vec::with_capacity(footprint.len());
+            for pt in &footprint {
+                let px = sprite_iso_pos.x + pt.x;
+                let py = sprite_iso_pos.y + pt.y;
 
-            let h = bilinear_height(hd, sx, sy, px, py);
+                let h = bilinear_height(hd, sx, sy, px, py);
 
-            let mut v = glam::Vec3::new(px, py, 0.0);
-            v = iso_to_cart_world.transform_point3(v);
-            v += tilemap_pos;
-            v.y -= h * hs;
-            world_verts.push(v);
-        }
+                let mut v = glam::Vec3::new(px, py, 0.0);
+                v = iso_to_cart_world.transform_point3(v);
+                v += tilemap_pos;
+                v.y -= h * hs;
+                world_verts.push(v);
+            }
 
-        if world_verts.is_empty() {
-            continue;
-        }
+            if world_verts.is_empty() {
+                None
+            } else {
+                let shape = polygon_from_verts(world_verts);
+                // Set sprite z-offset from terrain height (matches TS prefabs.ts:367).
+                let terrain_z =
+                    bilinear_height(hd, sx, sy, sprite_iso_pos.x, sprite_iso_pos.y) * hs;
+                Some((engine.debug_name(entity), shape, terrain_z))
+            }
+        };
 
-        let shape = polygon_from_verts(world_verts);
-        let pid = engine.physics.register_collider(ColliderData::new(shape));
-        log::debug!("registered footprint collider pid={pid} for sprite");
-
-        // Set sprite z-offset from terrain height (matches TS prefabs.ts:367).
-        let px = sprite_iso_pos.x;
-        let py = sprite_iso_pos.y;
-        let terrain_z = bilinear_height(hd, sx, sy, px, py) * hs;
+        let Some((name, shape, terrain_z)) = result else { continue };
+        engine.register_named_collider(&name, ColliderData::new(shape));
+        log::debug!("registered footprint collider for sprite '{name}'");
 
         if let Ok(mut tf) = engine.world.get::<&mut Transform>(entity) {
             tf.position.z = terrain_z;

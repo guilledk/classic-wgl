@@ -363,6 +363,23 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "pick_at",
+            |mut caller: Caller<'_, GuestHost>,
+             x: f64,
+             y: f64,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let name = caller.data_mut().pick_at(x, y);
+                if out_cap < name.len() as i32 {
+                    return -1;
+                }
+                abi::write_str(&mut caller, out_ptr, &name)
+            },
+        )?;
+
         Ok(())
     }
 }

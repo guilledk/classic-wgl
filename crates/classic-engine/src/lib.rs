@@ -22,7 +22,8 @@ use std::rc::Rc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    Animator, DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap, UiNode,
+    Animator, ColliderData, DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender,
+    Tilemap, UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -63,6 +64,9 @@ pub struct Engine {
     pub names: HashMap<String, hecs::Entity>,
     pub name_order: Vec<String>,
     pub physics: PhysicsProvider,
+    /// Collider pid → entity name, populated by `register_named_collider` so the
+    /// guest `pick_at` can resolve a screen point to a gameplay entity.
+    collider_names: HashMap<u32, String>,
     pub ui_consumed_click: bool,
     pub scroll_speed: f32,
     pub input: InputState,
@@ -160,6 +164,7 @@ impl Engine {
             names: HashMap::new(),
             name_order: Vec::new(),
             physics: PhysicsProvider::new(),
+            collider_names: HashMap::new(),
             ui_consumed_click: false,
             scroll_speed: 600.0,
             input: InputState::new(),
@@ -794,6 +799,20 @@ impl Engine {
         self.camera.position.y = y;
         self.camera.scale.x = scale;
         self.camera.scale.y = scale;
+    }
+
+    /// Register a collider and remember its owning entity's name, so
+    /// [`Engine::pick_at`] can resolve it.
+    pub fn register_named_collider(&mut self, name: &str, collider: ColliderData) -> u32 {
+        let pid = self.physics.register_collider(collider);
+        self.collider_names.insert(pid, name.to_string());
+        pid
+    }
+
+    /// The name of the top gameplay entity under a screen point, if any.
+    pub fn pick_at(&self, x: f32, y: f32) -> Option<String> {
+        let pid = self.physics.point_query(x, y).into_iter().next()?;
+        self.collider_names.get(&pid).cloned()
     }
 
     /// Save a file, handling both native (filesystem) and web (Blob download).

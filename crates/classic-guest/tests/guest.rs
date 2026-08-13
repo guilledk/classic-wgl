@@ -1,7 +1,7 @@
 //! Integration tests for the WASM guest runtime, driving wasmi with small
 //! hand-written WAT guest modules.
 
-use classic_core::components::{NavMesh, Role};
+use classic_core::components::{ColliderData, NavMesh, Role, Shape};
 use classic_core::RoleKind;
 use classic_engine::Engine;
 use classic_guest::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
@@ -170,4 +170,16 @@ fn guest_set_camera_moves_the_view() {
     rt.update(&mut engine, 0.016).unwrap();
 
     assert_eq!(engine.get_camera(), (100.0, 200.0, 2.5));
+}
+
+#[test]
+fn pick_at_returns_entity_under_point() {
+    let mut engine = Engine::new_for_test();
+    let mut collider = ColliderData::new(Shape::Circle { diameter: 10.0 });
+    collider.position = Vec3::new(100.0, 100.0, 0.0);
+    engine.register_named_collider("tree", collider);
+    engine.physics.begin_frame();
+
+    assert_eq!(engine.pick_at(100.0, 100.0), Some("tree".to_string()));
+    assert_eq!(engine.pick_at(500.0, 500.0), None);
 }

@@ -205,4 +205,9 @@ impl GuestHost {
         self.engine_mut().set_camera(x as f32, y as f32, scale as f32);
         1
     }
+
+    /// The name of the top gameplay entity under a screen point (empty if none).
+    pub fn pick_at(&mut self, x: f64, y: f64) -> String {
+        self.engine().pick_at(x as f32, y as f32).unwrap_or_default()
+    }
 }

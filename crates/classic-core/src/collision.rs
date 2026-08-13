@@ -303,6 +303,24 @@ impl PhysicsProvider {
         }
     }
 
+    /// Return the pids of enabled colliders whose bounding rect contains the
+    /// given screen point, ordered by click priority (desc) then pid (asc) —
+    /// the same ordering click dispatch uses.
+    pub fn point_query(&self, x: f32, y: f32) -> Vec<u32> {
+        let rect = Rect::new(x, y, 1.0, 1.0);
+        let candidates: Vec<_> = self.screen.retrieve(&rect).iter().copied().cloned().collect();
+        let mut hits: Vec<(i32, u32)> = Vec::new();
+        for ch in &candidates {
+            if ch.pid <= 1 || !ch.rect.contains(x, y) {
+                continue;
+            }
+            let pri = self.entries.get(&ch.pid).map(|e| e.collider.click_priority).unwrap_or(0);
+            hits.push((pri, ch.pid));
+        }
+        hits.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        hits.into_iter().map(|(_, pid)| pid).collect()
+    }
+
     /// Run GJK test between two collider/virtual entries.
     pub fn gjk_test(&self, a_pid: u32, b_pid: u32) -> bool {
         let (shape_a, pos_a, scl_a) = self.shape_of(a_pid);
