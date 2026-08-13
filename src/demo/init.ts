@@ -36,6 +36,8 @@ async function initContext(): Promise<void> {
     initUI();
     initLighting();
 
+    game.showGrid = true;
+
     // Centre camera on demo slope area around tile (90, 85)
     const isoToWorld = mat4.clone(isoToCartesian4);
     mat4.scale(isoToWorld, isoToWorld, [45, 45, 1]);

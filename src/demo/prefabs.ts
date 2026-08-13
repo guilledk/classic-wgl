@@ -21,6 +21,7 @@ declare module '/classic/types.js' {
         lightColor?: [number, number, number];
         lightAzimuth?: number;
         lightElevation?: number;
+        showGrid?: boolean;
         uiConsumedClick?: boolean;
         panelMenuOpen?: boolean;
     }
@@ -75,6 +76,10 @@ export function initTilemap(): void {
     ) as Collider;
 
     tilemap.registerCall('update', function () {
+        if (game.wasKeyPressed('KeyG')) {
+            game.showGrid = !(game.showGrid ?? false);
+        }
+
         const camDelta = game.camera.getFix();
         vec3.negate(camDelta, camDelta);
         vec3.copy(compTilemapCollider.position, camDelta);
