@@ -13,6 +13,7 @@ import {
     initShaders,
     initBuffers,
     initTextures,
+    initSdfFonts,
     initAnimations,
     estimateManifestWeight,
     slowSleep,
@@ -21,6 +22,7 @@ import {
     SHADER_COMPILE_WEIGHT,
     BUFFERS_WEIGHT,
     TEXTURE_WEIGHT,
+    SDF_FONT_WEIGHT,
     ANIMATIONS_WEIGHT,
 } from '/classic/utils.js';
 
@@ -47,6 +49,7 @@ import type {
 interface GameState extends IGameState {
     init(): void;
     getTexture(name: string): ITexture;
+    getSdfFont(name: string): IGameState['sdfFonts'][string];
     download(url: string): void;
     load(url: string, onProgress?: ProgressCallback): Promise<void>;
     registerCall(callName: CallName, entity: IEntity, fn: CallFunction): void;
@@ -94,6 +97,7 @@ const game: GameState = {
     buffers: {} as GameBuffers,
     textures: {} as Record<string, ITexture>,
     animations: {} as Record<string, IAnimation>,
+    sdfFonts: {} as Record<string, IGameState['sdfFonts'][string]>,
 
     entities: {},
 
@@ -182,6 +186,10 @@ const game: GameState = {
 
     getTexture(name: string): ITexture {
         return this.textures[name];
+    },
+
+    getSdfFont(name: string): IGameState['sdfFonts'][string] {
+        return this.sdfFonts[name];
     },
 
     download(url: string) {
@@ -400,6 +408,15 @@ const game: GameState = {
         );
         acc += this.manifest.textures.length * TEXTURE_WEIGHT;
 
+        report('Loading SDF fonts', acc / total);
+        this.sdfFonts = await initSdfFonts(this.manifest.sdfFonts || [], (label, frac) =>
+            report(
+                label,
+                (acc + frac * ((this.manifest.sdfFonts?.length ?? 0) * SDF_FONT_WEIGHT)) / total,
+            ),
+        );
+        acc += (this.manifest.sdfFonts?.length ?? 0) * SDF_FONT_WEIGHT;
+
         report('Building animations', acc / total);
         this.animations = initAnimations(this.manifest.animations);
         acc += ANIMATIONS_WEIGHT;
@@ -445,6 +462,7 @@ const game: GameState = {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.depthFunc(gl.LEQUAL);
         gl.depthMask(true);
+        gl.disable(gl.SCISSOR_TEST);
 
         this.renderList.length = 0;
         this.performCall('renderList');

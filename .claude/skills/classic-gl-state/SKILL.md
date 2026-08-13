@@ -166,6 +166,69 @@ by a normal pass (LEQUAL, depthMask=false — sprites don't write depth so
 sprite-sprite ordering is by renderList sort). The depth state is reset at
 frame start, so per-sprite state changes don't accumulate across frames.
 
+### `bindAttribLocation` before `linkProgram` (AMD driver workaround)
+
+AMD drivers (especially Radeon R9 200 series) may drop attribute locations
+at link time if the linker determines they're unused — even when the
+attribute is read by a varying that the fragment shader consumes. This
+returns `getAttribLocation` as `-1` and causes `vTexCoord` to be `(0,0)`
+in every fragment.
+
+**Fix:** call `gl.bindAttribLocation(program, index, name)` for every
+attribute in the manifest BEFORE `gl.linkProgram()`:
+
+```typescript
+for (let i = 0; i < attributes.length; i++) {
+    gl.bindAttribLocation(shaderProgram, i, attributes[i]);
+}
+gl.linkProgram(shaderProgram);
+```
+
+This is applied in `initShaderProgram()` in `src/classic/utils.ts`.
+
+### Sampler uniform ↔ texture unit binding order
+
+When binding a sampler uniform:
+
+```typescript
+gl.activeTexture(gl.TEXTURE0);
+gl.bindTexture(gl.TEXTURE_2D, texture);   // texture FIRST
+gl.uniform1i(samplerLoc, 0);              // sampler SECOND
+```
+
+Some drivers silently ignore a sampler assignment if the texture isn't
+already on the target unit when `uniform1i` is called. The `SdfText.rawDraw()`
+method uses this order.
+
+### SDF texture filtering override
+
+The engine's `loadTexture()` sets `gl.NEAREST` min/mag filters on all
+textures. SDF font atlases MUST use `gl.LINEAR` for `smoothstep` to produce
+anti-aliased edges. The `SdfText` constructor overrides the filter after
+retrieving the texture:
+
+```typescript
+this.gl.bindTexture(this.gl.TEXTURE_2D, this.atlasTexture.texture);
+this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+```
+
+### Interleaved vertex buffer for text
+
+`SdfText` uses an interleaved buffer: `[posX, posY, uvX, uvY]` per vertex,
+6 vertices per quad, stride = 16 bytes. The attribute pointers for the
+`Sdf` shader (which expects `vertexPos` at location 0 and `texCoord` at
+location 1) are:
+
+```typescript
+gl.vertexAttribPointer(shader.attr.vertexPos, 2, gl.FLOAT, false, 16, 0);
+gl.vertexAttribPointer(shader.attr.texCoord, 2, gl.FLOAT, false, 16, 8);
+```
+
+When binding this buffer to the `solid` shader (which only has `vertexPos`
+at location 0), use the same stride and offset — the solid shader ignores
+the UV data that follows each position pair.
+
 ---
 
 ## 5. DEBUGGING STATE LEAKS

@@ -3,6 +3,8 @@ import { SimplexNoise } from '/lib/simplex-noise.js';
 import type {
     ShaderInfo,
     TextureManifestEntry,
+    SdfFontManifestEntry,
+    SdfFontMetrics,
     AnimationData,
     IShader,
     ITexture,
@@ -171,6 +173,7 @@ export const SHADER_FETCH_WEIGHT = 2; // vertex + fragment source fetches
 export const SHADER_COMPILE_WEIGHT = 1; // compile + link
 export const BUFFERS_WEIGHT = 1;
 export const TEXTURE_WEIGHT = 1; // image download + upload
+export const SDF_FONT_WEIGHT = 1;
 export const ANIMATIONS_WEIGHT = 1;
 
 export function estimateManifestWeight(manifest: Manifest): number {
@@ -179,6 +182,7 @@ export function estimateManifestWeight(manifest: Manifest): number {
         manifest.shaders.length * (SHADER_FETCH_WEIGHT + SHADER_COMPILE_WEIGHT) +
         BUFFERS_WEIGHT +
         manifest.textures.length * TEXTURE_WEIGHT +
+        (manifest.sdfFonts?.length ?? 0) * SDF_FONT_WEIGHT +
         ANIMATIONS_WEIGHT
     );
 }
@@ -214,6 +218,7 @@ export function initShaderProgram(
     gl: WebGLRenderingContext,
     vsSource: string,
     fsSource: string,
+    attributes?: string[],
 ): WebGLProgram | null {
     const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
     const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
@@ -230,6 +235,13 @@ export function initShaderProgram(
 
     gl.attachShader(shaderProgram, vertexShader);
     gl.attachShader(shaderProgram, fragmentShader);
+
+    if (attributes) {
+        for (let i = 0; i < attributes.length; i++) {
+            gl.bindAttribLocation(shaderProgram, i, attributes[i]);
+        }
+    }
+
     gl.linkProgram(shaderProgram);
 
     if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
@@ -280,7 +292,12 @@ export class Shader implements IShader {
 
     compile(): void {
         console.log('Compiling', this.name, '...');
-        this.program = initShaderProgram(this.gl, this.vertexCode, this.fragmentCode);
+        this.program = initShaderProgram(
+            this.gl,
+            this.vertexCode,
+            this.fragmentCode,
+            this.attributes,
+        );
 
         if (!this.program) {
             throw new Error(`Failed to compile shader: ${this.name}`);
@@ -505,6 +522,43 @@ export async function initTextures(
     }
 
     return textures;
+}
+
+// ============================================================================
+// SDF Font Metrics
+// ============================================================================
+
+export async function initSdfFonts(
+    entries: SdfFontManifestEntry[],
+    onProgress?: ProgressCallback,
+): Promise<Record<string, SdfFontMetrics>> {
+    const fonts: Record<string, SdfFontMetrics> = {};
+
+    let stepDone = 0;
+    const report = (label: string) => {
+        if (onProgress) {
+            onProgress(label, stepDone / (entries.length || 1));
+        }
+    };
+
+    for (const entry of entries) {
+        report(`Loading font metrics: ${entry.name}`);
+        await slowSleep();
+        const resp = await fetch(entry.metrics);
+        if (!resp.ok) {
+            throw new Error(`Failed to load font metrics: ${entry.metrics}`);
+        }
+        fonts[entry.name] = (await resp.json()) as SdfFontMetrics;
+        if (fonts[entry.name].spread === undefined) {
+            console.warn(
+                `SDF font "${entry.name}" is missing "spread" in metrics JSON. ` +
+                    'Re-run make-font-atlas.mjs or the atlas may be stale.',
+            );
+        }
+        stepDone += 1;
+    }
+
+    return fonts;
 }
 
 // ============================================================================

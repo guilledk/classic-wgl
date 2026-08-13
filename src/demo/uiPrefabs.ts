@@ -1,6 +1,6 @@
 import game from '/classic/state.js';
 import { Tilemap, IsometricNavMesh } from '/classic/isometric.js';
-import { UIManager, UIText, UISprite, UIElement, UIContainer } from '/classic/ui.js';
+import { UIManager, UIText, UISdfText, UISprite, UIElement, UIContainer } from '/classic/ui.js';
 import { Collider } from '/classic/collision.js';
 import {
     PRESET_ORDER,
@@ -34,6 +34,7 @@ let _tilePalette: UIContainer | null = null;
 let _navPalette: UIContainer | null = null;
 let _heightWidget: UIContainer | null = null;
 let _lightWidget: UIContainer | null = null;
+let _textShowcase: UIContainer | null = null;
 let _uiScale = 1;
 
 /**
@@ -59,14 +60,15 @@ export function initUI(): void {
     _navPalette = initNavPalette(UI);
     _heightWidget = initHeightWidget(UI);
     _lightWidget = initLightWidget(UI);
+    _textShowcase = initTextShowcase(UI);
     initEditorModeControl(UI);
 }
 
 /** Top bar: FPS counter (left), title (center), controls hint (right). */
 function initTopBar(UI: UIManager): void {
-    const barH = Math.round(32 * _uiScale);
+    const barH = Math.round(68 * _uiScale);
     const textScale = 0.4 * _uiScale;
-    const titleScale = 0.6 * _uiScale;
+    const titleScale = 1.5 * _uiScale;
 
     const topBar = UI.spawnContainer(UI.root.width, barH, [0, 0, 0, 0.5]);
     UI.root.addChild(topBar, 'top-center', 'top-center');
@@ -74,16 +76,24 @@ function initTopBar(UI: UIManager): void {
     const fpsText = UI.spawnText('FPS', textScale, 100, [0, 0.6, 0, 1], [0, 0, 0, 0]);
     topBar.addChild(fpsText, 'mid-left', 'mid-left');
 
-    const title = UI.spawnText('CLASSIC WGL', titleScale, 400, [1, 0.53, 0.3, 1], [0, 0, 0, 0]);
+    const title = UI.spawnSdfText(
+        'CLASSIC WGL',
+        titleScale,
+        UI.root.width,
+        [1, 0.53, 0.3, 1],
+        [0, 0, 0, 0],
+    );
+    title.setOutline(0.12, [0.1, 0.05, 0, 1]);
     topBar.addChild(title, 'mid-center', 'mid-center');
 
-    const infoText = UI.spawnText(
-        'WASD MOVE | SCROLL ZOOM',
-        textScale,
+    const infoText = UI.spawnSdfText(
+        'WASD MOVE\nSCROLL ZOOM',
+        1.0 * _uiScale,
         400,
         [1, 0.2, 0.6, 1],
         [0, 0, 0, 0],
     );
+    infoText.setJustify('center');
     topBar.addChild(infoText, 'mid-right', 'mid-right');
 
     let lastFPS = 0;
@@ -300,10 +310,19 @@ function initToolButtons(UI: UIManager): void {
             },
             isActive: () => game.debugFootprints ?? false,
         },
+        {
+            label: 'Text Demo',
+            action: () => {
+                game.editorTarget = game.editorTarget === 'textDemo' ? 'none' : 'textDemo';
+                game.uiConsumedClick = true;
+                isOpen = false;
+            },
+            isActive: () => game.editorTarget === 'textDemo',
+        },
     ];
 
     const maxLabelLen = Math.max(...menuItems.map((m) => m.label.length));
-    const glyphPixelW = 16 * _uiScale;
+    const glyphPixelW = Math.round(20 * _uiScale);
     const menuW = maxLabelLen * glyphPixelW + menuPadding * 2;
     const menuH = menuItems.length * menuItemH + menuGap * (menuItems.length - 1) + menuPadding * 2;
 
@@ -319,7 +338,14 @@ function initToolButtons(UI: UIManager): void {
             game.agentSelected = !(game.agentSelected ?? true);
             return true;
         },
-        { text: 'A', textScale: 0.55 * _uiScale, priority: 1, hover: true, clickFeedback: 5 },
+        {
+            sdfText: true,
+            text: 'A',
+            textScale: 0.42 * _uiScale,
+            priority: 1,
+            hover: true,
+            clickFeedback: 5,
+        },
     );
 
     // Menu panel background
@@ -340,10 +366,10 @@ function initToolButtons(UI: UIManager): void {
             },
             { priority: 3 },
         );
-        const label = UI.spawnText(
+        const label = UI.spawnSdfText(
             item.label,
-            menuFontScale,
-            maxLabelLen + 2,
+            menuFontScale * 2.5,
+            maxLabelLen * 35,
             [1, 1, 1, 1],
             [0, 0, 0, 0],
         );
@@ -543,7 +569,7 @@ function initNavPalette(UI: UIManager): UIContainer {
 /** Height editing tool widget: value row + scale row + set/blend toggle. */
 function initHeightWidget(UI: UIManager): UIContainer {
     const btnSize = Math.round(32 * _uiScale);
-    const labelW = Math.round(50 * _uiScale);
+    const labelW = Math.round(70 * _uiScale);
     const gap = Math.round(4 * _uiScale);
     const widgetW = gap * 4 + btnSize * 2 + labelW;
     const rowH = btnSize;
@@ -570,11 +596,11 @@ function initHeightWidget(UI: UIManager): UIContainer {
             game.editorHeight = (game.editorHeight ?? 0) - 1;
             return true;
         },
-        { text: '-', textScale: 0.6 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '-', textScale: 0.6 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(hMinus, 'top-left', 'top-left');
 
-    const hLabel = UI.spawnText('0', 0.5 * _uiScale, 60, [1, 1, 1, 1], [0, 0, 0, 0]);
+    const hLabel = UI.spawnSdfText('0', 1.25 * _uiScale, 300, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(hLabel, 'top-left', 'top-left');
 
     const { container: hPlus } = UI.spawnButton(
@@ -586,7 +612,7 @@ function initHeightWidget(UI: UIManager): UIContainer {
             game.editorHeight = (game.editorHeight ?? 0) + 1;
             return true;
         },
-        { text: '+', textScale: 0.6 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '+', textScale: 0.6 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(hPlus, 'top-left', 'top-left');
 
@@ -601,11 +627,11 @@ function initHeightWidget(UI: UIManager): UIContainer {
             updateHeightScale();
             return true;
         },
-        { text: 's-', textScale: 0.45 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: 's-', textScale: 0.45 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(sMinus, 'top-left', 'top-left');
 
-    const sLabel = UI.spawnText('x1', 0.45 * _uiScale, 60, [1, 1, 1, 1], [0, 0, 0, 0]);
+    const sLabel = UI.spawnSdfText('x1', 1.125 * _uiScale, 300, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(sLabel, 'top-left', 'top-left');
 
     const { container: sPlus } = UI.spawnButton(
@@ -618,7 +644,7 @@ function initHeightWidget(UI: UIManager): UIContainer {
             updateHeightScale();
             return true;
         },
-        { text: 's+', textScale: 0.45 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: 's+', textScale: 0.45 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(sPlus, 'top-left', 'top-left');
 
@@ -632,7 +658,7 @@ function initHeightWidget(UI: UIManager): UIContainer {
             game.heightEditMode = game.heightEditMode === 'set' ? 'blend' : 'set';
             return true;
         },
-        { text: 'blend', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: 'blend', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(modeBtn, 'top-left', 'top-left');
 
@@ -661,7 +687,7 @@ function initHeightWidget(UI: UIManager): UIContainer {
 
         hLabel.setText((game.editorHeight ?? 0).toString());
         sLabel.setText('x' + (game.heightScaleMultiplier ?? 1).toString());
-        (modeTxt as UIText).setText(game.heightEditMode ?? 'blend');
+        (modeTxt as UISdfText).setText(game.heightEditMode ?? 'blend');
         UI.refreshLayout();
     });
 
@@ -673,8 +699,8 @@ function initHeightWidget(UI: UIManager): UIContainer {
 function initLightWidget(UI: UIManager): UIContainer {
     const btnSize = Math.round(36 * _uiScale);
     const smallBtn = Math.round(28 * _uiScale);
-    const labelW = Math.round(110 * _uiScale);
-    const dirW = Math.round(60 * _uiScale);
+    const labelW = Math.round(200 * _uiScale);
+    const dirW = Math.round(200 * _uiScale);
     const gap = Math.round(4 * _uiScale);
     const buttonGap = Math.round(12 * _uiScale);
     const presetRowW = gap * 4 + btnSize * 2 + labelW;
@@ -703,11 +729,17 @@ function initLightWidget(UI: UIManager): UIContainer {
             applyLightPreset(prev);
             return true;
         },
-        { text: '<<', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '<<', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(presetPrev, 'top-left', 'top-left');
 
-    const presetLabel = UI.spawnText('Sunny Day', 0.45 * _uiScale, 120, [1, 1, 1, 1], [0, 0, 0, 0]);
+    const presetLabel = UI.spawnSdfText(
+        'Sunny Day',
+        1.125 * _uiScale,
+        400,
+        [1, 1, 1, 1],
+        [0, 0, 0, 0],
+    );
     container.addChild(presetLabel, 'top-left', 'top-left');
 
     const { container: presetNext } = UI.spawnButton(
@@ -723,12 +755,12 @@ function initLightWidget(UI: UIManager): UIContainer {
             applyLightPreset(next);
             return true;
         },
-        { text: '>>', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '>>', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(presetNext, 'top-left', 'top-left');
 
     // Row 2: azimuth
-    const azLabel = UI.spawnText('az: 45deg', 0.45 * _uiScale, 80, [1, 1, 1, 1], [0, 0, 0, 0]);
+    const azLabel = UI.spawnSdfText('az: 45deg', 1.125 * _uiScale, 300, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(azLabel, 'top-left', 'top-left');
 
     const { container: azMinus } = UI.spawnButton(
@@ -742,7 +774,7 @@ function initLightWidget(UI: UIManager): UIContainer {
             game.lightPreset = 'custom';
             return true;
         },
-        { text: '-', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '-', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(azMinus, 'top-left', 'top-left');
 
@@ -757,12 +789,12 @@ function initLightWidget(UI: UIManager): UIContainer {
             game.lightPreset = 'custom';
             return true;
         },
-        { text: '+', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '+', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(azPlus, 'top-left', 'top-left');
 
     // Row 3: elevation
-    const elLabel = UI.spawnText('el: 45deg', 0.45 * _uiScale, 80, [1, 1, 1, 1], [0, 0, 0, 0]);
+    const elLabel = UI.spawnSdfText('el: 45deg', 1.125 * _uiScale, 300, [1, 1, 1, 1], [0, 0, 0, 0]);
     container.addChild(elLabel, 'top-left', 'top-left');
 
     const { container: elMinus } = UI.spawnButton(
@@ -776,7 +808,7 @@ function initLightWidget(UI: UIManager): UIContainer {
             game.lightPreset = 'custom';
             return true;
         },
-        { text: '-', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '-', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(elMinus, 'top-left', 'top-left');
 
@@ -791,7 +823,7 @@ function initLightWidget(UI: UIManager): UIContainer {
             game.lightPreset = 'custom';
             return true;
         },
-        { text: '+', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
+        { sdfText: true, text: '+', textScale: 0.4 * _uiScale, hover: true, clickFeedback: 5 },
     );
     container.addChild(elPlus, 'top-left', 'top-left');
 
@@ -835,6 +867,188 @@ function initLightWidget(UI: UIManager): UIContainer {
     return container;
 }
 
+/** SDF text rendering showcase panel with scroll and scissor clipping. */
+function initTextShowcase(UI: UIManager): UIContainer {
+    const uiBorder = Math.round(10 * _uiScale);
+    const widgetW = Math.round(800 * _uiScale);
+    const widgetH = Math.round(400 * _uiScale);
+    const pad = Math.round(12 * _uiScale);
+    const scrollW = Math.round(8 * _uiScale);
+
+    const container = UI.spawnContainer(widgetW, widgetH, [0.06, 0.06, 0.12, 0.92]);
+    UI.addColliderToElem(container).consumesClick = true;
+    container.clipChildren = true;
+
+    const scrollTrack = UI.spawnElement(scrollW, widgetH, [0.15, 0.15, 0.15, 0.6]);
+    container.addChild(scrollTrack, 'mid-right', 'mid-right');
+    scrollTrack._uiFixed = true;
+
+    const scrollThumb = UI.spawnElement(scrollW, 40, [0.4, 0.4, 0.4, 0.8]);
+    container.addChild(scrollThumb, 'mid-right', 'mid-right');
+    scrollThumb._uiFixed = true;
+
+    const labelScale = 0.75 * _uiScale;
+    const lineH = Math.round(28 * _uiScale);
+    const contentH = lineH * 18;
+
+    const scaleLabel = UI.spawnSdfText(
+        'Scale ramp:',
+        labelScale,
+        300,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(scaleLabel, 'top-left', 'top-left');
+
+    const scaleSamples = UI.spawnSdfText(
+        'Handgloves 0123',
+        labelScale,
+        600,
+        [1, 1, 1, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(scaleSamples, 'top-left', 'top-left');
+    scaleSamples.setTextScale(labelScale);
+    scaleSamples.setOutline(0.5, [0.1, 0.05, 0, 1]);
+
+    const wLabel = UI.spawnSdfText(
+        'Weight −0.08 / outline 1px:',
+        labelScale * 0.8,
+        400,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(wLabel, 'top-left', 'top-left');
+
+    const wSample = UI.spawnSdfText('BOLD', labelScale * 1.5, 300, [1, 0.5, 0.2, 1], [0, 0, 0, 0]);
+    container.addChild(wSample, 'top-left', 'top-left');
+    wSample.setWeight(-0.08);
+    wSample.setOutline(1, [0.1, 0.02, 0, 1]);
+
+    const jLabel = UI.spawnSdfText(
+        'Justification: left / center / right',
+        labelScale * 0.8,
+        400,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(jLabel, 'top-left', 'top-left');
+
+    const jLeft = UI.spawnSdfText(
+        'The quick brown fox jumps over the lazy dog.',
+        labelScale,
+        widgetW - pad * 2 - scrollW,
+        [0.3, 0.8, 1, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(jLeft, 'top-left', 'top-left');
+    jLeft.setJustify('left');
+
+    const jCenter = UI.spawnSdfText(
+        'The quick brown fox jumps over the lazy dog.',
+        labelScale,
+        widgetW - pad * 2 - scrollW,
+        [0.3, 1, 0.5, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(jCenter, 'top-left', 'top-left');
+    jCenter.setJustify('center');
+
+    const jRight = UI.spawnSdfText(
+        'The quick brown fox jumps over the lazy dog.',
+        labelScale,
+        widgetW - pad * 2 - scrollW,
+        [1, 0.8, 0.3, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(jRight, 'top-left', 'top-left');
+    jRight.setJustify('right');
+
+    const glyphLabel = UI.spawnSdfText(
+        '♔ ♕ ♖ ✓ ✗ ❤ ♻ ☠ ⚡ ★ ☆ ● ◆ № ½ ™ € ▲ ▼ █ ┌─┐',
+        labelScale,
+        widgetW - pad * 2 - scrollW,
+        [1, 0.8, 0.4, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(glyphLabel, 'top-left', 'top-left');
+
+    const shadowLabel = UI.spawnSdfText(
+        'Shadow (2,2 outl 2) / Glow',
+        labelScale * 0.8,
+        400,
+        [0.7, 0.7, 0.7, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(shadowLabel, 'top-left', 'top-left');
+
+    const shadowSample = UI.spawnSdfText(
+        'SHADOW',
+        labelScale * 1.2,
+        300,
+        [1, 0.9, 0.3, 1],
+        [0, 0, 0, 0],
+    );
+    container.addChild(shadowSample, 'top-left', 'top-left');
+    shadowSample.setShadow(2, 2, [0, 0, 0, 0.4], 2);
+
+    UI.root.entity.registerCall('update', () => {
+        const cw = game.canvas!.width;
+        const ch = game.canvas!.height;
+        const x0 = cw - uiBorder - widgetW;
+        const y0 = ch - uiBorder - widgetH;
+        container.setPosition(x0, y0);
+
+        if (container.entity.enabled) {
+            game._scrollContainers = [{ x: x0, y: y0, w: widgetW, h: widgetH }];
+        }
+
+        // Scroll
+        const maxScroll = Math.max(0, contentH - widgetH);
+        const mx = game.mousePos[0];
+        const my = game.mousePos[1];
+        const mouseInside = mx >= x0 && mx <= x0 + widgetW && my >= y0 && my <= y0 + widgetH;
+        if (maxScroll > 0 && game.panelMenuOpen !== true && mouseInside) {
+            container.scrollY += -game.mouseWheel * 30;
+            container.scrollY = Math.max(0, Math.min(maxScroll, container.scrollY));
+        }
+
+        const sy = container.scrollY;
+
+        scaleLabel.setPosition(x0 + pad, y0 + pad - sy);
+        scaleSamples.setPosition(x0 + pad, y0 + pad + lineH - sy);
+        wLabel.setPosition(x0 + pad, y0 + pad + lineH * 3 - sy);
+        wSample.setPosition(x0 + pad, y0 + pad + lineH * 4 - sy);
+        jLabel.setPosition(x0 + pad, y0 + pad + lineH * 6 - sy);
+        jLeft.setPosition(x0 + pad, y0 + pad + lineH * 7.5 - sy);
+        jCenter.setPosition(x0 + pad, y0 + pad + lineH * 9.5 - sy);
+        jRight.setPosition(x0 + pad, y0 + pad + lineH * 11.5 - sy);
+        glyphLabel.setPosition(x0 + pad, y0 + pad + lineH * 13.5 - sy);
+        shadowLabel.setPosition(x0 + pad, y0 + pad + lineH * 15.5 - sy);
+        shadowSample.setPosition(x0 + pad, y0 + pad + lineH * 16.5 - sy);
+
+        // Scrollbar thumb
+        if (maxScroll > 0) {
+            const thumbH = Math.max(20, (widgetH / contentH) * widgetH);
+            const thumbY = y0 + (sy / maxScroll) * (widgetH - thumbH);
+            scrollTrack.setSize(scrollW, widgetH);
+            scrollTrack.setPosition(x0 + widgetW - scrollW, y0);
+            scrollThumb.setSize(scrollW, thumbH);
+            scrollThumb.setPosition(x0 + widgetW - scrollW, thumbY);
+            scrollTrack.setEnabled(true);
+            scrollThumb.setEnabled(true);
+        } else {
+            scrollTrack.setEnabled(false);
+            scrollThumb.setEnabled(false);
+        }
+
+        UI.refreshLayout();
+    });
+
+    container.setEnabled(false);
+    return container;
+}
+
 /** Toggles palette/nav-mesh/height-widget visibility each frame based on game.editorTarget. */
 function initEditorModeControl(UI: UIManager): void {
     const navMeshEntity = game.getEntity('tilemapNavigation')!;
@@ -844,6 +1058,7 @@ function initEditorModeControl(UI: UIManager): void {
         if (_navPalette) _navPalette.setEnabled(game.editorTarget === 'navMesh');
         if (_heightWidget) _heightWidget.setEnabled(game.editorTarget === 'height');
         if (_lightWidget) _lightWidget.setEnabled(game.editorTarget === 'light');
+        if (_textShowcase) _textShowcase.setEnabled(game.editorTarget === 'textDemo');
         navMeshEntity.enabled = game.editorTarget === 'navMesh';
     });
 }

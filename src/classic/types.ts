@@ -265,9 +265,36 @@ export interface TextureManifestEntry {
     src: string;
 }
 
+export interface SdfFontManifestEntry {
+    name: string;
+    metrics: string;
+}
+
+export interface GlyphMetrics {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    xOffset: number;
+    yOffset: number;
+    xAdvance: number;
+}
+
+export interface SdfFontMetrics {
+    name: string;
+    family: string;
+    atlasSize: [number, number];
+    glyphSize: number;
+    spread: number;
+    baseline: number;
+    lineHeight: number;
+    glyphs: Record<string, GlyphMetrics>;
+}
+
 export interface Manifest {
     shaders: ShaderInfo[];
     textures: TextureManifestEntry[];
+    sdfFonts: SdfFontManifestEntry[];
     animations: AnimationData[];
 }
 
@@ -313,6 +340,7 @@ export interface IGameState {
     buffers: GameBuffers;
     textures: Record<string, ITexture>;
     animations: Record<string, IAnimation>;
+    sdfFonts: Record<string, SdfFontMetrics>;
 
     // Timing
     prevTime: number;
@@ -365,6 +393,7 @@ export interface IGameState {
     // Methods
     init(): void;
     getTexture(name: string): ITexture;
+    getSdfFont(name: string): SdfFontMetrics;
     download(url: string): void;
     load(url: string, onProgress?: ProgressCallback): Promise<void>;
     registerCall(callName: CallName, entity: IEntity, fn: CallFunction): void;
