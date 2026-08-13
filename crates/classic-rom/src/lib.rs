@@ -17,9 +17,9 @@ pub mod rom;
 
 pub use archive::RomArchive;
 pub use format::{detect_format, RomFormat};
-pub use loader::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 #[cfg(not(target_arch = "wasm32"))]
 pub use loader::FsAssetLoader;
+pub use loader::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 pub use manifest::{RomManifest, ScriptManifestEntry};
 pub use resource::{ResourceKind, ResourceSet};
 pub use rom::Rom;

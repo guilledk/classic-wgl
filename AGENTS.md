@@ -36,7 +36,7 @@ cargo fmt --all -- --check              # formatting
 cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-demo --all-targets -- -D warnings
 
 # Assets (must run once after checkout / submodule update)
-npm ci && npm run assets                # generates public/res/ (gitignored, embedded via include_bytes!)
+npm ci && npm run assets                # generates public/res/ + demo.rom/lunar.rom (gitignored, embedded via include_bytes!)
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
@@ -56,26 +56,27 @@ crates/
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
                           golden.rs (traces), env_config.rs
-  classic-rom/            ROM archive reader: RomArchive (zip/tar.gz/tar.zst), RomManifest,
+  classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
-  classic-demo/           application/prefab layer: init_engine(gl, &DemoAssets, Scene) bootstrap,
-                          DemoState + EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs,
-                          hud.rs, testing.rs, scenes/ (demo + lunar)
+  classic-demo/           application/prefab layer: init_engine(gl, &Rom) bootstrap, DemoState +
+                          EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs, hud.rs,
+                          testing.rs, scenes/ (demo + lunar assemblers)
 apps/
-  desktop/                native binary: include_bytes! assets, init_* calls, winit event loop
+  desktop/                native binary: include_bytes! demo.rom/lunar.rom, Rom::load, winit loop
   web/                    wasm cdylib: wasm-bindgen main, trunk build, canvas pointer-lock
 tests/
   golden/baseline/        demo-scene baseline.{trace.jsonl,png}
   golden/lunar/           lunar-scene render-trace baseline
 public/
-  manifest.json           shader/texture/animation declarations (used by Rust loader)
-  state.json              persisted demo entities
-  state_lunar.json        lunar scene entities, 400x400 (same names; terrain generated at boot)
-  map001.{txt,nav.txt}    tilemap + nav mesh data (base64 JSON arrays)
+  manifest.json           shader/texture/animation declarations (bundled into each ROM)
+  state.json              persisted demo entities (bundled into demo.rom)
+  state_lunar.json        lunar scene entities, 400x400 (bundled into lunar.rom; terrain generated)
+  demo.rom, lunar.rom     GENERATED (gitignored) scene ROMs — built from public/ by build-roms.mjs
 assets/                   git submodule -> guilledk/classic-assets (source assets)
 scripts/
   copy-assets.mjs         copies assets/demo/*.png + buildings/*/spritesheet.png -> public/res/
   make-font-atlas.mjs     generates SDF font atlas from DejaVuSans.ttf
+  build-roms.mjs          packs manifest + state + res/ into demo.rom + lunar.rom (tar.gz)
 docs/
   TS-PARITY.md            formulas, LIGHT_PRESETS, dump key ordering, TS↔Rust divergence list
 plans/
@@ -174,11 +175,15 @@ plans/
 ## Assets
 
 - Source game assets live in the `assets/` git submodule (private repo `guilledk/classic-assets`).
-- `public/res/` is GENERATED and gitignored.  Regenerate with: `npm run assets`.
+- `public/res/` and `public/*.rom` are GENERATED and gitignored.  Regenerate with: `npm run assets`.
 - `scripts/copy-assets.mjs` maps `assets/demo/*.png` → `public/res/<name>.png` and
   `assets/buildings/*/spritesheet.png` → `public/res/<name>.png`.
 - `scripts/make-font-atlas.mjs` generates SDF font atlas + metrics JSON.
-- Rust apps embed assets at compile time via `include_bytes!`/`include_str!` (see
+- `scripts/build-roms.mjs` packs `manifest.json` (+ injected `format_version`/`entrypoint`) +
+  `state.json` / `state_lunar.json` + the manifest-declared `res/` files into `demo.rom` /
+  `lunar.rom` (tar.gz).
+- Rust apps embed the two ROMs at compile time via `include_bytes!` and boot them with
+  `RomArchive::from_bytes` → `Rom::load` → `classic_demo::init_engine` (see
   `apps/desktop/src/main.rs` and `apps/web/src/lib.rs`).
 - CI and deploy must run `npm run assets` before `cargo build` / `trunk build`.
 
