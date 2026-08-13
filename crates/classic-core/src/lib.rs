@@ -180,97 +180,32 @@ pub fn register_all_components() {
 
 fn dumper_sprite(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let s = world.get::<&SpriteRender>(entity).ok()?;
-    let mut m = serde_json::Map::new();
-    m.insert("type".into(), serde_json::Value::String("Sprite".into()));
-    m.insert("position".into(), serde_json::json!([s.position.x, s.position.y, s.position.z]));
-    m.insert("scale".into(), serde_json::json!([s.scale.x, s.scale.y, s.scale.z]));
-    m.insert("texture".into(), s.texture.as_str().into());
-    m.insert("ignoreCam".into(), s.ignore_cam.into());
-    m.insert("frame".into(), s.frame.into());
-    m.insert("tileSetSize".into(), serde_json::json!([s.tile_set_size.x, s.tile_set_size.y]));
-    m.insert("anchor".into(), serde_json::json!([s.anchor.x, s.anchor.y]));
-    Some(serde_json::Value::Object(m))
+    serde_json::to_value(&*s).ok().map(|v| component_value("Sprite", v))
 }
 
 fn dumper_tilemap(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let tm = world.get::<&Tilemap>(entity).ok()?;
-    let mut m = serde_json::Map::new();
-    m.insert("type".into(), serde_json::Value::String("Tilemap".into()));
-    m.insert("position".into(), serde_json::json!([tm.position.x, tm.position.y, tm.position.z]));
-    m.insert("scale".into(), serde_json::json!([tm.scale.x, tm.scale.y, tm.scale.z]));
-    m.insert("sizeX".into(), tm.size_x.into());
-    m.insert("sizeY".into(), tm.size_y.into());
-    m.insert("tileSet".into(), tm.tile_set.as_str().into());
-    m.insert(
-        "tilePixelSize".into(),
-        serde_json::json!([tm.tile_pixel_size[0], tm.tile_pixel_size[1]]),
-    );
-    m.insert("maxTile".into(), tm.max_tile.into());
-    m.insert("data".into(), serde_base64::encode_u32(&tm.data).into());
-    m.insert("heightData".into(), serde_base64::encode_f32(&tm.height_data).into());
-    // heightScale is only emitted if non-zero (TS parity: it's optional)
-    if tm.height_scale != 0.0 {
-        m.insert("heightScale".into(), tm.height_scale.into());
-    }
-    Some(serde_json::Value::Object(m))
+    serde_json::to_value(&*tm).ok().map(|v| component_value("Tilemap", v))
 }
 
 fn dumper_isosprite(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let s = world.get::<&IsoSprite>(entity).ok()?;
-    let mut m = serde_json::Map::new();
-    m.insert("type".into(), serde_json::Value::String("IsoSprite".into()));
-    m.insert("position".into(), serde_json::json!([s.position.x, s.position.y, s.position.z]));
-    m.insert("scale".into(), serde_json::json!([s.scale.x, s.scale.y, s.scale.z]));
-    m.insert("texture".into(), s.texture.as_str().into());
-    m.insert("tilemap".into(), s.tilemap.as_str().into());
-    m.insert("frame".into(), s.frame.into());
-    m.insert("tileSetSize".into(), serde_json::json!([s.tile_set_size.x, s.tile_set_size.y]));
-    m.insert("anchor".into(), serde_json::json!([s.anchor.x, s.anchor.y]));
-    m.insert(
-        "footprint".into(),
-        serde_json::json!(s.footprint.iter().map(|v| [v.x, v.y]).collect::<Vec<[f32; 2]>>()),
-    );
-    Some(serde_json::Value::Object(m))
+    serde_json::to_value(&*s).ok().map(|v| component_value("IsoSprite", v))
 }
 
 fn dumper_isoagent(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let a = world.get::<&IsoAgent>(entity).ok()?;
-    let mut m = serde_json::Map::new();
-    m.insert("type".into(), serde_json::Value::String("IsoAgent".into()));
-    m.insert("position".into(), serde_json::json!([a.position.x, a.position.y, a.position.z]));
-    m.insert("scale".into(), serde_json::json!([a.scale.x, a.scale.y, a.scale.z]));
-    m.insert("texture".into(), a.texture.as_str().into());
-    m.insert("tilemap".into(), a.tilemap.as_str().into());
-    m.insert("frame".into(), a.frame.into());
-    m.insert("tileSetSize".into(), serde_json::json!([a.tile_set_size.x, a.tile_set_size.y]));
-    m.insert("anchor".into(), serde_json::json!([a.anchor.x, a.anchor.y]));
-    m.insert(
-        "footprint".into(),
-        serde_json::json!(a.footprint.iter().map(|v| [v.x, v.y]).collect::<Vec<[f32; 2]>>()),
-    );
-    m.insert("speed".into(), a.speed.into());
-    m.insert("animSpeed".into(), a.anim_speed.into());
-    Some(serde_json::Value::Object(m))
+    serde_json::to_value(&*a).ok().map(|v| component_value("IsoAgent", v))
 }
 
 fn dumper_animator(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let a = world.get::<&Animator>(entity).ok()?;
-    let mut m = serde_json::Map::new();
-    m.insert("type".into(), serde_json::Value::String("Animator".into()));
-    m.insert("target".into(), a.target.as_str().into());
-    m.insert("speed".into(), a.speed.into());
-    Some(serde_json::Value::Object(m))
+    serde_json::to_value(&*a).ok().map(|v| component_value("Animator", v))
 }
 
 fn dumper_navmesh(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let n = world.get::<&NavMesh>(entity).ok()?;
-    let mut m = serde_json::Map::new();
-    m.insert("type".into(), serde_json::Value::String("IsometricNavMesh".into()));
-    m.insert("map".into(), n.map_entity.as_str().into());
-    m.insert("sizeX".into(), n.size_x.into());
-    m.insert("sizeY".into(), n.size_y.into());
-    m.insert("data".into(), serde_base64::encode_u32(&n.data).into());
-    Some(serde_json::Value::Object(m))
+    serde_json::to_value(&*n).ok().map(|v| component_value("IsometricNavMesh", v))
 }
 
 /// Prepend the `"type"` key to a serde-serialized component body.

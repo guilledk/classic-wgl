@@ -184,9 +184,9 @@ fn navmesh_dumper_uses_map_key() {
     assert_eq!(val["type"], "IsometricNavMesh");
     assert_eq!(val["map"], "tilemap");
     assert_eq!(val["data"], classic_core::serde_base64::encode_u32(&[0, 1, 1, 0]));
-    // NavMesh dumper should NOT emit position/scale (matches TS)
-    assert!(val.get("position").is_none());
-    assert!(val.get("scale").is_none());
+    // derive-driven: position/scale now round-trip (previously omitted for TS parity)
+    assert_eq!(val["position"], serde_json::json!([0.0, 0.0, 0.0]));
+    assert_eq!(val["scale"], serde_json::json!([45.0, 45.0, 1.0]));
 }
 
 #[test]
