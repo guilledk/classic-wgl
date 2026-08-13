@@ -551,49 +551,141 @@ impl Engine {
 
     fn dump_state_value(&self) -> serde_json::Value {
         let mut entities = serde_json::Map::new();
-        let regs = classic_core::registry::ordered_regs();
 
         for name in &self.name_order {
             let Some(&entity) = self.names.get(name) else { continue };
-            let mut components: Vec<serde_json::Value> = Vec::new();
-            let mut dumped = std::collections::HashSet::new();
-
-            for reg in &regs {
-                if dumped.contains(reg.name) {
-                    continue;
-                }
-                if let Some(dump) = reg.dump {
-                    if let Some(val) = dump(&self.world, entity) {
-                        components.push(val);
-                        dumped.insert(reg.name);
-                        for sub in reg.subsumes {
-                            dumped.insert(sub);
-                        }
-                    }
-                }
-                // Try subsumed components first (they may match)
-                for sub in reg.subsumes {
-                    if dumped.contains(sub) {
-                        continue;
-                    }
-                    // Check if there's a subsumed reg with a dumper
-                    if let Some(sub_dump) =
-                        regs.iter().find(|r| r.name == *sub).and_then(|r| r.dump)
-                    {
-                        if let Some(val) = sub_dump(&self.world, entity) {
-                            components.push(val);
-                            dumped.insert(sub);
-                        }
-                    }
-                }
-            }
-
+            let components = self.dump_entity_components(entity);
             if !components.is_empty() {
                 entities.insert(name.clone(), serde_json::json!({ "components": components }));
             }
         }
 
         serde_json::Value::Object(entities)
+    }
+
+    /// Serialize a single named entity's component list (the `components`
+    /// array of a `state.json` entry), using the registry dumpers.
+    pub fn dump_entity_components(&self, entity: hecs::Entity) -> Vec<serde_json::Value> {
+        let regs = classic_core::registry::ordered_regs();
+        let mut components: Vec<serde_json::Value> = Vec::new();
+        let mut dumped = std::collections::HashSet::new();
+
+        for reg in &regs {
+            if dumped.contains(reg.name) {
+                continue;
+            }
+            if let Some(dump) = reg.dump {
+                if let Some(val) = dump(&self.world, entity) {
+                    components.push(val);
+                    dumped.insert(reg.name);
+                    for sub in reg.subsumes {
+                        dumped.insert(sub);
+                    }
+                }
+            }
+            // Try subsumed components first (they may match)
+            for sub in reg.subsumes {
+                if dumped.contains(sub) {
+                    continue;
+                }
+                // Check if there's a subsumed reg with a dumper
+                if let Some(sub_dump) = regs.iter().find(|r| r.name == *sub).and_then(|r| r.dump) {
+                    if let Some(val) = sub_dump(&self.world, entity) {
+                        components.push(val);
+                        dumped.insert(sub);
+                    }
+                }
+            }
+        }
+
+        components
+    }
+
+    /// Named-entity query/access helpers for the guest-code layer.  They mirror
+    /// the `load_state`/`dump_state` bookkeeping (names + name_order) so guest
+    /// code can spawn/despawn/lookup entities and round-trip components through
+    /// the registry without per-field glue.
+    pub fn has_name(&self, name: &str) -> bool {
+        self.names.contains_key(name)
+    }
+
+    pub fn entity_names(&self) -> Vec<String> {
+        self.name_order.clone()
+    }
+
+    /// Spawn an empty named entity (registers it in `names`/`name_order`).
+    /// Returns false if the name is already taken.
+    pub fn spawn_named(&mut self, name: &str) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = self.world.spawn(());
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+        true
+    }
+
+    /// Despawn a named entity and drop its name registration.
+    pub fn despawn_named(&mut self, name: &str) -> bool {
+        let Some(entity) = self.names.remove(name) else { return false };
+        self.name_order.retain(|n| n != name);
+        let _ = self.world.despawn(entity);
+        true
+    }
+
+    /// Dump a named entity's components to a JSON string (`{"components": [...]}`).
+    pub fn dump_entity_json(&self, name: &str) -> Option<String> {
+        let entity = *self.names.get(name)?;
+        let components = self.dump_entity_components(entity);
+        serde_json::to_string_pretty(&serde_json::json!({ "components": components })).ok()
+    }
+
+    /// Dump a single component of a named entity via the registry dumper.
+    pub fn dump_component_json(&self, name: &str, comp_type: &str) -> Option<String> {
+        let entity = *self.names.get(name)?;
+        let dumper = classic_core::registry::ordered_regs()
+            .into_iter()
+            .find(|r| r.name == comp_type)
+            .and_then(|r| r.dump)?;
+        let val = dumper(&self.world, entity)?;
+        serde_json::to_string_pretty(&val).ok()
+    }
+
+    /// Set a single component of a named entity from its serialized JSON,
+    /// reusing the registry spawner (deserialize → merge onto the entity).
+    pub fn set_component_json(
+        &mut self,
+        name: &str,
+        comp_type: &str,
+        json: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let spawner = classic_core::registry::lookup(comp_type)
+            .ok_or_else(|| anyhow::anyhow!("unknown component type: {comp_type}"))?;
+        let entity =
+            *self.names.get(name).ok_or_else(|| anyhow::anyhow!("no entity named {name}"))?;
+        let mut builder = hecs::EntityBuilder::new();
+        spawner(&mut builder, json)?;
+        self.world.insert(entity, builder.build())?;
+        Ok(())
+    }
+
+    /// Read a named entity's 2D position (from its `Transform`).
+    pub fn get_pos(&self, name: &str) -> Option<(f32, f32)> {
+        let entity = *self.names.get(name)?;
+        self.world.get::<&Transform>(entity).ok().map(|tf| (tf.position.x, tf.position.y))
+    }
+
+    /// Write a named entity's 2D position (into its `Transform`).
+    pub fn set_pos(&mut self, name: &str, x: f32, y: f32) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        if let Ok(mut tf) = self.world.get::<&mut Transform>(entity) {
+            tf.position.x = x;
+            tf.position.y = y;
+            true
+        } else {
+            false
+        }
     }
 
     /// Save a file, handling both native (filesystem) and web (Blob download).
