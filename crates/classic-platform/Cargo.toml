@@ -10,6 +10,7 @@ native = ["glutin", "glutin-winit", "raw-window-handle", "x11"]
 [dependencies]
 classic-core = { path = "../classic-core" }
 classic-gfx = { path = "../classic-gfx" }
+classic-rom = { path = "../classic-rom" }
 
 glam.workspace = true
 glow.workspace = true

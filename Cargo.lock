@@ -380,6 +380,7 @@ dependencies = [
  "anyhow",
  "classic-core",
  "classic-gfx",
+ "classic-rom",
  "console_error_panic_hook",
  "glam",
  "gloo-net",
