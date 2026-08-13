@@ -11,6 +11,10 @@ members = [
     "apps/desktop",
     "apps/web",
 ]
+# ROM guest crates are standalone #![no_std] cdylibs built only for
+# wasm32-unknown-unknown (see scripts/build-guest.mjs); they are not host code
+# and must not be compiled by the default workspace build.
+exclude = ["guest"]
 
 [workspace.package]
 version = "0.1.0-alpha.0"

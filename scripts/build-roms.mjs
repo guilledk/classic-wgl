@@ -45,13 +45,13 @@ function tarHeader(name, size) {
     return h;
 }
 
-function pack(entrypoint, stateFile, outName) {
+function pack(entrypoint, stateFile, outName, guestWasm) {
     const manifest = parseManifest();
     manifest.format_version = 1;
     manifest.entrypoint = entrypoint;
     manifest.host_features = true;
     manifest.trusted = true;
-    manifest.code = [{ name: 'main', src: '/code/main.wasm' }];
+    manifest.code = [{ name: 'main', src: `/code/${guestWasm}` }];
 
     const chunks = [];
     const addFile = (name, data) => {
@@ -81,5 +81,5 @@ function pack(entrypoint, stateFile, outName) {
     console.log(`wrote public/${outName}: ${gz.length} bytes`);
 }
 
-pack('demo', 'state.json', 'demo.rom');
-pack('lunar', 'state_lunar.json', 'lunar.rom');
+pack('demo', 'state.json', 'demo.rom', 'demo.wasm');
+pack('lunar', 'state_lunar.json', 'lunar.rom', 'lunar.wasm');

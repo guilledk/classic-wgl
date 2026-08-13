@@ -80,8 +80,10 @@ each `update` via `GuestHost::set_engine` and deref'd only inside that call
 - `init_engine` reads `rom.resources.code().get("main")` and builds limits from
   `rom.manifest.trusted`; runs the guest on every frame (not gated by
   `host_features`).
-- `scripts/build-roms.mjs` injects `code: [{name:"main", src:"/code/main.wasm"}]`
-  + `trusted: true` and bundles `public/code/main.wasm` (a no-op module).
+- `scripts/build-guest.mjs` compiles the `guest/*` `#![no_std]` cdylib crates to
+  `public/code/demo.wasm` / `lunar.wasm`; `scripts/build-roms.mjs` injects
+  `code: [{name:"main", src:"/code/<scene>.wasm"}]` + `trusted: true` and
+  bundles the per-scene guest into each ROM.
 
 ## 7. Adding a host import (the SDK is a reviewed surface)
 
@@ -99,5 +101,5 @@ guest code and must not expose raw engine internals or leak borrows.
 `cargo test -p classic-guest -- --test-threads=1` runs `tests/guest.rs`: no-op
 guest runs, spawn + move via the SDK, fuel-exhaustion trap, memory-cap trap.
 Fixtures are inline WAT (`wat::parse_str`) — no committed binaries needed for
-tests; the shipped `public/code/main.wasm` is committed (regenerate from
-`main.wat` with `wat2wasm` or a `wat`-crate helper).
+tests.  The shipped ROM guests live as Rust sources under `guest/` and are
+compiled to `public/code/*.wasm` by `scripts/build-guest.mjs` (`npm run assets`).

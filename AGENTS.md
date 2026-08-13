@@ -66,6 +66,9 @@ crates/
 apps/
   desktop/                native binary: include_bytes! demo.rom/lunar.rom, Rom::load, winit loop
   web/                    wasm cdylib: wasm-bindgen main, trunk build, canvas pointer-lock
+guest/
+  demo-guest/             standalone #![no_std] cdylib guest for the demo ROM -> public/code/demo.wasm
+  lunar-guest/            standalone #![no_std] cdylib guest for the lunar ROM -> public/code/lunar.wasm
 tests/
   golden/baseline/        demo-scene baseline.{trace.jsonl,png}
   golden/lunar/           lunar-scene render-trace baseline
@@ -73,13 +76,14 @@ public/
   manifest.json           shader/texture/animation declarations (bundled into each ROM)
   state.json              persisted demo entities (bundled into demo.rom)
   state_lunar.json        lunar scene entities, 400x400 (bundled into lunar.rom; terrain generated)
-  code/main.wasm          no-op guest module (bundled into each ROM; see classic-guest)
+  code/*.wasm             GENERATED (gitignored) per-scene guest modules — compiled from guest/
   demo.rom, lunar.rom     GENERATED (gitignored) scene ROMs — built from public/ by build-roms.mjs
 assets/                   git submodule -> guilledk/classic-assets (source assets)
 scripts/
   copy-assets.mjs         copies assets/demo/*.png + buildings/*/spritesheet.png -> public/res/
   make-font-atlas.mjs     generates SDF font atlas from DejaVuSans.ttf
-  build-roms.mjs          packs manifest + state + res/ into demo.rom + lunar.rom (tar.gz)
+  build-guest.mjs         compiles guest/* crates to wasm32 -> public/code/*.wasm
+  build-roms.mjs          packs manifest + state + res/ + code/ into demo.rom + lunar.rom (tar.gz)
 docs/
   TS-PARITY.md            formulas, LIGHT_PRESETS, dump key ordering, TS↔Rust divergence list
 plans/
@@ -184,12 +188,16 @@ plans/
 ## Assets
 
 - Source game assets live in the `assets/` git submodule (private repo `guilledk/classic-assets`).
-- `public/res/` and `public/*.rom` are GENERATED and gitignored.  Regenerate with: `npm run assets`.
+- `public/res/`, `public/code/` and `public/*.rom` are GENERATED and gitignored.
+  Regenerate with: `npm run assets`.
 - `scripts/copy-assets.mjs` maps `assets/demo/*.png` → `public/res/<name>.png` and
   `assets/buildings/*/spritesheet.png` → `public/res/<name>.png`.
 - `scripts/make-font-atlas.mjs` generates SDF font atlas + metrics JSON.
-- `scripts/build-roms.mjs` packs `manifest.json` (+ injected `format_version`/`entrypoint`) +
-  `state.json` / `state_lunar.json` + the manifest-declared `res/` files into `demo.rom` /
+- `scripts/build-guest.mjs` compiles the `guest/*` `#![no_std]` cdylib crates to
+  `wasm32-unknown-unknown` and copies the `.wasm` into `public/code/`.
+- `scripts/build-roms.mjs` packs `manifest.json` (+ injected `format_version`/`entrypoint`/
+  `host_features`/`trusted`/`code`) + `state.json` / `state_lunar.json` + the
+  manifest-declared `res/` files + the per-scene `code/*.wasm` into `demo.rom` /
   `lunar.rom` (tar.gz).
 - Rust apps embed the two ROMs at compile time via `include_bytes!` and boot them with
   `RomArchive::from_bytes` → `Rom::load` → `classic_demo::init_engine` (see
