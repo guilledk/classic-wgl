@@ -78,35 +78,37 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
         scenes::demo::hydrate_nav(&mut e);
     }
 
-    prefabs::init_debug_toggles(&mut e, &state);
-    editor::init_ui(&mut e);
-    editor::init_tool_buttons(&mut e, &state);
-    editor::init_height_widget(&mut e, &state);
-    lighting::init_light_widget(&mut e, &state);
-    scenes::lunar::init_lunar_widget(&mut e, &state);
-    editor::init_tile_palette(&mut e, &state);
-    editor::init_nav_palette(&mut e, &state);
-    e.init_nav_mesh_render();
-    editor::init_editor_mode_control(&mut e, &state);
-    e.measure_all_ui_labels();
-    lighting::init_lighting(&mut e, &state);
-    hud::init_text_showcase(&mut e, &state);
-    hud::init_iso_coord_overlay(&mut e, &state);
+    if rom.manifest.host_features {
+        prefabs::init_debug_toggles(&mut e, &state);
+        editor::init_ui(&mut e);
+        editor::init_tool_buttons(&mut e, &state);
+        editor::init_height_widget(&mut e, &state);
+        lighting::init_light_widget(&mut e, &state);
+        scenes::lunar::init_lunar_widget(&mut e, &state);
+        editor::init_tile_palette(&mut e, &state);
+        editor::init_nav_palette(&mut e, &state);
+        e.init_nav_mesh_render();
+        editor::init_editor_mode_control(&mut e, &state);
+        e.measure_all_ui_labels();
+        lighting::init_lighting(&mut e, &state);
+        hud::init_text_showcase(&mut e, &state);
+        hud::init_iso_coord_overlay(&mut e, &state);
 
-    // Engine hooks — the demo owns this behaviour, registered as callbacks.
-    {
-        let s = state.clone();
-        e.on_pre_update(move |engine| hud::route_text_scroll(engine, &s));
+        // Engine hooks — the demo owns this behaviour, registered as callbacks.
+        {
+            let s = state.clone();
+            e.on_pre_update(move |engine| hud::route_text_scroll(engine, &s));
+        }
+        {
+            let s = state.clone();
+            e.on_selection_end(move |engine| editor::apply_editor_selection(engine, &s));
+        }
+        {
+            let s = state.clone();
+            e.add_overlay(move |engine| hud::draw_debug_overlay(engine, &s));
+        }
+        testing::install(&mut e, &state);
     }
-    {
-        let s = state.clone();
-        e.on_selection_end(move |engine| editor::apply_editor_selection(engine, &s));
-    }
-    {
-        let s = state.clone();
-        e.add_overlay(move |engine| hud::draw_debug_overlay(engine, &s));
-    }
-    testing::install(&mut e, &state);
 
     if lunar {
         scenes::lunar::setup_view(&mut e, &state);

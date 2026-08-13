@@ -49,6 +49,7 @@ function pack(entrypoint, stateFile, outName) {
     const manifest = parseManifest();
     manifest.format_version = 1;
     manifest.entrypoint = entrypoint;
+    manifest.host_features = true;
 
     const chunks = [];
     const addFile = (name, data) => {

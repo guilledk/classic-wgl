@@ -24,6 +24,11 @@ pub struct RomManifest {
     pub entrypoint: String,
     #[serde(default)]
     pub scripts: Vec<ScriptManifestEntry>,
+    /// Whether this ROM ships the host toolchain (editor HUD, widgets, debug
+    /// overlays, test runner).  Bare gameplay ROMs leave this false and skip
+    /// the editor; the demo/lunar ROMs opt in.
+    #[serde(default)]
+    pub host_features: bool,
 }
 
 fn default_format_version() -> u32 {
@@ -53,5 +58,16 @@ mod tests {
         assert_eq!(m.manifest.textures.len(), 1);
         assert_eq!(m.manifest.textures[0].name, "humanoid");
         assert_eq!(m.manifest.sdf_fonts[0].name, "dejavusans");
+    }
+
+    #[test]
+    fn host_features_defaults_false() {
+        let json = r#"{
+            "shaders": [],
+            "textures": [],
+            "animations": []
+        }"#;
+        let m: RomManifest = serde_json::from_str(json).unwrap();
+        assert!(!m.host_features);
     }
 }
