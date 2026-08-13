@@ -265,17 +265,14 @@ default in CI because software-rasteriser output is version-dependent.
 
 ### Triggering
 
-- **F9**: dump `state.json` (entity/components registry dump)
-- **Shift+F9**: additionally dump sidecar files (tilemap, nav mesh, height data)
+- **F9**: dump `state.json` (entity/components registry dump; tile/nav/height
+  data is inlined in `state.json` — no sidecar files)
 
 ### Files Produced
 
 | File | Content |
 |---|---|
-| `state.json` | Full entity state: `{"entities": {"<name>": {"components": [...]}}}` |
-| `map001.txt` | Base64-encoded JSON array of tilemap data |
-| `map001.nav.txt` | Base64-encoded JSON array of nav mesh data |
-| `map001.height.txt` | Base64-encoded JSON array of height data |
+| `state.json` | Full entity state: `{"entities": {"<name>": {"components": [...]}}}` (tile/nav/height data inlined) |
 
 ### Output Directory
 
@@ -305,9 +302,10 @@ component's JSON object equals the constructor argument order.
 
 1. **Entity not visible**: check the dumped state for `Disabled` component
    or missing/zeroed `IsoSprite`/`Sprite` component
-2. **Tilemap corrupted**: inspect `map001.txt` for correct tile data shape
-3. **Navigation broken**: verify `map001.nav.txt` has walkable tiles where expected
-4. **Height interpolation wrong**: examine `map001.height.txt` vertex grid values
+2. **Tilemap corrupted**: inspect the inlined `Tilemap.data` / `height_data`
+   fields in the dumped `state.json`
+3. **Navigation broken**: verify the inlined `IsometricNavMesh.data` grid has
+   walkable tiles where expected
 
 ### CLASSIC_UI_DEBUG
 
@@ -447,7 +445,7 @@ original and will produce no diagnostics when broken:
 | **Entity destruction** | `world.despawn` is never called. Instead, entities are marked with a `Disabled` component and their colliders are skipped in the quadtree insertion. |
 | **Collider in quadtree (disabled)** | TS inserted all colliders (including disabled) into the quadtree and filtered them at query time. Rust skips disabled colliders at insertion time in `begin_frame()`. This is a deliberate optimisation and can affect click dispatch when toggling collider enabled state within a frame. |
 | **Camera matrix order** | TS does `S(scale) * T(-fix)`; Rust does `T(-fix) * S(scale)`. Both look correct because the fix-point formula compensates, but the raw model matrices differ. Golden traces will show this divergence in `model` fields. |
-| **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(sizeX + 1) * (sizeY + 1)` (vertex grid, one height per vertex). Dumped `map001.height.txt` will have different array lengths between TS and Rust. |
+| **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(sizeX + 1) * (sizeY + 1)` (vertex grid, one height per vertex). The inlined `height_data` in `state.json` therefore has different array lengths between TS and Rust. |
 | **Root UI tree** | TS attached all UI elements to a single root container and walked the full tree for layout. Rust only attaches the top bar to root; other panels position themselves independently. `CLASSIC_UI_DEBUG` will show fewer elements in the layout tree walk. |
 | **Web Worker pathfinder** | TS ran A* on a Web Worker for non-blocking path computation. Rust runs A* synchronously on the main thread. |
 | **`classic_log` hot-reload** | Channels are parsed once at startup. There is no runtime reload or live toggle — changing channels requires a process restart (or page reload on web). |

@@ -330,26 +330,20 @@ equal-cost nodes.
 reverses the resulting vector, and returns it.  The returned path includes
 both endpoints.
 
-### Integration in Engine::init\_navigation
+### Integration
 
-- Click-to-move converts the agent's iso position and the tilemap's
-  `mouse_iso_pos` to integer grid cells.
-- On click (when the agent is selected), `find_path` is called with the
-  current nav data as `&[i32]`.
-- **Impassable destinations are rejected before the search runs**: if
-  `nav_data[cy * size_x + cx] == 0` the click is ignored and `find_path` is
-  never called.  Without this, a click on a cliff makes A* exhaust every
-  reachable cell before it can return `None` — 3 ms on a 200x200 map, 21 ms on
-  a 400x400 map, a dropped frame.  Rejecting early is also the correct
-  behaviour (clicking a wall should do nothing, not walk to somewhere
-  adjacent).
-- Waypoints are offset by +0.5 to centre them within tiles (matching TS
-  behaviour).
-- The first waypoint is replaced with the agent's exact floating-point
-  position (matches TS `this._path[0] = [this.position[0],
-  this.position[1]]`).
-- The agent's state is set to `AgentState::FollowPath` with `target_index = 1`
-  and `delta = 0.0`.
+Pathfinding is exposed to ROM guests as the `find_path` SDK import (see the
+`classic-guest` skill).  Click-to-move is implemented in `guest/demo-guest`:
+on a left click with the agent tool selected (and not consumed by UI), it
+`find_path`s from the agent's tile to `mouse_iso` and follows the waypoints
+via `set_pos`/`get_pos`.  The engine no longer wires click-to-move — it only
+installs the nav grid (`init_navigation` / `init_navigation_data`).
+
+The retired engine click-to-move pre-rejected impassable destinations (so a
+click on a wall never ran A*).  The guest does not: `find_path` exhausts the
+grid and returns an empty path, which the guest treats as no-op.  Functionally
+equivalent (clicking a wall does nothing) at the cost of a full search
+(~3 ms at 200x200, ~21 ms at 400x400).
 
 ---
 
@@ -369,9 +363,8 @@ difference > 2.0 (cliff condition).  This check is done in 4 directions
 
 Walkability is recomputed in two contexts:
 
-1. **`init_navigation()`**: syncs nav mesh walkable flags from parent tilemap
-   heights, then overwrites nav data with the decoded `map001.nav.txt`
-   contents (nav file is authoritative).
+1. **`init_navigation()`**: installs the `NavMesh.data` that was inlined into
+   `state.json` (authoritative for passability).
 2. **`sync_nav_heights()`**: called after height paint operations
    (`apply_editor_selection`), checks all nav cells, marks changed cells, and
    rebuilds the nav GPU mesh if any cell changed.

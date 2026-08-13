@@ -92,13 +92,6 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
         speed: 2.5,
         anim_speed: 1.0,
         anim_prefix: "".into(),
-        path: vec![],
-        target_index: 1,
-        delta: 0.0,
-        init_dist: 0.0,
-        direction: 0.0,
-        anim_index: 2,
-        state: classic_core::components::AgentState::Idle,
     };
 
     let mut world = hecs::World::new();

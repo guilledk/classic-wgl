@@ -4,10 +4,10 @@
 //! `classic-core::terrain` does all the generation; this module installs the
 //! result on the ECS entities and GPU, and owns the runtime state needed to
 //! regenerate it.  The scene reuses the demo entity names (`tilemap`,
-//! `tilemapNavigation`, `navAgent`, ...) so the whole editor toolchain works
-//! on a generated map with no further changes.
+//! `tilemapNavigation`, ...) so the whole editor toolchain works on a
+//! generated map with no further changes.
 
-use classic_core::components::{IsoAgent, NavMesh, Tilemap, Transform};
+use classic_core::components::{NavMesh, Tilemap, Transform};
 use classic_core::instrument::Chan;
 use classic_core::terrain::lunar::{generate_lunar, LunarParams, LunarTerrain};
 use classic_core::terrain::tileset::{build_lunar_tileset, DEFAULT_COLS, DEFAULT_ROWS};
@@ -97,8 +97,6 @@ pub fn init_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, params: Lun
     // `sync_nav_heights`.
     engine.nav_slope_threshold = params.nav_max_slope;
 
-    place_agent_at_spawn(engine, &terrain);
-
     state.borrow_mut().lunar =
         Some(LunarScene { params, terrain, height_scale: LUNAR_HEIGHT_SCALE });
 }
@@ -130,7 +128,6 @@ pub fn regenerate_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, param
     engine.rebuild_nav_gpu();
 
     engine.nav_slope_threshold = params.nav_max_slope;
-    place_agent_at_spawn(engine, &terrain);
 
     cl_info!(
         Chan::Terrain,
@@ -143,27 +140,6 @@ pub fn regenerate_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, param
 
     state.borrow_mut().lunar =
         Some(LunarScene { params, terrain, height_scale: LUNAR_HEIGHT_SCALE });
-}
-
-/// Drop the nav agent onto the first spawn point and clear any path it was
-/// following (which would refer to terrain that no longer exists).
-fn place_agent_at_spawn(engine: &mut Engine, terrain: &LunarTerrain) {
-    let Some(agent) = engine.entity_by_role(classic_core::RoleKind::Agent) else { return };
-    let Some(&(sx, sy)) = terrain.spawn_points.first() else { return };
-
-    let h = terrain.height_at(sx, sy) * LUNAR_HEIGHT_SCALE;
-    let pos = glam::Vec3::new(sx as f32 + 0.5, sy as f32 + 0.5, h);
-
-    if let Ok(mut tf) = engine.world.get::<&mut Transform>(agent) {
-        tf.position = pos;
-    }
-    if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(agent) {
-        a.position = pos;
-        a.path.clear();
-        a.target_index = 0;
-        a.delta = 0.0;
-        a.state = classic_core::components::AgentState::Idle;
-    }
 }
 
 /// Dev widget: re-roll the map, and nudge the two parameters that most
@@ -412,7 +388,7 @@ pub fn focus_camera_on_spawn(engine: &mut Engine, state: &DemoStateRef) {
     engine.camera.position.y = origin.y;
 }
 
-/// Install the generated navigation grid and wire click-to-move.
+/// Install the generated navigation grid.
 ///
 /// The generator already derived walkability from real terrain slope and
 /// guaranteed every spawn is mutually reachable; re-deriving it from the

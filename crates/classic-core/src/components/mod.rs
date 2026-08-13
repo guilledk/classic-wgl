@@ -225,21 +225,6 @@ pub struct IsoAgent {
     pub anim_speed: f32,
     #[serde(default)]
     pub anim_prefix: String,
-    /// Internal state.
-    #[serde(skip)]
-    pub path: Vec<Vec2>,
-    #[serde(skip)]
-    pub target_index: usize,
-    #[serde(skip)]
-    pub delta: f32,
-    #[serde(skip)]
-    pub init_dist: f32,
-    #[serde(skip)]
-    pub direction: f32,
-    #[serde(skip)]
-    pub anim_index: usize,
-    #[serde(skip)]
-    pub state: AgentState,
 }
 
 impl Default for IsoAgent {
@@ -256,22 +241,8 @@ impl Default for IsoAgent {
             speed: 2.6,
             anim_speed: 1.0,
             anim_prefix: String::new(),
-            path: Vec::new(),
-            target_index: 1,
-            delta: 0.0,
-            init_dist: 0.0,
-            direction: 0.0,
-            anim_index: 2,
-            state: AgentState::Idle,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AgentState {
-    #[default]
-    Idle,
-    FollowPath,
 }
 
 /// A frame-animator tied to a sprite.

@@ -138,10 +138,13 @@ plans/
   Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),
   not a post-pass.  See `classic-text` skill.
 - **ROM guest code**: each ROM bundles a compiled `.wasm` module (`manifest.code`) run by
-  `classic-guest`'s `WasmiRuntime` against the host SDK (spawn/despawn, component JSON
-  round-trip via the registry, input/time, log).  Untrusted guests (`trusted: false`,
-  default) are sandboxed with fuel metering + a memory cap; the shipped demo/lunar ROMs set
-  `trusted: true`.  See `classic-guest` skill.
+  `classic-guest`'s `WasmiRuntime` against the host SDK (entity lifecycle, component JSON
+  round-trip via the registry, 3D position, mouse/mouse_iso/key input, time, `height_at`,
+  `set_anim`, `find_path`, `agent_selected`/`ui_consumed_click`, log).  Untrusted guests
+  (`trusted: false`, default) are sandboxed with fuel metering + a memory cap; the shipped
+  demo/lunar ROMs set `trusted: true`.  The demo's `navAgent` behaviour (click-to-move +
+  idle/walk animation + terrain-z) lives in `guest/demo-guest`, not Rust.  See `classic-guest`
+  skill.
 
 ## Conventions
 

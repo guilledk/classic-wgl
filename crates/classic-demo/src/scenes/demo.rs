@@ -11,7 +11,7 @@ pub fn hydrate_terrain(engine: &mut Engine) {
     engine.init_tilemap();
 }
 
-/// Install the navigation overlay + click-to-move from the inlined nav data.
+/// Install the navigation overlay from the inlined nav data.
 pub fn hydrate_nav(engine: &mut Engine) {
     engine.init_navigation();
 }

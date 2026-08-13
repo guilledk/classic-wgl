@@ -68,8 +68,8 @@ pub struct Engine {
     pub scroll_speed: f32,
     pub input: InputState,
     pub show_grid: bool,
-    /// Selected-agent flag — the generic engine signal the nav click-to-move
-    /// handler reads.  The demo editor toggles it.
+    /// Selected-agent flag — the demo editor toggles it; the ROM guest reads it
+    /// (via `agent_selected`) to gate click-to-move.
     pub agent_selected: bool,
     pub light_ambient: [f32; 3],
     pub light_dir: [f32; 3],
@@ -2004,7 +2004,7 @@ impl Engine {
     }
 
     /// Initialize navigation from the nav mesh entity's inline `NavMesh.data`
-    /// (loaded from `state.json`) and wire click-to-move.
+    /// (loaded from `state.json`).
     pub fn init_navigation(&mut self) {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
         let nav_data = {
