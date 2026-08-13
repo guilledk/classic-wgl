@@ -17,8 +17,8 @@ fn sample_files() -> Vec<(&'static str, &'static [u8])> {
 
 fn build_zip() -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let opts =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
     for (name, data) in sample_files() {
         writer.start_file(name, opts).unwrap();
         writer.write_all(data).unwrap();

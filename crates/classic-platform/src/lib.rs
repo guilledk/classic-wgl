@@ -99,7 +99,9 @@ pub trait Platform {
 // foundation crate) so `ResourceSet` can build from either a `RomArchive` or
 // an `AssetLoader` without pulling in a platform/GL dependency.  Re-export
 // the surface here for the existing `classic_platform::AssetLoader` callers.
-pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader, FsAssetLoader};
+#[cfg(not(target_arch = "wasm32"))]
+pub use classic_rom::FsAssetLoader;
+pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 
 // ---------------------------------------------------------------------------
 // Native backend  (not wasm32)

@@ -34,8 +34,9 @@ impl RomArchive {
         let n = file.read(&mut magic)?;
         file.seek(SeekFrom::Start(0))?;
 
-        let format = detect_format(&magic[..n])
-            .ok_or_else(|| anyhow::anyhow!("unknown ROM archive format: {}", path.as_ref().display()))?;
+        let format = detect_format(&magic[..n]).ok_or_else(|| {
+            anyhow::anyhow!("unknown ROM archive format: {}", path.as_ref().display())
+        })?;
         Self::from_reader(file, format)
     }
 
@@ -52,9 +53,7 @@ impl RomArchive {
         let files = match format {
             RomFormat::Zip => read_zip(reader)?,
             RomFormat::TarGz => read_tar(flate2::read::GzDecoder::new(reader))?,
-            RomFormat::TarZst => {
-                read_tar(ruzstd::decoding::StreamingDecoder::new(reader)?)?
-            }
+            RomFormat::TarZst => read_tar(ruzstd::decoding::StreamingDecoder::new(reader)?)?,
         };
         Ok(Self { files })
     }
@@ -71,9 +70,8 @@ impl RomArchive {
 
     /// Read a single entry and interpret it as UTF-8.
     pub fn read_string(&self, path: &str) -> anyhow::Result<String> {
-        let bytes = self
-            .read(path)
-            .ok_or_else(|| anyhow::anyhow!("ROM entry not found: {path}"))?;
+        let bytes =
+            self.read(path).ok_or_else(|| anyhow::anyhow!("ROM entry not found: {path}"))?;
         Ok(String::from_utf8(bytes.to_vec())?)
     }
 

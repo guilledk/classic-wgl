@@ -148,8 +148,8 @@ mod tests {
 
     fn test_archive() -> RomArchive {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        let opts =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         for (name, data) in [
             ("res/humanoid.png", b"png".as_slice()),
             ("res/dejavusans-sdf.json", b"{}".as_slice()),
@@ -168,10 +168,7 @@ mod tests {
         assert_eq!(set.len(), 3);
         assert_eq!(set.get(ResourceKind::Texture, "humanoid"), Some(b"png".as_slice()));
         assert_eq!(set.get(ResourceKind::Font, "dejavusans"), Some(b"{}".as_slice()));
-        assert_eq!(
-            set.get(ResourceKind::Script, "main"),
-            Some(b"fn update(ctx) {}".as_slice())
-        );
+        assert_eq!(set.get(ResourceKind::Script, "main"), Some(b"fn update(ctx) {}".as_slice()));
     }
 
     #[test]
@@ -192,9 +189,6 @@ mod tests {
         let loader = EmbeddedAssetLoader::new(ASSETS);
         let set = ResourceSet::from_loader(&loader, &test_manifest()).unwrap();
         assert_eq!(set.len(), 3);
-        assert_eq!(
-            set.get(ResourceKind::Script, "main"),
-            Some(b"fn update(ctx) {}".as_slice())
-        );
+        assert_eq!(set.get(ResourceKind::Script, "main"), Some(b"fn update(ctx) {}".as_slice()));
     }
 }

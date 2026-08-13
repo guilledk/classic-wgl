@@ -83,8 +83,8 @@ impl FsAssetLoader {
 impl AssetLoader for FsAssetLoader {
     fn load_bytes(&self, path: &str) -> anyhow::Result<AssetBytes> {
         let full = self.root.join(path.trim_start_matches('/'));
-        let bytes =
-            std::fs::read(&full).map_err(|e| anyhow::anyhow!("failed to read {}: {e}", full.display()))?;
+        let bytes = std::fs::read(&full)
+            .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", full.display()))?;
         Ok(AssetBytes::Owned(bytes))
     }
 }

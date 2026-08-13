@@ -33,7 +33,7 @@ CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo
 
 # Lint
 cargo fmt --all -- --check              # formatting
-cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-demo --all-targets -- -D warnings
+cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-demo --all-targets -- -D warnings
 
 # Assets (must run once after checkout / submodule update)
 npm ci && npm run assets                # generates public/res/ (gitignored, embedded via include_bytes!)
@@ -47,7 +47,7 @@ before considering a task done.
 ## Directory map
 
 ```
-Cargo.toml               workspace root (7 members)
+Cargo.toml               workspace root (8 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
                           tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder,
@@ -56,6 +56,8 @@ crates/
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
                           golden.rs (traces), env_config.rs
+  classic-rom/            ROM archive reader: RomArchive (zip/tar.gz/tar.zst), RomManifest,
+                          ResourceSet, AssetLoader trait (re-exported by classic-platform)
   classic-demo/           application/prefab layer: init_engine(gl, &DemoAssets, Scene) bootstrap,
                           DemoState + EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs,
                           hud.rs, testing.rs, scenes/ (demo + lunar)
