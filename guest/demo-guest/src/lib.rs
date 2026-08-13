@@ -9,10 +9,15 @@
 //! direction-aware idle/walk animation via `set_anim`, and terrain-height
 //! following via `height_at`.
 
+extern crate alloc;
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
+
+#[global_allocator]
+static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
 mod host {
     #[link(wasm_import_module = "env")]

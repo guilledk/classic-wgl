@@ -9,10 +9,15 @@
 //! `lunar` generator lives in `classic-core`; this guest picks the kind, seed,
 //! and trigger).
 
+extern crate alloc;
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
+
+#[global_allocator]
+static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
 mod host {
     #[link(wasm_import_module = "env")]
@@ -40,27 +45,16 @@ static mut SEED_LEN: i32 = 0;
 
 /// Write the next seed (`"1"`, `"2"`, ...) into `SEED`/`SEED_LEN`.
 fn bump_seed() {
-    // SAFETY: single-threaded guest.
-    unsafe {
+    let n = unsafe {
         SEED_N += 1;
-        let mut v = SEED_N;
-        let mut digits = [0u8; 16];
-        let mut dlen = 0usize;
-        loop {
-            digits[dlen] = b'0' + (v % 10) as u8;
-            dlen += 1;
-            v /= 10;
-            if v == 0 {
-                break;
-            }
-        }
-        let mut i = 0usize;
-        while dlen > 0 {
-            dlen -= 1;
-            SEED[i] = digits[dlen];
-            i += 1;
-        }
-        SEED_LEN = i as i32;
+        SEED_N
+    };
+    let seed = alloc::format!("{n}");
+    // SAFETY: single-threaded guest; SEED is a static buffer sized for u32 seeds.
+    unsafe {
+        let len = seed.len().min(SEED.len());
+        SEED[..len].copy_from_slice(&seed.as_bytes()[..len]);
+        SEED_LEN = len as i32;
     }
 }
 

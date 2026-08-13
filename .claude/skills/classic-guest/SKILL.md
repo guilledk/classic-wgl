@@ -132,6 +132,9 @@ each `update` via `GuestHost::set_engine` and deref'd only inside that call
   `public/code/demo.wasm` / `lunar.wasm`; `scripts/build-roms.mjs` injects
   `code: [{name:"main", src:"/code/<scene>.wasm"}]` + `trusted: true` and
   bundles the per-scene guest into each ROM.
+- Shipped guests link `dlmalloc` (`global` feature) as `#[global_allocator]`,
+  so `alloc::String`/`Vec`/`format!` are available from guest code (memory
+  still bounded by the wasmi memory cap).
 
 ## 7. Adding a host import (the SDK is a reviewed surface)
 
