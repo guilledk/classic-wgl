@@ -1,7 +1,7 @@
 //! Integration tests for the WASM guest runtime, driving wasmi with small
 //! hand-written WAT guest modules.
 
-use classic_core::components::{ColliderData, NavMesh, Role, Shape};
+use classic_core::components::{Animator, ColliderData, NavMesh, Role, Shape};
 use classic_core::RoleKind;
 use classic_engine::Engine;
 use classic_guest::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
@@ -357,4 +357,41 @@ fn guest_subscribe_and_poll_wiring() {
     .unwrap();
 
     rt.update(&mut engine, 0.016).unwrap();
+}
+
+#[test]
+fn spawn_collider_and_pick() {
+    let mut engine = Engine::new_for_test();
+    engine.spawn_named("unit");
+    assert!(engine.spawn_collider("unit", 50.0, 60.0, 20.0, 10.0));
+    assert!(engine.subscribe("unit"));
+    engine.physics.begin_frame();
+
+    assert_eq!(engine.pick_at(50.0, 60.0), Some("unit".to_string()));
+    assert_eq!(engine.pick_at(500.0, 500.0), None);
+}
+
+#[test]
+fn get_anim_reads_animation() {
+    let mut engine = Engine::new_for_test();
+    engine.spawn_named("unit");
+    let entity = *engine.names.get("unit").unwrap();
+    engine
+        .world
+        .insert_one(
+            entity,
+            Animator {
+                target: "unit.IsoAgent".into(),
+                speed: 1.0,
+                animation: Some("walkEast".into()),
+                counter: 0.0,
+                frame: 5.0,
+                repeat: true,
+                playing: true,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(engine.get_anim("unit"), Some(("walkEast".to_string(), 5.0)));
+    assert_eq!(engine.get_anim("missing"), None);
 }

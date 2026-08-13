@@ -797,6 +797,13 @@ impl Engine {
         }
     }
 
+    /// Read a named entity's current animation name and frame.
+    pub fn get_anim(&self, name: &str) -> Option<(String, f32)> {
+        let entity = *self.names.get(name)?;
+        let a = self.world.get::<&Animator>(entity).ok()?;
+        Some((a.animation.clone().unwrap_or_default(), a.frame))
+    }
+
     /// A* path over the nav mesh between two integer tile coordinates.
     /// Returns the full path (inclusive of both endpoints) or `None`.
     pub fn find_path(&self, from: (i32, i32), to: (i32, i32)) -> Option<Vec<(i32, i32)>> {
@@ -825,6 +832,26 @@ impl Engine {
         let pid = self.physics.register_collider(collider);
         self.collider_names.insert(pid, name.to_string());
         pid
+    }
+
+    /// Attach an axis-aligned rectangle collider to a named entity, at a screen
+    /// position and size.  Combined with `subscribe`, this makes arbitrary
+    /// (screen-space) entities clickable/hoverable from a guest.
+    pub fn spawn_collider(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32) -> bool {
+        if !self.names.contains_key(name) {
+            return false;
+        }
+        let verts = vec![
+            glam::Vec3::new(0.0, 0.0, 0.0),
+            glam::Vec3::new(w, 0.0, 0.0),
+            glam::Vec3::new(w, h, 0.0),
+            glam::Vec3::new(0.0, h, 0.0),
+        ];
+        let mut collider = ColliderData::new(classic_core::collision::polygon_from_verts(verts));
+        collider.position = glam::Vec3::new(x, y, 0.0);
+        collider.scale = glam::Vec3::ONE;
+        self.register_named_collider(name, collider);
+        true
     }
 
     /// The name of the top gameplay entity under a screen point, if any.

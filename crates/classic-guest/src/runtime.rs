@@ -723,6 +723,47 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "spawn_collider",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             x: f64,
+             y: f64,
+             w: f64,
+             h: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().spawn_collider(&name, x, y, w, h)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "get_anim",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                let Some((anim, frame)) = caller.data_mut().get_anim(&name) else {
+                    return 0;
+                };
+                let mut bytes = Vec::with_capacity(12 + anim.len());
+                bytes.extend_from_slice(&frame.to_le_bytes());
+                bytes.extend_from_slice(&(anim.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(anim.as_bytes());
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                abi::write_bytes(&mut caller, out_ptr, &bytes);
+                1
+            },
+        )?;
+
         Ok(())
     }
 }

@@ -527,4 +527,15 @@ impl GuestHost {
     pub fn poll_event(&mut self) -> Option<(u32, String)> {
         self.engine_mut().poll_event().map(|e| (e.kind, e.name))
     }
+
+    /// Attach an axis-aligned rectangle collider to a named entity (screen space).
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_collider(&mut self, name: &str, x: f64, y: f64, w: f64, h: f64) -> i32 {
+        self.engine_mut().spawn_collider(name, x as f32, y as f32, w as f32, h as f32) as i32
+    }
+
+    /// Read a named entity's current animation name and frame.
+    pub fn get_anim(&mut self, name: &str) -> Option<(String, f64)> {
+        self.engine().get_anim(name).map(|(n, f)| (n, f as f64))
+    }
 }
