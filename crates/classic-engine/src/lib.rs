@@ -193,10 +193,11 @@ impl Engine {
         let manifest: classic_core::types::Manifest =
             serde_json::from_str(manifest_json).expect("parse manifest.json");
         let mut gfx = Gfx::new(gl);
+        let registry = classic_gfx::ShaderSourceRegistry::builtin();
         for info in &manifest.shaders {
-            let vs = Gfx::resolve_vertex_source(&info.vertex);
-            let fs = Gfx::resolve_fragment_source(&info.fragment);
-            gfx.add_shader(&info.name, vs, fs, &info.attr, &info.unif).expect("compile shader");
+            let vs = registry.resolve_vertex(&info.vertex);
+            let fs = registry.resolve_fragment(&info.fragment);
+            gfx.add_shader(&info.name, &vs, &fs, &info.attr, &info.unif).expect("compile shader");
         }
         for anim in &manifest.animations {
             self.animations.insert(anim.name.clone(), anim.clone());

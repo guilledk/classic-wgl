@@ -761,39 +761,70 @@ impl Gfx {
             gl.disable(glow::DEPTH_TEST);
         }
     }
+}
 
-    /// Resolve a vertex-shader URL (from manifest.json) to its embedded source.
-    pub fn resolve_vertex_source(url: &str) -> &'static str {
-        if url.contains("direct.vert") && !url.contains("tex") {
-            shaders::DIRECT_VERT
-        } else if url.contains("direct_tex.vert") {
-            shaders::DIRECT_TEX_VERT
-        } else if url.contains("iso_tilemap.vert") {
-            shaders::ISO_TILEMAP_VERT
-        } else if url.contains("sdf.vert") {
-            shaders::SDF_VERT
-        } else {
-            panic!("unknown vertex shader URL: {url}")
-        }
+// ---------------------------------------------------------------------------
+// Named shader source registry
+// ---------------------------------------------------------------------------
+
+/// Extract the filename (last `/`-separated segment) from a shader URL such as
+/// `/shaders/direct.vert`.
+fn shader_filename(url: &str) -> &str {
+    url.rsplit('/').next().unwrap_or(url)
+}
+
+/// A name-keyed registry of GLSL shader sources.
+///
+/// Built-in sources (embedded via `include_str!`) are registered by
+/// [`ShaderSourceRegistry::builtin`]; a ROM may override any of them by
+/// filename, so ROM-owned shaders replace the engine defaults without touching
+/// the manifest or the draw layer.
+#[derive(Default)]
+pub struct ShaderSourceRegistry {
+    vertex: std::collections::HashMap<String, String>,
+    fragment: std::collections::HashMap<String, String>,
+}
+
+impl ShaderSourceRegistry {
+    /// Registry seeded with the engine's built-in shader sources.
+    pub fn builtin() -> Self {
+        let mut r = Self::default();
+        r.override_vertex("direct.vert", shaders::DIRECT_VERT);
+        r.override_vertex("direct_tex.vert", shaders::DIRECT_TEX_VERT);
+        r.override_vertex("iso_tilemap.vert", shaders::ISO_TILEMAP_VERT);
+        r.override_vertex("sdf.vert", shaders::SDF_VERT);
+        r.override_fragment("solid.frag", shaders::SOLID_FRAG);
+        r.override_fragment("image.frag", shaders::IMAGE_FRAG);
+        r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
+        r.override_fragment("iso_tilemap.frag", shaders::ISO_TILEMAP_FRAG);
+        r.override_fragment("sheet.frag", shaders::SHEET_FRAG);
+        r.override_fragment("sdf.frag", shaders::SDF_FRAG);
+        r
     }
 
-    /// Resolve a fragment-shader URL to its embedded source.
-    pub fn resolve_fragment_source(url: &str) -> &'static str {
-        if url.contains("solid.frag") {
-            shaders::SOLID_FRAG
-        } else if url.contains("image.frag") && !url.contains("color") {
-            shaders::IMAGE_FRAG
-        } else if url.contains("image_colorized.frag") {
-            shaders::IMAGE_COLORIZED_FRAG
-        } else if url.contains("iso_tilemap.frag") {
-            shaders::ISO_TILEMAP_FRAG
-        } else if url.contains("sheet.frag") {
-            shaders::SHEET_FRAG
-        } else if url.contains("sdf.frag") {
-            shaders::SDF_FRAG
-        } else {
-            panic!("unknown fragment shader URL: {url}")
-        }
+    /// Register (or replace) a vertex shader source by filename.
+    pub fn override_vertex(&mut self, filename: &str, source: impl Into<String>) {
+        self.vertex.insert(filename.to_string(), source.into());
+    }
+
+    /// Register (or replace) a fragment shader source by filename.
+    pub fn override_fragment(&mut self, filename: &str, source: impl Into<String>) {
+        self.fragment.insert(filename.to_string(), source.into());
+    }
+
+    /// Resolve a vertex-shader URL to a source string.
+    pub fn resolve_vertex(&self, url: &str) -> String {
+        let f = shader_filename(url);
+        self.vertex.get(f).cloned().unwrap_or_else(|| panic!("unknown vertex shader URL: {url}"))
+    }
+
+    /// Resolve a fragment-shader URL to a source string.
+    pub fn resolve_fragment(&self, url: &str) -> String {
+        let f = shader_filename(url);
+        self.fragment
+            .get(f)
+            .cloned()
+            .unwrap_or_else(|| panic!("unknown fragment shader URL: {url}"))
     }
 }
 
