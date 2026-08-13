@@ -387,6 +387,7 @@ dependencies = [
  "log",
  "serde_json",
  "wasmi",
+ "wat",
 ]
 
 [[package]]
@@ -2349,6 +2350,7 @@ checksum = "60bd825ffedc6cba8a642924ba7ae424afbc47811cffbcb7b92031ec24e59b4c"
 dependencies = [
  "bitflags 2.13.1",
  "indexmap",
+ "semver",
 ]
 
 [[package]]

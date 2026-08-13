@@ -676,9 +676,17 @@ impl Engine {
         self.world.get::<&Transform>(entity).ok().map(|tf| (tf.position.x, tf.position.y))
     }
 
-    /// Write a named entity's 2D position (into its `Transform`).
+    /// Write a named entity's 2D position (into its `Transform`, creating a
+    /// default one if the entity has none yet).
     pub fn set_pos(&mut self, name: &str, x: f32, y: f32) -> bool {
         let Some(&entity) = self.names.get(name) else { return false };
+        if self.world.get::<&Transform>(entity).is_err() {
+            let _ = self.world.insert_one(
+                entity,
+                Transform::new(glam::Vec3::new(x, y, 0.0), glam::Vec3::new(1.0, 1.0, 1.0)),
+            );
+            return true;
+        }
         if let Ok(mut tf) = self.world.get::<&mut Transform>(entity) {
             tf.position.x = x;
             tf.position.y = y;

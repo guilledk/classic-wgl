@@ -124,11 +124,8 @@ impl GuestHost {
         self.engine_mut().set_pos(name, x as f32, y as f32) as i32
     }
 
-    pub fn get_pos(&mut self, name: &str) -> (f64, f64) {
-        match self.engine().get_pos(name) {
-            Some((x, y)) => (x as f64, y as f64),
-            None => (0.0, 0.0),
-        }
+    pub fn get_pos(&mut self, name: &str) -> Option<(f64, f64)> {
+        self.engine().get_pos(name).map(|(x, y)| (x as f64, y as f64))
     }
 
     pub fn mouse(&mut self) -> (f64, f64) {

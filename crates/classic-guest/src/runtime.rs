@@ -205,14 +205,20 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "get_pos",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> (f64, f64) {
+            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32, out_ptr: i32| -> i32 {
                 let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().get_pos(&name)
+                let Some((x, y)) = caller.data_mut().get_pos(&name) else {
+                    return 0;
+                };
+                abi::write_f64_pair(&mut caller, out_ptr, x, y);
+                1
             },
         )?;
 
-        linker.func_wrap(m, "mouse", |mut caller: Caller<'_, GuestHost>| -> (f64, f64) {
-            caller.data_mut().mouse()
+        linker.func_wrap(m, "mouse", |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
+            let (x, y) = caller.data_mut().mouse();
+            abi::write_f64_pair(&mut caller, out_ptr, x, y);
+            1
         })?;
 
         linker.func_wrap(m, "delta", |mut caller: Caller<'_, GuestHost>| -> f64 {
@@ -249,8 +255,10 @@ impl GuestRuntime for WasmiRuntime {
         let engine = Self::build_engine(limits);
         let module = Module::new(&engine, wasm).map_err(|e| GuestError::Compile(e.to_string()))?;
 
-        let store_limits =
-            wasmi::StoreLimitsBuilder::new().memory_size(limits.max_memory_bytes).build();
+        let store_limits = wasmi::StoreLimitsBuilder::new()
+            .memory_size(limits.max_memory_bytes)
+            .trap_on_grow_failure(true)
+            .build();
         let mut store = Store::new(&engine, GuestHost::new(store_limits));
         store.limiter(|host: &mut GuestHost| host.resource_limiter());
 
