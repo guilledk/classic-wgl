@@ -16,11 +16,11 @@ pub mod quadtree;
 pub mod simplex_noise;
 
 use components::{
-    Animator, IsoAgent, IsoSprite, LightState, NavMesh, RectRender, SdfTextRender, Tilemap,
+    Animator, IsoAgent, IsoSprite, LightState, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
 };
 
 pub use camera::Camera;
-pub use components::{SpriteRender, Transform};
+pub use components::{RoleKind, SpriteRender, Transform};
 pub use types::Rect;
 
 /// Call once at startup to register all known component types.
@@ -174,6 +174,18 @@ pub fn register_all_components() {
         order: 48,
         subsumes: &[],
     });
+
+    registry::register(ComponentReg {
+        name: "Role",
+        spawn: |b, v| {
+            let r: Role = serde_json::from_value(v)?;
+            b.add(r);
+            Ok(())
+        },
+        dump: Some(dumper_role),
+        order: 60,
+        subsumes: &[],
+    });
 }
 
 // Dumper helpers
@@ -243,4 +255,9 @@ fn dumper_lightstate(world: &hecs::World, entity: hecs::Entity) -> Option<serde_
 fn dumper_camera(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let c = world.get::<&Camera>(entity).ok()?;
     serde_json::to_value(&*c).ok().map(|v| component_value("Camera", v))
+}
+
+fn dumper_role(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let r = world.get::<&Role>(entity).ok()?;
+    serde_json::to_value(*r).ok().map(|v| component_value("Role", v))
 }

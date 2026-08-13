@@ -6,9 +6,9 @@
 
 use classic_engine::Engine;
 
-/// Build the flat tilemap mesh + tile-data texture for the `tilemap` entity.
+/// Build the flat tilemap mesh + tile-data texture for the Tilemap-role entity.
 pub fn hydrate_terrain(engine: &mut Engine) {
-    engine.init_tilemap("tilemap");
+    engine.init_tilemap();
 }
 
 /// Install the navigation overlay + click-to-move from the inlined nav data.

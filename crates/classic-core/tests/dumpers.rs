@@ -240,3 +240,29 @@ fn lightstate_and_camera_dumpers() {
     // `size` is runtime-derived and must not be serialized.
     assert!(cam_val.get("size").is_none());
 }
+
+#[test]
+fn role_dumper_round_trips() {
+    classic_core::registry::clear();
+    register_all_components();
+
+    let role = classic_core::components::Role::new(classic_core::RoleKind::Tilemap);
+    let mut world = hecs::World::new();
+    let e = world.spawn((role,));
+
+    let regs = classic_core::registry::ordered_regs();
+    let role_reg = regs.iter().find(|r| r.name == "Role").unwrap();
+    let val = role_reg.dump.unwrap()(&world, e).unwrap();
+    assert_eq!(val["type"], "Role");
+    assert_eq!(val["value"], "Tilemap");
+
+    // Spawn it back from the dumped value.
+    let mut builder = hecs::EntityBuilder::new();
+    let fields = serde_json::json!({ "value": "Tilemap" });
+    (role_reg.spawn)(&mut builder, fields).unwrap();
+    let spawned = world.spawn(builder.build());
+    assert_eq!(
+        world.get::<&classic_core::components::Role>(spawned).unwrap().value,
+        classic_core::RoleKind::Tilemap
+    );
+}

@@ -40,6 +40,29 @@ impl std::fmt::Display for DebugName {
     }
 }
 
+/// The role an entity plays in a scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RoleKind {
+    Tilemap,
+    NavMesh,
+    Agent,
+    Cursor,
+}
+
+/// Tag component marking an entity's role, so host features (editor, nav,
+/// agent, cursor) find entities without hardcoded names.  ROMs tag their own
+/// entities in `state.json`; the engine queries by [`RoleKind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Role {
+    pub value: RoleKind,
+}
+
+impl Role {
+    pub fn new(value: RoleKind) -> Self {
+        Self { value }
+    }
+}
+
 /// Render a solid-colour rectangle.
 /// Port of `Rectangle` from `transforms.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]

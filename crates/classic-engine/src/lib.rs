@@ -22,7 +22,8 @@ use std::rc::Rc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    AgentState, DebugName, IsoAgent, IsoSprite, NavMesh, RectRender, SdfTextRender, Tilemap, UiNode,
+    AgentState, DebugName, IsoAgent, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
+    UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -32,7 +33,7 @@ use classic_core::terrain::lunar::LunarTerrain;
 use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 use classic_core::types::AnimationData;
 use classic_core::types::SdfFontMetrics;
-use classic_core::{Camera, SpriteRender, Transform};
+use classic_core::{Camera, RoleKind, SpriteRender, Transform};
 use classic_gfx::{Gfx, GlBuffer};
 use classic_platform::InputState;
 use glam::{Mat3, Mat4, Vec3, Vec4};
@@ -300,8 +301,8 @@ impl Engine {
     /// [`Engine::init_gfx`].  Terrain is flat (height 1.0 everywhere), matching
     /// the TS `heightData.fill(1)`.  For procedurally generated terrain see
     /// [`Engine::init_tilemap_generated`].
-    pub fn init_tilemap(&mut self, entity_name: &str) {
-        let entity = *self.names.get(entity_name).expect("tilemap entity");
+    pub fn init_tilemap(&mut self) {
+        let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
 
         let (size_x, size_y, tiles) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
@@ -313,7 +314,7 @@ impl Engine {
         // to avoid off-by-one edge cases. See docs/TS-PARITY.md.
         let heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
 
-        self.finish_tilemap_init(entity_name, entity, tiles, heights, None);
+        self.finish_tilemap_init(entity, tiles, heights, None);
     }
 
     /// Build and upload a tilemap from procedurally generated terrain, with
@@ -325,14 +326,13 @@ impl Engine {
     /// parallax solve.
     pub fn init_tilemap_generated(
         &mut self,
-        entity_name: &str,
         terrain: &LunarTerrain,
         tileset_rgba: &[u8],
         tileset_w: u32,
         tileset_h: u32,
         height_scale: Option<f32>,
     ) {
-        let entity = *self.names.get(entity_name).expect("tilemap entity");
+        let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
 
         let (tile_set_name, size_x, size_y) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
@@ -341,7 +341,7 @@ impl Engine {
         assert_eq!(
             (terrain.size_x, terrain.size_y),
             (size_x, size_y),
-            "generated terrain size does not match the '{entity_name}' Tilemap component"
+            "generated terrain size does not match the Tilemap component"
         );
 
         if let Some(gfx) = self.gfx.as_mut() {
@@ -349,7 +349,6 @@ impl Engine {
         }
 
         self.finish_tilemap_init(
-            entity_name,
             entity,
             terrain.tiles.clone(),
             terrain.heights.clone(),
@@ -365,7 +364,6 @@ impl Engine {
     /// is the main reason this is factored out rather than duplicated.
     fn finish_tilemap_init(
         &mut self,
-        entity_name: &str,
         entity: hecs::Entity,
         tiles: Vec<u32>,
         heights: Vec<f32>,
@@ -405,10 +403,8 @@ impl Engine {
             }
         }
 
-        self.tilemap_gpu.insert(
-            entity_name.to_string(),
-            TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex },
-        );
+        let name = self.debug_name(entity);
+        self.tilemap_gpu.insert(name, TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
 
         // Register updateMousePos: convert screen coords → iso tile coords
         // with 3-iteration height parallax solve.
@@ -526,6 +522,20 @@ impl Engine {
             .get::<&DebugName>(entity)
             .map(|n| n.0.clone())
             .unwrap_or_else(|_| format!("e#{:?}", entity.id()))
+    }
+
+    /// Find the entity tagged with the given [`RoleKind`].
+    pub fn entity_by_role(&self, kind: RoleKind) -> Option<hecs::Entity> {
+        self.world
+            .query::<&Role>()
+            .iter()
+            .find(|(_, role)| role.value == kind)
+            .map(|(entity, _)| entity)
+    }
+
+    /// Find the name of the entity tagged with the given [`RoleKind`].
+    pub fn name_by_role(&self, kind: RoleKind) -> Option<String> {
+        self.entity_by_role(kind).map(|e| self.debug_name(e))
     }
 
     // "type" must be the first key in each dumped component object.
@@ -709,7 +719,7 @@ impl Engine {
         if self.input.was_mouse_pressed(0) && !self.ui_consumed_click {
             self.selection_mode = 1;
             self.selection_begin_screen = Vec3::new(mp.x, mp.y, 0.0);
-            if let Some(&e) = self.names.get("tilemap") {
+            if let Some(e) = self.entity_by_role(RoleKind::Tilemap) {
                 if let Ok(mut tm) = self.world.get::<&mut Tilemap>(e) {
                     tm.selection_iso_begin = tm.mouse_iso_pos;
                 }
@@ -805,7 +815,7 @@ impl Engine {
             let just_finished_selection = self.selection_mode == 1;
             if self.selection_mode == 1 {
                 self.selection_mode = -1;
-                if let Some(&e) = self.names.get("tilemap") {
+                if let Some(e) = self.entity_by_role(RoleKind::Tilemap) {
                     if let Ok(mut tm) = self.world.get::<&mut Tilemap>(e) {
                         tm.selection_iso_end = tm.mouse_iso_pos;
                     }
@@ -851,7 +861,9 @@ impl Engine {
             if self.is_disabled(e) {
                 continue;
             }
-            if self.debug_name(e) == "tilemapNavigation" && self.nav_gpu.is_some() {
+            if self.world.get::<&Role>(e).is_ok_and(|r| r.value == RoleKind::NavMesh)
+                && self.nav_gpu.is_some()
+            {
                 items.push((19999.0, e, DrawKind::Tilemap));
             }
         }
@@ -963,8 +975,10 @@ impl Engine {
                     );
                 }
                 DrawKind::Tilemap => {
-                    let entity_name = name_by_entity.get(entity).copied().unwrap_or("");
-                    let is_nav = entity_name == "tilemapNavigation";
+                    let is_nav = self
+                        .world
+                        .get::<&Role>(*entity)
+                        .is_ok_and(|r| r.value == RoleKind::NavMesh);
 
                     if is_nav {
                         let Some(ref gpu) = self.nav_gpu else { continue };
@@ -1573,7 +1587,7 @@ impl Engine {
 
     /// Build and upload GPU resources for the nav mesh overlay.
     pub fn init_nav_mesh_render(&mut self) {
-        let Some(&nav_entity) = self.names.get("tilemapNavigation") else {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
             return;
         };
         let (size_x, size_y, nav_data, heights, height_scale) = {
@@ -1583,9 +1597,8 @@ impl Engine {
             };
             // Use parent tilemap's actual height data so nav tiles sit on terrain surface
             let (hd, hs) = self
-                .names
-                .get("tilemap")
-                .and_then(|&e| self.world.get::<&Tilemap>(e).ok())
+                .entity_by_role(RoleKind::Tilemap)
+                .and_then(|e| self.world.get::<&Tilemap>(e).ok())
                 .map(|tm| (tm.height_data.clone(), tm.height_scale))
                 .unwrap_or_else(|| {
                     let h = vec![1.0f32; (nav.size_x as usize + 1) * (nav.size_y as usize + 1)];
@@ -1609,9 +1622,8 @@ impl Engine {
         // Borrow position + scale from parent tilemap (matches TS IsometricNavMesh constructor).
         {
             let (pos, scl) = self
-                .names
-                .get("tilemap")
-                .and_then(|&e| self.world.get::<&Transform>(e).ok())
+                .entity_by_role(RoleKind::Tilemap)
+                .and_then(|e| self.world.get::<&Transform>(e).ok())
                 .map(|tf| (tf.position, tf.scale))
                 .unwrap_or((glam::Vec3::ZERO, glam::Vec3::ONE));
             let _ = self.world.insert_one(nav_entity, Transform::new(pos, scl));
@@ -1620,10 +1632,10 @@ impl Engine {
 
     /// After height edits, recalculate nav mesh walkability and rebuild GPU resources.
     pub fn sync_nav_heights(&mut self) {
-        let Some(nav_entity) = self.names.get("tilemapNavigation").copied() else {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
             return;
         };
-        let Some(tm_entity) = self.names.get("tilemap").copied() else {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else {
             return;
         };
         let (sx, sy) = {
@@ -1721,7 +1733,7 @@ impl Engine {
 
     /// Rebuild nav mesh GPU buffers from current NavMesh component data.
     pub fn rebuild_nav_gpu(&mut self) {
-        let Some(nav_entity) = self.names.get("tilemapNavigation").copied() else {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
             return;
         };
         let (sx, sy, data) = {
@@ -1736,9 +1748,8 @@ impl Engine {
         // detached from the surface after any nav edit — unnoticeable on the
         // flat demo map, glaring over a crater field.
         let (hs, heights) = self
-            .names
-            .get("tilemap")
-            .and_then(|&e| self.world.get::<&Tilemap>(e).ok())
+            .entity_by_role(RoleKind::Tilemap)
+            .and_then(|e| self.world.get::<&Tilemap>(e).ok())
             .map(|tm| (tm.height_scale, tm.height_data.clone()))
             .filter(|(_, h)| h.len() == (sx as usize + 1) * (sy as usize + 1))
             .unwrap_or_else(|| (64.0, vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)]));
@@ -1753,15 +1764,11 @@ impl Engine {
     }
 
     /// Rebuild the tilemap mesh from current data + heights and re-upload to GPU.
-    pub fn rebuild_tilemap_mesh(&mut self, entity_name: &str) {
-        classic_core::cl_info!(
-            classic_core::instrument::Chan::Editor,
-            "rebuild_tilemap_mesh: entering for '{entity_name}'"
-        );
-        let Some(&tm_entity) = self.names.get(entity_name) else {
+    pub fn rebuild_tilemap_mesh(&mut self) {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else {
             classic_core::cl_warn!(
                 classic_core::instrument::Chan::Editor,
-                "rebuild_tilemap_mesh: entity '{entity_name}' not found"
+                "rebuild_tilemap_mesh: no Tilemap-role entity"
             );
             return;
         };
@@ -1771,7 +1778,7 @@ impl Engine {
                 Err(_) => {
                     classic_core::cl_warn!(
                         classic_core::instrument::Chan::Editor,
-                        "rebuild_tilemap_mesh: no Tilemap on '{entity_name}'"
+                        "rebuild_tilemap_mesh: no Tilemap on the Tilemap-role entity"
                     );
                     return;
                 }
@@ -1797,7 +1804,8 @@ impl Engine {
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &tiles);
         let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
 
-        if let Some(gpu) = self.tilemap_gpu.get_mut(entity_name) {
+        let entity_name = self.debug_name(tm_entity);
+        if let Some(gpu) = self.tilemap_gpu.get_mut(&entity_name) {
             gpu.mesh_buf = mesh_buf;
             gpu.vertex_count = vcount;
             gpu.tile_tex = tile_tex;
@@ -1859,8 +1867,7 @@ impl Engine {
     /// Initialize navigation from the nav mesh entity's inline `NavMesh.data`
     /// (loaded from `state.json`) and wire click-to-move.
     pub fn init_navigation(&mut self) {
-        let nav_entity = self.names.get("tilemapNavigation").copied();
-        let Some(nav_entity) = nav_entity else { return };
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
         let nav_data = {
             let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) else { return };
             nav.data.clone()
@@ -1874,12 +1881,9 @@ impl Engine {
     /// Used by generated scenes, which derive walkability from real terrain
     /// slope during generation and so must not have it recomputed here.
     pub fn init_navigation_data(&mut self, nav_tiles: Vec<u32>) {
-        let nav_entity = self.names.get("tilemapNavigation").copied();
-        let agent_entity = self.names.get("navAgent").copied();
-
-        let Some(nav_entity) = nav_entity else { return };
-        let Some(agent_entity) = agent_entity else { return };
-        let Some(tilemap_entity) = self.names.get("tilemap").copied() else { return };
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
+        let Some(agent_entity) = self.entity_by_role(RoleKind::Agent) else { return };
+        let Some(tilemap_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
 
         // The supplied grid is authoritative for passability.  A block here
         // used to re-derive walkability from tilemap heights and then discard

@@ -43,7 +43,7 @@ pub fn init_camera_wasd(engine: &mut Engine) {
 
 /// Move the mouse cursor sprite to follow the pointer.
 pub fn init_cursor(engine: &mut Engine) {
-    let cursor_entity = engine.names.get("cursor").copied();
+    let cursor_entity = engine.entity_by_role(classic_core::RoleKind::Cursor);
     engine.on_update(move |engine| {
         let Some(cursor_e) = cursor_entity else { return };
         let mp = engine.input.mouse_pos;
@@ -270,7 +270,8 @@ pub fn init_animator_system(engine: &mut Engine) {
 /// entities.  Port of `initFootprintColliders` from `prefabs.ts`.
 pub fn init_footprint_colliders(engine: &mut Engine) {
     // Look up the tilemap entity once.
-    let tm_entity = engine.names.get("tilemap").copied().expect("tilemap entity");
+    let tm_entity =
+        engine.entity_by_role(classic_core::RoleKind::Tilemap).expect("Tilemap-role entity");
 
     let (isosprite_entities, _tilemap_name, iso_to_cart_world, tilemap_pos) = {
         let tilemap = engine.world.get::<&Tilemap>(tm_entity).unwrap();

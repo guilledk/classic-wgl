@@ -628,8 +628,8 @@ pub fn init_height_widget(engine: &mut Engine, state: &DemoStateRef) {
         // size (which generated scenes deliberately do not use).
         let prev_hs = editor_rc_clone.borrow().height_scale;
         let base_hs = engine.base_height_scale;
-        if let Some(_e) = engine.names.get("tilemap").copied() {
-            if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(_e) {
+        if let Some(e) = engine.entity_by_role(classic_core::RoleKind::Tilemap) {
+            if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(e) {
                 tm.height_scale = base_hs * prev_hs as f32;
             }
         }
@@ -706,7 +706,7 @@ pub fn init_editor_mode_control(engine: &mut Engine, state: &DemoStateRef) {
         if let Some(e) = state.borrow().text_showcase_e {
             engine.set_enabled(e, target == "textDemo");
         }
-        if let Some(&e) = engine.names.get("tilemapNavigation") {
+        if let Some(e) = engine.entity_by_role(classic_core::RoleKind::NavMesh) {
             engine.set_enabled(e, target == "navMesh");
         }
     });
@@ -714,7 +714,7 @@ pub fn init_editor_mode_control(engine: &mut Engine, state: &DemoStateRef) {
 
 /// Tile palette: shows the tileset texture with click-to-select and a selector overlay.
 pub fn init_tile_palette(engine: &mut Engine, state: &DemoStateRef) {
-    let Some(&tm_entity) = engine.names.get("tilemap") else { return };
+    let Some(tm_entity) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else { return };
     // Read the tileset name from the component rather than hardcoding
     // "tileSet", so a scene using a different (or procedurally generated)
     // tileset gets a palette showing its own tiles.
@@ -908,7 +908,7 @@ pub fn apply_editor_selection(engine: &mut Engine, state: &DemoStateRef) {
     let tile = state.borrow().editor.tile;
     let nav_tile = state.borrow().editor.nav_tile;
 
-    let Some(&tm_entity) = engine.names.get("tilemap") else { return };
+    let Some(tm_entity) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else { return };
     let (bx, by, ex, ey, tile_count) = {
         let tm = match engine.world.get::<&Tilemap>(tm_entity) {
             Ok(t) => t,
@@ -1005,7 +1005,7 @@ pub fn apply_editor_selection(engine: &mut Engine, state: &DemoStateRef) {
         true
     } else if target == "navMesh" {
         let val = nav_tile;
-        if let Some(&nav_e) = engine.names.get("tilemapNavigation") {
+        if let Some(nav_e) = engine.entity_by_role(classic_core::RoleKind::NavMesh) {
             if let Ok(mut nav) = engine.world.get::<&mut NavMesh>(nav_e) {
                 for y in by..ey {
                     for x in bx..ex {
@@ -1036,7 +1036,7 @@ pub fn apply_editor_selection(engine: &mut Engine, state: &DemoStateRef) {
         if target == "navMesh" {
             engine.rebuild_nav_gpu();
         } else {
-            engine.rebuild_tilemap_mesh("tilemap");
+            engine.rebuild_tilemap_mesh();
             if target == "height" {
                 engine.sync_nav_heights();
             }
