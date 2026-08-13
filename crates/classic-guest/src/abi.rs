@@ -1,10 +1,12 @@
 //! The guest ABI: the stable contract between a ROM guest module and the host.
 //!
 //! Guests import host functions from the module named [`HOST_MODULE`] and
-//! export `fn update(dt: f64) -> ()` (plus an optional `init`).  Strings cross
-//! the boundary as `(ptr, len)` pairs into guest linear memory; functions that
-//! return a byte slice write into a caller-provided output buffer and return
-//! the number of bytes written (`-1` if the buffer was too small).
+//! export `fn update(dt: f64) -> ()`, plus the optional one-shot lifecycle
+//! hooks `fn init()` (early, before the first frame) and `fn start()` (once,
+//! after the first `update`).  Strings cross the boundary as `(ptr, len)`
+//! pairs into guest linear memory; functions that return a byte slice write
+//! into a caller-provided output buffer and return the number of bytes written
+//! (`-1` if the buffer was too small).
 
 use wasmi::Caller;
 
@@ -15,6 +17,12 @@ pub const HOST_MODULE: &str = "env";
 
 /// The guest export invoked once per frame.
 pub const UPDATE_EXPORT: &str = "update";
+
+/// The optional guest export invoked once, before the first frame.
+pub const INIT_EXPORT: &str = "init";
+
+/// The optional guest export invoked once, after the first `update`.
+pub const START_EXPORT: &str = "start";
 
 /// The name of the guest's linear memory export.
 pub const MEMORY_EXPORT: &str = "memory";

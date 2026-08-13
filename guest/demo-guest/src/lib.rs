@@ -3,10 +3,11 @@
 //! ROM guest for the `demo` scene, compiled to `.wasm` and run by the host
 //! against the `classic-guest` SDK.
 //!
-//! Drives the `navAgent` entity: click-to-move (A* path via `find_path` to the
-//! iso tile under the cursor when the editor agent tool is active), direction-
-//! aware idle/walk animation via `set_anim`, and terrain-height following via
-//! `height_at`.
+//! Drives the `navAgent` entity: `init` seeds the agent's position from the
+//! host once, then `update` runs click-to-move (A* path via `find_path` to
+//! the iso tile under the cursor when the editor agent tool is active),
+//! direction-aware idle/walk animation via `set_anim`, and terrain-height
+//! following via `height_at`.
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -62,7 +63,6 @@ static mut CUR_Y: f64 = 0.0;
 static mut CUR_Z: f64 = 0.0;
 static mut FACING: usize = 0;
 static mut WALKING: bool = false;
-static mut BOOTED: bool = false;
 
 #[inline]
 fn agent_name() -> (i32, i32) {
@@ -97,14 +97,11 @@ fn play_anim(anim: &[u8]) {
     }
 }
 
-fn boot() {
+/// Called once, before the first `update`, to seed guest state from the host.
+#[no_mangle]
+pub extern "C" fn init() {
     // SAFETY: single-threaded guest; static state is only mutated from `update`.
     unsafe {
-        if BOOTED {
-            return;
-        }
-        BOOTED = true;
-
         let (np, nl) = agent_name();
         let mut pos = [0u8; 24];
         if host::get_pos(np, nl, pos.as_mut_ptr() as i32) != 1 {
@@ -213,7 +210,6 @@ fn step(dt: f64) {
 /// Called once per frame with the frame delta in seconds.
 #[no_mangle]
 pub extern "C" fn update(dt: f64) {
-    boot();
     handle_click();
     step(dt);
 }

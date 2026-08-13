@@ -47,17 +47,30 @@ fn is_lunar(rom: &Rom) -> bool {
     matches!(rom.manifest.entrypoint.as_str(), "lunar" | "moon")
 }
 
-/// Install the ROM guest runtime: instantiate the ROM's compiled guest module
-/// and register a per-frame `on_update` closure that runs `update(dt)`.
+/// Install the ROM guest runtime: instantiate the ROM's compiled guest module,
+/// run its optional one-shot `init` hook synchronously (before the first
+/// frame), and register a per-frame `on_update` closure that runs `update(dt)`
+/// and — once, after the first update — the optional `start` hook.
 pub fn init_guest(e: &mut Engine, state: &DemoStateRef, wasm: &[u8], limits: &GuestLimits) {
     match WasmiRuntime::new(wasm, limits) {
-        Ok(rt) => {
+        Ok(mut rt) => {
+            if let Err(err) = rt.init(e) {
+                cl_error!(Chan::Guest, "guest init failed: {err}");
+            }
             let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(Box::new(rt)));
             state.borrow_mut().guest = Some(rt.clone());
+            let mut started = false;
             e.on_update(move |engine| {
                 let dt = engine.time.delta as f64;
-                if let Err(err) = rt.borrow_mut().update(engine, dt) {
+                let mut guest = rt.borrow_mut();
+                if let Err(err) = guest.update(engine, dt) {
                     cl_error!(Chan::Guest, "guest update failed: {err}");
+                }
+                if !started {
+                    started = true;
+                    if let Err(err) = guest.start(engine) {
+                        cl_error!(Chan::Guest, "guest start failed: {err}");
+                    }
                 }
             });
         }

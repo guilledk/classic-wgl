@@ -395,3 +395,57 @@ fn get_anim_reads_animation() {
     assert_eq!(engine.get_anim("unit"), Some(("walkEast".to_string(), 5.0)));
     assert_eq!(engine.get_anim("missing"), None);
 }
+
+#[test]
+fn guest_init_hook_spawns_once_before_update() {
+    let mut engine = Engine::new_for_test();
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "inited")
+            (func (export "init")
+                (drop (call $spawn (i32.const 0) (i32.const 6))))
+            (func (export "update") (param f64)))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.init(&mut engine).unwrap();
+    assert!(engine.has_name("inited"));
+
+    rt.update(&mut engine, 0.016).unwrap();
+}
+
+#[test]
+fn guest_start_hook_spawns() {
+    let mut engine = Engine::new_for_test();
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "started")
+            (func (export "update") (param f64))
+            (func (export "start")
+                (drop (call $spawn (i32.const 0) (i32.const 7)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.start(&mut engine).unwrap();
+    assert!(engine.has_name("started"));
+}
+
+#[test]
+fn guest_without_lifecycle_hooks_still_runs() {
+    let mut engine = Engine::new_for_test();
+    let mut rt = runtime_from_wat(
+        r#"(module (func (export "update") (param f64)))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    assert!(rt.init(&mut engine).is_ok());
+    assert!(rt.start(&mut engine).is_ok());
+    rt.update(&mut engine, 0.016).unwrap();
+}

@@ -31,8 +31,15 @@ crates/classic-guest/
 
 ## 3. The ABI (host imports, module "env")
 
-Guest exports `fn update(dt: f64) -> ()` (invoked once per frame).  Host
-imports (defined in `runtime.rs::install_imports`) are the SDK surface:
+Guest exports (the host→guest side of the ABI):
+
+| Export | Signature | When |
+|---|---|---|
+| `update` | `(dt: f64) -> ()` | every frame (required) |
+| `init` | `() -> ()` | once, synchronously at install, before the first frame (optional) |
+| `start` | `() -> ()` | once, after the first `update` completes (optional) |
+
+Host imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 
 | Import | Signature | Purpose |
 |---|---|---|
@@ -109,8 +116,10 @@ each `update` via `GuestHost::set_engine` and deref'd only inside that call
 ## 6. Wiring (classic-demo)
 
 - `init_guest(&mut Engine, &DemoStateRef, wasm, &GuestLimits)` instantiates a
-  `WasmiRuntime`, stores it on `DemoState.guest`, and registers
-  `on_update(|e| guest.update(e, dt))`.
+  `WasmiRuntime`, runs its optional `init` hook synchronously (before the first
+  frame), stores it on `DemoState.guest`, and registers an
+  `on_update(|e| guest.update(e, dt))` closure that also runs the optional
+  `start` hook once after the first update.
 - `init_engine` reads `rom.resources.code().get("main")` and builds limits from
   `rom.manifest.trusted`; runs the guest on every frame (not gated by
   `host_features`).

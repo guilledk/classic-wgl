@@ -54,14 +54,28 @@ pub trait GuestRuntime {
     where
         Self: Sized;
 
+    /// Run the guest's optional `init()` once, before the first frame.  The
+    /// default is a no-op for guests that do not export `init`.
+    fn init(&mut self, _engine: &mut Engine) -> Result<(), GuestError> {
+        Ok(())
+    }
+
     /// Run the guest's `update(dt)` once against the engine.
     fn update(&mut self, engine: &mut Engine, dt: f64) -> Result<(), GuestError>;
+
+    /// Run the guest's optional `start()` once, after the first `update`.  The
+    /// default is a no-op for guests that do not export `start`.
+    fn start(&mut self, _engine: &mut Engine) -> Result<(), GuestError> {
+        Ok(())
+    }
 }
 
 /// wasmi-backed [`GuestRuntime`] (native and wasm targets).
 pub struct WasmiRuntime {
     store: Store<GuestHost>,
+    init: Option<wasmi::TypedFunc<(), ()>>,
     update: wasmi::TypedFunc<(f64,), ()>,
+    start: Option<wasmi::TypedFunc<(), ()>>,
     limits: GuestLimits,
 }
 
@@ -789,26 +803,54 @@ impl GuestRuntime for WasmiRuntime {
             .start(&mut store)
             .map_err(|e| GuestError::Instantiate(e.to_string()))?;
 
+        let init = instance.get_typed_func::<(), ()>(&store, abi::INIT_EXPORT).ok();
         let update = instance
             .get_typed_func::<(f64,), ()>(&store, abi::UPDATE_EXPORT)
             .map_err(|_| GuestError::MissingExport(abi::UPDATE_EXPORT.to_string()))?;
+        let start = instance.get_typed_func::<(), ()>(&store, abi::START_EXPORT).ok();
 
-        Ok(Self { store, update, limits: limits.clone() })
+        Ok(Self { store, init, update, start, limits: limits.clone() })
+    }
+
+    fn init(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
+        let Some(init) = self.init else { return Ok(()) };
+        self.store.data_mut().set_engine(engine);
+        self.set_fuel_budget()?;
+        init.call(&mut self.store, ()).map_err(Self::map_call_error)
     }
 
     fn update(&mut self, engine: &mut Engine, dt: f64) -> Result<(), GuestError> {
         self.store.data_mut().set_engine(engine);
+        self.set_fuel_budget()?;
+        self.update.call(&mut self.store, (dt,)).map_err(Self::map_call_error)
+    }
+
+    fn start(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
+        let Some(start) = self.start else { return Ok(()) };
+        self.store.data_mut().set_engine(engine);
+        self.set_fuel_budget()?;
+        start.call(&mut self.store, ()).map_err(Self::map_call_error)
+    }
+}
+
+impl WasmiRuntime {
+    /// Reset the store's fuel budget for the next guest entry point (no-op for
+    /// trusted guests).
+    fn set_fuel_budget(&mut self) -> Result<(), GuestError> {
         if !self.limits.trusted {
             self.store
                 .set_fuel(self.limits.fuel_per_frame)
                 .map_err(|e| GuestError::Trap(e.to_string()))?;
         }
-        self.update.call(&mut self.store, (dt,)).map_err(|e| {
-            if e.as_trap_code() == Some(wasmi::core::TrapCode::OutOfFuel) {
-                GuestError::FuelExhausted
-            } else {
-                GuestError::Trap(e.to_string())
-            }
-        })
+        Ok(())
+    }
+
+    /// Map a wasmi call error, distinguishing fuel exhaustion from a trap.
+    fn map_call_error(e: wasmi::Error) -> GuestError {
+        if e.as_trap_code() == Some(wasmi::core::TrapCode::OutOfFuel) {
+            GuestError::FuelExhausted
+        } else {
+            GuestError::Trap(e.to_string())
+        }
     }
 }
