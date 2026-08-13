@@ -496,6 +496,205 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "ui_container",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             w: f64,
+             h: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_container(&name, w, h, r, g, b, a)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_text",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             text_ptr: i32,
+             text_len: i32,
+             scale: f64,
+             max_width: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64,
+             justify: i32|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                let text = abi::read_str(&caller, text_ptr, text_len);
+                caller.data_mut().ui_text(&name, &text, scale, max_width, r, g, b, a, justify)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_button",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             text_ptr: i32,
+             text_len: i32,
+             w: f64,
+             h: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                let text = abi::read_str(&caller, text_ptr, text_len);
+                caller.data_mut().ui_button(&name, &text, w, h, r, g, b, a)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_array",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             vertical: i32,
+             align: i32,
+             spacing: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_array(&name, vertical, align, spacing, r, g, b, a)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_padding",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             top: f64,
+             right: f64,
+             bottom: f64,
+             left: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_padding(&name, top, right, bottom, left, r, g, b, a)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_sprite",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             texture_ptr: i32,
+             texture_len: i32,
+             w: f64,
+             h: f64,
+             frame: f64,
+             tsx: f64,
+             tsy: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                let texture = abi::read_str(&caller, texture_ptr, texture_len);
+                caller.data_mut().ui_sprite(&name, &texture, w, h, frame, tsx, tsy)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_add_child",
+            |mut caller: Caller<'_, GuestHost>,
+             parent_ptr: i32,
+             parent_len: i32,
+             child_ptr: i32,
+             child_len: i32,
+             self_anchor: i32,
+             child_anchor: i32|
+             -> i32 {
+                let parent = abi::read_str(&caller, parent_ptr, parent_len);
+                let child = abi::read_str(&caller, child_ptr, child_len);
+                caller.data_mut().ui_add_child(&parent, &child, self_anchor, child_anchor)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_add_to_root",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             self_anchor: i32,
+             child_anchor: i32|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_add_to_root(&name, self_anchor, child_anchor)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_set_size",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             w: f64,
+             h: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_set_size(&name, w, h)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_set_anchor",
+            |mut caller: Caller<'_, GuestHost>, name_ptr: i32, name_len: i32, anchor: i32| -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_set_anchor(&name, anchor)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_set_color",
+            |mut caller: Caller<'_, GuestHost>,
+             name_ptr: i32,
+             name_len: i32,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_set_color(&name, r, g, b, a)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "ui_set_fixed",
+            |mut caller: Caller<'_, GuestHost>, name_ptr: i32, name_len: i32, fixed: i32| -> i32 {
+                let name = abi::read_str(&caller, name_ptr, name_len);
+                caller.data_mut().ui_set_fixed(&name, fixed)
+            },
+        )?;
+
         Ok(())
     }
 }

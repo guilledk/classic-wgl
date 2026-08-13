@@ -267,3 +267,58 @@ fn guest_spawn_rect_wiring() {
     assert!(engine.has_name("bar"));
     assert_eq!(engine.get_pos("bar"), Some((10.0, 20.0, 0.0)));
 }
+
+#[test]
+fn ui_registration_and_layout_wiring() {
+    let mut engine = Engine::new_for_test();
+    engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
+
+    assert!(engine.ui_container("panel", 200.0, 100.0, [0.2, 0.3, 0.5, 1.0]));
+    assert!(engine.ui_text(
+        "title",
+        "Hello",
+        1.0,
+        200.0,
+        [1.0, 1.0, 1.0, 1.0],
+        classic_core::components::TextJustify::Left,
+    ));
+    assert!(engine.ui_button("play", "Play", 120.0, 40.0, [0.1, 0.6, 0.2, 1.0]));
+    assert!(engine.ui_add_child(
+        "panel",
+        "title",
+        classic_core::components::UiAnchor::TopLeft,
+        classic_core::components::UiAnchor::TopLeft,
+    ));
+
+    assert!(engine.has_name("panel"));
+    assert!(engine.has_name("title"));
+    assert!(engine.has_name("play"));
+    assert!(engine.ui_set_size("panel", 300.0, 150.0));
+    assert!(engine.ui_set_anchor("panel", classic_core::components::UiAnchor::TopRight));
+    assert!(engine.ui_set_color("panel", [1.0, 0.0, 0.0, 1.0]));
+    assert!(engine.ui_set_fixed("panel", true));
+}
+
+#[test]
+fn guest_ui_container_wiring() {
+    let mut engine = Engine::new_for_test();
+    engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "ui_container" (func $ui_container
+                (param i32 i32 f64 f64 f64 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "panel")
+            (func (export "update") (param f64)
+                (drop (call $ui_container (i32.const 0) (i32.const 5)
+                    (f64.const 200.0) (f64.const 100.0)
+                    (f64.const 0.2) (f64.const 0.3) (f64.const 0.5) (f64.const 1.0)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+
+    assert!(engine.has_name("panel"));
+}

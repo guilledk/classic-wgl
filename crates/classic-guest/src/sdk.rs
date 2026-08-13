@@ -5,8 +5,42 @@
 //! heavy lifting lives in safe `Engine` methods; only the pointer deref is
 //! `unsafe`.
 
+use classic_core::components::{TextJustify, UiAlign, UiAnchor};
 use classic_core::instrument::Chan;
 use classic_engine::Engine;
+
+/// Map an integer to a [`UiAnchor`] (0..=8, TopLeft → BotRight).
+fn anchor(i: i32) -> UiAnchor {
+    match i {
+        0 => UiAnchor::TopLeft,
+        1 => UiAnchor::TopCenter,
+        2 => UiAnchor::TopRight,
+        3 => UiAnchor::MidLeft,
+        4 => UiAnchor::MidCenter,
+        5 => UiAnchor::MidRight,
+        6 => UiAnchor::BotLeft,
+        7 => UiAnchor::BotCenter,
+        _ => UiAnchor::BotRight,
+    }
+}
+
+/// Map an integer to a [`UiAlign`] (0 = Left, 1 = Center, 2 = Right).
+fn align(i: i32) -> UiAlign {
+    match i {
+        0 => UiAlign::Left,
+        2 => UiAlign::Right,
+        _ => UiAlign::Center,
+    }
+}
+
+/// Map an integer to a [`TextJustify`] (0 = Left, 1 = Center, 2 = Right).
+fn justify(i: i32) -> TextJustify {
+    match i {
+        0 => TextJustify::Left,
+        2 => TextJustify::Right,
+        _ => TextJustify::Center,
+    }
+}
 
 /// Host state shared with the wasmi store: a pointer to the engine plus the
 /// guest's resource limits.
@@ -320,5 +354,167 @@ impl GuestHost {
     /// Update a named SDF text label's string.
     pub fn set_text(&mut self, name: &str, text: &str) -> i32 {
         self.engine_mut().set_text(name, text) as i32
+    }
+
+    // ---- UIManager registration (guest-managed responsive UI) -------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_container(
+        &mut self,
+        name: &str,
+        w: f64,
+        h: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> i32 {
+        self.engine_mut().ui_container(
+            name,
+            w as f32,
+            h as f32,
+            [r as f32, g as f32, b as f32, a as f32],
+        ) as i32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_text(
+        &mut self,
+        name: &str,
+        text: &str,
+        scale: f64,
+        max_width: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+        justify_idx: i32,
+    ) -> i32 {
+        self.engine_mut().ui_text(
+            name,
+            text,
+            scale as f32,
+            max_width as f32,
+            [r as f32, g as f32, b as f32, a as f32],
+            justify(justify_idx),
+        ) as i32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_button(
+        &mut self,
+        name: &str,
+        text: &str,
+        w: f64,
+        h: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> i32 {
+        self.engine_mut().ui_button(
+            name,
+            text,
+            w as f32,
+            h as f32,
+            [r as f32, g as f32, b as f32, a as f32],
+        ) as i32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_array(
+        &mut self,
+        name: &str,
+        vertical: i32,
+        align_idx: i32,
+        spacing: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> i32 {
+        self.engine_mut().ui_array(
+            name,
+            vertical != 0,
+            align(align_idx),
+            spacing as f32,
+            [r as f32, g as f32, b as f32, a as f32],
+        ) as i32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_padding(
+        &mut self,
+        name: &str,
+        top: f64,
+        right: f64,
+        bottom: f64,
+        left: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> i32 {
+        self.engine_mut().ui_padding(
+            name,
+            top as f32,
+            right as f32,
+            bottom as f32,
+            left as f32,
+            [r as f32, g as f32, b as f32, a as f32],
+        ) as i32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_sprite(
+        &mut self,
+        name: &str,
+        texture: &str,
+        w: f64,
+        h: f64,
+        frame: f64,
+        tsx: f64,
+        tsy: f64,
+    ) -> i32 {
+        self.engine_mut().ui_sprite(
+            name,
+            texture,
+            w as f32,
+            h as f32,
+            frame as f32,
+            [tsx as f32, tsy as f32],
+        ) as i32
+    }
+
+    pub fn ui_add_child(
+        &mut self,
+        parent: &str,
+        child: &str,
+        self_anchor: i32,
+        child_anchor: i32,
+    ) -> i32 {
+        self.engine_mut().ui_add_child(parent, child, anchor(self_anchor), anchor(child_anchor))
+            as i32
+    }
+
+    pub fn ui_add_to_root(&mut self, name: &str, self_anchor: i32, child_anchor: i32) -> i32 {
+        self.engine_mut().ui_add_to_root(name, anchor(self_anchor), anchor(child_anchor)) as i32
+    }
+
+    pub fn ui_set_size(&mut self, name: &str, w: f64, h: f64) -> i32 {
+        self.engine_mut().ui_set_size(name, w as f32, h as f32) as i32
+    }
+
+    pub fn ui_set_anchor(&mut self, name: &str, anchor_idx: i32) -> i32 {
+        self.engine_mut().ui_set_anchor(name, anchor(anchor_idx)) as i32
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_set_color(&mut self, name: &str, r: f64, g: f64, b: f64, a: f64) -> i32 {
+        self.engine_mut().ui_set_color(name, [r as f32, g as f32, b as f32, a as f32]) as i32
+    }
+
+    pub fn ui_set_fixed(&mut self, name: &str, fixed: i32) -> i32 {
+        self.engine_mut().ui_set_fixed(name, fixed != 0) as i32
     }
 }

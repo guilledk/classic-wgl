@@ -143,8 +143,9 @@ plans/
   `set_anim`, `find_path`, `agent_selected`/`ui_consumed_click`, log).  Untrusted guests
   (`trusted: false`, default) are sandboxed with fuel metering + a memory cap; the shipped
   demo/lunar ROMs set `trusted: true`.  The demo's `navAgent` behaviour (click-to-move +
-  idle/walk animation + terrain-z) lives in `guest/demo-guest`, not Rust.  See `classic-guest`
-  skill.
+  idle/walk animation + terrain-z) lives in `guest/demo-guest`, not Rust.  Heavy systems
+  (UIManager layout, animator, physics, pathfinding, terrain) stay host-side; guests
+  register + update into them rather than reimplementing them.  See `classic-guest` skill.
 
 ## Conventions
 

@@ -23,7 +23,7 @@ use std::rc::Rc;
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
     Animator, ColliderData, DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender,
-    Tilemap, UiNode,
+    TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -896,6 +896,221 @@ impl Engine {
         } else {
             false
         }
+    }
+
+    /// Register an already-spawned entity under a guest-visible name.
+    fn register_named_entity(&mut self, name: &str, entity: hecs::Entity) {
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+    }
+
+    // ---- UIManager registration (guest-managed responsive UI) -------------
+    //
+    // These wrap the `UIManager` factories so a guest can create UI elements
+    // that participate in layout (anchoring/array/padding/resize) under a name
+    // it controls, without reimplementing any responsiveness.
+
+    /// Spawn a named UI container (solid-color rectangle managed by layout).
+    pub fn ui_container(&mut self, name: &str, w: f32, h: f32, color: [f32; 4]) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_container(&mut self.world, w, h, color)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named UI SDF text label managed by layout.
+    pub fn ui_text(
+        &mut self,
+        name: &str,
+        text: &str,
+        scale: f32,
+        max_width: f32,
+        color: [f32; 4],
+        justify: TextJustify,
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_sdf_text(&mut self.world, text, scale, max_width, color, justify)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named UI button (container + centered text + click collider).
+    pub fn ui_button(&mut self, name: &str, text: &str, w: f32, h: f32, color: [f32; 4]) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_button(
+                &mut self.world,
+                &mut self.physics,
+                w,
+                h,
+                color,
+                ui::ButtonOptions {
+                    text: Some(text.to_string()),
+                    text_scale: 0.4,
+                    text_color: [1.0, 1.0, 1.0, 1.0],
+                    sdf_text: true,
+                    hover: true,
+                    click_priority: 1,
+                    ..Default::default()
+                },
+            )
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named UI array container (vertical or horizontal stacking).
+    pub fn ui_array(
+        &mut self,
+        name: &str,
+        vertical: bool,
+        align: UiAlign,
+        spacing: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_array(&mut self.world, vertical, align, spacing, color)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named UI padding wrapper.
+    pub fn ui_padding(
+        &mut self,
+        name: &str,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        left: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_padding(&mut self.world, top, right, bottom, left, color)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named texture-sprite UI element.
+    pub fn ui_sprite(
+        &mut self,
+        name: &str,
+        texture: &str,
+        w: f32,
+        h: f32,
+        frame: f32,
+        tile_set_size: [f32; 2],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_sprite(&mut self.world, texture, w, h, frame, tile_set_size)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Attach a named UI element as a child of another (anchor-based layout).
+    pub fn ui_add_child(
+        &mut self,
+        parent: &str,
+        child: &str,
+        self_anchor: UiAnchor,
+        child_anchor: UiAnchor,
+    ) -> bool {
+        let Some(&p) = self.names.get(parent) else { return false };
+        let Some(&c) = self.names.get(child) else { return false };
+        let Some(ui) = self.ui.as_mut() else { return false };
+        ui.container_add_child(&mut self.world, p, c, self_anchor, child_anchor);
+        true
+    }
+
+    /// Attach a named UI element to the root container (viewport-anchored).
+    pub fn ui_add_to_root(
+        &mut self,
+        name: &str,
+        self_anchor: UiAnchor,
+        child_anchor: UiAnchor,
+    ) -> bool {
+        let Some(&c) = self.names.get(name) else { return false };
+        let Some(ui) = self.ui.as_mut() else { return false };
+        ui.root_add_child(&mut self.world, c, self_anchor, child_anchor);
+        true
+    }
+
+    /// Set a named UI element's size.
+    pub fn ui_set_size(&mut self, name: &str, w: f32, h: f32) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        {
+            let Ok(mut n) = self.world.get::<&mut UiNode>(e) else { return false };
+            n.size = glam::Vec2::new(w, h);
+        }
+        if let Some(ui) = self.ui.as_mut() {
+            ui.mark_dirty();
+        }
+        true
+    }
+
+    /// Set a named UI element's anchor.
+    pub fn ui_set_anchor(&mut self, name: &str, anchor: UiAnchor) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        {
+            let Ok(mut n) = self.world.get::<&mut UiNode>(e) else { return false };
+            n.anchor = anchor;
+        }
+        if let Some(ui) = self.ui.as_mut() {
+            ui.mark_dirty();
+        }
+        true
+    }
+
+    /// Set a named UI rectangle's color.
+    pub fn ui_set_color(&mut self, name: &str, color: [f32; 4]) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        if let Ok(mut r) = self.world.get::<&mut RectRender>(e) {
+            r.color = color;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set whether a named UI element is fixed (skips responsive layout).
+    pub fn ui_set_fixed(&mut self, name: &str, fixed: bool) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        {
+            let Ok(mut n) = self.world.get::<&mut UiNode>(e) else { return false };
+            n.fixed = fixed;
+        }
+        if let Some(ui) = self.ui.as_mut() {
+            ui.mark_dirty();
+        }
+        true
     }
 
     /// Save a file, handling both native (filesystem) and web (Blob download).
