@@ -309,6 +309,25 @@ impl ColliderData {
     }
 }
 
+/// Scene lighting state (ambient / direction / colour).  Held on a dedicated
+/// `lighting` entity so it round-trips through `state.json`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LightState {
+    pub ambient: [f32; 3],
+    pub direction: [f32; 3],
+    pub color: [f32; 3],
+}
+
+impl Default for LightState {
+    fn default() -> Self {
+        Self {
+            ambient: [0.15, 0.15, 0.2],
+            direction: [0.45, -0.35, 0.82],
+            color: [1.0, 0.95, 0.85],
+        }
+    }
+}
+
 /// UI node — the visual + layout element for retained-mode UI.
 /// Port of `UIElement`/`UIContainer`/`UIArray`/`UIPadding` from `ui.ts`.
 #[derive(Clone, Debug)]

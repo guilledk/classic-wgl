@@ -15,7 +15,9 @@ pub mod gjk;
 pub mod quadtree;
 pub mod simplex_noise;
 
-use components::{Animator, IsoAgent, IsoSprite, NavMesh, Tilemap};
+use components::{
+    Animator, IsoAgent, IsoSprite, LightState, NavMesh, RectRender, SdfTextRender, Tilemap,
+};
 
 pub use camera::Camera;
 pub use components::{SpriteRender, Transform};
@@ -25,11 +27,17 @@ pub use types::Rect;
 pub fn register_all_components() {
     use registry::ComponentReg;
 
-    // Transform — bare spawner, no dumper (subsumed by all other components).
-    registry::register_spawner("Transform", |b, v| {
-        let tf: Transform = serde_json::from_value(v)?;
-        b.add(tf);
-        Ok(())
+    // Transform — emitted last; subsumed by components that embed position.
+    registry::register(ComponentReg {
+        name: "Transform",
+        spawn: |b, v| {
+            let tf: Transform = serde_json::from_value(v)?;
+            b.add(tf);
+            Ok(())
+        },
+        dump: Some(dumper_transform),
+        order: 50,
+        subsumes: &[],
     });
 
     registry::register(ComponentReg {
@@ -117,6 +125,54 @@ pub fn register_all_components() {
         dump: Some(dumper_navmesh),
         order: 15,
         subsumes: &["Transform"],
+    });
+
+    registry::register(ComponentReg {
+        name: "Rect",
+        spawn: |b, v| {
+            let r: RectRender = serde_json::from_value(v)?;
+            b.add(r);
+            Ok(())
+        },
+        dump: Some(dumper_rect),
+        order: 45,
+        subsumes: &[],
+    });
+
+    registry::register(ComponentReg {
+        name: "SdfText",
+        spawn: |b, v| {
+            let t: SdfTextRender = serde_json::from_value(v)?;
+            b.add(t);
+            Ok(())
+        },
+        dump: Some(dumper_sdftext),
+        order: 46,
+        subsumes: &[],
+    });
+
+    registry::register(ComponentReg {
+        name: "LightState",
+        spawn: |b, v| {
+            let l: LightState = serde_json::from_value(v)?;
+            b.add(l);
+            Ok(())
+        },
+        dump: Some(dumper_lightstate),
+        order: 47,
+        subsumes: &[],
+    });
+
+    registry::register(ComponentReg {
+        name: "Camera",
+        spawn: |b, v| {
+            let c: Camera = serde_json::from_value(v)?;
+            b.add(c);
+            Ok(())
+        },
+        dump: Some(dumper_camera),
+        order: 48,
+        subsumes: &[],
     });
 }
 
@@ -215,4 +271,41 @@ fn dumper_navmesh(world: &hecs::World, entity: hecs::Entity) -> Option<serde_jso
     m.insert("sizeY".into(), n.size_y.into());
     m.insert("data".into(), serde_base64::encode_u32(&n.data).into());
     Some(serde_json::Value::Object(m))
+}
+
+/// Prepend the `"type"` key to a serde-serialized component body.
+fn component_value(type_name: &str, body: serde_json::Value) -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    m.insert("type".into(), serde_json::Value::String(type_name.into()));
+    if let serde_json::Value::Object(obj) = body {
+        for (k, v) in obj {
+            m.insert(k, v);
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
+fn dumper_transform(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let tf = world.get::<&Transform>(entity).ok()?;
+    serde_json::to_value(&*tf).ok().map(|v| component_value("Transform", v))
+}
+
+fn dumper_rect(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let r = world.get::<&RectRender>(entity).ok()?;
+    serde_json::to_value(&*r).ok().map(|v| component_value("Rect", v))
+}
+
+fn dumper_sdftext(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let t = world.get::<&SdfTextRender>(entity).ok()?;
+    serde_json::to_value(&*t).ok().map(|v| component_value("SdfText", v))
+}
+
+fn dumper_lightstate(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let l = world.get::<&LightState>(entity).ok()?;
+    serde_json::to_value(&*l).ok().map(|v| component_value("LightState", v))
+}
+
+fn dumper_camera(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let c = world.get::<&Camera>(entity).ok()?;
+    serde_json::to_value(&*c).ok().map(|v| component_value("Camera", v))
 }

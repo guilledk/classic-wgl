@@ -7,10 +7,12 @@ use glam::{Mat4, Vec3};
 /// 2D camera for an orthographic projection.
 ///
 /// Port of `src/classic/camera.ts`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub position: Vec3,
     pub scale: Vec3,
+    /// Viewport size (runtime-derived, never serialized).
+    #[serde(skip)]
     pub size: Vec3,
 }
 

@@ -188,3 +188,55 @@ fn navmesh_dumper_uses_map_key() {
     assert!(val.get("position").is_none());
     assert!(val.get("scale").is_none());
 }
+
+#[test]
+fn rect_and_transform_dumpers_round_trip() {
+    classic_core::registry::clear();
+    register_all_components();
+
+    let rect =
+        classic_core::components::RectRender { color: [1.0, 0.0, 0.0, 1.0], ignore_cam: true };
+    let mut world = hecs::World::new();
+    let e = world.spawn((Transform::new([10.0, 20.0, 0.0].into(), [2.0, 3.0, 1.0].into()), rect));
+
+    let regs = classic_core::registry::ordered_regs();
+    let rect_val =
+        regs.iter().find(|r| r.name == "Rect").unwrap().dump.unwrap()(&world, e).unwrap();
+    assert_eq!(rect_val["type"], "Rect");
+    assert_eq!(rect_val["color"], serde_json::json!([1.0, 0.0, 0.0, 1.0]));
+    assert_eq!(rect_val["ignore_cam"], true);
+
+    let tf_val =
+        regs.iter().find(|r| r.name == "Transform").unwrap().dump.unwrap()(&world, e).unwrap();
+    assert_eq!(tf_val["type"], "Transform");
+    assert_eq!(tf_val["position"], serde_json::json!([10.0, 20.0, 0.0]));
+}
+
+#[test]
+fn lightstate_and_camera_dumpers() {
+    classic_core::registry::clear();
+    register_all_components();
+
+    let light = classic_core::components::LightState::default();
+    let cam = classic_core::Camera::new([5.0, 6.0, 0.0].into(), [0.5, 0.5, 1.0].into());
+    let expected_ambient = serde_json::to_value(light.ambient).unwrap();
+
+    let mut world = hecs::World::new();
+    let le = world.spawn((light,));
+    let ce = world.spawn((cam,));
+
+    let regs = classic_core::registry::ordered_regs();
+
+    let light_val =
+        regs.iter().find(|r| r.name == "LightState").unwrap().dump.unwrap()(&world, le).unwrap();
+    assert_eq!(light_val["type"], "LightState");
+    assert_eq!(light_val["ambient"], expected_ambient);
+
+    let cam_val =
+        regs.iter().find(|r| r.name == "Camera").unwrap().dump.unwrap()(&world, ce).unwrap();
+    assert_eq!(cam_val["type"], "Camera");
+    assert_eq!(cam_val["position"], serde_json::json!([5.0, 6.0, 0.0]));
+    assert_eq!(cam_val["scale"], serde_json::json!([0.5, 0.5, 1.0]));
+    // `size` is runtime-derived and must not be serialized.
+    assert!(cam_val.get("size").is_none());
+}
