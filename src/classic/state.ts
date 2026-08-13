@@ -371,6 +371,13 @@ const game: GameState = {
         this.physics!.beginFrame();
         (this.physics as PhysicsProvider).performCalls();
 
+        if (this.wasMouseButtonPressed(0) && !this.uiConsumedClick) {
+            this.selectionMode = 1;
+            vec3.copy(this.selectionBegin, this.mousePos);
+            this.performCall('selectionBegin');
+            (this.physics as PhysicsProvider).beginSelection();
+        }
+
         this.performCall('update');
 
         this.mouseWheel =
@@ -493,8 +500,10 @@ const game: GameState = {
             this.selectionMode = -1;
 
             vec3.copy(this.selectionEnd, this.mousePos);
-            this.performCall('selectionEnd');
-            (this.physics as PhysicsProvider).endSelection();
+            if (!this.uiConsumedClick) {
+                this.performCall('selectionEnd');
+                (this.physics as PhysicsProvider).endSelection();
+            }
         }
     },
 
@@ -508,11 +517,8 @@ const game: GameState = {
         }
 
         if (event.button === 0) {
-            this.selectionMode = 1;
-
-            vec3.copy(this.selectionBegin, this.mousePos);
-            this.performCall('selectionBegin');
-            (this.physics as PhysicsProvider).beginSelection();
+            this.uiConsumedClick = false;
+            if (this.panelMenuOpen) this.uiConsumedClick = true;
         }
     },
 
@@ -552,7 +558,7 @@ const game: GameState = {
             this.mouseAxis[1] = -1;
         }
 
-        if (this.selectionMode === 1) {
+        if (this.selectionMode === 1 && !this.uiConsumedClick) {
             (this.physics as PhysicsProvider).updateSelection();
         }
     },

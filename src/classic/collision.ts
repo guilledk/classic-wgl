@@ -285,6 +285,7 @@ export class Collider extends Component implements ICollider {
 
     _handlerNames: ColliderHandlerName[];
     _handlers: Record<ColliderHandlerName, ColliderHandler[]>;
+    consumesClick: boolean = false;
 
     constructor(entity: IEntity, shape: IShape) {
         super(entity);
@@ -505,6 +506,15 @@ export class PhysicsProvider {
         }
 
         if (this.game.wasMouseButtonPressed(0)) {
+            // Prescan: if any intersecting collider is a click consumer, pre-flag
+            for (const c of this.screen.retrieve(this.mouse)) {
+                if (c._pid === 0 || !('entity' in c) || !c.entity.enabled) continue;
+                const collider = c as Collider;
+                if (collider.consumesClick && this.gjk(this.mouse, c)) {
+                    this.game.uiConsumedClick = true;
+                    break;
+                }
+            }
             for (const c of this.screen.retrieve(this.mouse)) {
                 if (c._pid === 0 || !('entity' in c) || !c.entity.enabled) continue;
                 const collider = c as Collider;
