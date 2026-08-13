@@ -82,7 +82,7 @@ impl ResourceSet {
 
     /// Build a resource set by loading manifest-declared resources through an
     /// [`AssetLoader`] (loose files / embedded map).
-    pub fn from_loader<L: AssetLoader>(loader: &L, manifest: &RomManifest) -> anyhow::Result<Self> {
+    pub fn from_loader(loader: &dyn AssetLoader, manifest: &RomManifest) -> anyhow::Result<Self> {
         Self::build(manifest, |path| Ok(loader.load_bytes(path)?.to_vec()))
     }
 
@@ -138,7 +138,7 @@ mod tests {
         "scripts": [{"name": "main", "src": "scripts/main.rhai"}],
         "shaders": [],
         "textures": [{"name": "humanoid", "src": "res/humanoid.png"}],
-        "sdf_fonts": [{"name": "dejavusans", "metrics": "res/dejavusans-sdf.json"}],
+        "sdfFonts": [{"name": "dejavusans", "metrics": "res/dejavusans-sdf.json"}],
         "animations": []
     }"#;
 

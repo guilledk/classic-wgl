@@ -32,35 +32,9 @@ use classic_core::cl_info;
 use classic_core::instrument::Chan;
 use classic_core::terrain::lunar::LunarParams;
 use classic_engine::Engine;
+use classic_rom::{AssetLoader, ResourceSet, RomManifest};
 
 use crate::state::{DemoState, DemoStateRef};
-
-/// Every asset the demo needs, embedded by the caller at compile time via
-/// `include_bytes!` / `include_str!`.
-///
-/// Grouping these into a struct rather than passing seventeen positional
-/// arguments keeps the call sites in `apps/desktop` and `apps/web` readable
-/// and makes adding an asset a one-line change instead of a three-file one.
-#[derive(Clone, Copy)]
-pub struct DemoAssets<'a> {
-    pub manifest_json: &'a str,
-    /// Scene description for the hand-authored `demo` scene.
-    pub state_json: &'a str,
-    /// Scene description for the procedural `lunar` scene.
-    pub state_lunar_json: &'a str,
-    pub tileset_png: &'a [u8],
-    pub sdf_atlas_png: &'a [u8],
-    pub sdf_metrics_json: &'a str,
-    pub semaphore01_png: &'a [u8],
-    pub semaphore02_png: &'a [u8],
-    pub house_png: &'a [u8],
-    pub cursor_png: &'a [u8],
-    pub humanoid_png: &'a [u8],
-    pub cool_snek_png: &'a [u8],
-    pub tree_png: &'a [u8],
-    pub editor_icons_png: &'a [u8],
-    pub nav_tileset_png: &'a [u8],
-}
 
 /// Scene selector.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -82,26 +56,38 @@ impl Scene {
 }
 
 /// Full demo engine bootstrap for the named scene.
-pub fn init_engine(gl: Rc<glow::Context>, assets: &DemoAssets, scene: Scene) -> Engine {
+///
+/// Resources are resolved through an [`AssetLoader`] (the apps supply an
+/// embedded map at compile time): the `manifest.json` is parsed, a
+/// [`ResourceSet`] is built from it, and the engine hydrates shaders,
+/// textures, fonts and animations from that set.
+pub fn init_engine(gl: Rc<glow::Context>, loader: &dyn AssetLoader, scene: Scene) -> Engine {
+    let manifest: RomManifest =
+        serde_json::from_str(&loader.load_string("/manifest.json").expect("load manifest.json"))
+            .expect("parse manifest.json");
+    let resources =
+        ResourceSet::from_loader(loader, &manifest).expect("build resource set from manifest");
+
     let mut e = Engine::new();
-    e.init_gfx(gl, assets.manifest_json);
+    e.init_gfx(gl, &manifest, &resources);
 
     let state: DemoStateRef = Rc::new(RefCell::new(DemoState::default()));
 
     match scene {
         Scene::Demo => {
-            e.load_state(assets.state_json).expect("load state.json");
-            e.init_tilemap("tilemap", assets.tileset_png);
+            let state_json = loader.load_string("/state.json").expect("load state.json");
+            e.load_state(&state_json).expect("load state.json");
+            e.init_tilemap("tilemap");
         }
         Scene::Lunar => {
-            e.load_state(assets.state_lunar_json).expect("load state_lunar.json");
+            let state_json =
+                loader.load_string("/state_lunar.json").expect("load state_lunar.json");
+            e.load_state(&state_json).expect("load state_lunar.json");
             // Generates terrain, nav data and the tileset texture, and
             // installs all three.  Must precede `init_navigation`.
             scenes::lunar::init_lunar_terrain(&mut e, &state, LunarParams::default());
         }
     }
-
-    load_shared_textures(&mut e, assets);
 
     prefabs::init_cursor(&mut e);
     prefabs::init_camera_wasd(&mut e);
@@ -175,17 +161,4 @@ pub fn init_engine(gl: Rc<glow::Context>, assets: &DemoAssets, scene: Scene) -> 
 
     cl_info!(Chan::Frame, "classic-demo initialized ({scene:?} scene)");
     e
-}
-
-fn load_shared_textures(e: &mut Engine, assets: &DemoAssets) {
-    e.load_sdf_font("dejavusans-sdf", assets.sdf_metrics_json, assets.sdf_atlas_png);
-    e.load_texture_png("semaphore01", assets.semaphore01_png);
-    e.load_texture_png("semaphore02", assets.semaphore02_png);
-    e.load_texture_png("house", assets.house_png);
-    e.load_texture_png("cursor", assets.cursor_png);
-    e.load_texture_png("humanoid", assets.humanoid_png);
-    e.load_texture_png("coolSnake", assets.cool_snek_png);
-    e.load_texture_png("tree", assets.tree_png);
-    e.load_texture_png("editorIcons", assets.editor_icons_png);
-    e.load_texture_png("navTileset", assets.nav_tileset_png);
 }

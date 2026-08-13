@@ -1,23 +1,28 @@
-use classic_demo::DemoAssets;
+use classic_platform::EmbeddedAssetLoader;
 
-/// Every embedded asset, resolved at compile time.
-const ASSETS: DemoAssets<'static> = DemoAssets {
-    manifest_json: include_str!("../../../public/manifest.json"),
-    state_json: include_str!("../../../public/state.json"),
-    state_lunar_json: include_str!("../../../public/state_lunar.json"),
-    tileset_png: include_bytes!("../../../public/res/road_tileset.png"),
-    sdf_atlas_png: include_bytes!("../../../public/res/dejavusans-sdf.png"),
-    sdf_metrics_json: include_str!("../../../public/res/dejavusans-sdf.json"),
-    semaphore01_png: include_bytes!("../../../public/res/semaphore01.png"),
-    semaphore02_png: include_bytes!("../../../public/res/semaphore02.png"),
-    house_png: include_bytes!("../../../public/res/house01.png"),
-    cursor_png: include_bytes!("../../../public/res/cursor.png"),
-    humanoid_png: include_bytes!("../../../public/res/humanoid.png"),
-    cool_snek_png: include_bytes!("../../../public/res/cool_snek.png"),
-    tree_png: include_bytes!("../../../public/res/tree.png"),
-    editor_icons_png: include_bytes!("../../../public/res/editor_icons.png"),
-    nav_tileset_png: include_bytes!("../../../public/res/nav_tileset.png"),
-};
+/// Every embedded asset, resolved at compile time and keyed by manifest path.
+static ASSETS: &[(&str, &[u8])] = &[
+    ("/manifest.json", include_str!("../../../public/manifest.json").as_bytes()),
+    ("/state.json", include_str!("../../../public/state.json").as_bytes()),
+    ("/state_lunar.json", include_str!("../../../public/state_lunar.json").as_bytes()),
+    (
+        "/res/dejavusans-sdf.json",
+        include_str!("../../../public/res/dejavusans-sdf.json").as_bytes(),
+    ),
+    ("/res/skynet_logo.png", include_bytes!("../../../public/res/skynet_logo.png")),
+    ("/res/cool_snek.png", include_bytes!("../../../public/res/cool_snek.png")),
+    ("/res/road_tileset.png", include_bytes!("../../../public/res/road_tileset.png")),
+    ("/res/nav_tileset.png", include_bytes!("../../../public/res/nav_tileset.png")),
+    ("/res/cursor.png", include_bytes!("../../../public/res/cursor.png")),
+    ("/res/font.png", include_bytes!("../../../public/res/font.png")),
+    ("/res/dejavusans-sdf.png", include_bytes!("../../../public/res/dejavusans-sdf.png")),
+    ("/res/editor_icons.png", include_bytes!("../../../public/res/editor_icons.png")),
+    ("/res/humanoid.png", include_bytes!("../../../public/res/humanoid.png")),
+    ("/res/semaphore01.png", include_bytes!("../../../public/res/semaphore01.png")),
+    ("/res/semaphore02.png", include_bytes!("../../../public/res/semaphore02.png")),
+    ("/res/tree.png", include_bytes!("../../../public/res/tree.png")),
+    ("/res/house01.png", include_bytes!("../../../public/res/house01.png")),
+];
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -50,7 +55,8 @@ fn main() {
                     classic_core::instrument::Chan::Platform,
                     "headless: initialising engine"
                 );
-                let mut e = classic_demo::init_engine(gl, &ASSETS, scene);
+                let loader = EmbeddedAssetLoader::new(ASSETS);
+                let mut e = classic_demo::init_engine(gl, &loader, scene);
                 if let Some(gfx) = e.gfx.as_mut() {
                     gfx.set_render_target(vw as u32, vh as u32);
                 }
@@ -85,7 +91,8 @@ fn main() {
 
     platform.run_loop(move |gl, input, vw, vh, _delta, should_close| {
         if engine.is_none() {
-            engine = Some(classic_demo::init_engine(gl, &ASSETS, scene));
+            let loader = EmbeddedAssetLoader::new(ASSETS);
+            engine = Some(classic_demo::init_engine(gl, &loader, scene));
         }
         if let Some(e) = engine.as_mut() {
             if let Some(limit) = max_frames {

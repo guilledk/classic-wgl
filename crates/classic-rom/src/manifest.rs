@@ -18,10 +18,16 @@ pub struct ScriptManifestEntry {
 pub struct RomManifest {
     #[serde(flatten)]
     pub manifest: Manifest,
+    #[serde(default = "default_format_version")]
     pub format_version: u32,
+    #[serde(default)]
     pub entrypoint: String,
     #[serde(default)]
     pub scripts: Vec<ScriptManifestEntry>,
+}
+
+fn default_format_version() -> u32 {
+    1
 }
 
 #[cfg(test)]
@@ -30,17 +36,13 @@ mod tests {
 
     #[test]
     fn parses_rom_manifest_with_flattened_base() {
-        // NB: `Manifest` currently uses snake_case serde names (`sdf_fonts`),
-        // so the base manifest fields here use snake_case; Part 3 of the ROM
-        // plan adds `rename_all = "camelCase"` when sdf_fonts becomes
-        // authoritative for loading.
         let json = r#"{
             "format_version": 1,
             "entrypoint": "demo",
             "scripts": [{"name": "main", "src": "scripts/main.rhai"}],
             "shaders": [],
             "textures": [{"name": "humanoid", "src": "/res/humanoid.png"}],
-            "sdf_fonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
+            "sdfFonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
             "animations": []
         }"#;
         let m: RomManifest = serde_json::from_str(json).unwrap();

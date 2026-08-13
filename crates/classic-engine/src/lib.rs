@@ -189,20 +189,52 @@ impl Engine {
         }
     }
 
-    pub fn init_gfx(&mut self, gl: Rc<glow::Context>, manifest_json: &str) {
-        let manifest: classic_core::types::Manifest =
-            serde_json::from_str(manifest_json).expect("parse manifest.json");
-        let mut gfx = Gfx::new(gl);
+    /// Initialise the GL layer from a ROM manifest + resource set: compile the
+    /// manifest's shaders (built-ins, overridable by a ROM via the named
+    /// shader registry), upload every declared texture, load the SDF fonts, and
+    /// register the animations.
+    pub fn init_gfx(
+        &mut self,
+        gl: Rc<glow::Context>,
+        manifest: &classic_rom::RomManifest,
+        resources: &classic_rom::ResourceSet,
+    ) {
+        self.gfx = Some(Gfx::new(gl));
         let registry = classic_gfx::ShaderSourceRegistry::builtin();
-        for info in &manifest.shaders {
+        for info in &manifest.manifest.shaders {
             let vs = registry.resolve_vertex(&info.vertex);
             let fs = registry.resolve_fragment(&info.fragment);
-            gfx.add_shader(&info.name, &vs, &fs, &info.attr, &info.unif).expect("compile shader");
+            self.gfx
+                .as_mut()
+                .unwrap()
+                .add_shader(&info.name, &vs, &fs, &info.attr, &info.unif)
+                .expect("compile shader");
         }
-        for anim in &manifest.animations {
+
+        // Textures from the manifest (via the resource set), skipping the SDF
+        // atlas textures (those are uploaded by the SDF font path with LINEAR
+        // filtering).
+        let atlas_names: std::collections::HashSet<String> =
+            resources.fonts().keys().map(|f| format!("{f}-sdf")).collect();
+        for (name, bytes) in resources.textures() {
+            if atlas_names.contains(name) {
+                continue;
+            }
+            self.load_texture_png(name, bytes);
+        }
+
+        // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf").
+        for (font_name, metrics_bytes) in resources.fonts() {
+            let atlas_name = format!("{font_name}-sdf");
+            let metrics_str = std::str::from_utf8(metrics_bytes).expect("SDF metrics UTF-8");
+            if let Some(atlas_png) = resources.textures().get(&atlas_name) {
+                self.load_sdf_font(&atlas_name, metrics_str, atlas_png);
+            }
+        }
+
+        for anim in &manifest.manifest.animations {
             self.animations.insert(anim.name.clone(), anim.clone());
         }
-        self.gfx = Some(gfx);
     }
 
     /// Upload a PNG texture from raw bytes.
@@ -234,18 +266,17 @@ impl Engine {
     /// Decode base64-encoded JSON array into tile data.
     /// Build and upload the tilemap mesh + tile data texture for a named entity.
     /// The tile data comes from the entity's `Tilemap.data` (loaded inline from
-    /// `state.json`), and terrain is flat (height 1.0 everywhere), matching the
-    /// TS `heightData.fill(1)`.  For procedurally generated terrain see
+    /// `state.json`) and the tileset texture is loaded from the manifest by
+    /// [`Engine::init_gfx`].  Terrain is flat (height 1.0 everywhere), matching
+    /// the TS `heightData.fill(1)`.  For procedurally generated terrain see
     /// [`Engine::init_tilemap_generated`].
-    pub fn init_tilemap(&mut self, entity_name: &str, tileset_png: &[u8]) {
+    pub fn init_tilemap(&mut self, entity_name: &str) {
         let entity = *self.names.get(entity_name).expect("tilemap entity");
 
-        let (tile_set_name, size_x, size_y, tiles) = {
+        let (size_x, size_y, tiles) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.tile_set.clone(), tm.size_x, tm.size_y, tm.data.clone())
+            (tm.size_x, tm.size_y, tm.data.clone())
         };
-
-        self.load_texture_png(&tile_set_name, tileset_png);
 
         // height_data stride is (size_x + 1) — vertex grid, not tile grid.
         // The TS used sizeX * sizeY (tile-based). Rust uses (sizeX+1)*(sizeY+1)
