@@ -22,8 +22,7 @@ use std::rc::Rc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    AgentState, DebugName, IsoAgent, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
-    UiNode,
+    DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap, UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -1984,11 +1983,12 @@ impl Engine {
         self.init_navigation_data(nav_data);
     }
 
-    /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked) and
-    /// wire click-to-move.
+    /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked).
     ///
     /// Used by generated scenes, which derive walkability from real terrain
-    /// slope during generation and so must not have it recomputed here.
+    /// slope during generation and so must not have it recomputed here.  Agent
+    /// movement is driven by the ROM guest (which paths over this grid via
+    /// `find_path`); this only installs the grid for the nav-mesh overlay.
     pub fn init_navigation_data(&mut self, nav_tiles: Vec<u32>) {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
 
@@ -2002,102 +2002,6 @@ impl Engine {
         if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
             nav.data = nav_tiles;
         }
-
-        // Click-to-move needs an agent; without one there is nothing to move,
-        // but the nav data above is already installed.
-        let Some(agent_entity) = self.entity_by_role(RoleKind::Agent) else { return };
-        let Some(tilemap_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
-
-        // 3. Wire click-to-move.  Each frame, if the mouse was just
-        //    clicked, compute an A* path and send it to the agent.
-        let agent_ent = agent_entity;
-        let nav_ent = nav_entity;
-        self.on_update(move |engine| {
-            if !engine.input.was_mouse_pressed(0) || engine.ui_consumed_click {
-                return;
-            }
-
-            let (click_x, click_y, agent_pos, nav_data, s_x, s_y) = {
-                let Ok(tm) = engine.world.get::<&Tilemap>(tilemap_entity) else { return };
-                let Ok(_agent) = engine.world.get::<&IsoAgent>(agent_ent) else { return };
-                let agent_tf = engine.world.get::<&Transform>(agent_ent).unwrap();
-                let nav = engine.world.get::<&NavMesh>(nav_ent).unwrap();
-                (
-                    tm.mouse_iso_pos.x,
-                    tm.mouse_iso_pos.y,
-                    (agent_tf.position.x, agent_tf.position.y),
-                    nav.data.clone(),
-                    nav.size_x,
-                    nav.size_y,
-                )
-            };
-
-            let cx = click_x as i32;
-            let cy = click_y as i32;
-            let ax = agent_pos.0 as i32;
-            let ay = agent_pos.1 as i32;
-
-            // Bounds check.
-            if cx < 0 || cx >= s_x || cy < 0 || cy >= s_y {
-                return;
-            }
-
-            // Reject impassable destinations before running A*.  Without this
-            // the search cannot succeed but still has to exhaust every
-            // reachable cell before it can say so — 21 ms on a 400x400 map,
-            // a dropped frame, on every click against a crater wall.  It also
-            // happens to be the behaviour you want: clicking a cliff should
-            // do nothing rather than walk to somewhere adjacent to it.
-            if nav_data.get((cy * s_x + cx) as usize).copied().unwrap_or(0) == 0 {
-                classic_core::cl_debug!(
-                    classic_core::instrument::Chan::Path,
-                    "click-to-move: ({cx}, {cy}) is impassable, ignoring"
-                );
-                return;
-            }
-
-            let _dist = (((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay)) as f32).sqrt();
-
-            if !engine.agent_selected {
-                return;
-            }
-
-            // Convert nav data to owned i32 slice for the find_path API.
-            let nav_i32: Vec<i32> = nav_data.iter().map(|&v| v as i32).collect();
-            let size = (s_x, s_y);
-            if let Some(raw_path) =
-                pathfinder::find_path(&nav_i32, size.0, size.1, (ax, ay), (cx, cy))
-            {
-                // Offset waypoints by 0.5 to centre within tiles (matches TS).
-                let mut path: Vec<_> = raw_path
-                    .into_iter()
-                    .map(|(x, y)| glam::Vec2::new(x as f32 + 0.5, y as f32 + 0.5))
-                    .collect();
-
-                if let Ok(mut agent) = engine.world.get::<&mut IsoAgent>(agent_ent) {
-                    // Replace first waypoint with agent's exact current position
-                    // (matches TS `this._path[0] = [this.position[0], this.position[1]]`).
-                    let agent_tf = engine.world.get::<&Transform>(agent_ent).unwrap();
-                    path[0] = glam::Vec2::new(agent_tf.position.x, agent_tf.position.y);
-
-                    let waypoint_count = path.len();
-                    agent.path = path;
-                    agent.target_index = 1;
-                    agent.delta = 0.0;
-                    agent.init_dist = glam::Vec2::new(
-                        agent.path[1].x - agent.path[0].x,
-                        agent.path[1].y - agent.path[0].y,
-                    )
-                    .length()
-                    .max(0.001);
-                    agent.state = AgentState::FollowPath;
-                    classic_core::cl_debug!(
-                        classic_core::instrument::Chan::Nav,
-                        "nav: path found with {waypoint_count} waypoints"
-                    );
-                }
-            }
-        });
     }
 
     /// Compute the model matrix for an IsoSprite (matches TS `IsoSprite.modelMatrix()`).

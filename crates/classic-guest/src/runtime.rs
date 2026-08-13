@@ -257,11 +257,17 @@ impl WasmiRuntime {
              out_ptr: i32,
              out_cap: i32|
              -> i32 {
-                let json = caller.data_mut().find_path(sx, sy, ex, ey);
-                if out_cap < json.len() as i32 {
+                let cells = caller.data_mut().find_path(sx, sy, ex, ey);
+                let mut bytes = Vec::with_capacity(cells.len() * 8);
+                for (x, y) in &cells {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                    bytes.extend_from_slice(&y.to_le_bytes());
+                }
+                if bytes.len() > out_cap.max(0) as usize {
                     return -1;
                 }
-                abi::write_str(&mut caller, out_ptr, &json)
+                abi::write_bytes(&mut caller, out_ptr, &bytes);
+                cells.len() as i32
             },
         )?;
 

@@ -1,12 +1,10 @@
-//! Simple, state-independent prefabs: camera controls, cursor, ECS systems
-//! (agent + animator), footprint colliders and debug keyboard toggles.
+//! Simple, state-independent prefabs: camera controls, cursor, the animator
+//! system, footprint colliders and debug keyboard toggles.
 
 use std::rc::Rc;
 
 use classic_core::collision::polygon_from_verts;
-use classic_core::components::{
-    AgentState, Animator, ColliderData, IsoAgent, IsoSprite, Tilemap, Transform,
-};
+use classic_core::components::{Animator, ColliderData, IsoAgent, IsoSprite, Tilemap, Transform};
 use classic_core::math::iso_to_cartesian_4;
 use classic_core::tilemap::bilinear_height;
 use classic_engine::Engine;
@@ -50,139 +48,6 @@ pub fn init_cursor(engine: &mut Engine) {
         if let Ok(mut tf) = engine.world.get::<&mut Transform>(cursor_e) {
             tf.position.x = mp.x;
             tf.position.y = mp.y;
-        }
-    });
-}
-
-/// Register the isometric agent update system: idle animation + path-following
-/// state machine.  Only entities with `(IsoAgent, Animator, Transform)` are processed.
-pub fn init_agent_system(engine: &mut Engine) {
-    const ANIM_DIRS: [&str; 8] =
-        ["East", "SouthEast", "South", "SouthWest", "West", "NorthWest", "North", "NorthEast"];
-
-    engine.on_update(|engine| {
-        let delta = engine.time.delta;
-        let anim_names: std::collections::HashSet<String> =
-            engine.animations.keys().cloned().collect();
-
-        let mut z_updates: Vec<(hecs::Entity, f32)> = Vec::new();
-
-        for (_e, (agent, anim, tf)) in
-            engine.world.query::<(&mut IsoAgent, &mut Animator, &mut Transform)>().iter()
-        {
-            match agent.state {
-                AgentState::Idle => {
-                    let dir_name = ANIM_DIRS[agent.anim_index % 8];
-                    let anim_name = format!("idle{dir_name}");
-                    if anim_names.contains(&anim_name) {
-                        anim.animation = Some(anim_name);
-                        anim.playing = true;
-                        anim.repeat = true;
-                    }
-                }
-                AgentState::FollowPath => {
-                    if agent.target_index >= agent.path.len()
-                        || agent.target_index == 0
-                        || agent.path.get(agent.target_index).is_none()
-                    {
-                        agent.state = AgentState::Idle;
-                        continue;
-                    }
-
-                    if agent.delta >= 1.0 {
-                        agent.delta = 0.0;
-                        agent.target_index += 1;
-
-                        if agent.target_index >= agent.path.len() {
-                            agent.state = AgentState::Idle;
-                            continue;
-                        }
-
-                        let from = &agent.path[agent.target_index - 1];
-                        let to = &agent.path[agent.target_index];
-                        agent.init_dist =
-                            glam::Vec2::new(from.x - to.x, from.y - to.y).length().max(0.001);
-                    }
-
-                    let from = agent.path[agent.target_index - 1];
-                    let to = agent.path[agent.target_index];
-
-                    // Direction
-                    let dx = to.x - from.x;
-                    let dy = to.y - from.y;
-                    let radians = dy.atan2(dx);
-                    agent.direction = radians.to_degrees();
-                    let mut ix = (agent.direction / 45.0).floor() as i32;
-                    ix = ((ix % 8) + 8) % 8;
-                    agent.anim_index = ix as usize;
-
-                    let dir_name = ANIM_DIRS[agent.anim_index % 8];
-                    let anim_name = format!("walk{dir_name}");
-                    if anim_names.contains(&anim_name) {
-                        anim.animation = Some(anim_name);
-                        anim.playing = true;
-                        anim.repeat = true;
-                    }
-
-                    // Lerp position
-                    let start = glam::Vec3::new(from.x, from.y, tf.position.z);
-                    let end = glam::Vec3::new(to.x, to.y, tf.position.z);
-                    tf.position.x = start.x + (end.x - start.x) * agent.delta;
-                    tf.position.y = start.y + (end.y - start.y) * agent.delta;
-
-                    // Terrain height sampling
-                    let tilemap_entity = engine.names.get(&agent.tilemap).copied();
-                    if let Some(tm_e) = tilemap_entity {
-                        if let Ok(tm) = engine.world.get::<&Tilemap>(tm_e) {
-                            let px = tf.position.x;
-                            let py = tf.position.y;
-                            let ftx = px.floor() as i32;
-                            let fty = py.floor() as i32;
-                            let fx = px - ftx as f32;
-                            let fy = py - fty as f32;
-
-                            let at = |tx: i32, ty: i32| -> f32 {
-                                let tx = tx.clamp(0, tm.size_x) as usize;
-                                let ty = ty.clamp(0, tm.size_y) as usize;
-                                tm.height_data
-                                    .get(ty * (tm.size_x as usize + 1) + tx)
-                                    .copied()
-                                    .unwrap_or(0.0)
-                            };
-
-                            let h_nw = at(ftx, fty);
-                            let h_ne = at(ftx + 1, fty);
-                            let h_sw = at(ftx, fty + 1);
-                            let h_se = at(ftx + 1, fty + 1);
-                            let hi = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, px, py);
-                            let target_z = hi * tm.height_scale;
-
-                            // Speed factor from steepness
-                            let dx_h = (h_ne - h_nw) * (1.0 - fy) + (h_se - h_sw) * fy;
-                            let dy_h = (h_sw - h_nw) * (1.0 - fx) + (h_se - h_ne) * fx;
-                            let steepness = (dx_h * dx_h + dy_h * dy_h).sqrt();
-                            let speed_factor = 1.0 - (steepness.min(3.0) / 3.0) * 0.5;
-
-                            agent.delta +=
-                                (agent.speed * speed_factor * delta) / agent.init_dist.max(0.001);
-
-                            z_updates.push((_e, target_z));
-                        }
-                    }
-
-                    if tilemap_entity.is_none() {
-                        agent.state = AgentState::Idle;
-                    }
-                }
-            }
-        }
-
-        // Phase 2: smooth z interpolation
-        for (e, target_z) in z_updates {
-            if let Ok(mut tf) = engine.world.get::<&mut Transform>(e) {
-                let z_speed = (delta * 4.0).min(1.0);
-                tf.position.z += (target_z - tf.position.z) * z_speed;
-            }
         }
     });
 }

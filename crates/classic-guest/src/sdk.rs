@@ -152,12 +152,9 @@ impl GuestHost {
         self.engine().input.is_key_down(key) as i32
     }
 
-    /// A* path over the nav mesh from `(sx, sy)` to `(ex, ey)`, returned as a
-    /// JSON array of `[x, y]` tile-coordinate pairs (`[]` if no path).
-    pub fn find_path(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) -> String {
-        match self.engine().find_path((sx, sy), (ex, ey)) {
-            Some(cells) => serde_json::to_string(&cells).unwrap_or_default(),
-            None => "[]".to_string(),
-        }
+    /// A* path over the nav mesh from `(sx, sy)` to `(ex, ey)` as integer tile
+    /// coordinates (empty if no path exists).
+    pub fn find_path(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) -> Vec<(i32, i32)> {
+        self.engine().find_path((sx, sy), (ex, ey)).unwrap_or_default()
     }
 }

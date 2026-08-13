@@ -89,7 +89,6 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
     prefabs::init_cursor(&mut e);
     prefabs::init_camera_wasd(&mut e);
     prefabs::init_animator_system(&mut e);
-    prefabs::init_agent_system(&mut e);
     prefabs::init_footprint_colliders(&mut e);
 
     if lunar {
