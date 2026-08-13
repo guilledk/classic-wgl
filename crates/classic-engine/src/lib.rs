@@ -1982,16 +1982,22 @@ impl Engine {
     /// slope during generation and so must not have it recomputed here.
     pub fn init_navigation_data(&mut self, nav_tiles: Vec<u32>) {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
-        let Some(agent_entity) = self.entity_by_role(RoleKind::Agent) else { return };
-        let Some(tilemap_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
 
         // The supplied grid is authoritative for passability.  A block here
         // used to re-derive walkability from tilemap heights and then discard
         // the result on the very next line; `sync_nav_heights` is now the one
         // place that does that, and only in response to a height edit.
+        //
+        // Installed regardless of whether an agent exists — the nav mesh
+        // overlay still needs it.
         if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
             nav.data = nav_tiles;
         }
+
+        // Click-to-move needs an agent; without one there is nothing to move,
+        // but the nav data above is already installed.
+        let Some(agent_entity) = self.entity_by_role(RoleKind::Agent) else { return };
+        let Some(tilemap_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
 
         // 3. Wire click-to-move.  Each frame, if the mouse was just
         //    clicked, compute an A* path and send it to the agent.
