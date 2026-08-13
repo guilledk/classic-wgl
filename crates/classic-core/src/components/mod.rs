@@ -271,15 +271,20 @@ pub struct Animator {
 }
 
 /// Collision shape.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Shape {
     Circle { diameter: f32 },
     Polygon { verts: Vec<Vec3>, center: Vec3, min: Vec3, max: Vec3 },
 }
 
-/// Collider component — enables physics intersection.
-/// Port of `Collider` from `collision.ts`.
-pub struct Collider {
+/// Collider component — serializable physics data (no runtime handlers).
+///
+/// Port of `Collider` from `collision.ts`.  Interaction handlers
+/// (`Box<dyn FnMut>`) are *not* part of this component; they are stored on the
+/// [`PhysicsProvider`](crate::collision::PhysicsProvider) keyed by PID, so the
+/// component round-trips through `state.json` without baked closures.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ColliderData {
     pub shape: Shape,
     pub position: Vec3,
     pub scale: Vec3,
@@ -288,11 +293,9 @@ pub struct Collider {
     pub pid: u32,
     pub consumes_click: bool,
     pub click_priority: i32,
-    pub handlers:
-        std::collections::HashMap<crate::collision::HandlerKind, Vec<Box<dyn FnMut() -> bool>>>,
 }
 
-impl Collider {
+impl ColliderData {
     pub fn new(shape: Shape) -> Self {
         Self {
             shape,
@@ -302,16 +305,7 @@ impl Collider {
             pid: 0,
             consumes_click: false,
             click_priority: 0,
-            handlers: Default::default(),
         }
-    }
-
-    pub fn add_handler(
-        &mut self,
-        kind: crate::collision::HandlerKind,
-        f: impl FnMut() -> bool + 'static,
-    ) {
-        self.handlers.entry(kind).or_default().push(Box::new(f));
     }
 }
 

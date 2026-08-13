@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use classic_core::collision::polygon_from_verts;
 use classic_core::components::{
-    AgentState, Animator, Collider, IsoAgent, IsoSprite, Tilemap, Transform,
+    AgentState, Animator, ColliderData, IsoAgent, IsoSprite, Tilemap, Transform,
 };
 use classic_core::math::iso_to_cartesian_4;
 use classic_core::tilemap::bilinear_height;
@@ -320,7 +320,7 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
         }
 
         let shape = polygon_from_verts(world_verts);
-        let pid = engine.physics.register_collider(Collider::new(shape));
+        let pid = engine.physics.register_collider(ColliderData::new(shape));
         log::debug!("registered footprint collider pid={pid} for sprite");
 
         // Set sprite z-offset from terrain height (matches TS prefabs.ts:367).

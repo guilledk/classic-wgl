@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use glam::{Mat4, Vec3};
 
-use crate::components::{Collider, Shape};
+use crate::components::{ColliderData, Shape};
 use crate::gjk::{GjkContext, GjkShape};
 use crate::quadtree::{Quadtree, RectBounds};
 use crate::types::Rect;
@@ -145,12 +145,6 @@ pub enum HandlerKind {
     SelectionTemp,
 }
 
-impl Collider {
-    pub fn has_handlers(&self, kind: HandlerKind) -> bool {
-        self.handlers.get(&kind).is_some_and(|v| !v.is_empty())
-    }
-}
-
 // ---------------------------------------------------------------------------
 // VirtualCollider
 // ---------------------------------------------------------------------------
@@ -185,8 +179,21 @@ impl VirtualCollider {
 // ---------------------------------------------------------------------------
 
 struct ColliderEntry {
-    collider: Collider,
+    collider: ColliderData,
+    /// Interaction handlers, keyed by kind.  Owned by the provider (not the
+    /// serializable component) so they never round-trip through `state.json`.
+    handlers: HashMap<HandlerKind, Vec<Box<dyn FnMut() -> bool>>>,
     enabled: bool,
+}
+
+impl ColliderEntry {
+    fn has_handlers(&self, kind: HandlerKind) -> bool {
+        self.handlers.get(&kind).is_some_and(|v| !v.is_empty())
+    }
+
+    fn add_handler(&mut self, kind: HandlerKind, f: impl FnMut() -> bool + 'static) {
+        self.handlers.entry(kind).or_default().push(Box::new(f));
+    }
 }
 
 pub struct PhysicsProvider {
@@ -241,10 +248,11 @@ impl PhysicsProvider {
         self.screen.clear();
     }
 
-    pub fn register_collider(&mut self, collider: Collider) -> u32 {
+    pub fn register_collider(&mut self, collider: ColliderData) -> u32 {
         let pid = self.next_id;
         self.next_id += 1;
-        self.entries.insert(pid, ColliderEntry { collider, enabled: true });
+        self.entries
+            .insert(pid, ColliderEntry { collider, handlers: HashMap::new(), enabled: true });
         pid
     }
 
@@ -273,7 +281,7 @@ impl PhysicsProvider {
         f: impl FnMut() -> bool + 'static,
     ) {
         if let Some(entry) = self.entries.get_mut(&pid) {
-            entry.collider.add_handler(kind, f);
+            entry.add_handler(kind, f);
         }
     }
 
@@ -360,7 +368,7 @@ impl PhysicsProvider {
                 continue;
             }
             if let Some(entry) = self.entries.get_mut(&ch.pid) {
-                if let Some(handlers) = entry.collider.handlers.get_mut(&HandlerKind::Selection) {
+                if let Some(handlers) = entry.handlers.get_mut(&HandlerKind::Selection) {
                     for h in handlers.iter_mut() {
                         h.as_mut()();
                     }
@@ -427,7 +435,7 @@ impl PhysicsProvider {
                     continue;
                 }
                 if let Some(entry) = self.entries.get(&ch.pid) {
-                    if entry.collider.has_handlers(HandlerKind::Click) && self.gjk_test(0, ch.pid) {
+                    if entry.has_handlers(HandlerKind::Click) && self.gjk_test(0, ch.pid) {
                         click_targets.push((entry.collider.click_priority, ch.pid));
                     }
                 }
@@ -437,7 +445,7 @@ impl PhysicsProvider {
                 if let Some(entry) = self.entries.get_mut(&pid) {
                     let consumes = entry.collider.consumes_click;
                     let mut stop = false;
-                    if let Some(handlers) = entry.collider.handlers.get_mut(&HandlerKind::Click) {
+                    if let Some(handlers) = entry.handlers.get_mut(&HandlerKind::Click) {
                         for h in handlers.iter_mut() {
                             if h.as_mut()() {
                                 stop = true;
@@ -466,9 +474,7 @@ impl PhysicsProvider {
                         self.collided.get(&a_pid).map(|m| m.contains_key(&b_pid)).unwrap_or(false);
                     if !was_colliding {
                         if let Some(entry) = self.entries.get_mut(&a_pid) {
-                            if let Some(handlers) =
-                                entry.collider.handlers.get_mut(&HandlerKind::Enter)
-                            {
+                            if let Some(handlers) = entry.handlers.get_mut(&HandlerKind::Enter) {
                                 for h in handlers.iter_mut() {
                                     h.as_mut()();
                                 }
@@ -488,8 +494,7 @@ impl PhysicsProvider {
                     self.colliding.get(&a_pid).map(|m| m.contains_key(&b_pid)).unwrap_or(false);
                 if !still_colliding {
                     if let Some(entry) = self.entries.get_mut(&a_pid) {
-                        if let Some(handlers) = entry.collider.handlers.get_mut(&HandlerKind::Exit)
-                        {
+                        if let Some(handlers) = entry.handlers.get_mut(&HandlerKind::Exit) {
                             for h in handlers.iter_mut() {
                                 h.as_mut()();
                             }
