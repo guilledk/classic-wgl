@@ -13,11 +13,17 @@ pub mod format;
 pub mod loader;
 pub mod manifest;
 pub mod resource;
+pub mod rom;
 
 pub use archive::RomArchive;
 pub use format::{detect_format, RomFormat};
-#[cfg(not(target_arch = "wasm32"))]
-pub use loader::FsAssetLoader;
-pub use loader::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
+pub use loader::{AssetBytes, AssetLoader, EmbeddedAssetLoader, FsAssetLoader};
 pub use manifest::{RomManifest, ScriptManifestEntry};
 pub use resource::{ResourceKind, ResourceSet};
+pub use rom::Rom;
+
+/// Canonicalise a manifest resource path (`/res/foo.png`) to a ROM archive
+/// entry path (`res/foo.png`) — no leading slash.
+pub(crate) fn rom_path(path: &str) -> &str {
+    path.trim_start_matches('/')
+}

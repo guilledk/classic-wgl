@@ -92,13 +92,13 @@ impl ResourceSet {
     ) -> anyhow::Result<Self> {
         let mut set = Self::default();
         for entry in &manifest.manifest.textures {
-            set.textures.insert(entry.name.clone(), load(&entry.src)?);
+            set.textures.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
         for entry in &manifest.manifest.sdf_fonts {
-            set.fonts.insert(entry.name.clone(), load(&entry.metrics)?);
+            set.fonts.insert(entry.name.clone(), load(crate::rom_path(&entry.metrics))?);
         }
         for entry in &manifest.scripts {
-            set.scripts.insert(entry.name.clone(), load(&entry.src)?);
+            set.scripts.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
         Ok(set)
     }
