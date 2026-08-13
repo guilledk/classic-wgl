@@ -76,6 +76,11 @@ pub struct Engine {
     pub light_color: [f32; 3],
     pub animations: HashMap<String, AnimationData>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
+    /// ROM manifest (raw + parsed) and resources, captured by `load_rom` so
+    /// `dump_rom` can reconstruct a [`classic_rom::Rom`] with the current state.
+    pub rom_manifest_json: Option<String>,
+    pub rom_manifest: Option<classic_rom::RomManifest>,
+    pub rom_resources: Option<classic_rom::ResourceSet>,
     pub ui: Option<ui::UIManager>,
     pub selection_mode: i32,
     pub selection_begin_screen: glam::Vec3,
@@ -166,6 +171,9 @@ impl Engine {
             light_color: [1.0, 0.95, 0.85],
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
+            rom_manifest_json: None,
+            rom_manifest: None,
+            rom_resources: None,
             ui: None,
             selection_mode: -1,
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
@@ -235,6 +243,28 @@ impl Engine {
         for anim in &manifest.manifest.animations {
             self.animations.insert(anim.name.clone(), anim.clone());
         }
+    }
+
+    /// Hydrate the engine from a ROM: compile shaders, upload resources, and
+    /// spawn the entity graph.  Records the ROM's manifest + resources so
+    /// [`Engine::dump_rom`] can reconstruct it.
+    pub fn load_rom(&mut self, gl: Rc<glow::Context>, rom: &classic_rom::Rom) {
+        self.init_gfx(gl, &rom.manifest, &rom.resources);
+        self.load_state(&rom.state).expect("load ROM state");
+        self.rom_manifest_json = Some(rom.manifest_json.clone());
+        self.rom_manifest = Some(rom.manifest.clone());
+        self.rom_resources = Some(rom.resources.clone());
+    }
+
+    /// Reconstruct a [`classic_rom::Rom`] from the loaded manifest + resources
+    /// and the current world state.  Returns `None` if no ROM was loaded.
+    pub fn dump_rom(&self) -> Option<classic_rom::Rom> {
+        Some(classic_rom::Rom {
+            manifest: self.rom_manifest.clone()?,
+            manifest_json: self.rom_manifest_json.clone()?,
+            resources: self.rom_resources.clone()?,
+            state: self.dump_state(),
+        })
     }
 
     /// Upload a PNG texture from raw bytes.
