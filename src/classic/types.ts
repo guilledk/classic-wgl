@@ -144,6 +144,8 @@ export interface ICollider extends IComponent, Rect {
     position: vec3 | number[];
     scale: vec3 | number[];
     _pid: number;
+    clickPriority: number;
+    consumesClick: boolean;
     updateRect(): void;
     addHandler(name: ColliderHandlerName, fn: ColliderHandler): void;
     callHandler(name: ColliderHandlerName, ...params: unknown[]): boolean;
