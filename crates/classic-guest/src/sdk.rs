@@ -222,6 +222,21 @@ impl GuestHost {
         self.engine_mut().generate_terrain(kind, seed, height_scale as f32) as i32
     }
 
+    /// Write one tile index at tile coordinate `(x, y)`.
+    pub fn set_tile(&mut self, x: i32, y: i32, id: i32) -> i32 {
+        self.engine_mut().set_tile(x, y, id.max(0) as u32) as i32
+    }
+
+    /// Write one height vertex at coordinate `(x, y)`.
+    pub fn set_height(&mut self, x: i32, y: i32, h: f64) -> i32 {
+        self.engine_mut().set_height(x, y, h as f32) as i32
+    }
+
+    /// Rebuild the tilemap mesh and nav walkability after terrain edits.
+    pub fn rebuild_terrain(&mut self) -> i32 {
+        self.engine_mut().rebuild_terrain() as i32
+    }
+
     /// A* path over the nav mesh from `(sx, sy)` to `(ex, ey)` as integer tile
     /// coordinates (empty if no path exists).
     pub fn find_path(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) -> Vec<(i32, i32)> {

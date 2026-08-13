@@ -65,6 +65,9 @@ Host imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `key_up` | `(key_ptr, key_len) -> i32` | key released this frame |
 | `was_key_pressed` | `(key_ptr, key_len) -> i32` | key pressed this frame (edge-triggered) |
 | `generate_terrain` | `(kind_ptr, kind_len, seed_ptr, seed_len, height_scale: f64) -> i32` | generate/install a named terrain (generic engine prefab; `kind = "lunar"` today) |
+| `set_tile` | `(x: i32, y: i32, id: i32) -> i32` | write one tile index at tile coordinate `(x, y)` (bounds-checked) |
+| `set_height` | `(x: i32, y: i32, h: f64) -> i32` | write one height vertex at coordinate `(x, y)` (bounds-checked) |
+| `rebuild_terrain` | `() -> i32` | rebuild the tilemap mesh + re-derive nav walkability after in-place edits |
 | `get_camera` | `(out_ptr) -> i32` | writes `[x, y, scale]` (three f64) |
 | `set_camera` | `(x: f64, y: f64, scale: f64) -> i32` | set camera position + uniform scale |
 | `pick_at` | `(x: f64, y: f64, out_ptr, out_cap) -> i32` | name of the top gameplay entity under a screen point (bytes written, `0` if none) |

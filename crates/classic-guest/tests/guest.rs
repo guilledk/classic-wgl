@@ -1,7 +1,7 @@
 //! Integration tests for the WASM guest runtime, driving wasmi with small
 //! hand-written WAT guest modules.
 
-use classic_core::components::{Animator, ColliderData, NavMesh, Role, Shape};
+use classic_core::components::{Animator, ColliderData, NavMesh, Role, Shape, Tilemap};
 use classic_core::RoleKind;
 use classic_engine::Engine;
 use classic_guest::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
@@ -96,6 +96,29 @@ fn install_test_navmesh(engine: &mut Engine) {
     };
     let entity = engine.world.spawn((nav, Role::new(RoleKind::NavMesh)));
     engine.names.insert("navmesh".into(), entity);
+}
+
+/// Install a small (3x3) flat tilemap on a role-tagged entity.
+fn install_test_tilemap(engine: &mut Engine) {
+    let tilemap = Tilemap {
+        position: Vec3::ZERO,
+        scale: Vec3::ONE,
+        size_x: 3,
+        size_y: 3,
+        tile_set: "tileset".into(),
+        tile_pixel_size: [32, 32],
+        max_tile: 16,
+        data: vec![0u32; 9],
+        height_data: vec![1.0f32; 16],
+        height_scale: 1.0,
+        tile_set_pixel_size: [0, 0],
+        tiles_per_row: 0,
+        mouse_iso_pos: Vec3::ZERO,
+        selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+        selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+    };
+    let entity = engine.world.spawn((tilemap, Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), entity);
 }
 
 #[test]
@@ -448,4 +471,54 @@ fn guest_without_lifecycle_hooks_still_runs() {
     assert!(rt.init(&mut engine).is_ok());
     assert!(rt.start(&mut engine).is_ok());
     rt.update(&mut engine, 0.016).unwrap();
+}
+
+#[test]
+fn guest_edits_terrain_tile_and_height() {
+    let mut engine = Engine::new_for_test();
+    install_test_tilemap(&mut engine);
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "set_tile" (func $set_tile (param i32 i32 i32) (result i32)))
+            (import "env" "set_height" (func $set_height (param i32 i32 f64) (result i32)))
+            (import "env" "rebuild_terrain" (func $rebuild_terrain (result i32)))
+            (func (export "update") (param f64)
+                (drop (call $set_tile (i32.const 1) (i32.const 2) (i32.const 7)))
+                (drop (call $set_height (i32.const 0) (i32.const 0) (f64.const 5.0)))
+                (drop (call $rebuild_terrain))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+
+    let tm_entity = engine.entity_by_role(RoleKind::Tilemap).unwrap();
+    let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
+    assert_eq!(tm.data[2 * 3 + 1], 7);
+    assert_eq!(tm.height_data[0], 5.0);
+}
+
+#[test]
+fn guest_terrain_edits_are_bounds_checked() {
+    let mut engine = Engine::new_for_test();
+    install_test_tilemap(&mut engine);
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "set_tile" (func $set_tile (param i32 i32 i32) (result i32)))
+            (import "env" "set_height" (func $set_height (param i32 i32 f64) (result i32)))
+            (func (export "update") (param f64)
+                (drop (call $set_tile (i32.const 99) (i32.const 99) (i32.const 7)))
+                (drop (call $set_height (i32.const 99) (i32.const 99) (f64.const 5.0)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+
+    let tm_entity = engine.entity_by_role(RoleKind::Tilemap).unwrap();
+    let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
+    assert!(tm.data.iter().all(|&t| t == 0));
+    assert!(tm.height_data.iter().all(|&h| h == 1.0));
 }

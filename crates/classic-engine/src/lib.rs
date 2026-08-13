@@ -784,6 +784,44 @@ impl Engine {
         bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
     }
 
+    /// Write one tile index at tile coordinate `(x, y)` (bounds-checked).
+    pub fn set_tile(&mut self, x: i32, y: i32, id: u32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if x < 0 || y < 0 || x >= tm.size_x || y >= tm.size_y {
+            return false;
+        }
+        let idx = (y as usize) * tm.size_x as usize + x as usize;
+        let Some(t) = tm.data.get_mut(idx) else { return false };
+        *t = id;
+        true
+    }
+
+    /// Write one height vertex at coordinate `(x, y)` (bounds-checked; the
+    /// height grid is a `(size_x + 1) × (size_y + 1)` vertex grid).
+    pub fn set_height(&mut self, x: i32, y: i32, h: f32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if x < 0 || y < 0 || x > tm.size_x || y > tm.size_y {
+            return false;
+        }
+        let idx = (y as usize) * (tm.size_x as usize + 1) + x as usize;
+        let Some(cell) = tm.height_data.get_mut(idx) else { return false };
+        *cell = h.max(0.0);
+        true
+    }
+
+    /// Rebuild the tilemap mesh and re-derive nav walkability after in-place
+    /// tile/height edits (the guest-facing terrain-edit tail).
+    pub fn rebuild_terrain(&mut self) -> bool {
+        if self.entity_by_role(RoleKind::Tilemap).is_none() {
+            return false;
+        }
+        self.rebuild_tilemap_mesh();
+        self.sync_nav_heights();
+        true
+    }
+
     /// Set a named entity's `Animator` to play a looping animation.
     pub fn set_anim(&mut self, name: &str, anim: &str) -> bool {
         let Some(&entity) = self.names.get(name) else { return false };

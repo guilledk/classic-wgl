@@ -336,6 +336,26 @@ impl WasmiRuntime {
 
         linker.func_wrap(
             m,
+            "set_tile",
+            |mut caller: Caller<'_, GuestHost>, x: i32, y: i32, id: i32| -> i32 {
+                caller.data_mut().set_tile(x, y, id)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "set_height",
+            |mut caller: Caller<'_, GuestHost>, x: i32, y: i32, h: f64| -> i32 {
+                caller.data_mut().set_height(x, y, h)
+            },
+        )?;
+
+        linker.func_wrap(m, "rebuild_terrain", |mut caller: Caller<'_, GuestHost>| -> i32 {
+            caller.data_mut().rebuild_terrain()
+        })?;
+
+        linker.func_wrap(
+            m,
             "find_path",
             |mut caller: Caller<'_, GuestHost>,
              sx: i32,
