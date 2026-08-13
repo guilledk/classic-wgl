@@ -553,4 +553,19 @@ impl GuestHost {
     pub fn get_anim(&mut self, name: &str) -> Option<(String, f64)> {
         self.engine().get_anim(name).map(|(n, f)| (n, f as f64))
     }
+
+    /// Whether a named resource exists (0 = texture, 1 = font, 2 = animation).
+    pub fn has_resource(&mut self, kind: i32, name: &str) -> i32 {
+        (match kind {
+            0 => self.engine().has_texture(name),
+            1 => self.engine().has_font(name),
+            2 => self.engine().has_animation(name),
+            _ => false,
+        }) as i32
+    }
+
+    /// The pixel dimensions of a loaded texture, if any.
+    pub fn texture_size(&mut self, name: &str) -> Option<(f64, f64)> {
+        self.engine().texture_size(name).map(|(w, h)| (w as f64, h as f64))
+    }
 }

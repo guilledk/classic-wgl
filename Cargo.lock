@@ -385,6 +385,7 @@ dependencies = [
  "anyhow",
  "classic-core",
  "classic-engine",
+ "classic-rom",
  "glam",
  "log",
  "serde_json",

@@ -842,6 +842,34 @@ impl Engine {
         Some((a.animation.clone().unwrap_or_default(), a.frame))
     }
 
+    /// Whether a named texture is available (declared in the ROM's resources or
+    /// already uploaded to GL).
+    pub fn has_texture(&self, name: &str) -> bool {
+        let in_gfx = self.gfx.as_ref().map(|g| g.textures.contains_key(name)).unwrap_or(false);
+        let in_rom =
+            self.rom_resources.as_ref().map(|r| r.textures().contains_key(name)).unwrap_or(false);
+        in_gfx || in_rom
+    }
+
+    /// Whether a named SDF font is available (declared in the ROM's resources
+    /// or already loaded into `sdf_fonts`).
+    pub fn has_font(&self, name: &str) -> bool {
+        let in_metrics = self.sdf_fonts.contains_key(name);
+        let in_rom =
+            self.rom_resources.as_ref().map(|r| r.fonts().contains_key(name)).unwrap_or(false);
+        in_metrics || in_rom
+    }
+
+    /// Whether a named animation is registered.
+    pub fn has_animation(&self, name: &str) -> bool {
+        self.animations.contains_key(name)
+    }
+
+    /// The pixel dimensions of a loaded texture, if any.
+    pub fn texture_size(&self, name: &str) -> Option<(u32, u32)> {
+        self.gfx.as_ref().and_then(|g| g.textures.get(name)).map(|t| t.size)
+    }
+
     /// A* path over the nav mesh between two integer tile coordinates.
     /// Returns the full path (inclusive of both endpoints) or `None`.
     pub fn find_path(&self, from: (i32, i32), to: (i32, i32)) -> Option<Vec<(i32, i32)>> {

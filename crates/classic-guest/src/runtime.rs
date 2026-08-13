@@ -798,6 +798,28 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "has_resource",
+            |mut caller: Caller<'_, GuestHost>, kind: i32, ptr: i32, len: i32| -> i32 {
+                let name = abi::read_str(&caller, ptr, len);
+                caller.data_mut().has_resource(kind, &name)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "texture_size",
+            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32, out_ptr: i32| -> i32 {
+                let name = abi::read_str(&caller, ptr, len);
+                let Some((w, h)) = caller.data_mut().texture_size(&name) else {
+                    return 0;
+                };
+                abi::write_f64_pair(&mut caller, out_ptr, w, h);
+                1
+            },
+        )?;
+
         Ok(())
     }
 }

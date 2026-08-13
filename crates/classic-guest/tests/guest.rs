@@ -2,9 +2,11 @@
 //! hand-written WAT guest modules.
 
 use classic_core::components::{Animator, ColliderData, NavMesh, Role, Shape, Tilemap};
+use classic_core::types::AnimationData;
 use classic_core::RoleKind;
 use classic_engine::Engine;
 use classic_guest::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
+use classic_rom::{ResourceKind, ResourceSet};
 use glam::Vec3;
 
 fn runtime_from_wat(wat: &str, limits: &GuestLimits) -> Result<WasmiRuntime, GuestError> {
@@ -521,4 +523,57 @@ fn guest_terrain_edits_are_bounds_checked() {
     let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
     assert!(tm.data.iter().all(|&t| t == 0));
     assert!(tm.height_data.iter().all(|&h| h == 1.0));
+}
+
+fn install_test_resources(engine: &mut Engine) {
+    let mut resources = ResourceSet::default();
+    resources.insert(ResourceKind::Texture, "tree", vec![0, 1, 2]);
+    resources.insert(ResourceKind::Font, "font", vec![b'{']);
+    engine.rom_resources = Some(resources);
+    engine.animations.insert(
+        "anim".into(),
+        AnimationData { name: "anim".into(), src: String::new(), rate: 1.0, sequence: vec![] },
+    );
+}
+
+#[test]
+fn has_resource_and_texture_size_queries() {
+    let mut engine = Engine::new_for_test();
+    install_test_resources(&mut engine);
+
+    assert!(engine.has_texture("tree"));
+    assert!(engine.has_font("font"));
+    assert!(engine.has_animation("anim"));
+    assert!(!engine.has_texture("nope"));
+    // Dimensions are only known once the texture is uploaded to GL.
+    assert_eq!(engine.texture_size("tree"), None);
+}
+
+#[test]
+fn guest_has_resource_wiring() {
+    let mut engine = Engine::new_for_test();
+    install_test_resources(&mut engine);
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "has_resource" (func $has (param i32 i32 i32) (result i32)))
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "tree")
+            (data (i32.const 16) "font")
+            (data (i32.const 32) "anim")
+            (data (i32.const 48) "marker")
+            (func (export "update") (param f64)
+                (if (call $has (i32.const 0) (i32.const 0) (i32.const 4))
+                    (then
+                        (if (call $has (i32.const 1) (i32.const 16) (i32.const 4))
+                            (then
+                                (if (call $has (i32.const 2) (i32.const 32) (i32.const 4))
+                                    (then (drop (call $spawn (i32.const 48) (i32.const 6)))))))))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+    assert!(engine.has_name("marker"));
 }

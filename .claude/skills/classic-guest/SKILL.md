@@ -89,6 +89,8 @@ Host imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `poll_event` | `(out_ptr, out_cap) -> i32` | pop the next event as `kind:u32` + `name_len:u32` + `name` (kind 0=click, 1=enter, 2=exit; `0` if none) |
 | `spawn_collider` | `(name, x, y, w, h) -> i32` | attach an axis-aligned rectangle collider (screen space) to a named entity |
 | `get_anim` | `(name, out_ptr, out_cap) -> i32` | write the entity's current `frame: f64` + `name_len: u32` + animation name (`0` if no `Animator`) |
+| `has_resource` | `(kind: i32, name_ptr, name_len) -> i32` | resource existence (0=texture, 1=font, 2=animation) |
+| `texture_size` | `(name_ptr, name_len, out_ptr) -> i32` | write a loaded texture's pixel size as two `f64` (`0` if not loaded) |
 | `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into
