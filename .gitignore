@@ -50,3 +50,6 @@ apps/web/dist/
 # Worktree workspace (open-wkt)
 .claude/wkts/
 claude_wkts
+
+# Per-session AI plans (kept local, never committed)
+/plans/
