@@ -517,4 +517,14 @@ impl GuestHost {
     pub fn ui_set_fixed(&mut self, name: &str, fixed: i32) -> i32 {
         self.engine_mut().ui_set_fixed(name, fixed != 0) as i32
     }
+
+    /// Subscribe a named entity to interaction events (click/enter/exit).
+    pub fn subscribe(&mut self, name: &str) -> i32 {
+        self.engine_mut().subscribe(name) as i32
+    }
+
+    /// Pop the next queued guest event, as `(kind, name)` (0=click, 1=enter, 2=exit).
+    pub fn poll_event(&mut self) -> Option<(u32, String)> {
+        self.engine_mut().poll_event().map(|e| (e.kind, e.name))
+    }
 }

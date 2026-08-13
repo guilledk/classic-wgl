@@ -17,7 +17,7 @@ pub mod env_config;
 pub mod golden;
 pub mod ui;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use classic_core::collision::PhysicsProvider;
@@ -39,6 +39,15 @@ use glam::{Mat3, Mat4, Vec3, Vec4};
 use glow::HasContext;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
+
+/// An interaction event queued for a ROM guest.
+#[derive(Clone, Debug)]
+pub struct GuestEvent {
+    /// 0 = click, 1 = enter (hover start), 2 = exit (hover end).
+    pub kind: u32,
+    /// The subscribed entity's name.
+    pub name: String,
+}
 
 /// Per-entity GPU resources for a tilemap.
 struct TilemapGpu {
@@ -67,6 +76,12 @@ pub struct Engine {
     /// Collider pid → entity name, populated by `register_named_collider` so the
     /// guest `pick_at` can resolve a screen point to a gameplay entity.
     collider_names: HashMap<u32, String>,
+    /// Entity names the guest has subscribed to for interaction events.
+    subscribed: HashSet<String>,
+    /// Events queued for the guest, drained via `poll_event`.
+    guest_events: VecDeque<GuestEvent>,
+    /// The subscribed entity currently under the mouse (for enter/exit).
+    guest_hover: Option<String>,
     pub ui_consumed_click: bool,
     pub scroll_speed: f32,
     pub input: InputState,
@@ -165,6 +180,9 @@ impl Engine {
             name_order: Vec::new(),
             physics: PhysicsProvider::new(),
             collider_names: HashMap::new(),
+            subscribed: HashSet::new(),
+            guest_events: VecDeque::new(),
+            guest_hover: None,
             ui_consumed_click: false,
             scroll_speed: 600.0,
             input: InputState::new(),
@@ -815,6 +833,27 @@ impl Engine {
         self.collider_names.get(&pid).cloned()
     }
 
+    /// The name of the top *subscribed* entity under a screen point, if any.
+    fn pick_subscribed(&self, x: f32, y: f32) -> Option<String> {
+        self.physics.point_query(x, y).into_iter().find_map(|pid| {
+            self.collider_names.get(&pid).cloned().filter(|n| self.subscribed.contains(n))
+        })
+    }
+
+    /// Subscribe a named entity to interaction events (click/enter/exit).
+    pub fn subscribe(&mut self, name: &str) -> bool {
+        if !self.names.contains_key(name) {
+            return false;
+        }
+        self.subscribed.insert(name.to_string());
+        true
+    }
+
+    /// Pop the next queued guest event, if any.
+    pub fn poll_event(&mut self) -> Option<GuestEvent> {
+        self.guest_events.pop_front()
+    }
+
     /// Read the light uniforms (ambient, direction, color).
     pub fn get_light(&self) -> ([f32; 3], [f32; 3], [f32; 3]) {
         (self.light_ambient, self.light_dir, self.light_color)
@@ -946,13 +985,15 @@ impl Engine {
     }
 
     /// Spawn a named UI button (container + centered text + click collider).
+    /// The button is registered in the collider-name map and auto-subscribed,
+    /// so its clicks surface through the guest event queue.
     pub fn ui_button(&mut self, name: &str, text: &str, w: f32, h: f32, color: [f32; 4]) -> bool {
         if self.names.contains_key(name) {
             return false;
         }
-        let entity = {
+        let (entity, pid) = {
             let Some(ui) = self.ui.as_mut() else { return false };
-            ui.spawn_button(
+            let entity = ui.spawn_button(
                 &mut self.world,
                 &mut self.physics,
                 w,
@@ -967,9 +1008,15 @@ impl Engine {
                     click_priority: 1,
                     ..Default::default()
                 },
-            )
+            );
+            let pid = ui.collider_pid_for(entity);
+            (entity, pid)
         };
         self.register_named_entity(name, entity);
+        if let Some(pid) = pid {
+            self.collider_names.insert(pid, name.to_string());
+        }
+        self.subscribed.insert(name.to_string());
         true
     }
 
@@ -1231,6 +1278,25 @@ impl Engine {
         // Per-frame hover highlighting for UI elements.
         if let Some(ref mut ui) = self.ui {
             ui.update_hover(&mut self.world, &self.physics);
+        }
+
+        // Guest interaction events: click + enter/exit for subscribed entities.
+        if !self.subscribed.is_empty() {
+            if self.physics.mouse_clicked {
+                if let Some(name) = self.pick_subscribed(mp.x, mp.y) {
+                    self.guest_events.push_back(GuestEvent { kind: 0, name });
+                }
+            }
+            let current = self.pick_subscribed(mp.x, mp.y);
+            if current != self.guest_hover {
+                if let Some(h) = self.guest_hover.clone() {
+                    self.guest_events.push_back(GuestEvent { kind: 2, name: h });
+                }
+                if let Some(c) = current.clone() {
+                    self.guest_events.push_back(GuestEvent { kind: 1, name: c });
+                }
+                self.guest_hover = current;
+            }
         }
 
         if self.input.was_mouse_pressed(0) && !self.ui_consumed_click {

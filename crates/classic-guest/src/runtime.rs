@@ -695,6 +695,34 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "subscribe",
+            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
+                let name = abi::read_str(&caller, ptr, len);
+                caller.data_mut().subscribe(&name)
+            },
+        )?;
+
+        linker.func_wrap(
+            m,
+            "poll_event",
+            |mut caller: Caller<'_, GuestHost>, out_ptr: i32, out_cap: i32| -> i32 {
+                let Some((kind, name)) = caller.data_mut().poll_event() else {
+                    return 0;
+                };
+                let mut bytes = Vec::with_capacity(8 + name.len());
+                bytes.extend_from_slice(&kind.to_le_bytes());
+                bytes.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(name.as_bytes());
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                abi::write_bytes(&mut caller, out_ptr, &bytes);
+                1
+            },
+        )?;
+
         Ok(())
     }
 }

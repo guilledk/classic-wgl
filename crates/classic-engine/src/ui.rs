@@ -738,6 +738,12 @@ impl UIManager {
         }
         pids
     }
+
+    /// The collider pid registered for a UI element, if any.
+    pub fn collider_pid_for(&self, elem: hecs::Entity) -> Option<u32> {
+        self.element_colliders.iter().find(|e| e.elem == elem).map(|e| e.collider_pid)
+    }
+
     pub fn set_button_base_color(&mut self, elem: hecs::Entity, color: [f32; 4]) {
         for entry in &mut self.element_colliders {
             if entry.elem == elem {

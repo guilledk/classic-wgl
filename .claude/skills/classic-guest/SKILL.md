@@ -66,6 +66,17 @@ imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `spawn_rect` | `(name, x, y, w, h, r, g, b, a) -> i32` | spawn a named screen-space solid-color rectangle |
 | `spawn_text` | `(name, x, y, text, scale, r, g, b, a) -> i32` | spawn a named screen-space SDF text label |
 | `set_text` | `(name, text) -> i32` | update a named SDF text label's string |
+| `ui_container` | `(name, w, h, r, g, b, a) -> i32` | spawn a UIManager-managed container (responsive layout) |
+| `ui_text` | `(name, text, scale, max_width, r, g, b, a, justify) -> i32` | spawn a UIManager-managed SDF text |
+| `ui_button` | `(name, text, w, h, r, g, b, a) -> i32` | spawn a button (hover + click → event queue, auto-subscribed) |
+| `ui_array` | `(name, vertical, align, spacing, r, g, b, a) -> i32` | spawn a stacking array container |
+| `ui_padding` | `(name, top, right, bottom, left, r, g, b, a) -> i32` | spawn a padding wrapper |
+| `ui_sprite` | `(name, texture, w, h, frame, tsx, tsy) -> i32` | spawn a texture-sprite UI element |
+| `ui_add_child` | `(parent, child, self_anchor, child_anchor) -> i32` | attach a child for anchor-based layout |
+| `ui_add_to_root` | `(name, self_anchor, child_anchor) -> i32` | attach to the root container (viewport-anchored) |
+| `ui_set_size` / `ui_set_anchor` / `ui_set_color` / `ui_set_fixed` | `(name, …) -> i32` | update a managed element's layout/content |
+| `subscribe` | `(name) -> i32` | subscribe a named entity to interaction events |
+| `poll_event` | `(out_ptr, out_cap) -> i32` | pop the next event as `kind:u32` + `name_len:u32` + `name` (kind 0=click, 1=enter, 2=exit; `0` if none) |
 | `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into

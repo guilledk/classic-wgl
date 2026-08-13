@@ -322,3 +322,39 @@ fn guest_ui_container_wiring() {
 
     assert!(engine.has_name("panel"));
 }
+
+#[test]
+fn subscribe_and_poll_event() {
+    let mut engine = Engine::new_for_test();
+    engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
+    engine.ui_button("play", "Play", 120.0, 40.0, [0.1, 0.6, 0.2, 1.0]);
+
+    // ui_button auto-subscribes; subscribe is idempotent for known entities.
+    assert!(engine.subscribe("play"));
+    assert!(!engine.subscribe("nope"));
+
+    // No events queued yet.
+    assert!(engine.poll_event().is_none());
+}
+
+#[test]
+fn guest_subscribe_and_poll_wiring() {
+    let mut engine = Engine::new_for_test();
+    engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
+    engine.ui_button("play", "Play", 120.0, 40.0, [0.1, 0.6, 0.2, 1.0]);
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "subscribe" (func $subscribe (param i32 i32) (result i32)))
+            (import "env" "poll_event" (func $poll_event (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "play")
+            (func (export "update") (param f64)
+                (drop (call $subscribe (i32.const 0) (i32.const 4)))
+                (drop (call $poll_event (i32.const 64) (i32.const 256)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
+}
