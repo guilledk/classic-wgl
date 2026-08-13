@@ -1253,23 +1253,24 @@ impl Engine {
         true
     }
 
-    /// Save a file, handling both native (filesystem) and web (Blob download).
-    pub fn save_file(&self, name: &str, data: &str) {
+    /// Save raw bytes to a file, handling both native (filesystem) and web
+    /// (Blob download).
+    pub fn save_bytes(&self, name: &str, bytes: &[u8]) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let dir = &crate::env_config::EnvConfig::get().dump_dir;
             let _ = std::fs::create_dir_all(dir);
             let path = format!("{dir}/{name}");
-            if let Err(e) = std::fs::write(&path, data) {
+            if let Err(e) = std::fs::write(&path, bytes) {
                 classic_core::cl_warn!(
                     classic_core::instrument::Chan::Dump,
-                    "save_file: failed to write {path}: {e}"
+                    "save_bytes: failed to write {path}: {e}"
                 );
             } else {
                 classic_core::cl_warn!(
                     classic_core::instrument::Chan::Dump,
-                    "save_file: wrote {path} ({} bytes)",
-                    data.len()
+                    "save_bytes: wrote {path} ({} bytes)",
+                    bytes.len()
                 );
             }
         }
@@ -1279,7 +1280,7 @@ impl Engine {
             if let Some(window) = web_sys::window() {
                 let doc = window.document().unwrap();
                 let blob_parts = js_sys::Array::new();
-                blob_parts.push(&js_sys::Uint8Array::from(data.as_bytes()).into());
+                blob_parts.push(&js_sys::Uint8Array::from(bytes).into());
                 let blob = web_sys::Blob::new_with_str_sequence(&blob_parts).unwrap();
                 let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
                 let a = doc.create_element("a").unwrap();
@@ -1287,6 +1288,37 @@ impl Engine {
                 a.set_attribute("href", &url).unwrap();
                 a.dyn_ref::<web_sys::HtmlElement>().unwrap().click();
                 web_sys::Url::revoke_object_url(&url).unwrap();
+            }
+        }
+    }
+
+    /// Save a UTF-8 text file (delegates to [`Engine::save_bytes`]).
+    pub fn save_file(&self, name: &str, data: &str) {
+        self.save_bytes(name, data.as_bytes());
+    }
+
+    /// Serialize the current world as a ROM archive and save it to
+    /// `<entrypoint>.rom` — the canonical editor save (F10).
+    pub fn save_rom(&self) -> bool {
+        let Some(rom) = self.dump_rom() else {
+            classic_core::cl_warn!(
+                classic_core::instrument::Chan::Dump,
+                "save_rom: no ROM loaded to save"
+            );
+            return false;
+        };
+        let name = format!("{}.rom", rom.manifest.entrypoint);
+        match rom.pack() {
+            Ok(bytes) => {
+                self.save_bytes(&name, &bytes);
+                true
+            }
+            Err(e) => {
+                classic_core::cl_warn!(
+                    classic_core::instrument::Chan::Dump,
+                    "save_rom: failed to pack ROM: {e}"
+                );
+                false
             }
         }
     }

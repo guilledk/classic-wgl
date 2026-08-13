@@ -267,6 +267,7 @@ default in CI because software-rasteriser output is version-dependent.
 
 - **F9**: dump `state.json` (entity/components registry dump; tile/nav/height
   data is inlined in `state.json` — no sidecar files)
+- **F10**: save the current world as a packed ROM archive (`<entrypoint>.rom`)
 
 ### Files Produced
 

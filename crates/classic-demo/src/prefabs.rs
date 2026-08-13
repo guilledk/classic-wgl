@@ -205,7 +205,8 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
     }
 }
 
-/// Register keyboard toggles for debug overlays (F = footprints, F9 = dump).
+/// Register keyboard toggles for debug overlays (F = footprints, F9 = dump,
+/// F10 = save ROM archive).
 pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
     let state = Rc::clone(state);
     engine.on_update(move |engine| {
@@ -220,6 +221,10 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
         if engine.input.was_key_pressed("F9") {
             let state_json = engine.dump_state();
             engine.save_file("state.json", &state_json);
+        }
+        // F10: save the current world as a packed ROM archive.
+        if engine.input.was_key_pressed("F10") {
+            engine.save_rom();
         }
     });
 }
