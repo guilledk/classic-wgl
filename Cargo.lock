@@ -312,6 +312,7 @@ dependencies = [
  "classic-core",
  "classic-engine",
  "classic-gfx",
+ "classic-guest",
  "classic-rom",
  "glam",
  "glow",

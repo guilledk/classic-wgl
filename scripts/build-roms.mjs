@@ -50,6 +50,8 @@ function pack(entrypoint, stateFile, outName) {
     manifest.format_version = 1;
     manifest.entrypoint = entrypoint;
     manifest.host_features = true;
+    manifest.trusted = true;
+    manifest.code = [{ name: 'main', src: '/code/main.wasm' }];
 
     const chunks = [];
     const addFile = (name, data) => {
@@ -67,6 +69,9 @@ function pack(entrypoint, stateFile, outName) {
     }
     for (const f of manifest.sdfFonts || []) {
         addFile(romPath(f.metrics), readFileSync(path.join(resDir, basename(f.metrics))));
+    }
+    for (const c of manifest.code || []) {
+        addFile(romPath(c.src), readFileSync(path.join(publicDir, 'code', basename(c.src))));
     }
 
     chunks.push(Buffer.alloc(1024, 0)); // end-of-archive

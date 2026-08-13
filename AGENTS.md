@@ -33,7 +33,7 @@ CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo
 
 # Lint
 cargo fmt --all -- --check              # formatting
-cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-demo --all-targets -- -D warnings
+cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-guest -p classic-demo --all-targets -- -D warnings
 
 # Assets (must run once after checkout / submodule update)
 npm ci && npm run assets                # generates public/res/ + demo.rom/lunar.rom (gitignored, embedded via include_bytes!)
@@ -47,7 +47,7 @@ before considering a task done.
 ## Directory map
 
 ```
-Cargo.toml               workspace root (8 members)
+Cargo.toml               workspace root (9 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
                           tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder,
@@ -58,6 +58,8 @@ crates/
                           golden.rs (traces), env_config.rs
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
+  classic-guest/          WASM guest runtime: GuestRuntime trait, WasmiRuntime, the guest ABI
+                          (abi.rs) and host-side SDK (sdk.rs) bridging guest imports to the engine
   classic-demo/           application/prefab layer: init_engine(gl, &Rom) bootstrap, DemoState +
                           EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs, hud.rs,
                           testing.rs, scenes/ (demo + lunar assemblers)
@@ -71,6 +73,7 @@ public/
   manifest.json           shader/texture/animation declarations (bundled into each ROM)
   state.json              persisted demo entities (bundled into demo.rom)
   state_lunar.json        lunar scene entities, 400x400 (bundled into lunar.rom; terrain generated)
+  code/main.wasm          no-op guest module (bundled into each ROM; see classic-guest)
   demo.rom, lunar.rom     GENERATED (gitignored) scene ROMs — built from public/ by build-roms.mjs
 assets/                   git submodule -> guilledk/classic-assets (source assets)
 scripts/
@@ -130,6 +133,11 @@ plans/
   `classic-gfx` renders them with the `sdf` shader (`dejavusans-sdf` font atlas).
   Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),
   not a post-pass.  See `classic-text` skill.
+- **ROM guest code**: each ROM bundles a compiled `.wasm` module (`manifest.code`) run by
+  `classic-guest`'s `WasmiRuntime` against the host SDK (spawn/despawn, component JSON
+  round-trip via the registry, input/time, log).  Untrusted guests (`trusted: false`,
+  default) are sandboxed with fuel metering + a memory cap; the shipped demo/lunar ROMs set
+  `trusted: true`.  See `classic-guest` skill.
 
 ## Conventions
 
@@ -139,8 +147,9 @@ plans/
   `SCREAMING_SNAKE_CASE` for constants.  Prefab initializers follow `init_*()`.
 - Crate-prefixed imports preferred (`classic_core::`, `classic_gfx::`, `classic_engine::`).
 - `#[cfg(test)]` modules inline or in `tests/` directories mirroring the crate layout.
-- All `unsafe` is in `classic-gfx` (GL calls) and `classic-platform/headless.rs` (EGL FFI).
-  No other crate uses `unsafe`.
+- All `unsafe` is in `classic-gfx` (GL calls), `classic-platform/headless.rs` (EGL FFI), and
+  `classic-guest/src/sdk.rs` (the raw-pointer `GuestHost` bridge to `Engine`, contained to a
+  single `update` call).
 
 ## Testing
 
@@ -229,3 +238,4 @@ Engine skills (in `.claude/skills/`):
 | `classic-platform` | Native/web/headless backends, InputState, window/keyboard/mouse |
 | `classic-testing` | CLASSIC_TEST v2, golden harness, mock GL, scenario authoring workflow |
 | `classic-debugging` | CLASSIC_LOG channels, JSON format, runtime toggles, debugging playbook |
+| `classic-guest` | WASM guest runtime, ABI (host imports/guest exports), GuestRuntime trait, sandbox (fuel + memory) |

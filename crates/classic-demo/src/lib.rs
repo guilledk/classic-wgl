@@ -30,10 +30,12 @@ pub mod testing;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use classic_core::cl_error;
 use classic_core::cl_info;
 use classic_core::instrument::Chan;
 use classic_core::terrain::lunar::LunarParams;
 use classic_engine::Engine;
+use classic_guest::{GuestLimits, GuestRuntime, WasmiRuntime};
 use classic_rom::Rom;
 
 use crate::state::{DemoState, DemoStateRef};
@@ -43,6 +45,24 @@ use crate::state::{DemoState, DemoStateRef};
 /// hand-authored demo scene).
 fn is_lunar(rom: &Rom) -> bool {
     matches!(rom.manifest.entrypoint.as_str(), "lunar" | "moon")
+}
+
+/// Install the ROM guest runtime: instantiate the ROM's compiled guest module
+/// and register a per-frame `on_update` closure that runs `update(dt)`.
+pub fn init_guest(e: &mut Engine, state: &DemoStateRef, wasm: &[u8], limits: &GuestLimits) {
+    match WasmiRuntime::new(wasm, limits) {
+        Ok(rt) => {
+            let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(Box::new(rt)));
+            state.borrow_mut().guest = Some(rt.clone());
+            e.on_update(move |engine| {
+                let dt = engine.time.delta as f64;
+                if let Err(err) = rt.borrow_mut().update(engine, dt) {
+                    cl_error!(Chan::Guest, "guest update failed: {err}");
+                }
+            });
+        }
+        Err(err) => cl_error!(Chan::Guest, "init_guest: {err}"),
+    }
 }
 
 /// Full demo engine bootstrap for a loaded ROM.
@@ -108,6 +128,13 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
             e.add_overlay(move |engine| hud::draw_debug_overlay(engine, &s));
         }
         testing::install(&mut e, &state);
+    }
+
+    // ROM guest code (a no-op module in the shipped demo/lunar ROMs; see the
+    // WASM guest plan).  The module ships inside the ROM archive.
+    if let Some(wasm) = rom.resources.code().get("main") {
+        let limits = GuestLimits { trusted: rom.manifest.trusted, ..GuestLimits::default() };
+        init_guest(&mut e, &state, wasm, &limits);
     }
 
     if lunar {
