@@ -385,6 +385,7 @@ dependencies = [
  "anyhow",
  "classic-core",
  "classic-engine",
+ "glam",
  "log",
  "serde_json",
  "wasmi",

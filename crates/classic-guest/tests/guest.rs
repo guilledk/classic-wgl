@@ -1,8 +1,11 @@
 //! Integration tests for the WASM guest runtime, driving wasmi with small
 //! hand-written WAT guest modules.
 
+use classic_core::components::{NavMesh, Role};
+use classic_core::RoleKind;
 use classic_engine::Engine;
 use classic_guest::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
+use glam::Vec3;
 
 fn runtime_from_wat(wat: &str, limits: &GuestLimits) -> Result<WasmiRuntime, GuestError> {
     let wasm = wat::parse_str(wat).expect("valid WAT");
@@ -78,4 +81,47 @@ fn memory_growth_past_cap_traps() {
     .unwrap();
 
     assert!(rt.update(&mut engine, 0.016).is_err());
+}
+
+/// Install a small (3x3) fully-walkable nav mesh on a role-tagged entity.
+fn install_test_navmesh(engine: &mut Engine) {
+    let nav = NavMesh {
+        position: Vec3::ZERO,
+        scale: Vec3::ONE,
+        map_entity: "tilemap".into(),
+        tile_set: "navTileset".into(),
+        data: vec![1u32; 9],
+        size_x: 3,
+        size_y: 3,
+    };
+    let entity = engine.world.spawn((nav, Role::new(RoleKind::NavMesh)));
+    engine.names.insert("navmesh".into(), entity);
+}
+
+#[test]
+fn find_path_returns_waypoints() {
+    let mut engine = Engine::new_for_test();
+    install_test_navmesh(&mut engine);
+
+    assert_eq!(engine.find_path((0, 0), (2, 0)), Some(vec![(0, 0), (1, 0), (2, 0)]));
+    assert_eq!(engine.find_path((0, 0), (2, 2)), Some(vec![(0, 0), (1, 1), (2, 2)]));
+}
+
+#[test]
+fn guest_find_path_import_is_wired() {
+    let mut engine = Engine::new_for_test();
+    install_test_navmesh(&mut engine);
+
+    let mut rt = runtime_from_wat(
+        r#"(module
+            (import "env" "find_path" (func $find_path (param i32 i32 i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "update") (param f64)
+                (drop (call $find_path (i32.const 0) (i32.const 0) (i32.const 2) (i32.const 0)
+                    (i32.const 64) (i32.const 256)))))"#,
+        &GuestLimits::default(),
+    )
+    .unwrap();
+
+    rt.update(&mut engine, 0.016).unwrap();
 }

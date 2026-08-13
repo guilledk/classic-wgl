@@ -246,6 +246,25 @@ impl WasmiRuntime {
             },
         )?;
 
+        linker.func_wrap(
+            m,
+            "find_path",
+            |mut caller: Caller<'_, GuestHost>,
+             sx: i32,
+             sy: i32,
+             ex: i32,
+             ey: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let json = caller.data_mut().find_path(sx, sy, ex, ey);
+                if out_cap < json.len() as i32 {
+                    return -1;
+                }
+                abi::write_str(&mut caller, out_ptr, &json)
+            },
+        )?;
+
         Ok(())
     }
 }

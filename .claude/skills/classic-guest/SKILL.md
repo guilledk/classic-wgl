@@ -47,6 +47,7 @@ imports (defined in `runtime.rs::install_imports`) are the SDK surface:
 | `delta` / `elapsed` | `() -> f64` | frame time |
 | `was_pressed` | `(btn: i32) -> i32` | mouse press (0=left…) |
 | `key_down` | `(key_ptr, key_len) -> i32` | key held |
+| `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; JSON array of `[x, y]` waypoints |
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into
 guest linear memory.  Functions returning bytes write into a caller-provided

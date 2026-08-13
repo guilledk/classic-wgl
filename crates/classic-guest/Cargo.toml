@@ -16,3 +16,4 @@ log.workspace = true
 
 [dev-dependencies]
 wat = "1"
+glam.workspace = true

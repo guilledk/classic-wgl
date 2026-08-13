@@ -696,6 +696,15 @@ impl Engine {
         }
     }
 
+    /// A* path over the nav mesh between two integer tile coordinates.
+    /// Returns the full path (inclusive of both endpoints) or `None`.
+    pub fn find_path(&self, from: (i32, i32), to: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+        let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
+        let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
+        let nav_i32: Vec<i32> = nav.data.iter().map(|&v| v as i32).collect();
+        pathfinder::find_path(&nav_i32, nav.size_x, nav.size_y, from, to)
+    }
+
     /// Save a file, handling both native (filesystem) and web (Blob download).
     pub fn save_file(&self, name: &str, data: &str) {
         #[cfg(not(target_arch = "wasm32"))]
