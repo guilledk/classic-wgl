@@ -272,6 +272,16 @@ impl Engine {
         for anim in &manifest.manifest.animations {
             self.animations.insert(anim.name.clone(), anim.clone());
         }
+
+        // Per-animation renderer metadata (frame offsets) declared in the
+        // manifest is loaded from the ROM's `animations/` resources and folded
+        // into the registered `AnimationData`.
+        for (name, metadata_bytes) in resources.animations() {
+            let Ok(metadata_json) = std::str::from_utf8(metadata_bytes) else {
+                continue;
+            };
+            self.load_animation_offsets_json(name, metadata_json);
+        }
     }
 
     /// Hydrate the engine from a ROM: compile shaders, upload resources, and
@@ -2689,6 +2699,7 @@ mod tests {
                 rate: 24.0,
                 sequence: vec![0, 1],
                 offsets: vec![],
+                metadata: None,
             },
         );
 

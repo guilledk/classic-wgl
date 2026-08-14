@@ -18,12 +18,27 @@ import zlib from 'node:zlib';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = path.join(root, 'public');
 const resDir = path.join(publicDir, 'res');
+const animsDir = path.join(publicDir, 'animations');
 
 const romPath = (p) => p.replace(/^\/+/, ''); // "/res/foo.png" -> "res/foo.png"
 const basename = (p) => p.split('/').pop();
 
-function parseManifest() {
-    return JSON.parse(readFileSync(path.join(publicDir, 'manifest.json'), 'utf8'));
+function parseManifest(name) {
+    return JSON.parse(readFileSync(path.join(publicDir, name), 'utf8'));
+}
+
+// Merge a per-scene manifest overlay (`manifest_lunar.json`) onto the shared
+// base `manifest.json`, so scene-specific assets ship only in that scene's ROM.
+function parseSceneManifest(overlayName) {
+    const manifest = parseManifest('manifest.json');
+    if (!overlayName) return manifest;
+    const overlay = parseManifest(overlayName);
+    for (const key of ['shaders', 'textures', 'sdfFonts', 'animations']) {
+        if (overlay[key] && overlay[key].length) {
+            manifest[key] = (manifest[key] || []).concat(overlay[key]);
+        }
+    }
+    return manifest;
 }
 
 function tarHeader(name, size) {
@@ -45,8 +60,8 @@ function tarHeader(name, size) {
     return h;
 }
 
-function pack(entrypoint, stateFile, outName, guestWasm) {
-    const manifest = parseManifest();
+function pack(entrypoint, stateFile, outName, guestWasm, overlayName) {
+    const manifest = parseSceneManifest(overlayName);
     manifest.format_version = 1;
     manifest.entrypoint = entrypoint;
     manifest.state = 'state.json';
@@ -71,6 +86,11 @@ function pack(entrypoint, stateFile, outName, guestWasm) {
     for (const f of manifest.sdfFonts || []) {
         addFile(romPath(f.metrics), readFileSync(path.join(resDir, basename(f.metrics))));
     }
+    for (const a of manifest.animations || []) {
+        if (a.metadata) {
+            addFile(romPath(a.metadata), readFileSync(path.join(animsDir, basename(a.metadata))));
+        }
+    }
     for (const c of manifest.code || []) {
         addFile(romPath(c.src), readFileSync(path.join(publicDir, 'code', basename(c.src))));
     }
@@ -83,4 +103,4 @@ function pack(entrypoint, stateFile, outName, guestWasm) {
 }
 
 pack('demo', 'state.json', 'demo.rom', 'demo.wasm');
-pack('lunar', 'state_lunar.json', 'lunar.rom', 'lunar.wasm');
+pack('lunar', 'state_lunar.json', 'lunar.rom', 'lunar.wasm', 'manifest_lunar.json');

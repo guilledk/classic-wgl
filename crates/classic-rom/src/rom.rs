@@ -69,6 +69,14 @@ impl Rom {
                 writer.write_all(src)?;
             }
         }
+        for entry in &self.manifest.manifest.animations {
+            if let Some(metadata) = self.resources.animations().get(&entry.name) {
+                if let Some(path) = &entry.metadata {
+                    writer.start_file(crate::rom_path(path), opts)?;
+                    writer.write_all(metadata)?;
+                }
+            }
+        }
 
         Ok(writer.finish()?.into_inner())
     }

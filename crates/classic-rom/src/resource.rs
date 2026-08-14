@@ -1,11 +1,12 @@
-//! The resource set a ROM bundles: textures, fonts, and code modules, keyed by
-//! name.
+//! The resource set a ROM bundles: textures, fonts, code modules, and
+//! per-animation metadata, keyed by name.
 //!
 //! A [`ResourceSet`] can be produced from a [`RomArchive`] (the shipped-ROM
 //! path) or from an [`AssetLoader`] (the loose-files / embedded dev path),
 //! driven by a [`RomManifest`].  Shader sources are resolved separately by a
 //! named shader registry (Part 3 of the ROM plan), so `from_archive` /
-//! `from_loader` populate textures, fonts, and code modules only.
+//! `from_loader` populate textures, fonts, code modules, and animation
+//! metadata only.
 
 use std::collections::BTreeMap;
 
@@ -13,12 +14,14 @@ use crate::archive::RomArchive;
 use crate::loader::AssetLoader;
 use crate::manifest::RomManifest;
 
-/// The three categories of bundleable resource.
+/// The four categories of bundleable resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Texture,
     Font,
     Code,
+    /// Per-animation renderer metadata (e.g. per-frame visual offsets).
+    Animation,
 }
 
 /// Name-keyed byte blobs, grouped by kind.
@@ -27,6 +30,7 @@ pub struct ResourceSet {
     textures: BTreeMap<String, Vec<u8>>,
     fonts: BTreeMap<String, Vec<u8>>,
     code: BTreeMap<String, Vec<u8>>,
+    animations: BTreeMap<String, Vec<u8>>,
 }
 
 impl ResourceSet {
@@ -43,7 +47,7 @@ impl ResourceSet {
 
     /// The total number of resources across all categories.
     pub fn len(&self) -> usize {
-        self.textures.len() + self.fonts.len() + self.code.len()
+        self.textures.len() + self.fonts.len() + self.code.len() + self.animations.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -60,6 +64,10 @@ impl ResourceSet {
 
     pub fn code(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.code
+    }
+
+    pub fn animations(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.animations
     }
 
     /// Build a resource set by reading manifest-declared resources out of a
@@ -94,6 +102,11 @@ impl ResourceSet {
         for entry in &manifest.code {
             set.code.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
+        for entry in &manifest.manifest.animations {
+            if let Some(metadata) = &entry.metadata {
+                set.animations.insert(entry.name.clone(), load(crate::rom_path(metadata))?);
+            }
+        }
         Ok(set)
     }
 
@@ -102,6 +115,7 @@ impl ResourceSet {
             ResourceKind::Texture => &self.textures,
             ResourceKind::Font => &self.fonts,
             ResourceKind::Code => &self.code,
+            ResourceKind::Animation => &self.animations,
         }
     }
 
@@ -110,6 +124,7 @@ impl ResourceSet {
             ResourceKind::Texture => &mut self.textures,
             ResourceKind::Font => &mut self.fonts,
             ResourceKind::Code => &mut self.code,
+            ResourceKind::Animation => &mut self.animations,
         }
     }
 }
@@ -182,5 +197,41 @@ mod tests {
         let set = ResourceSet::from_loader(&loader, &test_manifest()).unwrap();
         assert_eq!(set.len(), 3);
         assert_eq!(set.get(ResourceKind::Code, "main"), Some(b"\0asm".as_slice()));
+    }
+
+    #[test]
+    fn from_archive_populates_animation_metadata() {
+        let manifest: RomManifest = serde_json::from_str(
+            r#"{
+                "shaders": [],
+                "textures": [{"name": "rocketLanding", "src": "res/landing_spritesheet.png"}],
+                "animations": [{
+                    "name": "rocketLanding",
+                    "src": "rocketLanding",
+                    "rate": 24,
+                    "sequence": [0, 1],
+                    "metadata": "animations/rocketLanding.json"
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in [
+            ("res/landing_spritesheet.png", b"png".as_slice()),
+            ("animations/rocketLanding.json", b"{\"positions\":[]}".as_slice()),
+        ] {
+            writer.start_file(name, opts).unwrap();
+            writer.write_all(data).unwrap();
+        }
+        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+
+        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        assert_eq!(
+            set.get(ResourceKind::Animation, "rocketLanding"),
+            Some(b"{\"positions\":[]}".as_slice())
+        );
     }
 }

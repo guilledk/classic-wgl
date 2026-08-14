@@ -662,7 +662,14 @@ fn install_test_resources(engine: &mut Engine) {
     engine.rom_resources = Some(resources);
     engine.animations.insert(
         "anim".into(),
-        AnimationData { name: "anim".into(), src: String::new(), rate: 1.0, sequence: vec![] },
+        AnimationData {
+            name: "anim".into(),
+            src: String::new(),
+            rate: 1.0,
+            sequence: vec![],
+            offsets: vec![],
+            metadata: None,
+        },
     );
 }
 
