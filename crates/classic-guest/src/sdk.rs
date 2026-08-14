@@ -184,12 +184,12 @@ impl GuestHost {
 
     /// Whether the editor's agent tool is active.
     pub fn agent_selected(&mut self) -> i32 {
-        self.engine().agent_selected as i32
+        self.engine().guest_flag("agent_selected") as i32
     }
 
     /// Whether a UI element consumed this frame's click.
     pub fn ui_consumed_click(&mut self) -> i32 {
-        self.engine().ui_consumed_click as i32
+        self.engine().guest_flag("ui_consumed_click") as i32
     }
 
     pub fn delta(&mut self) -> f64 {

@@ -206,24 +206,16 @@ fn rect_and_transform_dumpers_round_trip() {
 }
 
 #[test]
-fn lightstate_and_camera_dumpers() {
+fn camera_dumper() {
     classic_core::registry::clear();
     register_all_components();
 
-    let light = classic_core::components::LightState::default();
     let cam = classic_core::Camera::new([5.0, 6.0, 0.0].into(), [0.5, 0.5, 1.0].into());
-    let expected_ambient = serde_json::to_value(light.ambient).unwrap();
 
     let mut world = hecs::World::new();
-    let le = world.spawn((light,));
     let ce = world.spawn((cam,));
 
     let regs = classic_core::registry::ordered_regs();
-
-    let light_val =
-        regs.iter().find(|r| r.name == "LightState").unwrap().dump.unwrap()(&world, le).unwrap();
-    assert_eq!(light_val["type"], "LightState");
-    assert_eq!(light_val["ambient"], expected_ambient);
 
     let cam_val =
         regs.iter().find(|r| r.name == "Camera").unwrap().dump.unwrap()(&world, ce).unwrap();

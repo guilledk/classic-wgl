@@ -344,7 +344,7 @@ pub fn init_tool_buttons(engine: &mut Engine, state: &DemoStateRef) {
                 s.editor.panel_menu_open = es.panel_menu_open;
                 s.editor.agent_selected = es.agent_selected;
             }
-            engine.agent_selected = es.agent_selected;
+            engine.set_guest_flag("agent_selected", es.agent_selected);
             let open = es.panel_menu_open;
             drop(es);
             engine.set_enabled(menu_panel, open);

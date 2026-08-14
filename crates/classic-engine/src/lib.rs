@@ -82,13 +82,14 @@ pub struct Engine {
     guest_events: VecDeque<GuestEvent>,
     /// The subscribed entity currently under the mouse (for enter/exit).
     guest_hover: Option<String>,
-    pub ui_consumed_click: bool,
+    /// Host-provided boolean flags exposed to ROM guests (e.g. `agent_selected`,
+    /// `ui_consumed_click`).  Demo content writes these; the guest SDK reads
+    /// them back through the generic `agent_selected`/`ui_consumed_click`
+    /// imports.
+    pub guest_flags: HashMap<String, bool>,
     pub scroll_speed: f32,
     pub input: InputState,
     pub show_grid: bool,
-    /// Selected-agent flag — the demo editor toggles it; the ROM guest reads it
-    /// (via `agent_selected`) to gate click-to-move.
-    pub agent_selected: bool,
     pub light_ambient: [f32; 3],
     pub light_dir: [f32; 3],
     pub light_color: [f32; 3],
@@ -183,11 +184,10 @@ impl Engine {
             subscribed: HashSet::new(),
             guest_events: VecDeque::new(),
             guest_hover: None,
-            ui_consumed_click: false,
+            guest_flags: HashMap::new(),
             scroll_speed: 600.0,
             input: InputState::new(),
             show_grid: false,
-            agent_selected: false,
             light_ambient: [0.15, 0.15, 0.2],
             light_dir: [0.45, -0.35, 0.82],
             light_color: [1.0, 0.95, 0.85],
@@ -933,6 +933,16 @@ impl Engine {
         self.guest_events.pop_front()
     }
 
+    /// Set a host-provided boolean flag visible to ROM guests.
+    pub fn set_guest_flag(&mut self, name: &str, value: bool) {
+        self.guest_flags.insert(name.to_string(), value);
+    }
+
+    /// Read a host-provided boolean flag (false when unset).
+    pub fn guest_flag(&self, name: &str) -> bool {
+        self.guest_flags.get(name).copied().unwrap_or(false)
+    }
+
     /// Read the light uniforms (ambient, direction, color).
     pub fn get_light(&self) -> ([f32; 3], [f32; 3], [f32; 3]) {
         (self.light_ambient, self.light_dir, self.light_color)
@@ -984,7 +994,7 @@ impl Engine {
         let entity = self.world.spawn((
             Transform::new(glam::Vec3::new(x, y, 0.0), glam::Vec3::new(scale, scale, 1.0)),
             SdfTextRender {
-                atlas_name: "dejavusans".into(),
+                atlas_name: classic_core::components::DEFAULT_SDF_FONT.into(),
                 color,
                 bgcolor: [0.0, 0.0, 0.0, 0.0],
                 outline_color: [0.0, 0.0, 0.0, 0.0],
@@ -1383,7 +1393,7 @@ impl Engine {
         // ui_consumed_click blocks map editing on UI palette clicks.
         // Set AFTER perform_calls; reset AFTER the final release-path guard.
         if self.physics.consumed_click {
-            self.ui_consumed_click = true;
+            self.set_guest_flag("ui_consumed_click", true);
         }
 
         // Per-frame hover highlighting for UI elements.
@@ -1410,7 +1420,7 @@ impl Engine {
             }
         }
 
-        if self.input.was_mouse_pressed(0) && !self.ui_consumed_click {
+        if self.input.was_mouse_pressed(0) && !self.guest_flag("ui_consumed_click") {
             self.selection_mode = 1;
             self.selection_begin_screen = Vec3::new(mp.x, mp.y, 0.0);
             if let Some(e) = self.entity_by_role(RoleKind::Tilemap) {
@@ -1503,9 +1513,9 @@ impl Engine {
         // Reset here, after the last read in the mouse-release guard.
         // If reset earlier (e.g. at the top of frame()), click-through
         // protection on editor-paint is dead.
-        self.ui_consumed_click = false;
+        self.set_guest_flag("ui_consumed_click", false);
 
-        if self.input.was_mouse_released(0) && !self.ui_consumed_click {
+        if self.input.was_mouse_released(0) && !self.guest_flag("ui_consumed_click") {
             let just_finished_selection = self.selection_mode == 1;
             if self.selection_mode == 1 {
                 self.selection_mode = -1;
@@ -1683,7 +1693,7 @@ impl Engine {
                             let normal_matrix = iso3.inverse().transpose();
                             let nav_ts = gfx
                                 .textures
-                                .get("navTileset")
+                                .get(&nav.tile_set)
                                 .map(|t| [t.size.0 as f32 / 8.0, t.size.1 as f32 / 8.0])
                                 .unwrap_or([2.0, 1.0]);
                             if let Some(ref mut t) = self.trace {
@@ -1694,7 +1704,7 @@ impl Engine {
                                     name,
                                     model: &Mat4::from_translation(tf.position),
                                     camera_ignored: false,
-                                    texture: Some("navTileset"),
+                                    texture: Some(&nav.tile_set),
                                     frame: None,
                                     color: None,
                                 });
@@ -1704,7 +1714,7 @@ impl Engine {
                                 &cam,
                                 &iso_matrix,
                                 &gpu.tile_tex,
-                                "navTileset",
+                                &nav.tile_set,
                                 &nav_ts,
                                 &[8.0, 8.0],
                                 &[nav.size_x as f32, nav.size_y as f32],
@@ -1908,7 +1918,7 @@ impl Engine {
                     if !gfx.textures.contains_key(&atlas_name) {
                         continue;
                     }
-                    let font = self.sdf_fonts.get("dejavusans");
+                    let font = self.sdf_fonts.get(&sdf.atlas_name);
                     let Some(font) = font else { continue };
 
                     let scale = tf.scale.x;
@@ -2246,10 +2256,6 @@ impl Engine {
     /// UiNode.size = (max_width, 0) — the anchor math in position_children_of
     /// uses these stale dimensions until the render pass updates them.
     pub fn measure_all_ui_labels(&mut self) {
-        let Some(font) = self.sdf_fonts.get("dejavusans").cloned() else {
-            return;
-        };
-
         let mut to_measure: Vec<(hecs::Entity, SdfTextRender, f32)> = Vec::new();
         for (e, (tf, sdf)) in self.world.query::<(&Transform, &SdfTextRender)>().iter() {
             if self.world.get::<&UiNode>(e).map(|n| n.parent.is_some()).unwrap_or(false) {
@@ -2259,7 +2265,8 @@ impl Engine {
 
         let mut changed = false;
         for (e, sdf, scale) in &to_measure {
-            let buf = build_sdf_glyph_buffer(&font, &sdf.text, *scale, sdf.justify, 0.0);
+            let Some(font) = self.sdf_fonts.get(&sdf.atlas_name) else { continue };
+            let buf = build_sdf_glyph_buffer(font, &sdf.text, *scale, sdf.justify, 0.0);
             if let Ok(mut node) = self.world.get::<&mut UiNode>(*e) {
                 if (node.size.x - buf.text_width).abs() > 0.1
                     || (node.size.y - buf.text_height).abs() > 0.1
