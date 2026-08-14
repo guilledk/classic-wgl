@@ -15,9 +15,9 @@
 //! Two scenes ship as ROMs:
 //!
 //! - `demo` — the original hand-authored map (tile/nav data inlined).
-//! - `lunar` — a procedurally generated lunar surface (see
-//!   `classic_core::terrain::lunar`).  Reuses the same entity names so the
-//!   whole editor toolchain keeps working.
+//! - `lunar` — a procedurally generated lunar surface (see the `lunar-guest`
+//!   ROM guest, which owns the map algorithm).  Reuses the same entity names
+//!   so the whole editor toolchain keeps working.
 
 pub mod editor;
 pub mod hud;

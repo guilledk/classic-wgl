@@ -814,30 +814,6 @@ impl WebWasmRuntime {
             );
         }
 
-        // generate_terrain
-        {
-            let host = host.clone();
-            let mem = mem.clone();
-            set_import!(
-                "generate_terrain",
-                Box::new(
-                    move |kind_ptr: i32,
-                          kind_len: i32,
-                          seed_ptr: i32,
-                          seed_len: i32,
-                          height_scale: f64|
-                          -> i32 {
-                        let (kind, seed) = {
-                            let mem = mem.borrow();
-                            let m = mem.as_ref().unwrap();
-                            (read_str(m, kind_ptr, kind_len), read_str(m, seed_ptr, seed_len))
-                        };
-                        host.borrow_mut().generate_terrain(&kind, &seed, height_scale)
-                    },
-                ) as Box<dyn FnMut(i32, i32, i32, i32, f64) -> i32>
-            );
-        }
-
         // set_tile
         {
             let host = host.clone();

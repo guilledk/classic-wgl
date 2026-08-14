@@ -113,9 +113,8 @@ pub struct Engine {
     /// needs a much finer threshold to match the slope rule it was built with.
     pub nav_slope_threshold: f32,
     /// Landing-zone spawn points (tile coords) from the last generated terrain.
-    /// Set by [`Engine::set_spawn_points_bulk`] (guest-driven generation) or
-    /// [`Engine::install_generated_terrain`]; read by the scene layer to focus
-    /// the camera.
+    /// Set by [`Engine::set_spawn_points_bulk`] (guest-driven generation); read
+    /// by the scene layer to focus the camera.
     pub spawn_points: Vec<(i32, i32)>,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
@@ -342,94 +341,6 @@ impl Engine {
         let heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
 
         self.finish_tilemap_init(entity, tiles, heights, None);
-    }
-
-    /// Build and upload a tilemap from a generated
-    /// [`classic_core::terrain::GeneratedTerrain`], with an in-memory RGBA
-    /// tileset instead of a PNG.
-    ///
-    /// `height_scale` overrides the default (`tile_pixel_size[0]`).  Generated
-    /// terrain has a far larger height range than the flat demo map, so the
-    /// default scale would exaggerate the relief and stretch the mouse-picking
-    /// parallax solve.
-    pub fn install_generated_terrain(
-        &mut self,
-        gen: &classic_core::terrain::GeneratedTerrain,
-        height_scale: f32,
-    ) {
-        let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
-
-        let (tile_set_name, size_x, size_y) = {
-            let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.tile_set.clone(), tm.size_x, tm.size_y)
-        };
-        assert_eq!(
-            (gen.terrain.size_x, gen.terrain.size_y),
-            (size_x, size_y),
-            "generated terrain size does not match the Tilemap component"
-        );
-
-        if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_rgba8(
-                &tile_set_name,
-                &gen.tileset.rgba,
-                gen.tileset.width,
-                gen.tileset.height,
-            );
-        }
-
-        self.nav_slope_threshold = gen.nav_slope_threshold;
-
-        self.finish_tilemap_init(
-            entity,
-            gen.terrain.tiles.clone(),
-            gen.terrain.heights.clone(),
-            Some(height_scale),
-        );
-    }
-
-    /// Re-upload a generated terrain in place: update the Tilemap and NavMesh
-    /// data and rebuild their GPU resources.  Assumes the tilemap was already
-    /// installed (boot install or a prior [`Engine::install_generated_terrain`]).
-    pub fn regenerate_terrain(
-        &mut self,
-        gen: &classic_core::terrain::GeneratedTerrain,
-        height_scale: f32,
-    ) {
-        if let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) {
-            if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
-                tm.data = gen.terrain.tiles.clone();
-                tm.height_data = gen.terrain.heights.clone();
-                tm.height_scale = height_scale;
-            }
-        }
-        self.rebuild_tilemap_mesh();
-
-        if let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) {
-            if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
-                nav.data = gen.terrain.nav.clone();
-            }
-        }
-        self.rebuild_nav_gpu();
-
-        self.nav_slope_threshold = gen.nav_slope_threshold;
-    }
-
-    /// Generate a named terrain (see [`classic_core::terrain::generate`]) and
-    /// install or regenerate it.  The generic terrain prefab behind the guest
-    /// `generate_terrain` import.
-    pub fn generate_terrain(&mut self, kind: &str, seed: &str, height_scale: f32) -> bool {
-        let Some(gen) = classic_core::terrain::generate(kind, seed) else { return false };
-        let installed = self
-            .entity_by_role(RoleKind::Tilemap)
-            .map(|e| self.tilemap_gpu.contains_key(&self.debug_name(e)))
-            .unwrap_or(false);
-        if installed {
-            self.regenerate_terrain(&gen, height_scale);
-        } else {
-            self.install_generated_terrain(&gen, height_scale);
-        }
-        true
     }
 
     /// Shared tail of the `init_tilemap*` family: build the mesh and tile-data

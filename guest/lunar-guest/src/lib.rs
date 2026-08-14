@@ -1,31 +1,43 @@
-#![no_std]
+#![cfg_attr(target_arch = "wasm32", no_std)]
 #![allow(static_mut_refs)]
 
 //! ROM guest for the `lunar` scene: the procedural lunar map generator.
 //!
 //! Owns the *whole* map-generation behaviour.  `init` generates the 400x400
-//! lunar surface (via the `classic-terrain` crate) and bulk-uploads the grids
-//! + tileset + landing zones to the host; `update` re-rolls it when `R` is
-//! pressed.  The host is a generic terrain engine (storage + rebuild +
-//! pathfinding); the map algorithm lives here, in the ROM.
+//! lunar surface and bulk-uploads the grids + tileset + landing zones to the
+//! host; `update` re-rolls it when `R` is pressed.  The host is a generic
+//! terrain engine (storage + rebuild + pathfinding); the map algorithm lives
+//! here, in the ROM.
+//!
+//! The generator (`material`/`lunar`/`tileset`) is pure and builds on the open
+//! `classic-terrain` noise primitives; the wasm entrypoint (`host` imports,
+//! `init`/`update`) is `#[cfg(target_arch = "wasm32")]`-gated so the generator
+//! can be unit-tested natively (see `tests/terrain_lunar.rs`).
 
 extern crate alloc;
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
+pub mod lunar;
+pub mod material;
+pub mod tileset;
 
-use classic_terrain::lunar::{generate_lunar, LunarParams};
-use classic_terrain::tileset::build_lunar_tileset;
+pub use lunar::{generate_lunar, LandingZone, LunarParams, LunarStats, LunarTerrain};
+pub use material::LunarMaterial;
+pub use tileset::{build_default_lunar_tileset, build_lunar_tileset};
 
+#[cfg(target_arch = "wasm32")]
+use alloc::{format, string::String, vec::Vec};
+
+#[cfg(target_arch = "wasm32")]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
 
+#[cfg(target_arch = "wasm32")]
 #[global_allocator]
 static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
+#[cfg(target_arch = "wasm32")]
 mod host {
     #[link(wasm_import_module = "env")]
     extern "C" {
@@ -40,19 +52,24 @@ mod host {
 }
 
 /// Vertical exaggeration for the lunar relief (matches `LUNAR_HEIGHT_SCALE`).
+#[cfg(target_arch = "wasm32")]
 const HEIGHT_SCALE: f64 = 14.0;
 
+#[cfg(target_arch = "wasm32")]
 static KEY_R: &[u8] = b"KeyR";
 
+#[cfg(target_arch = "wasm32")]
 static mut SEED_N: u32 = 0;
 
 /// Build the seed string for generation `n` (`"0"`, `"1"`, ...).
+#[cfg(target_arch = "wasm32")]
 fn seed_for(n: u32) -> String {
     format!("{n}")
 }
 
 /// Generate the lunar map for a seed and bulk-upload every grid to the host,
 /// then commit the terrain (install on first call, rebuild afterwards).
+#[cfg(target_arch = "wasm32")]
 fn generate(seed: &str) {
     let params = LunarParams { seed: String::from(seed), ..LunarParams::default() };
     let terrain = generate_lunar(&params);
@@ -85,12 +102,14 @@ fn generate(seed: &str) {
 }
 
 /// Called once, before the first frame, to generate the initial map.
+#[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn init() {
     generate(&seed_for(0));
 }
 
 /// Called once per frame.  `R` re-rolls the terrain with a fresh seed.
+#[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn update(_dt: f64) {
     let (kp, kl) = (KEY_R.as_ptr() as i32, KEY_R.len() as i32);

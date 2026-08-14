@@ -64,7 +64,6 @@ var OP_ELAPSED = 18;
 var OP_WAS_PRESSED = 19;
 var OP_KEY_DOWN = 20;
 var OP_WAS_KEY_PRESSED = 21;
-var OP_GENERATE_TERRAIN = 22;
 var OP_SET_TILE = 23;
 var OP_SET_HEIGHT = 24;
 var OP_REBUILD_TERRAIN = 25;
@@ -257,10 +256,6 @@ function envImports() {
         },
         was_key_pressed: function (ptr, len) {
             return hostCall(OP_WAS_KEY_PRESSED, [readStr(ptr, len)], []).ret | 0;
-        },
-        generate_terrain: function (kindPtr, kindLen, seedPtr, seedLen, heightScale) {
-            var r = hostCall(OP_GENERATE_TERRAIN, [readStr(kindPtr, kindLen), readStr(seedPtr, seedLen)], [heightScale]);
-            return r.ret | 0;
         },
         set_tile: function (x, y, id) {
             return hostCall(OP_SET_TILE, [], [x, y, id]).ret | 0;

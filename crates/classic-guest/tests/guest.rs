@@ -195,12 +195,6 @@ fn guest_was_key_pressed_triggers_action() {
 }
 
 #[test]
-fn generate_terrain_unknown_kind_returns_false() {
-    let mut engine = Engine::new_for_test();
-    assert!(!engine.generate_terrain("bogus", "x", 1.0));
-}
-
-#[test]
 fn guest_set_camera_moves_the_view() {
     with_each_runtime(
         r#"(module

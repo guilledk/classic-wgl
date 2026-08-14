@@ -75,7 +75,6 @@ const OP_ELAPSED: i32 = 18;
 const OP_WAS_PRESSED: i32 = 19;
 const OP_KEY_DOWN: i32 = 20;
 const OP_WAS_KEY_PRESSED: i32 = 21;
-const OP_GENERATE_TERRAIN: i32 = 22;
 const OP_SET_TILE: i32 = 23;
 const OP_SET_HEIGHT: i32 = 24;
 const OP_REBUILD_TERRAIN: i32 = 25;
@@ -275,7 +274,6 @@ impl WorkerWasmRuntime {
             OP_WAS_PRESSED => (host.was_pressed(ni(0)) as f64, None),
             OP_KEY_DOWN => (host.key_down(&strs[0]) as f64, None),
             OP_WAS_KEY_PRESSED => (host.was_key_pressed(&strs[0]) as f64, None),
-            OP_GENERATE_TERRAIN => (host.generate_terrain(&strs[0], &strs[1], nf(0)) as f64, None),
             OP_SET_TILE => (host.set_tile(ni(0), ni(1), ni(2)) as f64, None),
             OP_SET_HEIGHT => (host.set_height(ni(0), ni(1), nf(2)) as f64, None),
             OP_REBUILD_TERRAIN => (host.rebuild_terrain() as f64, None),

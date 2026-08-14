@@ -211,12 +211,6 @@ impl GuestHost {
         self.engine().input.was_key_pressed(key) as i32
     }
 
-    /// Generate a named terrain (see `classic_core::terrain::generate`) and
-    /// install or regenerate it — the generic terrain prefab.
-    pub fn generate_terrain(&mut self, kind: &str, seed: &str, height_scale: f64) -> i32 {
-        self.engine_mut().generate_terrain(kind, seed, height_scale as f32) as i32
-    }
-
     /// Write one tile index at tile coordinate `(x, y)`.
     pub fn set_tile(&mut self, x: i32, y: i32, id: i32) -> i32 {
         self.engine_mut().set_tile(x, y, id.max(0) as u32) as i32

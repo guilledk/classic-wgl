@@ -239,22 +239,6 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
-            "generate_terrain",
-            |mut caller: Caller<'_, $host>,
-             kind_ptr: i32,
-             kind_len: i32,
-             seed_ptr: i32,
-             seed_len: i32,
-             height_scale: f64|
-             -> i32 {
-                let kind = $read_str(&mut caller, kind_ptr, kind_len);
-                let seed = $read_str(&mut caller, seed_ptr, seed_len);
-                caller.data_mut().guest_mut().generate_terrain(&kind, &seed, height_scale)
-            },
-        )?;
-
-        $linker.func_wrap(
-            m,
             "set_tile",
             |mut caller: Caller<'_, $host>, x: i32, y: i32, id: i32| -> i32 {
                 caller.data_mut().guest_mut().set_tile(x, y, id)
