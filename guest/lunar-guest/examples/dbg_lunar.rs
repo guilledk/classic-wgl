@@ -1,7 +1,8 @@
 //! Developer utility: generate a lunar map and print diagnostics plus ASCII
 //! previews of the height field, materials and navigation grid.
 //!
-//! `cargo run -p classic-core --example dbg_lunar -- [seed] [size]`
+//! `cargo run --manifest-path guest/lunar-guest/Cargo.toml --example dbg_lunar
+//! -- [seed] [size]`
 
 use lunar_guest::lunar::*;
 use lunar_guest::material::{material_for_tile_id, LunarMaterial};

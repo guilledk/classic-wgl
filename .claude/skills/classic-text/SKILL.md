@@ -17,8 +17,9 @@ description: >
 
 SDF text rendering is a single-pass GPU system. Text entities carry an
 `SdfTextRender` component with style/colour/text data. Each frame, the render
-loop rebuilds the glyph buffer if the text or justification changed, caches
-the GPU buffer in `SdfTextGpu`, and dispatches a single `draw_sdf` call.
+loop rebuilds the glyph buffer if the text or scale changed (justification
+changes are **not** part of the dirty check), caches the GPU buffer in
+`SdfTextGpu`, and dispatches a single `draw_sdf` call.
 
 The render list sorts `DrawKind::SdfText` items by `Transform.position.z`, so
 text shares the same z-sorted draw order as other UI elements. There is no
@@ -44,8 +45,8 @@ pub struct SdfTextRender {
 ```
 
 The GPU cache (`SdfTextGpu`) stores a `GlBuffer` per entity, keyed by entity
-ID. When the text or justification changes (or the cache is absent), the buffer
-is rebuilt and uploaded. The cache is in the `Engine` struct.
+ID. When the text or scale changes (or the cache is absent), the buffer is
+rebuilt and uploaded. The cache is in the `Engine` struct.
 
 ## 2. Font Atlas Loading
 
@@ -86,12 +87,14 @@ by `(column_width - line_width) / 2` or `(column_width - line_width)`. Column
 width is `layout_width` if > 0, else the maximum line width.
 
 ### Phase 3 — Glyph-extent height
-Computes `text_height` as `max(max_h * line_count, glyph_extent_center)`.
-The glyph extent is the visual range from the top of the highest glyph to the
-bottom of the lowest glyph, centred so that the glyph row's visual centre
-coincides with the element's geometric centre at `h/2`. This padding corrects
-SDF text centering so `UiAnchor::MidCenter` aligns the visual text, not the
-line-height box.
+Computes `text_height` starting from `max_h * line_count`; then, **only when**
+the glyph extent is non-trivial (`glyph_extent_min < glyph_extent_max`), it
+overrides to `(glyph_extent_min + glyph_extent_max).max(1.0)` (the two
+candidates are never `max()`-combined).  The glyph extent is the visual range
+from the top of the highest glyph to the bottom of the lowest glyph, centred so
+that the glyph row's visual centre coincides with the element's geometric
+centre at `h/2`. This padding corrects SDF text centering so
+`UiAnchor::MidCenter` aligns the visual text, not the line-height box.
 
 ### Phase 4 — Vertex buffer
 For each glyph, builds 6 vertices (2 triangles) in `{local_x, local_y, tex_u,
@@ -142,15 +145,13 @@ The render loop checks whether the text entity has a `UiNode` parent:
 let is_ui = self.world.get::<&UiNode>(*entity).map(|n| n.parent.is_some()).unwrap_or(false);
 ```
 
-When `is_ui` is true, the render loop passes `layout_width = 0` and relies on
-the UI anchor system for positioning. The SDF text element's `Transform` is
-set by the UI layout, so `build_sdf_glyph_buffer` computes `text_width` from
-the natural glyph widths and does NOT apply justification-based x-offsets
-within the buffer — the anchor system handles overall positioning.
-
-When `is_ui` is false (free-standing text, e.g. text demo), the render loop
-passes a `layout_width` derived from the max_width stored in `UiNode.size`,
-and the position comes from `Transform.position` directly.
+The render loop **always** passes `layout_width = 0` to
+`build_sdf_glyph_buffer` — the `is_ui` flag only controls a post-buffer
+justify **x-offset** on the model matrix (see §10), not the `layout_width`
+argument.  When `is_ui` is true the SDF text element's `Transform` is set by
+the UI layout and the buffer uses natural glyph widths; the anchor system
+handles overall positioning.  When `is_ui` is false (free-standing text, e.g.
+text demo), the position comes from `Transform.position` directly.
 
 ## 6. Scissor Clipping
 
@@ -261,9 +262,9 @@ when inputs are unchanged.
   no factory creates it. `spawn_sdf_text` creates `UiKind::SdfText`. There is
   no non-SDF text rendering path.
 
-- **`layout_width` in render loop** — When `is_ui` is false, the render loop
-  passes `layout_width` from `UiNode.size.x` to `build_sdf_glyph_buffer()`.
-  This allows max-width wraparound to work correctly for non-UI text. But
-  `build_sdf_glyph_buffer` only uses `layout_width` as a column width for
-  justification — it does NOT perform word-wrapping. Multi-line text relies
+- **`layout_width` in render loop** — The render loop always passes
+  `layout_width = 0` to `build_sdf_glyph_buffer()` (for both UI and non-UI
+  text); `is_ui` only toggles the justify x-offset applied to the model
+  matrix.  `build_sdf_glyph_buffer` only uses `layout_width` as a column width
+  for justification — it does NOT perform word-wrapping. Multi-line text relies
   on explicit `\n` characters.

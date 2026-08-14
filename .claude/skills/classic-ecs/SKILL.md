@@ -97,6 +97,14 @@ categories:
   golden traces, UI debug output.  Every entity loaded from `state.json` gets
   a `DebugName` matching its JSON key.
 
+- **`Role { value: RoleKind }`** — tags an entity with its game role
+  (`RoleKind::{Tilemap, NavMesh, Agent, Cursor}`).  This is how the engine and
+  demo find the tilemap/nav/agent/cursor entities — via
+  `Engine::entity_by_role(RoleKind::…)`, **not** by name.
+
+- **`Camera`** — 2D orthographic camera (`position`, `scale`, runtime-only
+  `size`).  Registered as a component so it round-trips through `state.json`.
+
 ### Render components
 
 - **`SpriteRender`** — single-frame sprite.  Fields: `position`, `scale`,
@@ -112,13 +120,13 @@ categories:
   `ignore_cam`.  Drawn via `draw_rect`.
 
 - **`Tilemap`** — the iso terrain grid.  Fields include `position`, `scale`,
-  `size_x`, `size_y`, `tile_set`, `tile_pixel_size`, `height_scale`,
-  `data: Vec<u32>` (tile indices, row-major), `height_data: Vec<f32>`
-  (per-vertex heights), `mouse_iso_pos`, `selection_iso_begin`,
-  `selection_iso_end`.  Drawn via `draw_tilemap`.
+  `size_x`, `size_y`, `tile_set`, `tile_pixel_size`, `max_tile`,
+  `height_scale`, `data: Vec<u32>` (tile indices, row-major),
+  `height_data: Vec<f32>` (per-vertex heights), `mouse_iso_pos`,
+  `selection_iso_begin`, `selection_iso_end`.  Drawn via `draw_tilemap`.
 
 - **`NavMesh`** — navigation mesh overlay.  Fields: `position`, `scale`,
-  `map_entity` (name of source tilemap), `tile_set`, `data`, `data_url`,
+  `map_entity` (name of source tilemap), `tile_set`, `data`,
   `size_x`, `size_y`.  Rendered on top of the tilemap at z-order 19999.
 
 - **`IsoSprite`** — billboard in iso space.  Fields: `position`, `scale`,
@@ -128,20 +136,22 @@ categories:
 
 - **`IsoAgent`** — pathfinding sprite.  Subsumes `IsoSprite` (i.e. the
   spawner creates both an `IsoAgent` and an `IsoSprite`).  Adds `speed`,
-  `anim_speed`, `anim_prefix`, plus internal path-tracking state: `path`,
-  `target_index`, `delta`, `init_dist`, `direction`, `anim_index`, `state`
-  (`Idle` / `FollowPath`).
+  `anim_speed`, `anim_prefix` on top of the `IsoSprite` fields.  There is no
+  path-tracking state on the component — click-to-move / path-following lives
+  entirely in the ROM guest (e.g. `guest/demo-guest`).
 
 - **`Animator`** — frame-animator tied to a sprite by `target` field
-  (`"entityName.ComponentName"` format).  Internal state: `animation`,
-  `counter`, `frame`, `repeat`, `playing`.
+  (`"entityName.ComponentName"` format).  Fields: `speed: f32`, plus
+  runtime-only `animation`, `counter`, `frame`, `repeat`, `playing`.
 
 ### Collision / UI
 
-- **`Collider`** — physics shape.  Contains `shape: Shape` (`Circle` or
-  `Polygon`), `position`, `scale`, `rotation`, `pid` (assigned by
-  `PhysicsProvider`), `consumes_click`, `click_priority`, and a `handlers`
-  map keyed by `HandlerKind`.  Handlers are `Box<dyn FnMut() -> bool>`.
+- **`ColliderData`** — serializable physics shape.  Contains `shape: Shape`
+  (`Circle` or `Polygon`), `position`, `scale`, `rotation`, `pid` (assigned by
+  `PhysicsProvider`), `consumes_click`, `click_priority`.  It deliberately has
+  **no** handlers — click/enter/exit handlers live on the private
+  `ColliderEntry` struct in `collision.rs`, kept off the serializable
+  component so it round-trips through `state.json`.
 
 - **`UiNode`** — retained-mode UI visual + layout element.  Fields:
   `parent: Option<Entity>`, `children: Vec<UiChild>`, `size: Vec2`,
@@ -222,13 +232,20 @@ so `Transform` is not emitted separately.  The current subsumes graph:
 | IsoAgent          | IsoSprite, Transform  |
 | IsometricNavMesh  | Transform             |
 | Animator          | (none)                |
+| Rect              | (none)                |
+| SdfText           | (none)                |
+| Camera            | (none)                |
+| Transform         | (none)                |
+| Role              | (none)                |
 
 ### Order priority
 
 During `dump_state`, `ordered_regs()` sorts by `order` (ascending).  The
 current priorities: Tilemap(10), IsometricNavMesh(15), Sprite(20),
-IsoSprite(30), Animator(35), IsoAgent(40).  This controls the field order in
-the serialized JSON.
+IsoSprite(30), Animator(35), IsoAgent(40), Rect(45), SdfText(46),
+Camera(48), Transform(50), Role(60).  This controls the field order in the
+serialized JSON.  Note `Transform` is **not** "emitted last" — `Role(60)`
+sorts after it.
 
 ### Registering a component
 
@@ -254,7 +271,17 @@ the registry across tests (clearing via `registry::clear()`).
 ## 5. update_fns Closure System
 
 The engine has no formal system scheduler.  Gameplay logic is registered as
-closures via `on_update`:
+closures through a small hook surface:
+
+| Method | Hook field | When it runs |
+|--------|-----------|--------------|
+| `on_update(f)` | `update_fns` | every frame, in registration order |
+| `on_pre_update(f)` | `pre_update_hooks` | every frame, *before* `on_update` closures |
+| `on_selection_end(f)` | `selection_end_hooks` | after a selection drag ends |
+| `add_overlay(f)` | `overlay_hooks` | in the GL draw phase, after the main render list |
+| `set_test_runner(f)` | `test_runner` | once per frame when `CLASSIC_TEST` is active |
+
+`on_update` is the workhorse:
 
 ```rust
 pub fn on_update(&mut self, f: impl FnMut(&mut Engine) + 'static) {
@@ -283,7 +310,7 @@ startup).
 
 Closures execute in registration order.  The camera WASD/zoom closure is
 registered by `init_camera_wasd()` early in the boot sequence.  Tilemap
-mouse-position code is registered inside `init_tilemap()`.  Since each runs
+mouse-position code is registered inside `commit_terrain()`.  Since each runs
 in order, later closures see camera state already updated for this frame.
 
 ### capture patterns
@@ -418,13 +445,14 @@ centre:
 
 ```rust
 pub fn fix(&self) -> Vec3 {
-    (self.position * self.scale - self.size) / Vec3::new(2.0, 2.0, 1.0)
+    self.position * self.scale - self.size / Vec3::new(2.0, 2.0, 1.0)
 }
 ```
 
-The division applies to the entire `(position*scale - size)` expression.
-A previous bug applied the division only to `size`, producing
-`pos*scale - size/2`, which at `scale=50` was off by `position*25` pixels.
+The `size / 2` term is the viewport centre, subtracted after scaling
+`position` — this maps `position * scale` to the centre of the viewport.  Do
+**not** wrap the whole expression in `/ 2.0`: `(position*scale - size)/2` is
+a different (wrong) transform.
 
 ### Matrix order: `T(-fix) * S(scale)`
 

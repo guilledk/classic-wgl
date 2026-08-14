@@ -21,8 +21,9 @@ Definitive reference for diagnosing problems in `classic-wgl`. Covers logging
 infrastructure (`CLASSIC_LOG`), golden-trace comparison, state dump inspection,
 headless CI runs, and a structured playbook for common issues.
 
-For macro-level details and adding new channels, see the `classic-logging`
-skill. This document focuses on diagnostic workflows and runtime tooling.
+For macro-level details and adding new channels, see
+`crates/classic-core/src/instrument.rs`. This document focuses on diagnostic
+workflows and runtime tooling.
 
 ---
 
@@ -39,10 +40,10 @@ CLASSIC_LOG=<unset>                     # all channels at Info (default gate)
 
 Tokens are comma-separated. Each token is `chan`, `chan=LEVEL`, `-chan`, `all`,
 or `all=LEVEL`. Order matters: `all` directives apply first, then `-all`,
-then per-channel overrides. Unknown channel names emit a `log::warn!`
-listing valid names.
+then per-channel overrides. Unknown channel names emit a `log::warn!` telling
+you to run `CLASSIC_LOG=help` (it does not enumerate the names).
 
-### All 23 Channels
+### All 25 Channels
 
 | Channel | Description |
 |---|---|
@@ -58,6 +59,7 @@ listing valid names.
 | `text` | SDF glyph buffer rebuilds, font load, text GpuCache invalidations |
 | `iso` | Iso coordinate transforms, depth calculations, sprite occlusion |
 | `nav` | Nav mesh queries, tile walkability checks |
+| `terrain` | Terrain generation/upload summary (alias `gen`) |
 | `path` | A* pathfinder execution (open/closed sets, cost) |
 | `ecs` | Entity spawn/despawn, component insert/remove, world queries |
 | `state` | State serialization (dump/load), registry lookups |
@@ -67,8 +69,9 @@ listing valid names.
 | `anim` | Animator frame advance, direction lookup |
 | `test` | CLASSIC_TEST step execution, assertions |
 | `golden` | Golden trace capture, comparison, mismatch reporting |
-| `dump` | State-dump file I/O, sidecar writes |
+| `dump` | State-dump file I/O (inlined into `state.json`, no sidecar files) |
 | `platform` | Platform backend lifecycle, context creation, swap buffers |
+| `guest` | ROM guest runtime: init/update/start, SDK bridge, fuel/memory errors |
 
 ### Convenience Aliases
 
@@ -180,11 +183,12 @@ No runtime toggles exist — the atomic level table is set at startup and
 can only be reset in tests via `reset_for_test()`.
 
 When `CLASSIC_LOG` is set, `env_logger`'s max level is bumped to `Trace`
-so the channel-gated output passes through. If you use `RUST_LOG`, add
-the channel target prefixes:
+so the channel-gated output passes through. If you use `RUST_LOG`, filter by
+the **channel name string** (the log target is `chan_name($chan)`, e.g. `gfx`),
+not a Rust module path:
 
 ```bash
-RUST_LOG=info,classic::Chan::Gfx=trace CLASSIC_LOG=gfx=trace cargo run -p classic-desktop
+RUST_LOG=info,gfx=trace CLASSIC_LOG=gfx=trace cargo run -p classic-desktop
 ```
 
 ### Web
@@ -201,8 +205,9 @@ RUST_LOG=info,classic::Chan::Gfx=trace CLASSIC_LOG=gfx=trace cargo run -p classi
 Golden traces capture a deterministic JSONL record of every draw call:
 model matrices, textures, sort order, camera state, per-kind draw counts.
 
-- **Reference**: `tests/golden/<scenario>/<tag>.trace.jsonl`
-- **Actual**: `target/classic-test/<scenario>/<tag>.actual.trace.jsonl`
+- **Reference**: `{CLASSIC_GOLDEN_DIR}/baseline.trace.jsonl` (default
+  `tests/golden/baseline`; per-scene by setting `CLASSIC_GOLDEN_DIR`)
+- **Actual**: `target/classic-test/baseline.actual.trace.jsonl`
 
 Traces are structural, not pixel-based — they compare the logic, not the
 GPU output. This means golden trace checks pass identically on any platform
@@ -255,9 +260,10 @@ committed baseline is authoritative.
 
 ### Pixel Golden (CLASSIC_GOLDEN_PNG=1)
 
-Optional per-pixel comparison against `tests/golden/<scenario>/<tag>.png`.
-Per-channel tolerance is `CLASSIC_GOLDEN_TOL` (default 2). Not enabled by
-default in CI because software-rasteriser output is version-dependent.
+Optional per-pixel comparison against
+`{CLASSIC_GOLDEN_DIR}/baseline.png`.  Per-channel tolerance is
+`CLASSIC_GOLDEN_TOL` (default 2). Not enabled by default in CI because
+software-rasteriser output is version-dependent.
 
 ---
 
@@ -443,7 +449,7 @@ original and will produce no diagnostics when broken:
 | **SDF shadow/glow passes** | Fields (`outline`, `shadow`) in UISdfText are stored but not rendered. Rust only runs a single SDF draw; TS ran secondary passes for shadow, glow, and outline. |
 | **Bitmap `UIText`** | Not ported. The TS engine used a traditional glyph-map text renderer for dev UI. All text in Rust is SDF. |
 | **`consumesClick` prescan** | TS ran a two-pass dispatch: first pass set a `uiConsumedClick` flag, second pass checked it. Rust collapses this, using `consumed_click` on the dispatch path directly. No equivalent of the TS prescan exists. |
-| **Entity destruction** | `world.despawn` is never called. Instead, entities are marked with a `Disabled` component and their colliders are skipped in the quadtree insertion. |
+| **Entity destruction** | `world.despawn` is called via `Engine::despawn_named`, exposed to ROM guests through the `despawn` SDK import. Entities are also soft-disabled with a `Disabled` component in the UI layer. |
 | **Collider in quadtree (disabled)** | TS inserted all colliders (including disabled) into the quadtree and filtered them at query time. Rust skips disabled colliders at insertion time in `begin_frame()`. This is a deliberate optimisation and can affect click dispatch when toggling collider enabled state within a frame. |
 | **Camera matrix order** | TS does `S(scale) * T(-fix)`; Rust does `T(-fix) * S(scale)`. Both look correct because the fix-point formula compensates, but the raw model matrices differ. Golden traces will show this divergence in `model` fields. |
 | **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(sizeX + 1) * (sizeY + 1)` (vertex grid, one height per vertex). The inlined `height_data` in `state.json` therefore has different array lengths between TS and Rust. |

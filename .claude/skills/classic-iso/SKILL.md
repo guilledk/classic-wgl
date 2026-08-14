@@ -203,7 +203,7 @@ The `at` closure clamps coordinates to the valid range `[0, size_x]` and
 
 ## 5. Mouse-to-Iso (3-Pass Height Parallax Solve)
 
-Registered in `init_tilemap` as an `on_update` closure on `Engine`.  Runs every
+Registered in `commit_terrain` as an `on_update` closure on `Engine`.  Runs every
 frame to convert screen-space mouse position into iso tile coordinates,
 accounting for height parallax.
 
@@ -335,7 +335,8 @@ pixels[p + 3] = 255; // A
 ```
 
 Dimensions are `size_x × size_y` pixels, one pixel per tile.  NEAREST filtering
-is used (set in `GlTexture::from_rgba8`).
+(with `CLAMP_TO_EDGE` wrapping) is set in `Engine::upload_data_texture` when the
+tile-data texture is uploaded.
 
 ### Fragment shader decoding
 
@@ -356,7 +357,7 @@ vec2 tileId = vec2(floor(mod(tileIdFlat, tileSetSize.x)), floor(tileIdFlat / til
 
 ### Upload
 
-Created during `init_tilemap` and stored as a raw GL texture in `TilemapGpu.tile_tex`.
+Created during `commit_terrain` and stored as a raw GL texture in `TilemapGpu.tile_tex`.
 
 ---
 
@@ -405,10 +406,18 @@ shader layout:
 
 | Index | Logical name | Vertex map |
 |-------|-------------|------------|
-| 0 | bottom-left | SW depth |
-| 1 | bottom-right | SE depth |
+| 0 | bottom-left | `min_fp` (global min depth across all four corners) |
+| 1 | bottom-right | `min_fp` |
 | 2 | top-left | NW depth |
 | 3 | top-right | NE depth |
+
+Per-corner depths are first computed as
+`min(per-corner-depth, base_depth)` where `base_depth` is the depth at the
+sprite's exact position; then the two bottom slots are collapsed to the global
+`min_fp` (the minimum of all four raw depths) before returning
+`[min_fp, min_fp, raw[3], raw[0]]` (footprint order `[NE, SE, SW, NW]`, so
+`raw[3]`=NW and `raw[0]`=NE).  This keeps the quad's bottom edge at the
+shallowest point, preventing occlusion artifacts on tall sprites.
 
 The shader interpolates depth across the quad:
 
@@ -418,11 +427,6 @@ float topDepth    = mix(isoDepthCorners.z, isoDepthCorners.w, vertexPos.x);
 float cornerDepth = mix(topDepth, bottomDepth, vertexPos.y);
 gl_Position.z = clamp(cornerDepth, 0.0, 1.0);
 ```
-
-Each corner uses `min(per-corner-depth, base_depth)` where `base_depth` is the
-depth at the sprite's exact position.  This ensures that the entire quad is
-never deeper than the sprite's anchor point, preventing occlusion artifacts on
-tall sprites.
 
 ### Ghost pass (`draw_iso_sprite`)
 
@@ -507,23 +511,24 @@ on top of the main terrain.
 
 ### Mesh generation
 
-The nav mesh uses the same `build_mesh` function as the main tilemap, but
-with `height_scale = 1.0` and flat heights (all `1.0`).  The data array
-contains walkability flags where 0 = walkable.
+The nav mesh uses the same `build_mesh` function as the main tilemap, built
+from the tilemap's **actual** `height_data` + `height_scale` (the flat
+`height_scale = 64.0` fallback is only used when there is no tilemap).  The
+data array contains walkability flags where `1` = walkable, `0` = blocked.
 
 ### Rendering
 
 Drawn via `draw_tilemap` with:
 - **`tile_data_tex`:**  the nav data texture (walkability values).
-- **`tileset_name`:** `"navTileset"` — a small tileset with transparent solid
-  tiles for non-walkable areas.
+- **`tileset_name`:** the `NavMesh.tile_set` name (default `"navTileset"`) — a
+  small tileset with transparent solid tiles for non-walkable areas.
 - **`tile_set_size`:** `[nav_tileset_width / 8, nav_tileset_height / 8]`.
 - **`model`:** `Mat4::from_translation(tf.position)`.
 - **Sort order:**  `19999.0` — between the main tilemap (`20000.0`) and sprites.
 
-When `debug_footprints` is off, the nav mesh entity's `NavMesh` component
-(`tilemapNavigation`) is iterated in the render loop; when its `nav_gpu` is
-present, it is drawn.
+The nav mesh entity (`tilemapNavigation`, `Role == NavMesh`) is iterated in the
+render loop whenever `self.nav_gpu.is_some()`; it is drawn regardless of the
+`debug_footprints` toggle.
 
 ### Depth test
 
@@ -573,7 +578,7 @@ items and sorts descending (larger order = farther = drawn first).
 | `Tilemap` (nav) | `19999.0` | Behind sprites, on top of terrain |
 | `IsoSprite` | `tf.position.x - tf.position.y` | Depth-major sort |
 | `Sprite` (non-UI) | `tf.position.z` (or `-20000.0` if `ignore_cam`) | Z-order |
-| `Sprite` (UI) | `tf.position.z` | UI z-slice |
+| `UiSprite` | `tf.position.z` | UI z-slice |
 | `UiRect` | `tf.position.z` | |
 | `SdfText` | `tf.position.z` | |
 
@@ -582,9 +587,9 @@ shader (`vertexPos.x - vertexPos.y`).  A sprite at iso `(10, 2)` has order
 `8.0`; one at `(2, 10)` has order `-8.0`.  Larger values are farther from the
 camera and drawn first.
 
-Non-UI sprites with `ignore_cam = true` get a fixed order of `-20000.0`,
-placing them behind everything (rendered last, like UI).  This is used for
-HUD/overlay elements.
+Non-UI sprites with `ignore_cam = true` get a fixed order of `-20000.0`.  Since
+the list is sorted **descending**, `-20000.0` is the smallest key and is drawn
+**last** (on top), like UI — this is how the HUD cursor sprite works.
 
 `UiRect` and `UiSprite` use `tf.position.z` for layering within the UI
 plane.  Items are drawn **without** `DEPTH_TEST` (enabled only during tilemap

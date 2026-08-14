@@ -1,6 +1,6 @@
 //! The single source of truth for the host-import surface (the "console SDK").
 //!
-//! Every backend exposes the same 57 `env` host imports.  The *bodies* live in
+//! Every backend exposes the same 69 `env` host imports.  The *bodies* live in
 //! the shared [`GuestHost`] (`sdk.rs`); this macro generates only the thin
 //! linker/closure layer that marshals arguments in and out of guest linear
 //! memory and forwards to `GuestHost`.  The wasmi and wasmtime backends differ

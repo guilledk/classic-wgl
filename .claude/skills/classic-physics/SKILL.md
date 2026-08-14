@@ -64,10 +64,10 @@ frame the mouse button goes down).  If the mouse is outside the screen rect
 Before sorting and dispatching click handlers, `perform_calls` does a pre-scan
 of all colliders in the mouse's quadtree cells.  If any collider with
 `consumes_click == true` intersects the mouse (via GJK), the scan breaks
-early.  The caller is responsible for checking this state: in `Engine::frame`,
-if `physics.consumed_click` is true after `perform_calls`,
-`self.ui_consumed_click` is set to `true`, which gates tilemap drag-selection
-on the next frame.
+early (it only short-circuits — it does not set `consumed_click`; that is done
+in the dispatch loop below).  The caller reacts to the result in
+`Engine::frame`: if `physics.consumed_click` is true after `perform_calls`, the
+`"ui_consumed_click"` guest flag is set, which gates tilemap drag-selection.
 
 ### Priority Sort
 
@@ -114,8 +114,10 @@ For every pair that was in last frame's `collided` but is NOT in this frame's
 `colliding`, all `Exit` handlers on the collider with PID `a_pid` fire.
 
 Both enter and exit dispatch iterate per `a_pid`; each collider tracks which
-other PIDs it is colliding with.  The handlers are closures stored in
-`Collider::handlers: HashMap<HandlerKind, Vec<Box<dyn FnMut() -> bool>>>`.
+other PIDs it is colliding with.  The handlers are closures stored in the
+private `ColliderEntry::handlers: HashMap<HandlerKind, Vec<Box<dyn FnMut() ->
+bool>>>` map in `collision.rs` (not on the serializable `ColliderData`
+component).
 
 ---
 
@@ -138,9 +140,10 @@ is shared between `PhysicsProvider` and `Engine`:
    `physics.end_selection()` fires `Selection` handlers on every registered
    collider whose bounding rect intersects the selection rect AND passes GJK
    test against the selection virtual collider.
-4. **`apply_editor_selection()`** runs after `end_selection`, applying the
-   editor target (tile paint, height paint, or nav paint) to the final
-   selection region.
+4. **Selection end** runs the `on_selection_end` hook surface.  The demo
+   registers `editor::apply_editor_selection` into it (a demo-crate function,
+   not an engine method), which applies the editor target (tile paint, height
+   paint, or nav paint) to the final selection region.
 
 The selection virtual collider positions itself at `(-1, -1)` when idle
 (offscreen).
@@ -181,12 +184,14 @@ through `UIManager`.
 
 Called by `spawn_button` and manual collider attachments.  Registers a new
 collider with `PhysicsProvider`, sets it as a `Polygon` matching the UI
-element's size, and returns the PID.  The PID is stored in the
-`UiNode::collider_pid` field.
+element's size, and returns the PID.  The PID is tracked in the private
+`UIManager` `UiColliderEntry { elem, collider_pid, … }` table (not on
+`UiNode`), accessed via `collider_pid_for` / `collect_collider_pids`.
 
 ### `sync_colliders`
 
-Called from `refresh_layout()` after the UI tree is laid out.  For every UI
+Called by `Engine::frame` (after `ui.refresh_layout`) once the UI tree is laid
+out.  For every UI
 element with an associated collider PID, `sync_collider_rect(pid, x, y, w, h)`
 rebuilds the collider polygon to match the element's current screen
 position and size.  This ensures button hit-testing stays aligned with
@@ -337,7 +342,8 @@ Pathfinding is exposed to ROM guests as the `find_path` SDK import (see the
 on a left click with the agent tool selected (and not consumed by UI), it
 `find_path`s from the agent's tile to `mouse_iso` and follows the waypoints
 via `set_pos`/`get_pos`.  The engine no longer wires click-to-move — it only
-installs the nav grid (`init_navigation` / `init_navigation_data`).
+holds the nav grid (installed by `load_state` inline data or the guest's
+`set_nav` + `commit_terrain`).
 
 The retired engine click-to-move pre-rejected impassable destinations (so a
 click on a wall never ran A*).  The guest does not: `find_path` exhausts the
@@ -358,13 +364,14 @@ the nav mesh overlay.
 `sync_nav_heights()` runs after every height editing operation.  For each nav
 cell, it checks the corresponding height value in the parent tilemap's
 `height_data`.  A cell is marked blocked if any adjacent cell has a height
-difference > 2.0 (cliff condition).  This check is done in 4 directions
-(left, right, up, down).
+difference above `Engine::nav_slope_threshold` (a configurable field,
+defaulting to `2.0` for the flat demo map; generated terrain needs a finer
+value).  This check is done in 4 directions (left, right, up, down).
 
 Walkability is recomputed in two contexts:
 
-1. **`init_navigation()`**: installs the `NavMesh.data` that was inlined into
-   `state.json` (authoritative for passability).
+1. **`commit_terrain()`**: the ROM guest installs the authoritative nav grid
+   (its `set_nav` upload, or the inline `NavMesh.data` for a hand-authored map).
 2. **`sync_nav_heights()`**: called after height paint operations
    (`apply_editor_selection`), checks all nav cells, marks changed cells, and
    rebuilds the nav GPU mesh if any cell changed.
