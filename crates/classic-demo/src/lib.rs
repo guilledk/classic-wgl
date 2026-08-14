@@ -35,7 +35,7 @@ use classic_core::cl_info;
 use classic_core::instrument::Chan;
 use classic_core::terrain::lunar::LunarParams;
 use classic_engine::Engine;
-use classic_guest::{GuestLimits, GuestRuntime, WasmiRuntime};
+use classic_guest::{create_runtime, GuestLimits, GuestRuntime};
 use classic_rom::Rom;
 
 use crate::state::{DemoState, DemoStateRef};
@@ -52,12 +52,12 @@ fn is_lunar(rom: &Rom) -> bool {
 /// frame), and register a per-frame `on_update` closure that runs `update(dt)`
 /// and — once, after the first update — the optional `start` hook.
 pub fn init_guest(e: &mut Engine, state: &DemoStateRef, wasm: &[u8], limits: &GuestLimits) {
-    match WasmiRuntime::new(wasm, limits) {
+    match create_runtime(wasm, limits) {
         Ok(mut rt) => {
             if let Err(err) = rt.init(e) {
                 cl_error!(Chan::Guest, "guest init failed: {err}");
             }
-            let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(Box::new(rt)));
+            let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(rt));
             state.borrow_mut().guest = Some(rt.clone());
             let mut started = false;
             e.on_update(move |engine| {

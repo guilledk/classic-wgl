@@ -1,34 +1,52 @@
-//! Integration tests for the WASM guest runtime, driving wasmi with small
-//! hand-written WAT guest modules.
+//! Integration tests for the WASM guest runtime, driving every backend (wasmi
+//! always; wasmtime on native) with small hand-written WAT guest modules.
 
 use classic_core::components::{Animator, ColliderData, NavMesh, Role, Shape, Tilemap};
 use classic_core::types::AnimationData;
 use classic_core::RoleKind;
 use classic_engine::Engine;
+#[cfg(not(target_arch = "wasm32"))]
+use classic_guest::WasmtimeRuntime;
 use classic_guest::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
 use classic_rom::{ResourceKind, ResourceSet};
 use glam::Vec3;
 
-fn runtime_from_wat(wat: &str, limits: &GuestLimits) -> Result<WasmiRuntime, GuestError> {
+/// Build one runtime per available backend for a WAT module.
+fn runtimes_from_wat(
+    wat: &str,
+    limits: &GuestLimits,
+) -> Result<Vec<Box<dyn GuestRuntime>>, GuestError> {
     let wasm = wat::parse_str(wat).expect("valid WAT");
-    WasmiRuntime::new(&wasm, limits)
+    let mut runtimes: Vec<Box<dyn GuestRuntime>> =
+        vec![Box::new(WasmiRuntime::new(&wasm, limits)?)];
+    #[cfg(not(target_arch = "wasm32"))]
+    runtimes.push(Box::new(WasmtimeRuntime::new(&wasm, limits)?));
+    Ok(runtimes)
+}
+
+/// Run a guest-driven assertion against every backend, with a fresh engine per
+/// backend.
+fn with_each_runtime(wat: &str, limits: &GuestLimits, f: impl Fn(&mut dyn GuestRuntime)) {
+    for mut rt in runtimes_from_wat(wat, limits).expect("valid guest") {
+        f(&mut *rt);
+    }
 }
 
 #[test]
 fn noop_guest_runs() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module (func (export "update") (param f64)))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-    rt.update(&mut engine, 0.016).unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
 }
 
 #[test]
 fn guest_can_spawn_and_move_entities() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
             (import "env" "set_pos" (func $set_pos (param i32 i32 f64 f64 f64) (result i32)))
@@ -41,19 +59,19 @@ fn guest_can_spawn_and_move_entities() {
                 (drop (call $set_pos (i32.const 0) (i32.const 4) (f64.const 10.0) (f64.const 20.0) (f64.const 3.0)))
                 (call $log (i32.const 16) (i32.const 5))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
 
-    rt.update(&mut engine, 0.016).unwrap();
-
-    assert!(engine.has_name("unit"));
-    assert_eq!(engine.get_pos("unit"), Some((10.0, 20.0, 3.0)));
+            assert!(engine.has_name("unit"));
+            assert_eq!(engine.get_pos("unit"), Some((10.0, 20.0, 3.0)));
+        },
+    );
 }
 
 #[test]
 fn infinite_loop_halts_on_fuel_budget() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (func (export "update") (param f64)
                 (loop $l
@@ -63,26 +81,30 @@ fn infinite_loop_halts_on_fuel_budget() {
                     (drop)
                     (br $l))))"#,
         &GuestLimits { fuel_per_frame: 10_000, ..GuestLimits::default() },
-    )
-    .unwrap();
-
-    let err = rt.update(&mut engine, 0.016).unwrap_err();
-    assert!(matches!(err, GuestError::FuelExhausted), "expected fuel exhaustion, got {err}");
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            let err = rt.update(&mut engine, 0.016).unwrap_err();
+            assert!(
+                matches!(err, GuestError::FuelExhausted),
+                "expected fuel exhaustion, got {err}"
+            );
+        },
+    );
 }
 
 #[test]
 fn memory_growth_past_cap_traps() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (memory (export "memory") 1)
             (func (export "update") (param f64)
                 (drop (memory.grow (i32.const 32)))))"#,
         &GuestLimits { max_memory_bytes: 1 << 20, ..GuestLimits::default() },
-    )
-    .unwrap();
-
-    assert!(rt.update(&mut engine, 0.016).is_err());
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            assert!(rt.update(&mut engine, 0.016).is_err());
+        },
+    );
 }
 
 /// Install a small (3x3) fully-walkable nav mesh on a role-tagged entity.
@@ -134,10 +156,7 @@ fn find_path_returns_waypoints() {
 
 #[test]
 fn guest_find_path_import_is_wired() {
-    let mut engine = Engine::new_for_test();
-    install_test_navmesh(&mut engine);
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "find_path" (func $find_path (param i32 i32 i32 i32 i32 i32) (result i32)))
             (memory (export "memory") 1)
@@ -145,18 +164,17 @@ fn guest_find_path_import_is_wired() {
                 (drop (call $find_path (i32.const 0) (i32.const 0) (i32.const 2) (i32.const 0)
                     (i32.const 64) (i32.const 256)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_navmesh(&mut engine);
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
 }
 
 #[test]
 fn guest_was_key_pressed_triggers_action() {
-    let mut engine = Engine::new_for_test();
-    engine.input.keys_pressed.insert("KeyR".to_string(), true);
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "was_key_pressed" (func $wp (param i32 i32) (result i32)))
             (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
@@ -167,11 +185,13 @@ fn guest_was_key_pressed_triggers_action() {
                 (if (call $wp (i32.const 0) (i32.const 4))
                     (then (drop (call $spawn (i32.const 16) (i32.const 6)))))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
-    assert!(engine.has_name("marker"));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.input.keys_pressed.insert("KeyR".to_string(), true);
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(engine.has_name("marker"));
+        },
+    );
 }
 
 #[test]
@@ -182,19 +202,18 @@ fn generate_terrain_unknown_kind_returns_false() {
 
 #[test]
 fn guest_set_camera_moves_the_view() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "set_camera" (func $set_camera (param f64 f64 f64) (result i32)))
             (func (export "update") (param f64)
                 (drop (call $set_camera (f64.const 100.0) (f64.const 200.0) (f64.const 2.5)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
-
-    assert_eq!(engine.get_camera(), (100.0, 200.0, 2.5));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_camera(), (100.0, 200.0, 2.5));
+        },
+    );
 }
 
 #[test]
@@ -211,8 +230,7 @@ fn pick_at_returns_entity_under_point() {
 
 #[test]
 fn guest_set_light_updates_uniforms() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "set_light" (func $set_light
                 (param f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
@@ -222,21 +240,17 @@ fn guest_set_light_updates_uniforms() {
                     (f64.const 0.4) (f64.const 0.5) (f64.const 0.6)
                     (f64.const 0.7) (f64.const 0.8) (f64.const 0.9)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
-
-    assert_eq!(engine.get_light(), ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_light(), ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]));
+        },
+    );
 }
 
 #[test]
 fn guest_mouse_down_and_key_up_trigger_action() {
-    let mut engine = Engine::new_for_test();
-    engine.input.mouse_down[0] = true;
-    engine.input.keys_released.insert("KeyR".to_string(), true);
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "mouse_down" (func $md (param i32) (result i32)))
             (import "env" "key_up" (func $ku (param i32 i32) (result i32)))
@@ -250,11 +264,14 @@ fn guest_mouse_down_and_key_up_trigger_action() {
                         (if (call $ku (i32.const 0) (i32.const 4))
                             (then (drop (call $spawn (i32.const 16) (i32.const 6)))))))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
-    assert!(engine.has_name("marker"));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.input.mouse_down[0] = true;
+            engine.input.keys_released.insert("KeyR".to_string(), true);
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(engine.has_name("marker"));
+        },
+    );
 }
 
 #[test]
@@ -272,8 +289,7 @@ fn spawn_rect_text_and_set_text() {
 
 #[test]
 fn guest_spawn_rect_wiring() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "spawn_rect" (func $spawn_rect
                 (param i32 i32 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
@@ -284,13 +300,13 @@ fn guest_spawn_rect_wiring() {
                     (f64.const 10.0) (f64.const 20.0) (f64.const 100.0) (f64.const 50.0)
                     (f64.const 1.0) (f64.const 0.0) (f64.const 0.0) (f64.const 1.0)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
-
-    assert!(engine.has_name("bar"));
-    assert_eq!(engine.get_pos("bar"), Some((10.0, 20.0, 0.0)));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(engine.has_name("bar"));
+            assert_eq!(engine.get_pos("bar"), Some((10.0, 20.0, 0.0)));
+        },
+    );
 }
 
 #[test]
@@ -326,10 +342,7 @@ fn ui_registration_and_layout_wiring() {
 
 #[test]
 fn guest_ui_container_wiring() {
-    let mut engine = Engine::new_for_test();
-    engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "ui_container" (func $ui_container
                 (param i32 i32 f64 f64 f64 f64 f64 f64) (result i32)))
@@ -340,12 +353,13 @@ fn guest_ui_container_wiring() {
                     (f64.const 200.0) (f64.const 100.0)
                     (f64.const 0.2) (f64.const 0.3) (f64.const 0.5) (f64.const 1.0)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
-
-    assert!(engine.has_name("panel"));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(engine.has_name("panel"));
+        },
+    );
 }
 
 #[test]
@@ -364,11 +378,7 @@ fn subscribe_and_poll_event() {
 
 #[test]
 fn guest_subscribe_and_poll_wiring() {
-    let mut engine = Engine::new_for_test();
-    engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
-    engine.ui_button("play", "Play", 120.0, 40.0, [0.1, 0.6, 0.2, 1.0]);
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "subscribe" (func $subscribe (param i32 i32) (result i32)))
             (import "env" "poll_event" (func $poll_event (param i32 i32) (result i32)))
@@ -378,10 +388,13 @@ fn guest_subscribe_and_poll_wiring() {
                 (drop (call $subscribe (i32.const 0) (i32.const 4)))
                 (drop (call $poll_event (i32.const 64) (i32.const 256)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.ui = Some(classic_engine::ui::UIManager::new(800.0, 600.0, &mut engine.world));
+            engine.ui_button("play", "Play", 120.0, 40.0, [0.1, 0.6, 0.2, 1.0]);
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
 }
 
 #[test]
@@ -423,8 +436,7 @@ fn get_anim_reads_animation() {
 
 #[test]
 fn guest_init_hook_spawns_once_before_update() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
             (memory (export "memory") 1)
@@ -433,19 +445,18 @@ fn guest_init_hook_spawns_once_before_update() {
                 (drop (call $spawn (i32.const 0) (i32.const 6))))
             (func (export "update") (param f64)))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.init(&mut engine).unwrap();
-    assert!(engine.has_name("inited"));
-
-    rt.update(&mut engine, 0.016).unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.init(&mut engine).unwrap();
+            assert!(engine.has_name("inited"));
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
 }
 
 #[test]
 fn guest_start_hook_spawns() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
             (memory (export "memory") 1)
@@ -454,33 +465,31 @@ fn guest_start_hook_spawns() {
             (func (export "start")
                 (drop (call $spawn (i32.const 0) (i32.const 7)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.start(&mut engine).unwrap();
-    assert!(engine.has_name("started"));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.start(&mut engine).unwrap();
+            assert!(engine.has_name("started"));
+        },
+    );
 }
 
 #[test]
 fn guest_without_lifecycle_hooks_still_runs() {
-    let mut engine = Engine::new_for_test();
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module (func (export "update") (param f64)))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    assert!(rt.init(&mut engine).is_ok());
-    assert!(rt.start(&mut engine).is_ok());
-    rt.update(&mut engine, 0.016).unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            assert!(rt.init(&mut engine).is_ok());
+            assert!(rt.start(&mut engine).is_ok());
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
 }
 
 #[test]
 fn guest_edits_terrain_tile_and_height() {
-    let mut engine = Engine::new_for_test();
-    install_test_tilemap(&mut engine);
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "set_tile" (func $set_tile (param i32 i32 i32) (result i32)))
             (import "env" "set_height" (func $set_height (param i32 i32 f64) (result i32)))
@@ -490,23 +499,22 @@ fn guest_edits_terrain_tile_and_height() {
                 (drop (call $set_height (i32.const 0) (i32.const 0) (f64.const 5.0)))
                 (drop (call $rebuild_terrain))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            rt.update(&mut engine, 0.016).unwrap();
 
-    rt.update(&mut engine, 0.016).unwrap();
-
-    let tm_entity = engine.entity_by_role(RoleKind::Tilemap).unwrap();
-    let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-    assert_eq!(tm.data[2 * 3 + 1], 7);
-    assert_eq!(tm.height_data[0], 5.0);
+            let tm_entity = engine.entity_by_role(RoleKind::Tilemap).unwrap();
+            let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
+            assert_eq!(tm.data[2 * 3 + 1], 7);
+            assert_eq!(tm.height_data[0], 5.0);
+        },
+    );
 }
 
 #[test]
 fn guest_terrain_edits_are_bounds_checked() {
-    let mut engine = Engine::new_for_test();
-    install_test_tilemap(&mut engine);
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "set_tile" (func $set_tile (param i32 i32 i32) (result i32)))
             (import "env" "set_height" (func $set_height (param i32 i32 f64) (result i32)))
@@ -514,15 +522,17 @@ fn guest_terrain_edits_are_bounds_checked() {
                 (drop (call $set_tile (i32.const 99) (i32.const 99) (i32.const 7)))
                 (drop (call $set_height (i32.const 99) (i32.const 99) (f64.const 5.0)))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            rt.update(&mut engine, 0.016).unwrap();
 
-    rt.update(&mut engine, 0.016).unwrap();
-
-    let tm_entity = engine.entity_by_role(RoleKind::Tilemap).unwrap();
-    let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-    assert!(tm.data.iter().all(|&t| t == 0));
-    assert!(tm.height_data.iter().all(|&h| h == 1.0));
+            let tm_entity = engine.entity_by_role(RoleKind::Tilemap).unwrap();
+            let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
+            assert!(tm.data.iter().all(|&t| t == 0));
+            assert!(tm.height_data.iter().all(|&h| h == 1.0));
+        },
+    );
 }
 
 fn install_test_resources(engine: &mut Engine) {
@@ -551,10 +561,7 @@ fn has_resource_and_texture_size_queries() {
 
 #[test]
 fn guest_has_resource_wiring() {
-    let mut engine = Engine::new_for_test();
-    install_test_resources(&mut engine);
-
-    let mut rt = runtime_from_wat(
+    with_each_runtime(
         r#"(module
             (import "env" "has_resource" (func $has (param i32 i32 i32) (result i32)))
             (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
@@ -571,9 +578,11 @@ fn guest_has_resource_wiring() {
                                 (if (call $has (i32.const 2) (i32.const 32) (i32.const 4))
                                     (then (drop (call $spawn (i32.const 48) (i32.const 6)))))))))))"#,
         &GuestLimits::default(),
-    )
-    .unwrap();
-
-    rt.update(&mut engine, 0.016).unwrap();
-    assert!(engine.has_name("marker"));
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_resources(&mut engine);
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(engine.has_name("marker"));
+        },
+    );
 }

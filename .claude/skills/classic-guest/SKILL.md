@@ -20,14 +20,21 @@ isolation, and one artifact for both native and web.  See
 
 ```
 crates/classic-guest/
-  src/lib.rs        GuestRuntime trait, GuestLimits, GuestError, WasmiRuntime
-  src/abi.rs        the ABI contract: host module name, guest export, string/buffer
-                    marshalling helpers over guest linear memory
-  src/sdk.rs        GuestHost: raw-pointer bridge to Engine + the SDK methods
-  src/runtime.rs    WasmiRuntime: config (fuel), Store<GuestHost>, Linker imports,
-                    instantiate + update
-  tests/guest.rs    inline WAT fixtures (wat crate) driving wasmi
+  src/lib.rs              GuestRuntime trait, GuestLimits, GuestError, create_runtime
+  src/abi.rs              the ABI contract: host module name, guest exports, and
+                          backend-agnostic string/buffer marshalling over a
+                          linear-memory slice
+  src/sdk.rs              GuestHost: raw-pointer bridge to Engine + the SDK methods
+                          (shared by every runtime backend)
+  src/runtime.rs          WasmiRuntime (native + wasm): config (fuel), Linker imports
+  src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel), Linker imports
+  tests/guest.rs          inline WAT fixtures (wat crate) driven against every backend
 ```
+
+`create_runtime(wasm, limits)` picks the backend: **wasmtime on native**,
+**wasmi on wasm**.  Both implement the same `GuestRuntime` trait and the same
+`env` import surface (the `GuestHost` SDK bodies are not duplicated — only the
+thin linker closures are).
 
 ## 3. The ABI (host imports, module "env")
 
@@ -39,7 +46,7 @@ Guest exports (the host→guest side of the ABI):
 | `init` | `() -> ()` | once, synchronously at install, before the first frame (optional) |
 | `start` | `() -> ()` | once, after the first `update` completes (optional) |
 
-Host imports (defined in `runtime.rs::install_imports`) are the SDK surface:
+Host imports (defined in `runtime.rs::install_imports` / `runtime_wasmtime.rs::install_imports`) are the SDK surface:
 
 | Import | Signature | Purpose |
 |---|---|---|
@@ -112,17 +119,20 @@ Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
 
 ## 5. Host state & the unsafe bridge
 
-`GuestHost` (`sdk.rs`) holds `*mut Engine` + the `StoreLimits`.  wasmi's
-`Store<T>` host data has no `Send`/`Sync` bound, so the raw pointer is set fresh
-each `update` via `GuestHost::set_engine` and deref'd only inside that call
-(single-threaded, `engine` borrowed for the call).  The `unsafe` is confined to
+`GuestHost` (`sdk.rs`) holds only `*mut Engine`.  Each backend wraps it in its
+own store data (`WasmiHost` / `WasmtimeHost`) that also owns that backend's
+resource limiter (`StoreLimits`).  Neither store's host data has a `Send`/`Sync`
+bound, so the raw pointer is set fresh each `init`/`update`/`start` via
+`GuestHost::set_engine` and deref'd only inside that call (single-threaded,
+`engine` borrowed for the call).  The `unsafe` is confined to
 `GuestHost::engine`/`engine_mut`.
 
 ## 6. Wiring (classic-demo)
 
-- `init_guest(&mut Engine, &DemoStateRef, wasm, &GuestLimits)` instantiates a
-  `WasmiRuntime`, runs its optional `init` hook synchronously (before the first
-  frame), stores it on `DemoState.guest`, and registers an
+- `init_guest(&mut Engine, &DemoStateRef, wasm, &GuestLimits)` calls
+  `classic_guest::create_runtime` (wasmtime on native, wasmi on wasm), runs the
+  optional `init` hook synchronously (before the first frame), stores the boxed
+  runtime on `DemoState.guest`, and registers an
   `on_update(|e| guest.update(e, dt))` closure that also runs the optional
   `start` hook once after the first update.
 - `init_engine` reads `rom.resources.code().get("main")` and builds limits from
@@ -139,9 +149,13 @@ each `update` via `GuestHost::set_engine` and deref'd only inside that call
 ## 7. Adding a host import (the SDK is a reviewed surface)
 
 1. Add the method to `GuestHost` in `sdk.rs` (call the safe `Engine` helper).
-2. Register it in `runtime.rs::install_imports` via `linker.func_wrap("env", name, …)`.
-3. Marshal strings with `abi::read_str`/`write_str`; pairs with `abi::write_f64_pair`.
-4. Add a WAT test in `tests/guest.rs`.
+2. Register it in **both** `runtime.rs::install_imports` (wasmi) and
+   `runtime_wasmtime.rs::install_imports` (wasmtime) via
+   `linker.func_wrap("env", name, …)`.
+3. Marshal strings with the local `read_str`/`write_str` helpers; pairs with
+   `write_f64_pair` (they wrap the backend-agnostic `abi::read_str_from` /
+   `abi::write_*_to` slice helpers).
+4. Add a WAT test in `tests/guest.rs` (it runs against every backend).
 5. Update this skill's import table.
 
 Treat every new import as a sandbox-surface change: it is reachable by untrusted
@@ -149,8 +163,10 @@ guest code and must not expose raw engine internals or leak borrows.
 
 ## 8. Testing
 
-`cargo test -p classic-guest -- --test-threads=1` runs `tests/guest.rs`: no-op
-guest runs, spawn + move via the SDK, fuel-exhaustion trap, memory-cap trap.
-Fixtures are inline WAT (`wat::parse_str`) — no committed binaries needed for
-tests.  The shipped ROM guests live as Rust sources under `guest/` and are
-compiled to `public/code/*.wasm` by `scripts/build-guest.mjs` (`npm run assets`).
+`cargo test -p classic-guest -- --test-threads=1` runs `tests/guest.rs`: every
+guest-driven test runs against **both** `WasmiRuntime` and (on native)
+`WasmtimeRuntime` — no-op run, spawn + move, fuel-exhaustion trap, memory-cap
+trap, and the full SDK surface.  Fixtures are inline WAT (`wat::parse_str`) — no
+committed binaries needed for tests.  The shipped ROM guests live as Rust
+sources under `guest/` and are compiled to `public/code/*.wasm` by
+`scripts/build-guest.mjs` (`npm run assets`).

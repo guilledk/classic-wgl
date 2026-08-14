@@ -18,3 +18,6 @@ log.workspace = true
 wat = "1"
 glam.workspace = true
 classic-rom = { path = "../classic-rom" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmtime = { version = "47", default-features = false, features = ["cranelift", "runtime"] }

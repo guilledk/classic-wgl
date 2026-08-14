@@ -58,8 +58,9 @@ crates/
                           golden.rs (traces), env_config.rs
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
-  classic-guest/          WASM guest runtime: GuestRuntime trait, WasmiRuntime, the guest ABI
-                          (abi.rs) and host-side SDK (sdk.rs) bridging guest imports to the engine
+  classic-guest/          WASM guest runtime: GuestRuntime trait, WasmiRuntime + WasmtimeRuntime
+                           (native) + create_runtime, the guest ABI (abi.rs) and host-side SDK
+                           (sdk.rs) bridging guest imports to the engine
   classic-demo/           application/prefab layer: init_engine(gl, &Rom) bootstrap, DemoState +
                           EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs, hud.rs,
                           testing.rs, scenes/ (demo + lunar assemblers)
@@ -138,9 +139,9 @@ plans/
   Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),
   not a post-pass.  See `classic-text` skill.
 - **ROM guest code**: each ROM bundles a compiled `.wasm` module (`manifest.code`) run by
-  `classic-guest`'s `WasmiRuntime` against the host SDK (entity lifecycle, component JSON
-  round-trip via the registry, 3D position, mouse/mouse_iso/key input, time, `height_at`,
-  `set_anim`, `find_path`, `agent_selected`/`ui_consumed_click`, log).  Untrusted guests
+  `classic-guest` (wasmtime on native, wasmi on wasm) against the host SDK (entity lifecycle,
+  component JSON round-trip via the registry, 3D position, mouse/mouse_iso/key input, time,
+  `height_at`, `set_anim`, `find_path`, `agent_selected`/`ui_consumed_click`, log).  Untrusted guests
   (`trusted: false`, default) are sandboxed with fuel metering + a memory cap; the shipped
   demo/lunar ROMs set `trusted: true`.  The demo's `navAgent` behaviour (click-to-move +
   idle/walk animation + terrain-z) lives in `guest/demo-guest`, not Rust.  Heavy systems
