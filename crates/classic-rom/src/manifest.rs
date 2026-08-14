@@ -13,6 +13,13 @@ pub struct CodeEntry {
     pub src: String,
 }
 
+/// The default ROM state entry name.
+pub const DEFAULT_STATE_ENTRY: &str = "state.json";
+
+fn default_state_entry() -> String {
+    DEFAULT_STATE_ENTRY.to_string()
+}
+
 /// The ROM manifest: an engine [`Manifest`] plus ROM-specific metadata.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct RomManifest {
@@ -22,6 +29,9 @@ pub struct RomManifest {
     pub format_version: u32,
     #[serde(default)]
     pub entrypoint: String,
+    /// Archive entry holding the serialized entity state (default `state.json`).
+    #[serde(default = "default_state_entry")]
+    pub state: String,
     #[serde(default)]
     pub code: Vec<CodeEntry>,
     /// Whether this ROM ships the host toolchain (editor HUD, widgets, debug

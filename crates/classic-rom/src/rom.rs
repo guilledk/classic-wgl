@@ -11,6 +11,10 @@ use crate::archive::RomArchive;
 use crate::manifest::RomManifest;
 use crate::resource::ResourceSet;
 
+/// The bootstrap archive entry: the ROM manifest (always read first, so its
+/// entry name must be well-known).
+pub const MANIFEST_ENTRY: &str = "manifest.json";
+
 /// A self-contained ROM: manifest + resources + entity state.
 #[derive(Clone, Debug)]
 pub struct Rom {
@@ -20,18 +24,19 @@ pub struct Rom {
     pub manifest_json: String,
     /// Name-keyed resource blobs (textures, fonts, code modules).
     pub resources: ResourceSet,
-    /// The serialized entity graph (`state.json`).
+    /// The serialized entity graph (the manifest's `state` entry).
     pub state: String,
 }
 
 impl Rom {
-    /// Read a ROM from an archive.  Expects `manifest.json` and `state.json`
-    /// at the archive root, and every manifest-declared resource inlined.
+    /// Read a ROM from an archive.  Expects the manifest at [`MANIFEST_ENTRY`]
+    /// and the entity state at the manifest-declared `state` entry, plus every
+    /// manifest-declared resource inlined.
     pub fn load(archive: &RomArchive) -> anyhow::Result<Self> {
-        let manifest_json = archive.read_string("manifest.json")?;
+        let manifest_json = archive.read_string(MANIFEST_ENTRY)?;
         let manifest: RomManifest = serde_json::from_str(&manifest_json)?;
         let resources = ResourceSet::from_archive(archive, &manifest)?;
-        let state = archive.read_string("state.json")?;
+        let state = archive.read_string(&manifest.state)?;
         Ok(Self { manifest, manifest_json, resources, state })
     }
 
@@ -41,9 +46,9 @@ impl Rom {
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
 
-        writer.start_file("manifest.json", opts)?;
+        writer.start_file(MANIFEST_ENTRY, opts)?;
         writer.write_all(self.manifest_json.as_bytes())?;
-        writer.start_file("state.json", opts)?;
+        writer.start_file(&self.manifest.state, opts)?;
         writer.write_all(self.state.as_bytes())?;
 
         for entry in &self.manifest.manifest.textures {
