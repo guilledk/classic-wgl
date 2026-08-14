@@ -34,8 +34,8 @@ pub struct EnvConfig {
     pub failfast: bool,
     /// CLASSIC_TEST_FILE: path to a JSON test-scenario file.
     pub test_file: String,
-    /// CLASSIC_SCENE: which demo scene to boot (`demo` | `lunar`).
-    pub scene: String,
+    /// CLASSIC_ROM: which ROM to boot (a `rom:` name, file path, or URL).
+    pub rom: String,
     /// CLASSIC_GOLDEN_DIR: directory holding the golden trace + PNG baseline.
     /// Per-scene so a second scene can have its own reference output.
     pub golden_dir: String,
@@ -80,14 +80,7 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
                 d
             }
         },
-        scene: {
-            let s = read("CLASSIC_SCENE");
-            if s.is_empty() {
-                String::from("demo")
-            } else {
-                s
-            }
-        },
+        rom: read("CLASSIC_ROM"),
         test,
     }
 });

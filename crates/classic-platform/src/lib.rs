@@ -104,6 +104,13 @@ pub use classic_rom::FsAssetLoader;
 pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 
 // ---------------------------------------------------------------------------
+// ROM source resolution (embedded name / file path / URL)
+// ---------------------------------------------------------------------------
+
+pub mod rom;
+pub use rom::resolve_rom;
+
+// ---------------------------------------------------------------------------
 // Native backend  (not wasm32)
 // ---------------------------------------------------------------------------
 

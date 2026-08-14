@@ -70,7 +70,7 @@ jobs:
                   LIBGL_ALWAYS_SOFTWARE: 1
                   EGL_PLATFORM: surfaceless
               run: >-
-                  CLASSIC_SCENE=lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60
+                  CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60
                   CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
                   CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar
                   RUST_LOG=info ./target/debug/classic-desktop

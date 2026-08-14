@@ -45,6 +45,9 @@ glutin-winit = "0.5"
 # Async runtime for native
 pollster = "0.4"
 
+# Blocking HTTP client (native ROM fetch)
+ureq = "2"
+
 # Image loading (PNG, etc.)
 image = { version = "0.25", default-features = false, features = ["png"] }
 
@@ -94,6 +97,9 @@ web-sys = { version = "0.3", features = [
     "Worker",
     "Blob",
     "Url",
+    "XmlHttpRequest",
+    "XmlHttpRequestEventTarget",
+    "XmlHttpRequestResponseType",
 ] }
 js-sys = "0.3"
 gloo-net = "0.6"

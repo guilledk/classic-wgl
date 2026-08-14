@@ -188,7 +188,7 @@ plans/
 - **Lunar golden trace**: a second baseline in `tests/golden/lunar/`.  Requires an
   explicit `CLASSIC_FIXED_DT` — without `CLASSIC_TEST` the idle animator advances on
   real delta and lands on a different frame each run:
-  `CLASSIC_SCENE=lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar cargo run -p classic-desktop`
+  `CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar cargo run -p classic-desktop`
 - **Pixel golden**: `CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=check` compares a pixel buffer
   against `tests/golden/baseline/baseline.png` (not run in CI by default — software-
   rasteriser version-dependent).
@@ -219,7 +219,7 @@ plans/
 | Var | Purpose | Default |
 |---|---|---|
 | `CLASSIC_TEST` | Enable e2e test runner | off |
-| `CLASSIC_SCENE` | Demo scene to boot: `demo` or `lunar` | `demo` |
+| `CLASSIC_ROM` | ROM to boot: `rom:<name>` (embedded `demo`/`lunar`), a file path, or an `http(s)://` URL | `rom:demo` |
 | `CLASSIC_FRAMES` | Max frames in headless mode | unlimited |
 | `CLASSIC_FIXED_DT` | Fixed delta time (auto 1/60 under test) | real dt |
 | `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Forced viewport | window size |

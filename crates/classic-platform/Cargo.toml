@@ -28,6 +28,7 @@ x11 = { version = "2", optional = true }
 # Headless EGL (native only, no window)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libloading = "0.8"
+ureq = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen.workspace = true

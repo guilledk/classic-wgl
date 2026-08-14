@@ -42,19 +42,20 @@ pub fn main() {
 
     #[cfg(target_arch = "wasm32")]
     {
-        // `?classic_log=` configures channel logging; `?scene=` picks the
-        // scene (the native `CLASSIC_SCENE` env var has no web equivalent).
+        // `?classic_log=` configures channel logging; `?rom=` selects the ROM
+        // to boot (`rom:<name>`, a URL, or a relative path — the native
+        // `CLASSIC_ROM` env var has no web equivalent).
         if let Some(spec) = query_param("classic_log") {
             classic_core::instrument::init(&spec);
         }
-        let scene = query_param("scene").unwrap_or_default();
+        let rom = query_param("rom").unwrap_or_default();
 
-        static DEMO_ROM: &[u8] = include_bytes!("../../../public/demo.rom");
-        static LUNAR_ROM: &[u8] = include_bytes!("../../../public/lunar.rom");
-        let rom_bytes: &'static [u8] = match scene.trim().to_ascii_lowercase().as_str() {
-            "lunar" | "moon" => LUNAR_ROM,
-            _ => DEMO_ROM,
-        };
+        static ROMS: &[(&str, &[u8])] = &[
+            ("demo", include_bytes!("../../../public/demo.rom")),
+            ("lunar", include_bytes!("../../../public/lunar.rom")),
+            ("moon", include_bytes!("../../../public/lunar.rom")),
+        ];
+        let rom_bytes = classic_platform::resolve_rom(&rom, ROMS).expect("resolve ROM");
 
         use classic_platform::web::WebPlatform;
         use classic_platform::Platform;
@@ -72,7 +73,7 @@ pub fn main() {
         platform.run_loop(move |gl, input, vw, vh, _delta, should_close| {
             if engine.is_none() {
                 let archive =
-                    classic_rom::RomArchive::from_bytes(rom_bytes).expect("open ROM archive");
+                    classic_rom::RomArchive::from_bytes(&rom_bytes).expect("open ROM archive");
                 let rom = classic_rom::Rom::load(&archive).expect("load ROM");
                 engine = Some(classic_demo::init_engine(gl, &rom));
             }
