@@ -1,5 +1,5 @@
-//! The resource set a ROM bundles: textures, fonts, shaders, and code modules,
-//! keyed by name.
+//! The resource set a ROM bundles: textures, fonts, and code modules, keyed by
+//! name.
 //!
 //! A [`ResourceSet`] can be produced from a [`RomArchive`] (the shipped-ROM
 //! path) or from an [`AssetLoader`] (the loose-files / embedded dev path),
@@ -13,12 +13,11 @@ use crate::archive::RomArchive;
 use crate::loader::AssetLoader;
 use crate::manifest::RomManifest;
 
-/// The four categories of bundleable resource.
+/// The three categories of bundleable resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Texture,
     Font,
-    Shader,
     Code,
 }
 
@@ -27,7 +26,6 @@ pub enum ResourceKind {
 pub struct ResourceSet {
     textures: BTreeMap<String, Vec<u8>>,
     fonts: BTreeMap<String, Vec<u8>>,
-    shaders: BTreeMap<String, Vec<u8>>,
     code: BTreeMap<String, Vec<u8>>,
 }
 
@@ -45,7 +43,7 @@ impl ResourceSet {
 
     /// The total number of resources across all categories.
     pub fn len(&self) -> usize {
-        self.textures.len() + self.fonts.len() + self.shaders.len() + self.code.len()
+        self.textures.len() + self.fonts.len() + self.code.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -58,10 +56,6 @@ impl ResourceSet {
 
     pub fn fonts(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.fonts
-    }
-
-    pub fn shaders(&self) -> &BTreeMap<String, Vec<u8>> {
-        &self.shaders
     }
 
     pub fn code(&self) -> &BTreeMap<String, Vec<u8>> {
@@ -107,7 +101,6 @@ impl ResourceSet {
         match kind {
             ResourceKind::Texture => &self.textures,
             ResourceKind::Font => &self.fonts,
-            ResourceKind::Shader => &self.shaders,
             ResourceKind::Code => &self.code,
         }
     }
@@ -116,7 +109,6 @@ impl ResourceSet {
         match kind {
             ResourceKind::Texture => &mut self.textures,
             ResourceKind::Font => &mut self.fonts,
-            ResourceKind::Shader => &mut self.shaders,
             ResourceKind::Code => &mut self.code,
         }
     }
