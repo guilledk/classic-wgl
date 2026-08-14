@@ -105,17 +105,13 @@ pub struct Engine {
     /// Height scale the tilemap mesh was built with, before the height
     /// widget's multiplier.  Recorded so the widget can scale relative to it
     /// instead of assuming `tile_pixel_size[0]`, which is wrong for any scene
-    /// that overrides the scale (see `init_tilemap_generated`).
+    /// that overrides the scale (see [`Engine::commit_terrain`]).
     pub base_height_scale: f32,
     /// Height difference between adjacent tiles above which `sync_nav_heights`
     /// marks a tile impassable.  The flat demo map edits heights in integer
     /// steps, hence the default of 2.0; generated terrain is continuous and
     /// needs a much finer threshold to match the slope rule it was built with.
     pub nav_slope_threshold: f32,
-    /// Landing-zone spawn points (tile coords) from the last generated terrain.
-    /// Set by [`Engine::set_spawn_points_bulk`] (guest-driven generation); read
-    /// by the scene layer to focus the camera.
-    pub spawn_points: Vec<(i32, i32)>,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
     pre_update_hooks: Vec<UpdateFn>,
@@ -205,7 +201,6 @@ impl Engine {
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
             base_height_scale: 32.0,
             nav_slope_threshold: 2.0,
-            spawn_points: Vec::new(),
             nav_gpu: None,
             debug_frame: 0,
             pre_update_hooks: Vec::new(),
@@ -320,30 +315,7 @@ impl Engine {
         }
     }
 
-    /// Decode base64-encoded JSON array into tile data.
-    /// Build and upload the tilemap mesh + tile data texture for a named entity.
-    /// The tile data comes from the entity's `Tilemap.data` (loaded inline from
-    /// `state.json`) and the tileset texture is loaded from the manifest by
-    /// [`Engine::init_gfx`].  Terrain is flat (height 1.0 everywhere), matching
-    /// the TS `heightData.fill(1)`.  For procedurally generated terrain see
-    /// [`Engine::init_tilemap_generated`].
-    pub fn init_tilemap(&mut self) {
-        let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
-
-        let (size_x, size_y, tiles) = {
-            let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.size_x, tm.size_y, tm.data.clone())
-        };
-
-        // height_data stride is (size_x + 1) — vertex grid, not tile grid.
-        // The TS used sizeX * sizeY (tile-based). Rust uses (sizeX+1)*(sizeY+1)
-        // to avoid off-by-one edge cases. See docs/TS-PARITY.md.
-        let heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
-
-        self.finish_tilemap_init(entity, tiles, heights, None);
-    }
-
-    /// Shared tail of the `init_tilemap*` family: build the mesh and tile-data
+    /// Shared tail of the `commit_terrain` path: build the mesh and tile-data
     /// texture, upload both, write the data back onto the component, and
     /// register the mouse-to-iso parallax solve.
     ///
@@ -694,6 +666,16 @@ impl Engine {
         Some((tm.mouse_iso_pos.x, tm.mouse_iso_pos.y))
     }
 
+    /// Project an iso tile coordinate to screen space, using the Tilemap-role
+    /// entity's scale.  Returns `None` when no Tilemap-role entity exists.
+    pub fn iso_to_screen(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+        let iso = Mat4::from_scale(tm.scale) * cartesian_to_iso_4().inverse();
+        let p = iso.transform_point3(Vec3::new(x, y, 0.0));
+        Some((p.x, p.y))
+    }
+
     /// Terrain height (in world z units) at the given iso tile coordinate.
     pub fn height_at(&self, x: f32, y: f32) -> f32 {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
@@ -788,20 +770,14 @@ impl Engine {
         true
     }
 
-    /// Bulk-write landing-zone spawn points from guest-provided `i32` pairs.
-    pub fn set_spawn_points_bulk(&mut self, pairs: &[i32]) -> bool {
-        if !pairs.len().is_multiple_of(2) {
-            return false;
-        }
-        self.spawn_points = pairs.chunks(2).map(|c| (c[0], c[1])).collect();
-        true
-    }
-
-    /// Commit a guest-generated terrain: install (first call) or rebuild
-    /// (later calls) the tilemap mesh + tile data texture and re-upload the
-    /// nav overlay from the grids written by the bulk `set_*` imports.  Does
-    /// NOT re-derive walkability (the generator's nav grid is authoritative).
-    pub fn commit_generated_terrain(&mut self, height_scale: f32) -> bool {
+    /// Commit the tilemap terrain: install (first call) or rebuild (later
+    /// calls) the tilemap mesh + tile data texture and re-upload the nav
+    /// overlay.  Used by ROM guests to own their map, whether generated
+    /// (bulk-uploaded via the `set_*` imports) or hand-authored (inline
+    /// `state.json` data, hydrated here).  Does NOT re-derive walkability (the
+    /// guest's nav grid is authoritative).  A tilemap with no height data is
+    /// treated as flat (height 1.0 everywhere).
+    pub fn commit_terrain(&mut self, height_scale: f32) -> bool {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else {
             return false;
         };
@@ -812,10 +788,15 @@ impl Engine {
         if installed {
             self.rebuild_tilemap_mesh();
         } else {
-            let (tiles, heights) = {
+            let (tiles, mut heights, size_x, size_y) = {
                 let tm = self.world.get::<&Tilemap>(tm_entity).unwrap();
-                (tm.data.clone(), tm.height_data.clone())
+                (tm.data.clone(), tm.height_data.clone(), tm.size_x, tm.size_y)
             };
+            // A tilemap with no height data (e.g. a hand-authored map with only
+            // inline tiles) renders flat at height 1.0.
+            if heights.is_empty() {
+                heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
+            }
             self.finish_tilemap_init(tm_entity, tiles, heights, Some(height_scale));
         }
         self.rebuild_nav_gpu();
@@ -890,6 +871,11 @@ impl Engine {
         self.camera.position.y = y;
         self.camera.scale.x = scale;
         self.camera.scale.y = scale;
+    }
+
+    /// Show or hide the tilemap editor grid overlay.
+    pub fn set_grid(&mut self, show: bool) {
+        self.show_grid = show;
     }
 
     /// Register a collider and remember its owning entity's name, so
@@ -2570,38 +2556,6 @@ impl Engine {
                 self.world.get::<&classic_core::components::UiNode>(p).ok().and_then(|n| n.parent);
         }
         false
-    }
-
-    /// Initialize navigation from the nav mesh entity's inline `NavMesh.data`
-    /// (loaded from `state.json`).
-    pub fn init_navigation(&mut self) {
-        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
-        let nav_data = {
-            let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) else { return };
-            nav.data.clone()
-        };
-        self.init_navigation_data(nav_data);
-    }
-
-    /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked).
-    ///
-    /// Used by generated scenes, which derive walkability from real terrain
-    /// slope during generation and so must not have it recomputed here.  Agent
-    /// movement is driven by the ROM guest (which paths over this grid via
-    /// `find_path`); this only installs the grid for the nav-mesh overlay.
-    pub fn init_navigation_data(&mut self, nav_tiles: Vec<u32>) {
-        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
-
-        // The supplied grid is authoritative for passability.  A block here
-        // used to re-derive walkability from tilemap heights and then discard
-        // the result on the very next line; `sync_nav_heights` is now the one
-        // place that does that, and only in response to a height edit.
-        //
-        // Installed regardless of whether an agent exists — the nav mesh
-        // overlay still needs it.
-        if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
-            nav.data = nav_tiles;
-        }
     }
 
     /// Compute the model matrix for an IsoSprite (matches TS `IsoSprite.modelMatrix()`).

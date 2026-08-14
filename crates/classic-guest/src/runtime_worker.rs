@@ -119,8 +119,9 @@ const OP_SET_TILES: i32 = 63;
 const OP_SET_HEIGHTS: i32 = 64;
 const OP_SET_NAV: i32 = 65;
 const OP_SET_TILESET: i32 = 66;
-const OP_SET_SPAWN_POINTS: i32 = 67;
 const OP_COMMIT_TERRAIN: i32 = 68;
+const OP_ISO_TO_SCREEN: i32 = 69;
+const OP_SET_GRID: i32 = 70;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -265,6 +266,10 @@ impl WorkerWasmRuntime {
                 Some((x, y)) => (1.0, Some(enc_f64s(&[x, y]))),
                 None => (0.0, None),
             },
+            OP_ISO_TO_SCREEN => match host.iso_to_screen(nf(0), nf(1)) {
+                Some((sx, sy)) => (1.0, Some(enc_f64s(&[sx, sy]))),
+                None => (0.0, None),
+            },
             OP_HEIGHT_AT => (host.height_at(nf(0), nf(1)), None),
             OP_SET_ANIM => (host.set_anim(&strs[0], &strs[1]) as f64, None),
             OP_AGENT_SELECTED => (host.agent_selected() as f64, None),
@@ -298,6 +303,7 @@ impl WorkerWasmRuntime {
                 let _ = host.set_camera(nf(0), nf(1), nf(2));
                 (1.0, None)
             }
+            OP_SET_GRID => (host.set_grid(ni(0)) as f64, None),
             OP_PICK_AT => {
                 let name = host.pick_at(nf(0), nf(1));
                 if ni(3) < name.len() as i32 || name.len() as u32 > OUT_BYTES {
@@ -457,9 +463,6 @@ impl WorkerWasmRuntime {
             OP_SET_NAV => (host.set_nav(&crate::abi::bytes_to_u32(raw)) as f64, None),
             OP_SET_TILESET => {
                 (host.set_tileset(raw, ni(0).max(0) as u32, ni(1).max(0) as u32) as f64, None)
-            }
-            OP_SET_SPAWN_POINTS => {
-                (host.set_spawn_points(&crate::abi::bytes_to_i32(raw)) as f64, None)
             }
             OP_COMMIT_TERRAIN => (host.commit_terrain(nf(0)) as f64, None),
             _ => (0.0, None),

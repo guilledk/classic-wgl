@@ -26,8 +26,12 @@ mod host {
         pub fn set_pos(name_ptr: i32, name_len: i32, x: f64, y: f64, z: f64) -> i32;
         pub fn find_path(sx: i32, sy: i32, ex: i32, ey: i32, out_ptr: i32, out_cap: i32) -> i32;
         pub fn mouse_iso(out_ptr: i32) -> i32;
+        pub fn iso_to_screen(x: f64, y: f64, out_ptr: i32) -> i32;
         pub fn height_at(x: f64, y: f64) -> f64;
         pub fn set_anim(name_ptr: i32, name_len: i32, anim_ptr: i32, anim_len: i32) -> i32;
+        pub fn set_camera(x: f64, y: f64, scale: f64) -> i32;
+        pub fn set_grid(show: i32) -> i32;
+        pub fn commit_terrain(height_scale: f64) -> i32;
         pub fn agent_selected() -> i32;
         pub fn ui_consumed_click() -> i32;
         pub fn was_pressed(btn: i32) -> i32;
@@ -105,6 +109,12 @@ fn play_anim(anim: &[u8]) {
 /// Called once, before the first `update`, to seed guest state from the host.
 #[no_mangle]
 pub extern "C" fn init() {
+    // The demo scene owns its map: commit the hand-authored inline tile/nav
+    // state (hydrated flat by the host).  `32.0` matches the map's 32px tile.
+    unsafe {
+        host::commit_terrain(32.0);
+    }
+
     // SAFETY: single-threaded guest; static state is only mutated from `update`.
     unsafe {
         let (np, nl) = agent_name();
@@ -118,6 +128,18 @@ pub extern "C" fn init() {
         FACING = 0;
     }
     play_anim(IDLE_ANIMS[0]);
+
+    // The demo scene owns its own look: frame the camera over the hand-authored
+    // map and show the editor grid.
+    unsafe {
+        let mut screen = [0u8; 16];
+        if host::iso_to_screen(32.0, 13.0, screen.as_mut_ptr() as i32) == 1 {
+            let sx = read_f64(&screen[0..8]);
+            let sy = read_f64(&screen[8..16]);
+            host::set_camera(sx, sy, 1.0);
+        }
+        host::set_grid(1);
+    }
 }
 
 fn handle_click() {

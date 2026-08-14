@@ -178,6 +178,18 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
+            "iso_to_screen",
+            |mut caller: Caller<'_, $host>, x: f64, y: f64, out_ptr: i32| -> i32 {
+                let Some((sx, sy)) = caller.data_mut().guest_mut().iso_to_screen(x, y) else {
+                    return 0;
+                };
+                $write_f64_pair(&mut caller, out_ptr, sx, sy);
+                1
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
             "height_at",
             |mut caller: Caller<'_, $host>, x: f64, y: f64| -> f64 {
                 caller.data_mut().guest_mut().height_at(x, y)
@@ -299,6 +311,10 @@ macro_rules! install_host_imports {
                 caller.data_mut().guest_mut().set_camera(x, y, scale)
             },
         )?;
+
+        $linker.func_wrap(m, "set_grid", |mut caller: Caller<'_, $host>, show: i32| -> i32 {
+            caller.data_mut().guest_mut().set_grid(show)
+        })?;
 
         $linker.func_wrap(
             m,
@@ -928,15 +944,6 @@ macro_rules! install_host_imports {
             |mut caller: Caller<'_, $host>, ptr: i32, len: i32, w: i32, h: i32| -> i32 {
                 let rgba = $read_bytes(&mut caller, ptr, len);
                 caller.data_mut().guest_mut().set_tileset(&rgba, w.max(0) as u32, h.max(0) as u32)
-            },
-        )?;
-
-        $linker.func_wrap(
-            m,
-            "set_spawn_points",
-            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
-                let pairs = crate::abi::bytes_to_i32(&$read_bytes(&mut caller, ptr, len));
-                caller.data_mut().guest_mut().set_spawn_points(&pairs)
             },
         )?;
 

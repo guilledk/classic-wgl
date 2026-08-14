@@ -211,6 +211,40 @@ fn guest_set_camera_moves_the_view() {
 }
 
 #[test]
+fn iso_to_screen_projects_with_tilemap_scale() {
+    let mut engine = Engine::new_for_test();
+    install_test_tilemap(&mut engine);
+    assert!(engine.iso_to_screen(0.0, 0.0).is_some());
+    assert!(engine.iso_to_screen(32.0, 13.0).is_some());
+}
+
+#[test]
+fn iso_to_screen_returns_none_without_tilemap() {
+    let engine = Engine::new_for_test();
+    assert_eq!(engine.iso_to_screen(32.0, 13.0), None);
+}
+
+#[test]
+fn guest_iso_to_screen_and_set_grid_wiring() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "iso_to_screen" (func $iso (param f64 f64 i32) (result i32)))
+            (import "env" "set_grid" (func $set_grid (param i32) (result i32)))
+            (memory (export "memory") 1)
+            (func (export "update") (param f64)
+                (drop (call $iso (f64.const 32.0) (f64.const 13.0) (i32.const 64)))
+                (drop (call $set_grid (i32.const 1)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(engine.show_grid);
+        },
+    );
+}
+
+#[test]
 fn pick_at_returns_entity_under_point() {
     let mut engine = Engine::new_for_test();
     let mut collider = ColliderData::new(Shape::Circle { diameter: 10.0 });
@@ -542,16 +576,13 @@ fn bulk_terrain_upload_roundtrip() {
     assert!(engine.set_tiles_bulk(&[7u32; 9]));
     assert!(engine.set_heights_bulk(&[2.5f32; 16]));
     assert!(engine.set_nav_bulk(&[1u32; 9]));
-    assert!(engine.set_spawn_points_bulk(&[0, 0, 2, 2]));
 
     assert_eq!(engine.world.get::<&Tilemap>(tm_entity).unwrap().data, vec![7u32; 9]);
     assert_eq!(engine.world.get::<&Tilemap>(tm_entity).unwrap().height_data, vec![2.5f32; 16]);
     assert_eq!(engine.world.get::<&NavMesh>(nav_entity).unwrap().data, vec![1u32; 9]);
-    assert_eq!(engine.spawn_points, vec![(0, 0), (2, 2)]);
 
     // Length mismatch is rejected.
     assert!(!engine.set_tiles_bulk(&[1u32; 8]));
-    assert!(!engine.set_spawn_points_bulk(&[0, 0, 1]));
 }
 
 #[test]

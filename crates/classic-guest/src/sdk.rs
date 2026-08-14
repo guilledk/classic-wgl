@@ -167,6 +167,11 @@ impl GuestHost {
         self.engine().mouse_iso().map(|(x, y)| (x as f64, y as f64))
     }
 
+    /// Project an iso tile coordinate to screen space (none if no Tilemap).
+    pub fn iso_to_screen(&mut self, x: f64, y: f64) -> Option<(f64, f64)> {
+        self.engine().iso_to_screen(x as f32, y as f32).map(|(sx, sy)| (sx as f64, sy as f64))
+    }
+
     /// Terrain height (world z) at an iso tile coordinate.
     pub fn height_at(&mut self, x: f64, y: f64) -> f64 {
         self.engine().height_at(x as f32, y as f32) as f64
@@ -241,6 +246,12 @@ impl GuestHost {
     /// Set the camera position (x, y) and uniform scale.
     pub fn set_camera(&mut self, x: f64, y: f64, scale: f64) -> i32 {
         self.engine_mut().set_camera(x as f32, y as f32, scale as f32);
+        1
+    }
+
+    /// Show or hide the tilemap editor grid overlay.
+    pub fn set_grid(&mut self, show: i32) -> i32 {
+        self.engine_mut().set_grid(show != 0);
         1
     }
 
@@ -653,12 +664,8 @@ impl GuestHost {
         self.engine_mut().set_tileset_bulk(rgba, w, h) as i32
     }
 
-    pub fn set_spawn_points(&mut self, pairs: &[i32]) -> i32 {
-        self.engine_mut().set_spawn_points_bulk(pairs) as i32
-    }
-
     /// Commit a guest-generated terrain (install or rebuild mesh + nav overlay).
     pub fn commit_terrain(&mut self, height_scale: f64) -> i32 {
-        self.engine_mut().commit_generated_terrain(height_scale as f32) as i32
+        self.engine_mut().commit_terrain(height_scale as f32) as i32
     }
 }

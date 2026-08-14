@@ -108,8 +108,9 @@ var OP_SET_TILES = 63;
 var OP_SET_HEIGHTS = 64;
 var OP_SET_NAV = 65;
 var OP_SET_TILESET = 66;
-var OP_SET_SPAWN_POINTS = 67;
 var OP_COMMIT_TERRAIN = 68;
+var OP_ISO_TO_SCREEN = 69;
+var OP_SET_GRID = 70;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -230,6 +231,11 @@ function envImports() {
             if (r.out.length > 0) writeMem(outPtr, r.out);
             return r.ret | 0;
         },
+        iso_to_screen: function (x, y, outPtr) {
+            var r = hostCall(OP_ISO_TO_SCREEN, [], [x, y, outPtr]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
         height_at: function (x, y) {
             return hostCall(OP_HEIGHT_AT, [], [x, y]).ret;
         },
@@ -278,6 +284,9 @@ function envImports() {
         },
         set_camera: function (x, y, scale) {
             return hostCall(OP_SET_CAMERA, [], [x, y, scale]).ret | 0;
+        },
+        set_grid: function (show) {
+            return hostCall(OP_SET_GRID, [], [show]).ret | 0;
         },
         pick_at: function (x, y, outPtr, outCap) {
             var r = hostCall(OP_PICK_AT, [], [x, y, outPtr, outCap]);
@@ -419,9 +428,6 @@ function envImports() {
         },
         set_tileset: function (ptr, len, w, h) {
             return hostCallRaw(OP_SET_TILESET, ptr, len, [w, h]).ret | 0;
-        },
-        set_spawn_points: function (ptr, len) {
-            return hostCallRaw(OP_SET_SPAWN_POINTS, ptr, len, []).ret | 0;
         },
         commit_terrain: function (heightScale) {
             return hostCall(OP_COMMIT_TERRAIN, [], [heightScale]).ret | 0;
