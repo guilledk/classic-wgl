@@ -28,13 +28,17 @@ crates/classic-guest/
                           (shared by every runtime backend)
   src/runtime.rs          WasmiRuntime (native + wasm): config (fuel), Linker imports
   src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel), Linker imports
+  src/runtime_web.rs      WebWasmRuntime (wasm only, trusted): browser-native
+                          `WebAssembly`, host imports as `Closure`s (+ a dispatcher
+                          for the 8 imports with >8 args)
   tests/guest.rs          inline WAT fixtures (wat crate) driven against every backend
 ```
 
-`create_runtime(wasm, limits)` picks the backend: **wasmtime on native**,
-**wasmi on wasm**.  Both implement the same `GuestRuntime` trait and the same
-`env` import surface (the `GuestHost` SDK bodies are not duplicated — only the
-thin linker closures are).
+`create_runtime(wasm, limits)` picks the backend: **wasmtime on native**; on
+wasm, **browser-native `WebAssembly` for `trusted` guests** (no fuel API) and
+**wasmi for untrusted guests** (interruptible fuel metering).  All implement the
+same `GuestRuntime` trait and the same `env` import surface (the `GuestHost` SDK
+bodies are not duplicated — only the thin linker/closure layers are).
 
 ## 3. The ABI (host imports, module "env")
 
@@ -119,22 +123,23 @@ Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
 
 ## 5. Host state & the unsafe bridge
 
-`GuestHost` (`sdk.rs`) holds only `*mut Engine`.  Each backend wraps it in its
-own store data (`WasmiHost` / `WasmtimeHost`) that also owns that backend's
-resource limiter (`StoreLimits`).  Neither store's host data has a `Send`/`Sync`
-bound, so the raw pointer is set fresh each `init`/`update`/`start` via
-`GuestHost::set_engine` and deref'd only inside that call (single-threaded,
-`engine` borrowed for the call).  The `unsafe` is confined to
-`GuestHost::engine`/`engine_mut`.
+`GuestHost` (`sdk.rs`) holds only `*mut Engine`.  Each native/wasm-interpreter
+backend wraps it in its own store data (`WasmiHost` / `WasmtimeHost`) that also
+owns that backend's resource limiter (`StoreLimits`); `WebWasmRuntime` shares it
+via `Rc<RefCell<GuestHost>>` (captured by the `'static` host-import closures).
+Neither store's host data has a `Send`/`Sync` bound, so the raw pointer is set
+fresh each `init`/`update`/`start` via `GuestHost::set_engine` and deref'd only
+inside that call (single-threaded, `engine` borrowed for the call).  The
+`unsafe` is confined to `GuestHost::engine`/`engine_mut`.
 
 ## 6. Wiring (classic-demo)
 
 - `init_guest(&mut Engine, &DemoStateRef, wasm, &GuestLimits)` calls
-  `classic_guest::create_runtime` (wasmtime on native, wasmi on wasm), runs the
-  optional `init` hook synchronously (before the first frame), stores the boxed
-  runtime on `DemoState.guest`, and registers an
-  `on_update(|e| guest.update(e, dt))` closure that also runs the optional
-  `start` hook once after the first update.
+  `classic_guest::create_runtime` (wasmtime on native; browser-Wasm for trusted /
+  wasmi for untrusted on wasm), runs the optional `init` hook synchronously
+  (before the first frame), stores the boxed runtime on `DemoState.guest`, and
+  registers an `on_update(|e| guest.update(e, dt))` closure that also runs the
+  optional `start` hook once after the first update.
 - `init_engine` reads `rom.resources.code().get("main")` and builds limits from
   `rom.manifest.trusted`; runs the guest on every frame (not gated by
   `host_features`).

@@ -10,15 +10,20 @@ pub mod abi;
 pub mod runtime;
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_wasmtime;
+#[cfg(target_arch = "wasm32")]
+mod runtime_web;
 pub mod sdk;
 
 pub use runtime::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime_wasmtime::WasmtimeRuntime;
+#[cfg(target_arch = "wasm32")]
+pub use runtime_web::WebWasmRuntime;
 
 /// Create the best guest runtime available for the current target: wasmtime on
-/// native (near-native speed, fuel + memory limits), wasmi on wasm (pure-Rust
-/// interpreter, uniform untrusted isolation).
+/// native (near-native speed, fuel + memory limits); on wasm, browser-native
+/// `WebAssembly` for trusted guests (no fuel API) and wasmi for untrusted
+/// guests (interruptible fuel metering).
 pub fn create_runtime(
     wasm: &[u8],
     limits: &GuestLimits,
@@ -29,6 +34,10 @@ pub fn create_runtime(
     }
     #[cfg(target_arch = "wasm32")]
     {
-        WasmiRuntime::new(wasm, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>)
+        if limits.trusted {
+            WebWasmRuntime::new(wasm, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>)
+        } else {
+            WasmiRuntime::new(wasm, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>)
+        }
     }
 }
