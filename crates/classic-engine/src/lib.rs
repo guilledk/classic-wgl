@@ -112,6 +112,11 @@ pub struct Engine {
     /// steps, hence the default of 2.0; generated terrain is continuous and
     /// needs a much finer threshold to match the slope rule it was built with.
     pub nav_slope_threshold: f32,
+    /// Landing-zone spawn points (tile coords) from the last generated terrain.
+    /// Set by [`Engine::set_spawn_points_bulk`] (guest-driven generation) or
+    /// [`Engine::install_generated_terrain`]; read by the scene layer to focus
+    /// the camera.
+    pub spawn_points: Vec<(i32, i32)>,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
     pre_update_hooks: Vec<UpdateFn>,
@@ -201,6 +206,7 @@ impl Engine {
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
             base_height_scale: 32.0,
             nav_slope_threshold: 2.0,
+            spawn_points: Vec::new(),
             nav_gpu: None,
             debug_frame: 0,
             pre_update_hooks: Vec::new(),
@@ -819,6 +825,75 @@ impl Engine {
         }
         self.rebuild_tilemap_mesh();
         self.sync_nav_heights();
+        true
+    }
+
+    /// Bulk-write the tilemap tile grid from a guest-provided `u32` array
+    /// (row-major, `size_x * size_y`).  Length must match the Tilemap exactly.
+    pub fn set_tiles_bulk(&mut self, tiles: &[u32]) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if tiles.len() != tm.data.len() {
+            return false;
+        }
+        tm.data.copy_from_slice(tiles);
+        true
+    }
+
+    /// Bulk-write the tilemap height vertex grid from a guest-provided `f32`
+    /// array (`(size_x + 1) * (size_y + 1)`).  Length must match exactly.
+    pub fn set_heights_bulk(&mut self, heights: &[f32]) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if heights.len() != tm.height_data.len() {
+            return false;
+        }
+        tm.height_data.copy_from_slice(heights);
+        true
+    }
+
+    /// Bulk-write the nav walkability grid from a guest-provided `u32` array
+    /// (`size_x * size_y`, `1` = walkable).  Length must match the NavMesh.
+    pub fn set_nav_bulk(&mut self, nav: &[u32]) -> bool {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return false };
+        let Ok(mut nm) = self.world.get::<&mut NavMesh>(nav_entity) else { return false };
+        if nav.len() != nm.data.len() {
+            return false;
+        }
+        nm.data.copy_from_slice(nav);
+        true
+    }
+
+    /// Upload a raw RGBA tileset texture for the tilemap (guest-generated
+    /// tileset).  Replaces the current tileset under the Tilemap's `tile_set`.
+    pub fn set_tileset_bulk(&mut self, rgba: &[u8], w: u32, h: u32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return false };
+        let tile_set = tm.tile_set.clone();
+        let Some(gfx) = self.gfx.as_mut() else { return false };
+        gfx.add_texture_rgba8(&tile_set, rgba, w, h);
+        true
+    }
+
+    /// Bulk-write landing-zone spawn points from guest-provided `i32` pairs.
+    pub fn set_spawn_points_bulk(&mut self, pairs: &[i32]) -> bool {
+        if !pairs.len().is_multiple_of(2) {
+            return false;
+        }
+        self.spawn_points = pairs.chunks(2).map(|c| (c[0], c[1])).collect();
+        true
+    }
+
+    /// Commit a guest-generated terrain: rebuild the tilemap mesh + tile data
+    /// texture and re-upload the nav overlay from the grids written by the
+    /// bulk `set_*` imports.  Does NOT re-derive walkability (the generator's
+    /// nav grid is authoritative).
+    pub fn commit_generated_terrain(&mut self) -> bool {
+        if self.entity_by_role(RoleKind::Tilemap).is_none() {
+            return false;
+        }
+        self.rebuild_tilemap_mesh();
+        self.rebuild_nav_gpu();
         true
     }
 

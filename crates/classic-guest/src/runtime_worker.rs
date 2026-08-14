@@ -110,6 +110,18 @@ const OP_SPAWN_COLLIDER: i32 = 53;
 const OP_GET_ANIM: i32 = 54;
 const OP_HAS_RESOURCE: i32 = 55;
 const OP_TEXTURE_SIZE: i32 = 56;
+const OP_FBM_FIELD: i32 = 57;
+const OP_RIDGED_FIELD: i32 = 58;
+const OP_BILLOW_FIELD: i32 = 59;
+const OP_TILING_FIELD: i32 = 60;
+const OP_NOISE_FIELD: i32 = 61;
+const OP_NOISE2D: i32 = 62;
+const OP_SET_TILES: i32 = 63;
+const OP_SET_HEIGHTS: i32 = 64;
+const OP_SET_NAV: i32 = 65;
+const OP_SET_TILESET: i32 = 66;
+const OP_SET_SPAWN_POINTS: i32 = 67;
+const OP_COMMIT_TERRAIN: i32 = 68;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -162,23 +174,6 @@ impl WorkerWasmRuntime {
         self.write_u8(offset, &v.to_le_bytes());
     }
 
-    /// Decode the length-prefixed string stream the worker wrote to the SAB.
-    fn read_strings(&self) -> Vec<String> {
-        let raw = self.read_u8(STR_OFFSET, self.flag_load(I_REQ_STR_LEN).max(0) as u32);
-        let mut out = Vec::new();
-        let mut i = 0usize;
-        while i + 4 <= raw.len() {
-            let len = u32::from_le_bytes([raw[i], raw[i + 1], raw[i + 2], raw[i + 3]]) as usize;
-            i += 4;
-            if i + len > raw.len() {
-                break;
-            }
-            out.push(String::from_utf8_lossy(&raw[i..i + len]).into_owned());
-            i += len;
-        }
-        out
-    }
-
     fn read_nums(&self) -> Vec<f64> {
         let count = self.flag_load(I_REQ_NUM_COUNT).max(0) as u32;
         (0..count).map(|i| self.read_f64(NUM_OFFSET + i * 8)).collect()
@@ -187,10 +182,11 @@ impl WorkerWasmRuntime {
     /// Service one host-import request against the engine.
     fn service(&mut self) {
         let op = self.flag_load(I_REQ_OP);
-        let strs = self.read_strings();
+        let raw = self.read_u8(STR_OFFSET, self.flag_load(I_REQ_STR_LEN).max(0) as u32);
+        let strs = decode_strings(&raw);
         let nums = self.read_nums();
         self.flag_store(I_REQ_READY, 0);
-        let (ret, out) = self.dispatch(op, &strs, &nums);
+        let (ret, out) = self.dispatch(op, &strs, &nums, &raw);
         self.write_f64(NUM_OFFSET + F_RET * 8, ret);
         match out {
             Some(bytes) => {
@@ -205,7 +201,13 @@ impl WorkerWasmRuntime {
         self.notify(I_RESP_READY);
     }
 
-    fn dispatch(&mut self, op: i32, strs: &[String], nums: &[f64]) -> (f64, Option<Vec<u8>>) {
+    fn dispatch(
+        &mut self,
+        op: i32,
+        strs: &[String],
+        nums: &[f64],
+        raw: &[u8],
+    ) -> (f64, Option<Vec<u8>>) {
         let nf = |i: usize| nums.get(i).copied().unwrap_or(0.0);
         let ni = |i: usize| nf(i) as i32;
         let enc_f64s = |v: &[f64]| -> Vec<u8> {
@@ -400,6 +402,68 @@ impl WorkerWasmRuntime {
                 Some((w, h)) => (1.0, Some(enc_f64s(&[w, h]))),
                 None => (0.0, None),
             },
+            OP_FBM_FIELD => {
+                let field = host.fbm_field(
+                    ni(0),
+                    ni(1),
+                    &strs[0],
+                    ni(2).max(0) as u32,
+                    nf(3),
+                    nf(4),
+                    nf(5),
+                );
+                let bytes = crate::abi::f32_array_bytes(&field);
+                out_or_err(bytes, ni(6))
+            }
+            OP_RIDGED_FIELD => {
+                let field = host.ridged_field(
+                    ni(0),
+                    ni(1),
+                    &strs[0],
+                    ni(2).max(0) as u32,
+                    nf(3),
+                    nf(4),
+                    nf(5),
+                    nf(6),
+                );
+                let bytes = crate::abi::f32_array_bytes(&field);
+                out_or_err(bytes, ni(7))
+            }
+            OP_BILLOW_FIELD => {
+                let field = host.billow_field(
+                    ni(0),
+                    ni(1),
+                    &strs[0],
+                    ni(2).max(0) as u32,
+                    nf(3),
+                    nf(4),
+                    nf(5),
+                );
+                let bytes = crate::abi::f32_array_bytes(&field);
+                out_or_err(bytes, ni(6))
+            }
+            OP_TILING_FIELD => {
+                let field =
+                    host.tiling_field(ni(0), ni(1), &strs[0], nf(2), ni(3).max(0) as u32, nf(4));
+                let bytes = crate::abi::f32_array_bytes(&field);
+                out_or_err(bytes, ni(5))
+            }
+            OP_NOISE_FIELD => {
+                let field = host.noise_field(ni(0), ni(1), &strs[0], nf(2), nf(3));
+                let bytes = crate::abi::f32_array_bytes(&field);
+                out_or_err(bytes, ni(4))
+            }
+            OP_NOISE2D => (host.noise2d(&strs[0], nf(0), nf(1)), None),
+            OP_SET_TILES => (host.set_tiles(&crate::abi::bytes_to_u32(raw)) as f64, None),
+            OP_SET_HEIGHTS => (host.set_heights(&crate::abi::bytes_to_f32(raw)) as f64, None),
+            OP_SET_NAV => (host.set_nav(&crate::abi::bytes_to_u32(raw)) as f64, None),
+            OP_SET_TILESET => {
+                (host.set_tileset(raw, ni(0).max(0) as u32, ni(1).max(0) as u32) as f64, None)
+            }
+            OP_SET_SPAWN_POINTS => {
+                (host.set_spawn_points(&crate::abi::bytes_to_i32(raw)) as f64, None)
+            }
+            OP_COMMIT_TERRAIN => (host.commit_terrain() as f64, None),
             _ => (0.0, None),
         }
     }
@@ -477,5 +541,31 @@ impl GuestRuntime for WorkerWasmRuntime {
 
     fn start(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
         self.run(engine, CMD_START, 0.0)
+    }
+}
+
+/// Decode the length-prefixed string stream the worker wrote to the SAB.
+fn decode_strings(raw: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 4 <= raw.len() {
+        let len = u32::from_le_bytes([raw[i], raw[i + 1], raw[i + 2], raw[i + 3]]) as usize;
+        i += 4;
+        if i + len > raw.len() {
+            break;
+        }
+        out.push(String::from_utf8_lossy(&raw[i..i + len]).into_owned());
+        i += len;
+    }
+    out
+}
+
+/// Pack a bulk out buffer, rejecting it if it exceeds the guest's `out_cap` or
+/// the SAB's OUT region.
+fn out_or_err(bytes: Vec<u8>, out_cap: i32) -> (f64, Option<Vec<u8>>) {
+    if bytes.len() > out_cap.max(0) as usize || bytes.len() as u32 > OUT_BYTES {
+        (-1.0, None)
+    } else {
+        (bytes.len() as f64, Some(bytes))
     }
 }

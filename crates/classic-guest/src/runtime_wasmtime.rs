@@ -55,6 +55,7 @@ impl WasmtimeRuntime {
             linker,
             WasmtimeHost,
             read_str,
+            read_bytes,
             write_str,
             write_bytes,
             write_f64_pair,
@@ -144,6 +145,14 @@ fn read_str(caller: &mut Caller<'_, WasmtimeHost>, ptr: i32, len: i32) -> String
         return String::new();
     };
     abi::read_str_from(mem.data(&*caller), ptr, len)
+}
+
+/// Read raw bytes from the guest's linear memory (wasmtime backend).
+fn read_bytes(caller: &mut Caller<'_, WasmtimeHost>, ptr: i32, len: i32) -> Vec<u8> {
+    let Some(mem) = caller.get_export(abi::MEMORY_EXPORT).and_then(|e| e.into_memory()) else {
+        return Vec::new();
+    };
+    abi::read_bytes_from(mem.data(&*caller), ptr, len)
 }
 
 /// Write bytes into the guest's linear memory (wasmtime backend).

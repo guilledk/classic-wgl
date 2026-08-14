@@ -99,6 +99,18 @@ var OP_SPAWN_COLLIDER = 53;
 var OP_GET_ANIM = 54;
 var OP_HAS_RESOURCE = 55;
 var OP_TEXTURE_SIZE = 56;
+var OP_FBM_FIELD = 57;
+var OP_RIDGED_FIELD = 58;
+var OP_BILLOW_FIELD = 59;
+var OP_TILING_FIELD = 60;
+var OP_NOISE_FIELD = 61;
+var OP_NOISE2D = 62;
+var OP_SET_TILES = 63;
+var OP_SET_HEIGHTS = 64;
+var OP_SET_NAV = 65;
+var OP_SET_TILESET = 66;
+var OP_SET_SPAWN_POINTS = 67;
+var OP_COMMIT_TERRAIN = 68;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -129,6 +141,27 @@ function hostCall(op, strArr, numArr) {
         soff += b.length;
     }
     Atomics.store(flags, I_REQ_STR_LEN, soff);
+    for (var j = 0; j < numArr.length; j++) {
+        nums[j] = numArr[j];
+    }
+    Atomics.store(flags, I_REQ_NUM_COUNT, numArr.length);
+    Atomics.store(flags, I_REQ_OP, op);
+    Atomics.store(flags, I_REQ_READY, 1);
+    Atomics.notify(flags, I_REQ_READY, 1);
+    Atomics.wait(flags, I_RESP_READY, 0);
+    var ret = nums[F_RET];
+    var outLen = Atomics.load(flags, I_RESP_OUT_LEN);
+    var outBytes = out.slice(0, outLen);
+    Atomics.store(flags, I_RESP_READY, 0);
+    return { ret: ret, out: outBytes };
+}
+
+// Send raw guest bytes (bulk upload) to the main thread and block for the
+// response.  Unlike `hostCall`, the request payload is a raw byte span, not a
+// length-prefixed string stream.
+function hostCallRaw(op, ptr, len, numArr) {
+    str.set(memView().subarray(ptr, ptr + len), 0);
+    Atomics.store(flags, I_REQ_STR_LEN, len);
     for (var j = 0; j < numArr.length; j++) {
         nums[j] = numArr[j];
     }
@@ -351,6 +384,52 @@ function envImports() {
             var r = hostCall(OP_TEXTURE_SIZE, [readStr(ptr, len)], [outPtr]);
             if (r.out.length > 0) writeMem(outPtr, r.out);
             return r.ret | 0;
+        },
+        fbm_field: function (w, h, seedPtr, seedLen, octaves, freq, lacunarity, gain, outPtr, outCap) {
+            var r = hostCall(OP_FBM_FIELD, [readStr(seedPtr, seedLen)], [w, h, octaves, freq, lacunarity, gain, outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
+        ridged_field: function (w, h, seedPtr, seedLen, octaves, freq, lacunarity, gain, warpAmp, outPtr, outCap) {
+            var r = hostCall(OP_RIDGED_FIELD, [readStr(seedPtr, seedLen)], [w, h, octaves, freq, lacunarity, gain, warpAmp, outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
+        billow_field: function (w, h, seedPtr, seedLen, octaves, freq, lacunarity, gain, outPtr, outCap) {
+            var r = hostCall(OP_BILLOW_FIELD, [readStr(seedPtr, seedLen)], [w, h, octaves, freq, lacunarity, gain, outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
+        tiling_field: function (w, h, seedPtr, seedLen, period, octaves, radius, outPtr, outCap) {
+            var r = hostCall(OP_TILING_FIELD, [readStr(seedPtr, seedLen)], [w, h, period, octaves, radius, outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
+        noise_field: function (w, h, seedPtr, seedLen, freqX, freqY, outPtr, outCap) {
+            var r = hostCall(OP_NOISE_FIELD, [readStr(seedPtr, seedLen)], [w, h, freqX, freqY, outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
+        noise2d: function (seedPtr, seedLen, x, y) {
+            return hostCall(OP_NOISE2D, [readStr(seedPtr, seedLen)], [x, y]).ret;
+        },
+        set_tiles: function (ptr, len) {
+            return hostCallRaw(OP_SET_TILES, ptr, len, []).ret | 0;
+        },
+        set_heights: function (ptr, len) {
+            return hostCallRaw(OP_SET_HEIGHTS, ptr, len, []).ret | 0;
+        },
+        set_nav: function (ptr, len) {
+            return hostCallRaw(OP_SET_NAV, ptr, len, []).ret | 0;
+        },
+        set_tileset: function (ptr, len, w, h) {
+            return hostCallRaw(OP_SET_TILESET, ptr, len, [w, h]).ret | 0;
+        },
+        set_spawn_points: function (ptr, len) {
+            return hostCallRaw(OP_SET_SPAWN_POINTS, ptr, len, []).ret | 0;
+        },
+        commit_terrain: function () {
+            return hostCall(OP_COMMIT_TERRAIN, [], []).ret | 0;
         },
     };
 }

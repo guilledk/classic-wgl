@@ -563,4 +563,108 @@ impl GuestHost {
     pub fn texture_size(&mut self, name: &str) -> Option<(f64, f64)> {
         self.engine().texture_size(name).map(|(w, h)| (w as f64, h as f64))
     }
+
+    // ---- Bulk noise fields (host generates, guest composes) ----------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fbm_field(
+        &mut self,
+        w: i32,
+        h: i32,
+        seed: &str,
+        octaves: u32,
+        freq: f64,
+        lacunarity: f64,
+        gain: f64,
+    ) -> Vec<f32> {
+        classic_core::terrain::noise_fields::fbm_field(w, h, seed, octaves, freq, lacunarity, gain)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ridged_field(
+        &mut self,
+        w: i32,
+        h: i32,
+        seed: &str,
+        octaves: u32,
+        freq: f64,
+        lacunarity: f64,
+        gain: f64,
+        warp_amp: f64,
+    ) -> Vec<f32> {
+        classic_core::terrain::noise_fields::ridged_field(
+            w, h, seed, octaves, freq, lacunarity, gain, warp_amp,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn billow_field(
+        &mut self,
+        w: i32,
+        h: i32,
+        seed: &str,
+        octaves: u32,
+        freq: f64,
+        lacunarity: f64,
+        gain: f64,
+    ) -> Vec<f32> {
+        classic_core::terrain::noise_fields::billow_field(
+            w, h, seed, octaves, freq, lacunarity, gain,
+        )
+    }
+
+    pub fn tiling_field(
+        &mut self,
+        w: i32,
+        h: i32,
+        seed: &str,
+        period: f64,
+        octaves: u32,
+        radius: f64,
+    ) -> Vec<f32> {
+        classic_core::terrain::noise_fields::tiling_field(w, h, seed, period, octaves, radius)
+    }
+
+    pub fn noise_field(
+        &mut self,
+        w: i32,
+        h: i32,
+        seed: &str,
+        freq_x: f64,
+        freq_y: f64,
+    ) -> Vec<f32> {
+        classic_core::terrain::noise_fields::noise_field(w, h, seed, freq_x, freq_y)
+    }
+
+    /// Single-point raw 2D simplex sample (for non-uniform noise).
+    pub fn noise2d(&mut self, seed: &str, x: f64, y: f64) -> f64 {
+        classic_core::terrain::noise_fields::noise2d(seed, x, y)
+    }
+
+    // ---- Bulk terrain upload (guest generates → host stores) ---------------
+
+    pub fn set_tiles(&mut self, tiles: &[u32]) -> i32 {
+        self.engine_mut().set_tiles_bulk(tiles) as i32
+    }
+
+    pub fn set_heights(&mut self, heights: &[f32]) -> i32 {
+        self.engine_mut().set_heights_bulk(heights) as i32
+    }
+
+    pub fn set_nav(&mut self, nav: &[u32]) -> i32 {
+        self.engine_mut().set_nav_bulk(nav) as i32
+    }
+
+    pub fn set_tileset(&mut self, rgba: &[u8], w: u32, h: u32) -> i32 {
+        self.engine_mut().set_tileset_bulk(rgba, w, h) as i32
+    }
+
+    pub fn set_spawn_points(&mut self, pairs: &[i32]) -> i32 {
+        self.engine_mut().set_spawn_points_bulk(pairs) as i32
+    }
+
+    /// Commit a guest-generated terrain (rebuild mesh + nav overlay).
+    pub fn commit_terrain(&mut self) -> i32 {
+        self.engine_mut().commit_generated_terrain() as i32
+    }
 }

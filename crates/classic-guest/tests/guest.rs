@@ -535,6 +535,52 @@ fn guest_terrain_edits_are_bounds_checked() {
     );
 }
 
+#[test]
+fn bulk_terrain_upload_roundtrip() {
+    let mut engine = Engine::new_for_test();
+    install_test_tilemap(&mut engine);
+    install_test_navmesh(&mut engine);
+
+    let tm_entity = engine.entity_by_role(RoleKind::Tilemap).unwrap();
+    let nav_entity = engine.entity_by_role(RoleKind::NavMesh).unwrap();
+
+    // 3x3 tilemap: 9 tiles, 16 height vertices; 3x3 navmesh: 9 cells.
+    assert!(engine.set_tiles_bulk(&[7u32; 9]));
+    assert!(engine.set_heights_bulk(&[2.5f32; 16]));
+    assert!(engine.set_nav_bulk(&[1u32; 9]));
+    assert!(engine.set_spawn_points_bulk(&[0, 0, 2, 2]));
+
+    assert_eq!(engine.world.get::<&Tilemap>(tm_entity).unwrap().data, vec![7u32; 9]);
+    assert_eq!(engine.world.get::<&Tilemap>(tm_entity).unwrap().height_data, vec![2.5f32; 16]);
+    assert_eq!(engine.world.get::<&NavMesh>(nav_entity).unwrap().data, vec![1u32; 9]);
+    assert_eq!(engine.spawn_points, vec![(0, 0), (2, 2)]);
+
+    // Length mismatch is rejected.
+    assert!(!engine.set_tiles_bulk(&[1u32; 8]));
+    assert!(!engine.set_spawn_points_bulk(&[0, 0, 1]));
+}
+
+#[test]
+fn guest_noise_field_imports_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "fbm_field" (func $fbm (param i32 i32 i32 i32 i32 f64 f64 f64 i32 i32) (result i32)))
+            (import "env" "noise2d" (func $noise2d (param i32 i32 f64 f64) (result f64)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "apollo")
+            (func (export "update") (param f64)
+                (drop (call $fbm (i32.const 8) (i32.const 8) (i32.const 0) (i32.const 6)
+                    (i32.const 4) (f64.const 0.03) (f64.const 2.0) (f64.const 0.5)
+                    (i32.const 1024) (i32.const 256)))
+                (drop (call $noise2d (i32.const 0) (i32.const 6) (f64.const 1.0) (f64.const 2.0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
+}
+
 fn install_test_resources(engine: &mut Engine) {
     let mut resources = ResourceSet::default();
     resources.insert(ResourceKind::Texture, "tree", vec![0, 1, 2]);

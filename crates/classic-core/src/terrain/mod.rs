@@ -13,6 +13,7 @@
 pub mod fractal;
 pub mod lunar;
 pub mod material;
+pub mod noise_fields;
 pub mod tileset;
 pub mod types;
 
