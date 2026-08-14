@@ -70,9 +70,30 @@ pub trait GuestRuntime {
     }
 }
 
+/// wasmi store data: the shared [`GuestHost`] engine bridge plus wasmi's
+/// resource limiter (memory cap).
+struct WasmiHost {
+    guest: GuestHost,
+    limits: wasmi::StoreLimits,
+}
+
+impl WasmiHost {
+    fn new(limits: wasmi::StoreLimits) -> Self {
+        Self { guest: GuestHost::new(), limits }
+    }
+
+    fn guest_mut(&mut self) -> &mut GuestHost {
+        &mut self.guest
+    }
+
+    fn resource_limiter(&mut self) -> &mut dyn wasmi::ResourceLimiter {
+        &mut self.limits
+    }
+}
+
 /// wasmi-backed [`GuestRuntime`] (native and wasm targets).
 pub struct WasmiRuntime {
-    store: Store<GuestHost>,
+    store: Store<WasmiHost>,
     init: Option<wasmi::TypedFunc<(), ()>>,
     update: wasmi::TypedFunc<(f64,), ()>,
     start: Option<wasmi::TypedFunc<(), ()>>,
@@ -88,75 +109,75 @@ impl WasmiRuntime {
         WasmEngine::new(&config)
     }
 
-    fn install_imports(linker: &mut Linker<GuestHost>) -> Result<(), wasmi::Error> {
+    fn install_imports(linker: &mut Linker<WasmiHost>) -> Result<(), wasmi::Error> {
         let m = abi::HOST_MODULE;
 
-        linker.func_wrap(m, "log", |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| {
-            let msg = abi::read_str(&caller, ptr, len);
-            caller.data_mut().log(&msg);
+        linker.func_wrap(m, "log", |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| {
+            let msg = read_str(&caller, ptr, len);
+            caller.data_mut().guest_mut().log(&msg);
         })?;
 
         linker.func_wrap(
             m,
             "spawn",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().spawn(&name)
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| -> i32 {
+                let name = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().spawn(&name)
             },
         )?;
 
         linker.func_wrap(
             m,
             "despawn",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().despawn(&name)
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| -> i32 {
+                let name = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().despawn(&name)
             },
         )?;
 
         linker.func_wrap(
             m,
             "has",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().has(&name)
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| -> i32 {
+                let name = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().has(&name)
             },
         )?;
 
         linker.func_wrap(
             m,
             "names",
-            |mut caller: Caller<'_, GuestHost>, out_ptr: i32, out_cap: i32| -> i32 {
-                let json = caller.data_mut().names();
+            |mut caller: Caller<'_, WasmiHost>, out_ptr: i32, out_cap: i32| -> i32 {
+                let json = caller.data_mut().guest_mut().names();
                 if out_cap < json.len() as i32 {
                     return -1;
                 }
-                abi::write_str(&mut caller, out_ptr, &json)
+                write_str(&mut caller, out_ptr, &json)
             },
         )?;
 
         linker.func_wrap(
             m,
             "get",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              ptr: i32,
              len: i32,
              out_ptr: i32,
              out_cap: i32|
              -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                let json = caller.data_mut().get(&name);
+                let name = read_str(&caller, ptr, len);
+                let json = caller.data_mut().guest_mut().get(&name);
                 if out_cap < json.len() as i32 {
                     return -1;
                 }
-                abi::write_str(&mut caller, out_ptr, &json)
+                write_str(&mut caller, out_ptr, &json)
             },
         )?;
 
         linker.func_wrap(
             m,
             "get_comp",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              ptr: i32,
              len: i32,
              comp_ptr: i32,
@@ -164,35 +185,35 @@ impl WasmiRuntime {
              out_ptr: i32,
              out_cap: i32|
              -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                let comp = abi::read_str(&caller, comp_ptr, comp_len);
-                let json = caller.data_mut().get_comp(&name, &comp);
+                let name = read_str(&caller, ptr, len);
+                let comp = read_str(&caller, comp_ptr, comp_len);
+                let json = caller.data_mut().guest_mut().get_comp(&name, &comp);
                 if out_cap < json.len() as i32 {
                     return -1;
                 }
-                abi::write_str(&mut caller, out_ptr, &json)
+                write_str(&mut caller, out_ptr, &json)
             },
         )?;
 
         linker.func_wrap(
             m,
             "set",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              ptr: i32,
              len: i32,
              json_ptr: i32,
              json_len: i32|
              -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                let json = abi::read_str(&caller, json_ptr, json_len);
-                caller.data_mut().set(&name, &json)
+                let name = read_str(&caller, ptr, len);
+                let json = read_str(&caller, json_ptr, json_len);
+                caller.data_mut().guest_mut().set(&name, &json)
             },
         )?;
 
         linker.func_wrap(
             m,
             "set_comp",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              ptr: i32,
              len: i32,
              comp_ptr: i32,
@@ -200,55 +221,55 @@ impl WasmiRuntime {
              json_ptr: i32,
              json_len: i32|
              -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                let comp = abi::read_str(&caller, comp_ptr, comp_len);
-                let json = abi::read_str(&caller, json_ptr, json_len);
-                caller.data_mut().set_comp(&name, &comp, &json)
+                let name = read_str(&caller, ptr, len);
+                let comp = read_str(&caller, comp_ptr, comp_len);
+                let json = read_str(&caller, json_ptr, json_len);
+                caller.data_mut().guest_mut().set_comp(&name, &comp, &json)
             },
         )?;
 
         linker.func_wrap(
             m,
             "set_pos",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              ptr: i32,
              len: i32,
              x: f64,
              y: f64,
              z: f64|
              -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().set_pos(&name, x, y, z)
+                let name = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().set_pos(&name, x, y, z)
             },
         )?;
 
         linker.func_wrap(
             m,
             "get_pos",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32, out_ptr: i32| -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                let Some((x, y, z)) = caller.data_mut().get_pos(&name) else {
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32, out_ptr: i32| -> i32 {
+                let name = read_str(&caller, ptr, len);
+                let Some((x, y, z)) = caller.data_mut().guest_mut().get_pos(&name) else {
                     return 0;
                 };
-                abi::write_f64_triple(&mut caller, out_ptr, x, y, z);
+                write_f64_triple(&mut caller, out_ptr, x, y, z);
                 1
             },
         )?;
 
-        linker.func_wrap(m, "mouse", |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
-            let (x, y) = caller.data_mut().mouse();
-            abi::write_f64_pair(&mut caller, out_ptr, x, y);
+        linker.func_wrap(m, "mouse", |mut caller: Caller<'_, WasmiHost>, out_ptr: i32| -> i32 {
+            let (x, y) = caller.data_mut().guest_mut().mouse();
+            write_f64_pair(&mut caller, out_ptr, x, y);
             1
         })?;
 
         linker.func_wrap(
             m,
             "mouse_iso",
-            |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
-                let Some((x, y)) = caller.data_mut().mouse_iso() else {
+            |mut caller: Caller<'_, WasmiHost>, out_ptr: i32| -> i32 {
+                let Some((x, y)) = caller.data_mut().guest_mut().mouse_iso() else {
                     return 0;
                 };
-                abi::write_f64_pair(&mut caller, out_ptr, x, y);
+                write_f64_pair(&mut caller, out_ptr, x, y);
                 1
             },
         )?;
@@ -256,108 +277,108 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "height_at",
-            |mut caller: Caller<'_, GuestHost>, x: f64, y: f64| -> f64 {
-                caller.data_mut().height_at(x, y)
+            |mut caller: Caller<'_, WasmiHost>, x: f64, y: f64| -> f64 {
+                caller.data_mut().guest_mut().height_at(x, y)
             },
         )?;
 
         linker.func_wrap(
             m,
             "set_anim",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              ptr: i32,
              len: i32,
              anim_ptr: i32,
              anim_len: i32|
              -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                let anim = abi::read_str(&caller, anim_ptr, anim_len);
-                caller.data_mut().set_anim(&name, &anim)
+                let name = read_str(&caller, ptr, len);
+                let anim = read_str(&caller, anim_ptr, anim_len);
+                caller.data_mut().guest_mut().set_anim(&name, &anim)
             },
         )?;
 
-        linker.func_wrap(m, "agent_selected", |mut caller: Caller<'_, GuestHost>| -> i32 {
-            caller.data_mut().agent_selected()
+        linker.func_wrap(m, "agent_selected", |mut caller: Caller<'_, WasmiHost>| -> i32 {
+            caller.data_mut().guest_mut().agent_selected()
         })?;
 
-        linker.func_wrap(m, "ui_consumed_click", |mut caller: Caller<'_, GuestHost>| -> i32 {
-            caller.data_mut().ui_consumed_click()
+        linker.func_wrap(m, "ui_consumed_click", |mut caller: Caller<'_, WasmiHost>| -> i32 {
+            caller.data_mut().guest_mut().ui_consumed_click()
         })?;
 
-        linker.func_wrap(m, "delta", |mut caller: Caller<'_, GuestHost>| -> f64 {
-            caller.data_mut().delta()
+        linker.func_wrap(m, "delta", |mut caller: Caller<'_, WasmiHost>| -> f64 {
+            caller.data_mut().guest_mut().delta()
         })?;
 
-        linker.func_wrap(m, "elapsed", |mut caller: Caller<'_, GuestHost>| -> f64 {
-            caller.data_mut().elapsed()
+        linker.func_wrap(m, "elapsed", |mut caller: Caller<'_, WasmiHost>| -> f64 {
+            caller.data_mut().guest_mut().elapsed()
         })?;
 
         linker.func_wrap(
             m,
             "was_pressed",
-            |mut caller: Caller<'_, GuestHost>, btn: i32| -> i32 {
-                caller.data_mut().was_pressed(btn)
+            |mut caller: Caller<'_, WasmiHost>, btn: i32| -> i32 {
+                caller.data_mut().guest_mut().was_pressed(btn)
             },
         )?;
 
         linker.func_wrap(
             m,
             "key_down",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
-                let key = abi::read_str(&caller, ptr, len);
-                caller.data_mut().key_down(&key)
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| -> i32 {
+                let key = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().key_down(&key)
             },
         )?;
 
         linker.func_wrap(
             m,
             "was_key_pressed",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
-                let key = abi::read_str(&caller, ptr, len);
-                caller.data_mut().was_key_pressed(&key)
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| -> i32 {
+                let key = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().was_key_pressed(&key)
             },
         )?;
 
         linker.func_wrap(
             m,
             "generate_terrain",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              kind_ptr: i32,
              kind_len: i32,
              seed_ptr: i32,
              seed_len: i32,
              height_scale: f64|
              -> i32 {
-                let kind = abi::read_str(&caller, kind_ptr, kind_len);
-                let seed = abi::read_str(&caller, seed_ptr, seed_len);
-                caller.data_mut().generate_terrain(&kind, &seed, height_scale)
+                let kind = read_str(&caller, kind_ptr, kind_len);
+                let seed = read_str(&caller, seed_ptr, seed_len);
+                caller.data_mut().guest_mut().generate_terrain(&kind, &seed, height_scale)
             },
         )?;
 
         linker.func_wrap(
             m,
             "set_tile",
-            |mut caller: Caller<'_, GuestHost>, x: i32, y: i32, id: i32| -> i32 {
-                caller.data_mut().set_tile(x, y, id)
+            |mut caller: Caller<'_, WasmiHost>, x: i32, y: i32, id: i32| -> i32 {
+                caller.data_mut().guest_mut().set_tile(x, y, id)
             },
         )?;
 
         linker.func_wrap(
             m,
             "set_height",
-            |mut caller: Caller<'_, GuestHost>, x: i32, y: i32, h: f64| -> i32 {
-                caller.data_mut().set_height(x, y, h)
+            |mut caller: Caller<'_, WasmiHost>, x: i32, y: i32, h: f64| -> i32 {
+                caller.data_mut().guest_mut().set_height(x, y, h)
             },
         )?;
 
-        linker.func_wrap(m, "rebuild_terrain", |mut caller: Caller<'_, GuestHost>| -> i32 {
-            caller.data_mut().rebuild_terrain()
+        linker.func_wrap(m, "rebuild_terrain", |mut caller: Caller<'_, WasmiHost>| -> i32 {
+            caller.data_mut().guest_mut().rebuild_terrain()
         })?;
 
         linker.func_wrap(
             m,
             "find_path",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              sx: i32,
              sy: i32,
              ex: i32,
@@ -365,7 +386,7 @@ impl WasmiRuntime {
              out_ptr: i32,
              out_cap: i32|
              -> i32 {
-                let cells = caller.data_mut().find_path(sx, sy, ex, ey);
+                let cells = caller.data_mut().guest_mut().find_path(sx, sy, ex, ey);
                 let mut bytes = Vec::with_capacity(cells.len() * 8);
                 for (x, y) in &cells {
                     bytes.extend_from_slice(&x.to_le_bytes());
@@ -374,7 +395,7 @@ impl WasmiRuntime {
                 if bytes.len() > out_cap.max(0) as usize {
                     return -1;
                 }
-                abi::write_bytes(&mut caller, out_ptr, &bytes);
+                write_bytes(&mut caller, out_ptr, &bytes);
                 cells.len() as i32
             },
         )?;
@@ -382,9 +403,9 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "get_camera",
-            |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
-                let (x, y, s) = caller.data_mut().get_camera();
-                abi::write_f64_triple(&mut caller, out_ptr, x, y, s);
+            |mut caller: Caller<'_, WasmiHost>, out_ptr: i32| -> i32 {
+                let (x, y, s) = caller.data_mut().guest_mut().get_camera();
+                write_f64_triple(&mut caller, out_ptr, x, y, s);
                 1
             },
         )?;
@@ -392,67 +413,67 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "set_camera",
-            |mut caller: Caller<'_, GuestHost>, x: f64, y: f64, scale: f64| -> i32 {
-                caller.data_mut().set_camera(x, y, scale)
+            |mut caller: Caller<'_, WasmiHost>, x: f64, y: f64, scale: f64| -> i32 {
+                caller.data_mut().guest_mut().set_camera(x, y, scale)
             },
         )?;
 
         linker.func_wrap(
             m,
             "pick_at",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              x: f64,
              y: f64,
              out_ptr: i32,
              out_cap: i32|
              -> i32 {
-                let name = caller.data_mut().pick_at(x, y);
+                let name = caller.data_mut().guest_mut().pick_at(x, y);
                 if out_cap < name.len() as i32 {
                     return -1;
                 }
-                abi::write_str(&mut caller, out_ptr, &name)
+                write_str(&mut caller, out_ptr, &name)
             },
         )?;
 
         linker.func_wrap(
             m,
             "mouse_down",
-            |mut caller: Caller<'_, GuestHost>, btn: i32| -> i32 {
-                caller.data_mut().mouse_down(btn)
+            |mut caller: Caller<'_, WasmiHost>, btn: i32| -> i32 {
+                caller.data_mut().guest_mut().mouse_down(btn)
             },
         )?;
 
         linker.func_wrap(
             m,
             "mouse_released",
-            |mut caller: Caller<'_, GuestHost>, btn: i32| -> i32 {
-                caller.data_mut().mouse_released(btn)
+            |mut caller: Caller<'_, WasmiHost>, btn: i32| -> i32 {
+                caller.data_mut().guest_mut().mouse_released(btn)
             },
         )?;
 
-        linker.func_wrap(m, "mouse_wheel", |mut caller: Caller<'_, GuestHost>| -> f64 {
-            caller.data_mut().mouse_wheel()
+        linker.func_wrap(m, "mouse_wheel", |mut caller: Caller<'_, WasmiHost>| -> f64 {
+            caller.data_mut().guest_mut().mouse_wheel()
         })?;
 
         linker.func_wrap(
             m,
             "key_up",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
-                let key = abi::read_str(&caller, ptr, len);
-                caller.data_mut().key_up(&key)
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| -> i32 {
+                let key = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().key_up(&key)
             },
         )?;
 
         linker.func_wrap(
             m,
             "get_light",
-            |mut caller: Caller<'_, GuestHost>, out_ptr: i32| -> i32 {
-                let (a, d, c) = caller.data_mut().get_light();
+            |mut caller: Caller<'_, WasmiHost>, out_ptr: i32| -> i32 {
+                let (a, d, c) = caller.data_mut().guest_mut().get_light();
                 let mut buf = Vec::with_capacity(72);
                 for v in a.iter().chain(d.iter()).chain(c.iter()) {
                     buf.extend_from_slice(&v.to_le_bytes());
                 }
-                abi::write_bytes(&mut caller, out_ptr, &buf);
+                write_bytes(&mut caller, out_ptr, &buf);
                 1
             },
         )?;
@@ -460,7 +481,7 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "set_light",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              a0: f64,
              a1: f64,
              a2: f64,
@@ -470,13 +491,15 @@ impl WasmiRuntime {
              c0: f64,
              c1: f64,
              c2: f64|
-             -> i32 { caller.data_mut().set_light(a0, a1, a2, d0, d1, d2, c0, c1, c2) },
+             -> i32 {
+                caller.data_mut().guest_mut().set_light(a0, a1, a2, d0, d1, d2, c0, c1, c2)
+            },
         )?;
 
         linker.func_wrap(
             m,
             "spawn_rect",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              x: f64,
@@ -488,15 +511,15 @@ impl WasmiRuntime {
              b: f64,
              a: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().spawn_rect(&name, x, y, w, h, r, g, b, a)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().spawn_rect(&name, x, y, w, h, r, g, b, a)
             },
         )?;
 
         linker.func_wrap(
             m,
             "spawn_text",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              x: f64,
@@ -509,31 +532,31 @@ impl WasmiRuntime {
              b: f64,
              a: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                let text = abi::read_str(&caller, text_ptr, text_len);
-                caller.data_mut().spawn_text(&name, x, y, &text, scale, r, g, b, a)
+                let name = read_str(&caller, name_ptr, name_len);
+                let text = read_str(&caller, text_ptr, text_len);
+                caller.data_mut().guest_mut().spawn_text(&name, x, y, &text, scale, r, g, b, a)
             },
         )?;
 
         linker.func_wrap(
             m,
             "set_text",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              text_ptr: i32,
              text_len: i32|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                let text = abi::read_str(&caller, text_ptr, text_len);
-                caller.data_mut().set_text(&name, &text)
+                let name = read_str(&caller, name_ptr, name_len);
+                let text = read_str(&caller, text_ptr, text_len);
+                caller.data_mut().guest_mut().set_text(&name, &text)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_container",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              w: f64,
@@ -543,15 +566,15 @@ impl WasmiRuntime {
              b: f64,
              a: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_container(&name, w, h, r, g, b, a)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().ui_container(&name, w, h, r, g, b, a)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_text",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              text_ptr: i32,
@@ -564,16 +587,19 @@ impl WasmiRuntime {
              a: f64,
              justify: i32|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                let text = abi::read_str(&caller, text_ptr, text_len);
-                caller.data_mut().ui_text(&name, &text, scale, max_width, r, g, b, a, justify)
+                let name = read_str(&caller, name_ptr, name_len);
+                let text = read_str(&caller, text_ptr, text_len);
+                caller
+                    .data_mut()
+                    .guest_mut()
+                    .ui_text(&name, &text, scale, max_width, r, g, b, a, justify)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_button",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              text_ptr: i32,
@@ -585,16 +611,16 @@ impl WasmiRuntime {
              b: f64,
              a: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                let text = abi::read_str(&caller, text_ptr, text_len);
-                caller.data_mut().ui_button(&name, &text, w, h, r, g, b, a)
+                let name = read_str(&caller, name_ptr, name_len);
+                let text = read_str(&caller, text_ptr, text_len);
+                caller.data_mut().guest_mut().ui_button(&name, &text, w, h, r, g, b, a)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_array",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              vertical: i32,
@@ -605,15 +631,15 @@ impl WasmiRuntime {
              b: f64,
              a: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_array(&name, vertical, align, spacing, r, g, b, a)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().ui_array(&name, vertical, align, spacing, r, g, b, a)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_padding",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              top: f64,
@@ -625,15 +651,18 @@ impl WasmiRuntime {
              b: f64,
              a: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_padding(&name, top, right, bottom, left, r, g, b, a)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller
+                    .data_mut()
+                    .guest_mut()
+                    .ui_padding(&name, top, right, bottom, left, r, g, b, a)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_sprite",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              texture_ptr: i32,
@@ -644,16 +673,16 @@ impl WasmiRuntime {
              tsx: f64,
              tsy: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                let texture = abi::read_str(&caller, texture_ptr, texture_len);
-                caller.data_mut().ui_sprite(&name, &texture, w, h, frame, tsx, tsy)
+                let name = read_str(&caller, name_ptr, name_len);
+                let texture = read_str(&caller, texture_ptr, texture_len);
+                caller.data_mut().guest_mut().ui_sprite(&name, &texture, w, h, frame, tsx, tsy)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_add_child",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              parent_ptr: i32,
              parent_len: i32,
              child_ptr: i32,
@@ -661,53 +690,58 @@ impl WasmiRuntime {
              self_anchor: i32,
              child_anchor: i32|
              -> i32 {
-                let parent = abi::read_str(&caller, parent_ptr, parent_len);
-                let child = abi::read_str(&caller, child_ptr, child_len);
-                caller.data_mut().ui_add_child(&parent, &child, self_anchor, child_anchor)
+                let parent = read_str(&caller, parent_ptr, parent_len);
+                let child = read_str(&caller, child_ptr, child_len);
+                caller.data_mut().guest_mut().ui_add_child(
+                    &parent,
+                    &child,
+                    self_anchor,
+                    child_anchor,
+                )
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_add_to_root",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              self_anchor: i32,
              child_anchor: i32|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_add_to_root(&name, self_anchor, child_anchor)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().ui_add_to_root(&name, self_anchor, child_anchor)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_set_size",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              w: f64,
              h: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_set_size(&name, w, h)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().ui_set_size(&name, w, h)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_set_anchor",
-            |mut caller: Caller<'_, GuestHost>, name_ptr: i32, name_len: i32, anchor: i32| -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_set_anchor(&name, anchor)
+            |mut caller: Caller<'_, WasmiHost>, name_ptr: i32, name_len: i32, anchor: i32| -> i32 {
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().ui_set_anchor(&name, anchor)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_set_color",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              r: f64,
@@ -715,34 +749,34 @@ impl WasmiRuntime {
              b: f64,
              a: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_set_color(&name, r, g, b, a)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().ui_set_color(&name, r, g, b, a)
             },
         )?;
 
         linker.func_wrap(
             m,
             "ui_set_fixed",
-            |mut caller: Caller<'_, GuestHost>, name_ptr: i32, name_len: i32, fixed: i32| -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().ui_set_fixed(&name, fixed)
+            |mut caller: Caller<'_, WasmiHost>, name_ptr: i32, name_len: i32, fixed: i32| -> i32 {
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().ui_set_fixed(&name, fixed)
             },
         )?;
 
         linker.func_wrap(
             m,
             "subscribe",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32| -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().subscribe(&name)
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32| -> i32 {
+                let name = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().subscribe(&name)
             },
         )?;
 
         linker.func_wrap(
             m,
             "poll_event",
-            |mut caller: Caller<'_, GuestHost>, out_ptr: i32, out_cap: i32| -> i32 {
-                let Some((kind, name)) = caller.data_mut().poll_event() else {
+            |mut caller: Caller<'_, WasmiHost>, out_ptr: i32, out_cap: i32| -> i32 {
+                let Some((kind, name)) = caller.data_mut().guest_mut().poll_event() else {
                     return 0;
                 };
                 let mut bytes = Vec::with_capacity(8 + name.len());
@@ -752,7 +786,7 @@ impl WasmiRuntime {
                 if bytes.len() > out_cap.max(0) as usize {
                     return -1;
                 }
-                abi::write_bytes(&mut caller, out_ptr, &bytes);
+                write_bytes(&mut caller, out_ptr, &bytes);
                 1
             },
         )?;
@@ -760,7 +794,7 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "spawn_collider",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              x: f64,
@@ -768,22 +802,22 @@ impl WasmiRuntime {
              w: f64,
              h: f64|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                caller.data_mut().spawn_collider(&name, x, y, w, h)
+                let name = read_str(&caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().spawn_collider(&name, x, y, w, h)
             },
         )?;
 
         linker.func_wrap(
             m,
             "get_anim",
-            |mut caller: Caller<'_, GuestHost>,
+            |mut caller: Caller<'_, WasmiHost>,
              name_ptr: i32,
              name_len: i32,
              out_ptr: i32,
              out_cap: i32|
              -> i32 {
-                let name = abi::read_str(&caller, name_ptr, name_len);
-                let Some((anim, frame)) = caller.data_mut().get_anim(&name) else {
+                let name = read_str(&caller, name_ptr, name_len);
+                let Some((anim, frame)) = caller.data_mut().guest_mut().get_anim(&name) else {
                     return 0;
                 };
                 let mut bytes = Vec::with_capacity(12 + anim.len());
@@ -793,7 +827,7 @@ impl WasmiRuntime {
                 if bytes.len() > out_cap.max(0) as usize {
                     return -1;
                 }
-                abi::write_bytes(&mut caller, out_ptr, &bytes);
+                write_bytes(&mut caller, out_ptr, &bytes);
                 1
             },
         )?;
@@ -801,21 +835,21 @@ impl WasmiRuntime {
         linker.func_wrap(
             m,
             "has_resource",
-            |mut caller: Caller<'_, GuestHost>, kind: i32, ptr: i32, len: i32| -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                caller.data_mut().has_resource(kind, &name)
+            |mut caller: Caller<'_, WasmiHost>, kind: i32, ptr: i32, len: i32| -> i32 {
+                let name = read_str(&caller, ptr, len);
+                caller.data_mut().guest_mut().has_resource(kind, &name)
             },
         )?;
 
         linker.func_wrap(
             m,
             "texture_size",
-            |mut caller: Caller<'_, GuestHost>, ptr: i32, len: i32, out_ptr: i32| -> i32 {
-                let name = abi::read_str(&caller, ptr, len);
-                let Some((w, h)) = caller.data_mut().texture_size(&name) else {
+            |mut caller: Caller<'_, WasmiHost>, ptr: i32, len: i32, out_ptr: i32| -> i32 {
+                let name = read_str(&caller, ptr, len);
+                let Some((w, h)) = caller.data_mut().guest_mut().texture_size(&name) else {
                     return 0;
                 };
-                abi::write_f64_pair(&mut caller, out_ptr, w, h);
+                write_f64_pair(&mut caller, out_ptr, w, h);
                 1
             },
         )?;
@@ -833,8 +867,8 @@ impl GuestRuntime for WasmiRuntime {
             .memory_size(limits.max_memory_bytes)
             .trap_on_grow_failure(true)
             .build();
-        let mut store = Store::new(&engine, GuestHost::new(store_limits));
-        store.limiter(|host: &mut GuestHost| host.resource_limiter());
+        let mut store = Store::new(&engine, WasmiHost::new(store_limits));
+        store.limiter(|host: &mut WasmiHost| host.resource_limiter());
 
         let mut linker = Linker::new(&engine);
         Self::install_imports(&mut linker).map_err(|e| GuestError::Instantiate(e.to_string()))?;
@@ -856,20 +890,20 @@ impl GuestRuntime for WasmiRuntime {
 
     fn init(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
         let Some(init) = self.init else { return Ok(()) };
-        self.store.data_mut().set_engine(engine);
+        self.store.data_mut().guest_mut().set_engine(engine);
         self.set_fuel_budget()?;
         init.call(&mut self.store, ()).map_err(Self::map_call_error)
     }
 
     fn update(&mut self, engine: &mut Engine, dt: f64) -> Result<(), GuestError> {
-        self.store.data_mut().set_engine(engine);
+        self.store.data_mut().guest_mut().set_engine(engine);
         self.set_fuel_budget()?;
         self.update.call(&mut self.store, (dt,)).map_err(Self::map_call_error)
     }
 
     fn start(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
         let Some(start) = self.start else { return Ok(()) };
-        self.store.data_mut().set_engine(engine);
+        self.store.data_mut().guest_mut().set_engine(engine);
         self.set_fuel_budget()?;
         start.call(&mut self.store, ()).map_err(Self::map_call_error)
     }
@@ -895,4 +929,41 @@ impl WasmiRuntime {
             GuestError::Trap(e.to_string())
         }
     }
+}
+
+/// Read a UTF-8 string from the guest's linear memory (wasmi backend).
+fn read_str(caller: &Caller<'_, WasmiHost>, ptr: i32, len: i32) -> String {
+    let Some(mem) = caller.get_export(abi::MEMORY_EXPORT).and_then(|e| e.into_memory()) else {
+        return String::new();
+    };
+    abi::read_str_from(mem.data(caller), ptr, len)
+}
+
+/// Write bytes into the guest's linear memory (wasmi backend).
+fn write_bytes(caller: &mut Caller<'_, WasmiHost>, ptr: i32, bytes: &[u8]) -> i32 {
+    let Some(mem) = caller.get_export(abi::MEMORY_EXPORT).and_then(|e| e.into_memory()) else {
+        return -1;
+    };
+    abi::write_bytes_to(mem.data_mut(caller), ptr, bytes)
+}
+
+/// Write a UTF-8 string into the guest's linear memory (wasmi backend).
+fn write_str(caller: &mut Caller<'_, WasmiHost>, ptr: i32, s: &str) -> i32 {
+    write_bytes(caller, ptr, s.as_bytes())
+}
+
+/// Write two `f64`s into the guest's linear memory (wasmi backend).
+fn write_f64_pair(caller: &mut Caller<'_, WasmiHost>, ptr: i32, a: f64, b: f64) -> i32 {
+    let Some(mem) = caller.get_export(abi::MEMORY_EXPORT).and_then(|e| e.into_memory()) else {
+        return -1;
+    };
+    abi::write_f64_pair_to(mem.data_mut(caller), ptr, a, b)
+}
+
+/// Write three `f64`s into the guest's linear memory (wasmi backend).
+fn write_f64_triple(caller: &mut Caller<'_, WasmiHost>, ptr: i32, a: f64, b: f64, c: f64) -> i32 {
+    let Some(mem) = caller.get_export(abi::MEMORY_EXPORT).and_then(|e| e.into_memory()) else {
+        return -1;
+    };
+    abi::write_f64_triple_to(mem.data_mut(caller), ptr, a, b, c)
 }

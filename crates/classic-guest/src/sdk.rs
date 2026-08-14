@@ -1,7 +1,8 @@
 //! The host-side SDK: bridges guest host-imports to the engine.
 //!
-//! [`GuestHost`] is a thin raw-pointer bridge over [`classic_engine::Engine`].
-//! It also owns the wasmi [`StoreLimits`] used to cap guest linear memory.  The
+//! [`GuestHost`] is a thin raw-pointer bridge over [`classic_engine::Engine`],
+//! shared by every runtime backend (wasmi, wasmtime).  Each runtime wraps it in
+//! its own store data and owns its own resource limiter (memory cap).  The
 //! heavy lifting lives in safe `Engine` methods; only the pointer deref is
 //! `unsafe`.
 
@@ -42,26 +43,20 @@ fn justify(i: i32) -> TextJustify {
     }
 }
 
-/// Host state shared with the wasmi store: a pointer to the engine plus the
-/// guest's resource limits.
+/// Host state shared with every guest runtime store: a raw pointer to the
+/// engine, re-pointed for each guest entry point.
 pub struct GuestHost {
     engine: *mut Engine,
-    limits: wasmi::StoreLimits,
 }
 
 impl GuestHost {
-    pub(crate) fn new(limits: wasmi::StoreLimits) -> Self {
-        Self { engine: std::ptr::null_mut(), limits }
+    pub(crate) fn new() -> Self {
+        Self { engine: std::ptr::null_mut() }
     }
 
-    /// Re-point the host at the engine for the current frame.
+    /// Re-point the host at the engine for the current call.
     pub(crate) fn set_engine(&mut self, engine: &mut Engine) {
         self.engine = engine as *mut Engine;
-    }
-
-    /// The guest resource limiter (memory cap).
-    pub(crate) fn resource_limiter(&mut self) -> &mut dyn wasmi::ResourceLimiter {
-        &mut self.limits
     }
 
     #[inline]
