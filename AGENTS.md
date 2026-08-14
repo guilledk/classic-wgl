@@ -189,6 +189,10 @@ plans/
   explicit `CLASSIC_FIXED_DT` — without `CLASSIC_TEST` the idle animator advances on
   real delta and lands on a different frame each run:
   `CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar cargo run -p classic-desktop`
+  Under `LIBGL_ALWAYS_SOFTWARE=1`, llvmpipe's multithreaded rasterizer can race on
+  the sprite ghost-pass depth rendering (the landing rocket is the first iso
+  sprite in the lunar scene); pin it to one thread with `LP_NUM_THREADS=0`
+  (CI does this — see `.github/workflows/ci.yml`).
 - **Pixel golden**: `CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=check` compares a pixel buffer
   against `tests/golden/baseline/baseline.png` (not run in CI by default — software-
   rasteriser version-dependent).
