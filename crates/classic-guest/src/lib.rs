@@ -7,6 +7,7 @@
 //! guest imports to the engine, and the ABI contract ([`abi`]).
 
 pub mod abi;
+pub mod imports;
 pub mod runtime;
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime_wasmtime;

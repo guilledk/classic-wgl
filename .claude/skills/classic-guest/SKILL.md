@@ -28,8 +28,13 @@ crates/classic-guest/
                           linear-memory slice
   src/sdk.rs              GuestHost: raw-pointer bridge to Engine + the SDK methods
                           (shared by every runtime backend)
-  src/runtime.rs          WasmiRuntime (native + wasm): config (fuel), Linker imports
-  src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel), Linker imports
+  src/imports.rs          the host-import surface (single source of truth): an
+                          `install_host_imports!` macro expanded by the wasmi and
+                          wasmtime backends (marshals args and forwards to `GuestHost`)
+  src/runtime.rs          WasmiRuntime (native + wasm): config (fuel) + the shared
+                          import macro + memory helpers
+  src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel) + the shared
+                          import macro + memory helpers
   src/runtime_web.rs      WebWasmRuntime (wasm only, trusted): browser-native
                           `WebAssembly`, host imports as `Closure`s (+ a dispatcher
                           for the 8 imports with >8 args)
@@ -43,9 +48,10 @@ crates/classic-guest/
 wasm, **browser-native `WebAssembly` for `trusted` guests** (no fuel API) and a
 **`Worker`-isolated browser-native runtime for untrusted guests** (terminate
 watchdog), falling back to **wasmi** when `SharedArrayBuffer` is unavailable.
-All implement the same `GuestRuntime` trait and the same `env` import surface
-(the `GuestHost` SDK bodies are not duplicated — only the thin linker/closure
-layers are).
+All implement the same `GuestRuntime` trait and the same `env` import surface.
+The wasmi and wasmtime linker layers are generated from the single
+`imports.rs::install_host_imports!` macro; only the `GuestHost` SDK bodies
+(`sdk.rs`) and the web/worker closure/SAB layers are backend-specific.
 
 ## 3. The ABI (host imports, module "env")
 
@@ -57,7 +63,8 @@ Guest exports (the host→guest side of the ABI):
 | `init` | `() -> ()` | once, synchronously at install, before the first frame (optional) |
 | `start` | `() -> ()` | once, after the first `update` completes (optional) |
 
-Host imports (defined in `runtime.rs::install_imports` / `runtime_wasmtime.rs::install_imports`) are the SDK surface:
+Host imports (defined once in `imports.rs::install_host_imports`, expanded by
+both the wasmi and wasmtime backends) are the SDK surface:
 
 | Import | Signature | Purpose |
 |---|---|---|
@@ -166,11 +173,11 @@ confined to `GuestHost::engine`/`engine_mut`.
 ## 7. Adding a host import (the SDK is a reviewed surface)
 
 1. Add the method to `GuestHost` in `sdk.rs` (call the safe `Engine` helper).
-2. Register it in every backend's import surface: `runtime.rs::install_imports`
-   (wasmi) and `runtime_wasmtime.rs::install_imports` (wasmtime) via
-   `linker.func_wrap("env", name, …)`; `runtime_web.rs` (browser-Wasm: a
-   `Closure`, or a dispatcher arm for the >8-arg imports); `runtime_worker.rs`'s
-   dispatch match plus the matching stub in `worker.js`.
+2. Register it in every backend's import surface: the `imports.rs`
+   `install_host_imports!` macro (shared by the wasmi and wasmtime backends);
+   `runtime_web.rs` (browser-Wasm: a `Closure`, or a dispatcher arm for the
+   >8-arg imports); `runtime_worker.rs`'s dispatch match plus the matching
+   stub in `worker.js`.
 3. Marshal strings with the local `read_str`/`write_str` helpers; pairs with
    `write_f64_pair` (they wrap the backend-agnostic `abi::read_str_from` /
    `abi::write_*_to` slice helpers).

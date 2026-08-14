@@ -55,18 +55,11 @@ fn write_str(mem: &Memory, ptr: i32, s: &str) -> i32 {
 }
 
 fn write_f64_pair(mem: &Memory, ptr: i32, a: f64, b: f64) -> i32 {
-    let mut buf = [0u8; 16];
-    buf[0..8].copy_from_slice(&a.to_le_bytes());
-    buf[8..16].copy_from_slice(&b.to_le_bytes());
-    write_bytes(mem, ptr, &buf)
+    write_bytes(mem, ptr, &abi::f64_pair_bytes(a, b))
 }
 
 fn write_f64_triple(mem: &Memory, ptr: i32, a: f64, b: f64, c: f64) -> i32 {
-    let mut buf = [0u8; 24];
-    buf[0..8].copy_from_slice(&a.to_le_bytes());
-    buf[8..16].copy_from_slice(&b.to_le_bytes());
-    buf[16..24].copy_from_slice(&c.to_le_bytes());
-    write_bytes(mem, ptr, &buf)
+    write_bytes(mem, ptr, &abi::f64_triple_bytes(a, b, c))
 }
 
 /// A JS exception's message, for trap reporting.
@@ -116,7 +109,6 @@ impl WebWasmRuntime {
         mem: &Rc<RefCell<Option<Memory>>>,
     ) -> Result<js_sys::Object, GuestError> {
         let env = js_sys::Object::new();
-        let m = abi::HOST_MODULE;
 
         macro_rules! set_import {
             ($name:literal, $closure:expr) => {{
@@ -125,12 +117,6 @@ impl WebWasmRuntime {
                     .map_err(|e| GuestError::Instantiate(js_err(&e)))?;
                 c.forget();
             }};
-        }
-
-        macro_rules! mem_cell {
-            () => {
-                mem.clone()
-            };
         }
 
         macro_rules! set_import_str {
@@ -147,7 +133,7 @@ impl WebWasmRuntime {
         // args, and dispatches into the shared `GuestHost`.
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             let dispatcher =
                 Closure::wrap(Box::new(move |op: u32, args: js_sys::Array| -> JsValue {
                     let result: i32 = match op {
@@ -321,7 +307,7 @@ impl WebWasmRuntime {
         // log
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "log",
                 Box::new(move |ptr: i32, len: i32| {
@@ -337,7 +323,7 @@ impl WebWasmRuntime {
         // spawn
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "spawn",
                 Box::new(move |ptr: i32, len: i32| -> i32 {
@@ -353,7 +339,7 @@ impl WebWasmRuntime {
         // despawn
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "despawn",
                 Box::new(move |ptr: i32, len: i32| -> i32 {
@@ -369,7 +355,7 @@ impl WebWasmRuntime {
         // has
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "has",
                 Box::new(move |ptr: i32, len: i32| -> i32 {
@@ -385,7 +371,7 @@ impl WebWasmRuntime {
         // names
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "names",
                 Box::new(move |out_ptr: i32, out_cap: i32| -> i32 {
@@ -402,7 +388,7 @@ impl WebWasmRuntime {
         // get
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "get",
                 Box::new(move |ptr: i32, len: i32, out_ptr: i32, out_cap: i32| -> i32 {
@@ -423,7 +409,7 @@ impl WebWasmRuntime {
         // get_comp
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "get_comp",
                 Box::new(
@@ -453,7 +439,7 @@ impl WebWasmRuntime {
         // set
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "set",
                 Box::new(move |ptr: i32, len: i32, json_ptr: i32, json_len: i32| -> i32 {
@@ -470,7 +456,7 @@ impl WebWasmRuntime {
         // set_comp
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "set_comp",
                 Box::new(
@@ -499,7 +485,7 @@ impl WebWasmRuntime {
         // set_pos
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "set_pos",
                 Box::new(move |ptr: i32, len: i32, x: f64, y: f64, z: f64| -> i32 {
@@ -515,7 +501,7 @@ impl WebWasmRuntime {
         // get_pos
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "get_pos",
                 Box::new(move |ptr: i32, len: i32, out_ptr: i32| -> i32 {
@@ -536,7 +522,7 @@ impl WebWasmRuntime {
         // mouse
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "mouse",
                 Box::new(move |out_ptr: i32| -> i32 {
@@ -551,7 +537,7 @@ impl WebWasmRuntime {
         // mouse_iso
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "mouse_iso",
                 Box::new(move |out_ptr: i32| -> i32 {
@@ -578,7 +564,7 @@ impl WebWasmRuntime {
         // set_anim
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "set_anim",
                 Box::new(move |ptr: i32, len: i32, anim_ptr: i32, anim_len: i32| -> i32 {
@@ -643,7 +629,7 @@ impl WebWasmRuntime {
         // key_down
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "key_down",
                 Box::new(move |ptr: i32, len: i32| -> i32 {
@@ -659,7 +645,7 @@ impl WebWasmRuntime {
         // was_key_pressed
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "was_key_pressed",
                 Box::new(move |ptr: i32, len: i32| -> i32 {
@@ -675,7 +661,7 @@ impl WebWasmRuntime {
         // generate_terrain
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "generate_terrain",
                 Box::new(
@@ -731,7 +717,7 @@ impl WebWasmRuntime {
         // find_path
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "find_path",
                 Box::new(
@@ -756,7 +742,7 @@ impl WebWasmRuntime {
         // get_camera
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "get_camera",
                 Box::new(move |out_ptr: i32| -> i32 {
@@ -782,7 +768,7 @@ impl WebWasmRuntime {
         // pick_at
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "pick_at",
                 Box::new(move |x: f64, y: f64, out_ptr: i32, out_cap: i32| -> i32 {
@@ -829,7 +815,7 @@ impl WebWasmRuntime {
         // key_up
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "key_up",
                 Box::new(move |ptr: i32, len: i32| -> i32 {
@@ -845,7 +831,7 @@ impl WebWasmRuntime {
         // get_light
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "get_light",
                 Box::new(move |out_ptr: i32| -> i32 {
@@ -873,7 +859,7 @@ impl WebWasmRuntime {
         // set_text
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "set_text",
                 Box::new(move |name_ptr: i32, name_len: i32, text_ptr: i32, text_len: i32| -> i32 {
@@ -890,7 +876,7 @@ impl WebWasmRuntime {
         // ui_container
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "ui_container",
                 Box::new(
@@ -931,7 +917,7 @@ impl WebWasmRuntime {
         // ui_add_child
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "ui_add_child",
                 Box::new(
@@ -956,7 +942,7 @@ impl WebWasmRuntime {
         // ui_add_to_root
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "ui_add_to_root",
                 Box::new(
@@ -978,7 +964,7 @@ impl WebWasmRuntime {
         // ui_set_size
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "ui_set_size",
                 Box::new(move |name_ptr: i32, name_len: i32, w: f64, h: f64| -> i32 {
@@ -994,7 +980,7 @@ impl WebWasmRuntime {
         // ui_set_anchor
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "ui_set_anchor",
                 Box::new(move |name_ptr: i32, name_len: i32, anchor: i32| -> i32 {
@@ -1010,7 +996,7 @@ impl WebWasmRuntime {
         // ui_set_color
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "ui_set_color",
                 Box::new(
@@ -1028,7 +1014,7 @@ impl WebWasmRuntime {
         // ui_set_fixed
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "ui_set_fixed",
                 Box::new(move |name_ptr: i32, name_len: i32, fixed: i32| -> i32 {
@@ -1044,7 +1030,7 @@ impl WebWasmRuntime {
         // subscribe
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "subscribe",
                 Box::new(move |ptr: i32, len: i32| -> i32 {
@@ -1060,7 +1046,7 @@ impl WebWasmRuntime {
         // poll_event
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "poll_event",
                 Box::new(move |out_ptr: i32, out_cap: i32| -> i32 {
@@ -1084,7 +1070,7 @@ impl WebWasmRuntime {
         // spawn_collider
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "spawn_collider",
                 Box::new(
@@ -1102,7 +1088,7 @@ impl WebWasmRuntime {
         // get_anim
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "get_anim",
                 Box::new(move |name_ptr: i32, name_len: i32, out_ptr: i32, out_cap: i32| -> i32 {
@@ -1130,7 +1116,7 @@ impl WebWasmRuntime {
         // has_resource
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "has_resource",
                 Box::new(move |kind: i32, ptr: i32, len: i32| -> i32 {
@@ -1146,7 +1132,7 @@ impl WebWasmRuntime {
         // texture_size
         {
             let host = host.clone();
-            let mem = mem_cell!();
+            let mem = mem.clone();
             set_import!(
                 "texture_size",
                 Box::new(move |ptr: i32, len: i32, out_ptr: i32| -> i32 {
@@ -1164,7 +1150,6 @@ impl WebWasmRuntime {
             );
         }
 
-        let _ = m;
         Ok(env)
     }
 }

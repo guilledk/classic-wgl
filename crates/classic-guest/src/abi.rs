@@ -55,19 +55,29 @@ pub fn write_str_to(data: &mut [u8], ptr: i32, s: &str) -> i32 {
     write_bytes_to(data, ptr, s.as_bytes())
 }
 
-/// Write two `f64`s (16 bytes, little-endian native layout) into guest memory.
-pub fn write_f64_pair_to(data: &mut [u8], ptr: i32, a: f64, b: f64) -> i32 {
+/// Pack two `f64`s into a 16-byte little-endian buffer.
+pub fn f64_pair_bytes(a: f64, b: f64) -> [u8; 16] {
     let mut buf = [0u8; 16];
     buf[0..8].copy_from_slice(&a.to_le_bytes());
     buf[8..16].copy_from_slice(&b.to_le_bytes());
-    write_bytes_to(data, ptr, &buf)
+    buf
 }
 
-/// Write three `f64`s (24 bytes) into guest memory.
-pub fn write_f64_triple_to(data: &mut [u8], ptr: i32, a: f64, b: f64, c: f64) -> i32 {
+/// Pack three `f64`s into a 24-byte little-endian buffer.
+pub fn f64_triple_bytes(a: f64, b: f64, c: f64) -> [u8; 24] {
     let mut buf = [0u8; 24];
     buf[0..8].copy_from_slice(&a.to_le_bytes());
     buf[8..16].copy_from_slice(&b.to_le_bytes());
     buf[16..24].copy_from_slice(&c.to_le_bytes());
-    write_bytes_to(data, ptr, &buf)
+    buf
+}
+
+/// Write two `f64`s (16 bytes, little-endian native layout) into guest memory.
+pub fn write_f64_pair_to(data: &mut [u8], ptr: i32, a: f64, b: f64) -> i32 {
+    write_bytes_to(data, ptr, &f64_pair_bytes(a, b))
+}
+
+/// Write three `f64`s (24 bytes) into guest memory.
+pub fn write_f64_triple_to(data: &mut [u8], ptr: i32, a: f64, b: f64, c: f64) -> i32 {
+    write_bytes_to(data, ptr, &f64_triple_bytes(a, b, c))
 }
