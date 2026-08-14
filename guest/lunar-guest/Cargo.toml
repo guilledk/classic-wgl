@@ -15,4 +15,5 @@ panic = "abort"
 strip = true
 
 [dependencies]
+classic-terrain = { path = "../../crates/classic-terrain" }
 dlmalloc = { version = "0.2", features = ["global"] }

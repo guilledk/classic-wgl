@@ -428,8 +428,8 @@ function envImports() {
         set_spawn_points: function (ptr, len) {
             return hostCallRaw(OP_SET_SPAWN_POINTS, ptr, len, []).ret | 0;
         },
-        commit_terrain: function () {
-            return hostCall(OP_COMMIT_TERRAIN, [], []).ret | 0;
+        commit_terrain: function (heightScale) {
+            return hostCall(OP_COMMIT_TERRAIN, [], [heightScale]).ret | 0;
         },
     };
 }

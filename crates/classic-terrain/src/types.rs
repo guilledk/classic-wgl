@@ -3,7 +3,9 @@
 //! Any terrain generator produces a [`Terrain`] (tile/heights/nav grids) plus a
 //! procedurally painted [`Tileset`]; [`GeneratedTerrain`] bundles them for the
 //! engine's install/regenerate prefabs.  The `lunar` generator (see
-//! [`crate::terrain::generate`]) is the first implementation.
+//! [`crate::generate`]) is the first implementation.
+
+use alloc::vec::Vec;
 
 /// A generated terrain's grids.
 ///

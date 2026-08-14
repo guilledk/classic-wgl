@@ -35,9 +35,15 @@
 //! `y * (size_x + 1) + x`; tiles and nav live on a **tile** grid of
 //! `size_x * size_y` indexed `y * size_x + x`.  `build_mesh` asserts both.
 
+use alloc::collections::VecDeque;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
+use crate::fractal::{domain_warp, smoothstep, Fbm};
+use crate::material::{tile_id, LunarMaterial};
 use crate::simplex_noise::{Random, SimplexNoise};
-use crate::terrain::fractal::{domain_warp, smoothstep, Fbm};
-use crate::terrain::material::{tile_id, LunarMaterial};
 
 /// A guaranteed-flat circular region for an RTS start position or base site.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -482,7 +488,7 @@ pub fn generate_lunar(p: &LunarParams) -> LunarTerrain {
             // Per-tile gradient magnitude, in height units per tile.
             let dzdx = ((ne + se) - (nw + sw)) * 0.5;
             let dzdy = ((sw + se) - (nw + ne)) * 0.5;
-            slopes[i] = (dzdx * dzdx + dzdy * dzdy).sqrt();
+            slopes[i] = libm::sqrtf(dzdx * dzdx + dzdy * dzdy);
         }
     }
 
@@ -541,7 +547,7 @@ pub fn generate_lunar(p: &LunarParams) -> LunarTerrain {
 
     let mut spawn_points: Vec<(i32, i32)> = zones
         .iter()
-        .map(|z| (z.x.round() as i32, z.y.round() as i32))
+        .map(|z| (libm::roundf(z.x) as i32, libm::roundf(z.y) as i32))
         .map(|(x, y)| (x.clamp(0, sx - 1), y.clamp(0, sy - 1)))
         .collect();
 
@@ -610,9 +616,9 @@ fn place_landing_zones(
 
     let mut zones = Vec::with_capacity(n as usize);
     for i in 0..n {
-        let a = std::f32::consts::TAU * (i as f32 / n as f32) + std::f32::consts::FRAC_PI_4;
-        let ideal_x = cx + ring * a.cos();
-        let ideal_y = cy + ring * a.sin();
+        let a = core::f32::consts::TAU * (i as f32 / n as f32) + core::f32::consts::FRAC_PI_4;
+        let ideal_x = cx + ring * libm::cosf(a);
+        let ideal_y = cy + ring * libm::sinf(a);
 
         let mut best = (ideal_x, ideal_y);
         let mut best_score = f32::MAX;
@@ -653,7 +659,7 @@ fn zone_score(
     heights: &[f32],
     vw: usize,
 ) -> f32 {
-    let r = radius.ceil() as i32;
+    let r = libm::ceilf(radius) as i32;
     let mut n = 0f32;
     let mut sum = 0f32;
     let mut sum_sq = 0f32;
@@ -698,7 +704,7 @@ fn sample_craters(
     // Density is per 1000 tiles; the sampling area is inflated to match the
     // 20% overscan below so that off-map centres do not thin out the interior.
     let area = (sx as f32 * 1.2) * (sy as f32 * 1.2);
-    let count = ((p.crater_density.max(0.0) * area) / 1000.0).round() as u32;
+    let count = libm::roundf((p.crater_density.max(0.0) * area) / 1000.0) as u32;
     let mut craters = Vec::with_capacity(count as usize);
     let r_min = p.crater_radius_min.max(0.5);
     let r_max = p.crater_radius_max.max(r_min + 0.1);
@@ -710,7 +716,7 @@ fn sample_craters(
         let x = (rng.next_f64() as f32) * (sx as f32 * 1.2) - sx as f32 * 0.1;
         let y = (rng.next_f64() as f32) * (sy as f32 * 1.2) - sy as f32 * 0.1;
         let u = rng.next_f64();
-        let radius = r_min * ratio.powf(u.powf(p.crater_size_exponent as f64)) as f32;
+        let radius = r_min * libm::pow(ratio, libm::pow(u, p.crater_size_exponent as f64)) as f32;
 
         // Keep the *bowl* off the pad core.  Excluding the skirt as well —
         // and scaling the exclusion by the full crater radius — carves an
@@ -729,8 +735,8 @@ fn sample_craters(
 
         // Thin the crater population over the maria.  Sampling the mask here
         // rather than filtering afterwards keeps the size distribution intact.
-        let mx = (x.round() as i32).clamp(0, sx) as usize;
-        let my = (y.round() as i32).clamp(0, sy) as usize;
+        let mx = (libm::roundf(x) as i32).clamp(0, sx) as usize;
+        let my = (libm::roundf(y) as i32).clamp(0, sy) as usize;
         let highland = mare[my * vw + mx];
         let keep_p = p.mare_crater_factor + (1.0 - p.mare_crater_factor) * highland;
         if (rng.next_f64() as f32) > keep_p {
@@ -765,7 +771,7 @@ fn crater_depth(p: &LunarParams, radius: f32) -> f32 {
     } else {
         p.crater_depth_ratio
             * p.crater_complex_radius
-            * (radius / p.crater_complex_radius).powf(0.35)
+            * libm::powf(radius / p.crater_complex_radius, 0.35)
     }
 }
 
@@ -786,10 +792,10 @@ fn stamp_crater(
     noise: &SimplexNoise,
 ) {
     let reach = c.radius * p.ejecta_extent + 2.0;
-    let x0 = ((c.x - reach).floor() as i32).max(0);
-    let x1 = ((c.x + reach).ceil() as i32).min(sx);
-    let y0 = ((c.y - reach).floor() as i32).max(0);
-    let y1 = ((c.y + reach).ceil() as i32).min(sy);
+    let x0 = (libm::floorf(c.x - reach) as i32).max(0);
+    let x1 = (libm::ceilf(c.x + reach) as i32).min(sx);
+    let y0 = (libm::floorf(c.y - reach) as i32).max(0);
+    let y1 = (libm::ceilf(c.y + reach) as i32).min(sy);
     if x0 > x1 || y0 > y1 {
         return;
     }
@@ -797,8 +803,8 @@ fn stamp_crater(
     // Reference elevation at the crater centre, taken from the pre-impact
     // surface so a crater's shape does not depend on which other craters
     // happened to be stamped before it.
-    let cix = (c.x.round() as i32).clamp(0, sx) as usize;
-    let ciy = (c.y.round() as i32).clamp(0, sy) as usize;
+    let cix = (libm::roundf(c.x) as i32).clamp(0, sx) as usize;
+    let ciy = (libm::roundf(c.y) as i32).clamp(0, sy) as usize;
     let h0 = pre_impact[ciy * vw + cix];
 
     let tw = sx as usize;
@@ -808,7 +814,7 @@ fn stamp_crater(
         for vx in x0..=x1 {
             let dx = vx as f32 - c.x;
             let dy = vy as f32 - c.y;
-            let d = (dx * dx + dy * dy).sqrt();
+            let d = libm::sqrtf(dx * dx + dy * dy);
             if d > reach {
                 continue;
             }
@@ -837,7 +843,7 @@ fn stamp_crater(
                     // Complex crater: flat floor out to 55% of the radius,
                     // then a slumped wall, plus a central peak.
                     let wall = smoothstep_f32(0.55, 1.0, t);
-                    let peak = (1.0 - (t / 0.22).min(1.0)).powi(2) * c.depth * 0.45;
+                    let peak = libm::powf(1.0 - (t / 0.22).min(1.0), 2.0) * c.depth * 0.45;
                     anchor - c.depth * (1.0 - wall) + peak
                 } else {
                     // Simple crater: parabolic bowl.
@@ -855,7 +861,7 @@ fn stamp_crater(
 
             if t > 0.80 {
                 let s = (t - 1.0) / 0.15;
-                let rim_falloff = (-(s * s)).exp();
+                let rim_falloff = libm::expf(-(s * s));
                 let rim_noise = 0.75
                     + 0.25
                         * noise.noise_2d(ux as f64 * 5.0 + c.phase, uy as f64 * 5.0 + c.phase)
@@ -913,17 +919,17 @@ fn stamp_rays(
     noise: &SimplexNoise,
 ) {
     let reach = c.radius * p.ray_extent;
-    let x0 = ((c.x - reach).floor() as i32).max(0);
-    let x1 = ((c.x + reach).ceil() as i32).min(sx - 1);
-    let y0 = ((c.y - reach).floor() as i32).max(0);
-    let y1 = ((c.y + reach).ceil() as i32).min(sy - 1);
+    let x0 = (libm::floorf(c.x - reach) as i32).max(0);
+    let x1 = (libm::ceilf(c.x + reach) as i32).min(sx - 1);
+    let y0 = (libm::floorf(c.y - reach) as i32).max(0);
+    let y1 = (libm::ceilf(c.y + reach) as i32).min(sy - 1);
     let tw = sx as usize;
 
     for ty in y0..=y1 {
         for tx in x0..=x1 {
             let dx = tx as f32 + 0.5 - c.x;
             let dy = ty as f32 + 0.5 - c.y;
-            let d = (dx * dx + dy * dy).sqrt();
+            let d = libm::sqrtf(dx * dx + dy * dy);
             if d < c.radius || d > reach {
                 continue;
             }
@@ -1062,10 +1068,10 @@ fn measure_max_slope(heights: &[f32], vw: usize, vh: usize) -> f32 {
 fn pad_core_mask(zones: &[LandingZone], sx: i32, sy: i32, vw: usize, vh: usize) -> Vec<bool> {
     let mut mask = vec![false; vw * vh];
     for z in zones {
-        let x0 = ((z.x - z.radius).floor() as i32).max(0);
-        let x1 = ((z.x + z.radius).ceil() as i32).min(sx);
-        let y0 = ((z.y - z.radius).floor() as i32).max(0);
-        let y1 = ((z.y + z.radius).ceil() as i32).min(sy);
+        let x0 = (libm::floorf(z.x - z.radius) as i32).max(0);
+        let x1 = (libm::ceilf(z.x + z.radius) as i32).min(sx);
+        let y0 = (libm::floorf(z.y - z.radius) as i32).max(0);
+        let y1 = (libm::ceilf(z.y + z.radius) as i32).min(sy);
         for vy in y0..=y1 {
             for vx in x0..=x1 {
                 let dx = vx as f32 - z.x;
@@ -1083,10 +1089,10 @@ fn pad_core_mask(zones: &[LandingZone], sx: i32, sy: i32, vw: usize, vh: usize) 
 /// disc mean; across `skirt` it eases back to the surrounding terrain.
 fn flatten_zone(z: &LandingZone, sx: i32, sy: i32, vw: usize, heights: &mut [f32]) {
     let outer = z.radius + z.skirt;
-    let x0 = ((z.x - outer).floor() as i32).max(0);
-    let x1 = ((z.x + outer).ceil() as i32).min(sx);
-    let y0 = ((z.y - outer).floor() as i32).max(0);
-    let y1 = ((z.y + outer).ceil() as i32).min(sy);
+    let x0 = (libm::floorf(z.x - outer) as i32).max(0);
+    let x1 = (libm::ceilf(z.x + outer) as i32).min(sx);
+    let y0 = (libm::floorf(z.y - outer) as i32).max(0);
+    let y1 = (libm::ceilf(z.y + outer) as i32).min(sy);
 
     let mut sum = 0f32;
     let mut n = 0f32;
@@ -1109,7 +1115,7 @@ fn flatten_zone(z: &LandingZone, sx: i32, sy: i32, vw: usize, heights: &mut [f32
         for vx in x0..=x1 {
             let dx = vx as f32 - z.x;
             let dy = vy as f32 - z.y;
-            let d = (dx * dx + dy * dy).sqrt();
+            let d = libm::sqrtf(dx * dx + dy * dy);
             if d > outer {
                 continue;
             }
@@ -1313,7 +1319,7 @@ fn nearest_walkable(nav: &[u32], sx: i32, sy: i32, from: (i32, i32)) -> Option<(
     let tw = sx as usize;
     let th = sy as usize;
     let mut seen = vec![false; tw * th];
-    let mut queue = std::collections::VecDeque::new();
+    let mut queue = VecDeque::new();
     let start = from.1 as usize * tw + from.0 as usize;
     seen[start] = true;
     queue.push_back(from);
@@ -1356,7 +1362,7 @@ fn route_to_component(
     let mut seen = vec![false; tw * th];
     let start = from.1 as usize * tw + from.0 as usize;
     seen[start] = true;
-    let mut queue = std::collections::VecDeque::new();
+    let mut queue = alloc::collections::VecDeque::new();
     queue.push_back(start);
 
     let mut goal = usize::MAX;
@@ -1430,7 +1436,7 @@ fn carve_corridor_cell(
                 let mean = (heights[i00] + heights[i10] + heights[i01] + heights[i11]) * 0.25;
                 let dzdx = ((heights[i10] + heights[i11]) - (heights[i00] + heights[i01])) * 0.5;
                 let dzdy = ((heights[i01] + heights[i11]) - (heights[i00] + heights[i10])) * 0.5;
-                if (dzdx * dzdx + dzdy * dzdy).sqrt() <= nav_max_slope * 0.7 {
+                if libm::sqrtf(dzdx * dzdx + dzdy * dzdy) <= nav_max_slope * 0.7 {
                     break;
                 }
                 for j in [i00, i10, i01, i11] {

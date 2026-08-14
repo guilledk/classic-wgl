@@ -884,15 +884,27 @@ impl Engine {
         true
     }
 
-    /// Commit a guest-generated terrain: rebuild the tilemap mesh + tile data
-    /// texture and re-upload the nav overlay from the grids written by the
-    /// bulk `set_*` imports.  Does NOT re-derive walkability (the generator's
-    /// nav grid is authoritative).
-    pub fn commit_generated_terrain(&mut self) -> bool {
-        if self.entity_by_role(RoleKind::Tilemap).is_none() {
+    /// Commit a guest-generated terrain: install (first call) or rebuild
+    /// (later calls) the tilemap mesh + tile data texture and re-upload the
+    /// nav overlay from the grids written by the bulk `set_*` imports.  Does
+    /// NOT re-derive walkability (the generator's nav grid is authoritative).
+    pub fn commit_generated_terrain(&mut self, height_scale: f32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else {
             return false;
+        };
+        if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
+            tm.height_scale = height_scale;
         }
-        self.rebuild_tilemap_mesh();
+        let installed = self.tilemap_gpu.contains_key(&self.debug_name(tm_entity));
+        if installed {
+            self.rebuild_tilemap_mesh();
+        } else {
+            let (tiles, heights) = {
+                let tm = self.world.get::<&Tilemap>(tm_entity).unwrap();
+                (tm.data.clone(), tm.height_data.clone())
+            };
+            self.finish_tilemap_init(tm_entity, tiles, heights, Some(height_scale));
+        }
         self.rebuild_nav_gpu();
         true
     }

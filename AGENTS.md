@@ -47,11 +47,12 @@ before considering a task done.
 ## Directory map
 
 ```
-Cargo.toml               workspace root (9 members)
+Cargo.toml               workspace root (10 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
-                          tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder,
-                          terrain/ (fractal noise, lunar generator, material table, tileset painter)
+                          tilemap, instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder
+  classic-terrain/        #![no_std] procedural terrain + noise (simplex, fractal, lunar generator,
+                          material table, tileset painter, bulk noise fields) — linked by guests
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
@@ -129,11 +130,14 @@ plans/
 - **Isometric/pathfinding**: `classic-core/src/tilemap.rs` builds the 3D tilemap mesh;
   `classic-core/src/pathfinder.rs` implements A* (single-threaded, no worker — the TS
   Web Worker pattern was dropped).  See `classic-iso` skill.
-- **Procedural terrain**: `classic-core/src/terrain/` generates the `lunar` scene — a
+- **Procedural terrain**: the `classic-terrain` crate generates the `lunar` scene — a
   400x400 map of layered simplex noise plus an age-ordered meteorite crater field,
   with slope relaxation and stamped landing zones providing the flat, pathable ground
-  an RTS needs.  Pure and GL-free, so it is unit-tested without a GL context.
-  `classic-demo/src/scenes/lunar.rs` installs the result.  See `classic-terrain` skill.
+  an RTS needs.  Pure, GL-free and `#![no_std]`, so it is unit-tested without a GL
+  context and linked into `guest/lunar-guest`, which bulk-uploads the grids + tileset
+  to the host via the guest SDK.  The host is a generic terrain engine (storage +
+  rebuild + pathfinding); the map algorithm lives in the ROM.  See `classic-terrain`
+  skill.
 - **SDF text**: `classic-core/src/sdf_builder.rs` builds interleaved glyph buffers;
   `classic-gfx` renders them with the `sdf` shader (`dejavusans-sdf` font atlas).
   Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),

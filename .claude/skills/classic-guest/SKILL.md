@@ -144,7 +144,7 @@ Bulk upload (guest writes grids into its memory, host reads them):
 | `set_nav` | `(ptr, len) -> i32` | bulk `u32` LE walkability → `NavMesh.data` |
 | `set_tileset` | `(ptr, len, w, h) -> i32` | raw RGBA → upload the tilemap's tileset texture |
 | `set_spawn_points` | `(ptr, len) -> i32` | `i32` LE `[x, y]` pairs → `Engine.spawn_points` |
-| `commit_terrain` | `() -> i32` | rebuild the tilemap mesh + nav overlay (no slope re-derivation) |
+| `commit_terrain` | `(height_scale: f64) -> i32` | install (first call) or rebuild the tilemap mesh + nav overlay (no slope re-derivation) |
 
 The bulk fields are `f32` little-endian; the bulk grids are `u32`/`i32`/`f32`
 little-endian, matching the existing `find_path` binary convention.  Note: the

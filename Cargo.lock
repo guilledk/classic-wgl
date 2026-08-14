@@ -335,6 +335,7 @@ dependencies = [
  "anyhow",
  "base64",
  "bytemuck",
+ "classic-terrain",
  "glam",
  "hecs",
  "log",
@@ -474,6 +475,13 @@ dependencies = [
  "serde_json",
  "tar",
  "zip",
+]
+
+[[package]]
+name = "classic-terrain"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "libm",
 ]
 
 [[package]]

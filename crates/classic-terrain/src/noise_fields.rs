@@ -8,8 +8,10 @@
 //! The guest-side SDK exposes these as host imports (`fbm_field`, `ridged_field`,
 //! `billow_field`, `tiling_field`, `noise_field`, `noise2d`).
 
+use crate::fractal::{domain_warp, tiling_fbm_2d, Fbm};
 use crate::simplex_noise::SimplexNoise;
-use crate::terrain::fractal::{domain_warp, tiling_fbm_2d, Fbm};
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// Fill a `w`×`h` grid with summed-octave fBm (normalised to `[-1, 1]`).
 pub fn fbm_field(

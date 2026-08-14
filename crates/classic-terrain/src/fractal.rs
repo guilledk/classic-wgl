@@ -134,6 +134,17 @@ pub fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Euclidean remainder (`0 <= r < b`) for `b > 0`.  Stands in for
+/// `f64::rem_euclid`, which this toolchain does not expose on `#![no_std]`.
+fn rem_euclid(a: f64, b: f64) -> f64 {
+    let r = a % b;
+    if r < 0.0 {
+        r + b
+    } else {
+        r
+    }
+}
+
 /// Periodic 2D noise: seamless in both axes with period `period`.
 ///
 /// Maps `(u, v)` onto the surface of a torus embedded in 4D and samples
@@ -147,14 +158,19 @@ pub fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
 /// `radius` controls how much of the 4D noise field the torus sweeps through;
 /// larger values give more variation per period.
 pub fn tiling_noise_2d(n: &SimplexNoise, u: f64, v: f64, period: f64, radius: f64) -> f64 {
-    let tau = std::f64::consts::TAU;
+    let tau = core::f64::consts::TAU;
     let p = if period.abs() < f64::EPSILON { 1.0 } else { period };
     // Wrapping the input first makes the period *bit-exact* at the seam.
     // Without it, `u = 0` and `u = period` differ by an ULP in the angle,
     // which the noise gradient amplifies into a faint but real seam.
-    let au = u.rem_euclid(p) / p * tau;
-    let av = v.rem_euclid(p) / p * tau;
-    n.noise_4d(radius * au.cos(), radius * au.sin(), radius * av.cos(), radius * av.sin())
+    let au = rem_euclid(u, p) / p * tau;
+    let av = rem_euclid(v, p) / p * tau;
+    n.noise_4d(
+        radius * libm::cos(au),
+        radius * libm::sin(au),
+        radius * libm::cos(av),
+        radius * libm::sin(av),
+    )
 }
 
 /// Multi-octave variant of [`tiling_noise_2d`].  Each octave doubles the

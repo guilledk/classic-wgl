@@ -956,9 +956,13 @@ macro_rules! install_host_imports {
             },
         )?;
 
-        $linker.func_wrap(m, "commit_terrain", |mut caller: Caller<'_, $host>| -> i32 {
-            caller.data_mut().guest_mut().commit_terrain()
-        })?;
+        $linker.func_wrap(
+            m,
+            "commit_terrain",
+            |mut caller: Caller<'_, $host>, height_scale: f64| -> i32 {
+                caller.data_mut().guest_mut().commit_terrain(height_scale)
+            },
+        )?;
 
         Ok(())
     }};

@@ -463,7 +463,7 @@ impl WorkerWasmRuntime {
             OP_SET_SPAWN_POINTS => {
                 (host.set_spawn_points(&crate::abi::bytes_to_i32(raw)) as f64, None)
             }
-            OP_COMMIT_TERRAIN => (host.commit_terrain() as f64, None),
+            OP_COMMIT_TERRAIN => (host.commit_terrain(nf(0)) as f64, None),
             _ => (0.0, None),
         }
     }

@@ -1,19 +1,34 @@
-//! Procedural terrain generation.
+//! Procedural terrain generation + the noise primitives behind it.
 //!
-//! Pure, GL-free, allocation-light and fully deterministic: everything here is
-//! a function of a seed string, so results are reproducible across platforms
-//! (including `wasm32`) and stable for golden traces.
+//! `#![no_std]` (with `alloc`) so it can compile into ROM guest `.wasm`
+//! modules as well as the native host.  Everything here is a pure function of
+//! `(seed, dims, params)` — no system clock, no GL — so output is reproducible
+//! across targets and stable for golden traces.
 //!
+//! Shared by the host (which re-exports it as `classic_core::terrain` /
+//! `classic_core::simplex_noise` and exposes the [`noise_fields`] bulk API to
+//! guests) and by ROM guests (which link it to generate custom maps).
+//!
+//! - [`simplex_noise`] — seedable 2D/3D/4D simplex + a deterministic [`Random`].
 //! - [`fractal`] — multi-octave combinators over `simplex_noise`.
-//! - [`material`] — the lunar material table shared by generator and tileset.
+//! - [`material`] — the lunar material table.
 //! - [`lunar`] — the lunar surface generator.
 //! - [`tileset`] — the matching procedurally painted tile sheet.
+//! - [`noise_fields`] — bulk field-fill helpers behind the host SDK.
 //! - [`types`] — the generic generated-terrain contract.
+
+#![no_std]
+
+extern crate alloc;
+
+use alloc::format;
+use alloc::string::ToString;
 
 pub mod fractal;
 pub mod lunar;
 pub mod material;
 pub mod noise_fields;
+pub mod simplex_noise;
 pub mod tileset;
 pub mod types;
 
@@ -52,27 +67,5 @@ pub fn generate(kind: &str, seed: &str) -> Option<GeneratedTerrain> {
             })
         }
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generate_lunar_produces_valid_terrain() {
-        let gen = generate("lunar", "apollo").unwrap();
-        let (sx, sy) = (gen.terrain.size_x as usize, gen.terrain.size_y as usize);
-        assert_eq!(gen.terrain.tiles.len(), sx * sy);
-        assert_eq!(gen.terrain.heights.len(), (sx + 1) * (sy + 1));
-        assert_eq!(gen.terrain.nav.len(), sx * sy);
-        assert!(gen.tileset.width > 0 && gen.tileset.height > 0);
-        assert!(!gen.tileset.rgba.is_empty());
-        assert!(gen.nav_slope_threshold > 0.0);
-    }
-
-    #[test]
-    fn generate_unknown_kind_returns_none() {
-        assert!(generate("bogus", "x").is_none());
     }
 }

@@ -1409,8 +1409,8 @@ impl WebWasmRuntime {
             let host = host.clone();
             set_import!(
                 "commit_terrain",
-                Box::new(move || -> i32 { host.borrow_mut().commit_terrain() })
-                    as Box<dyn FnMut() -> i32>
+                Box::new(move |hs: f64| -> i32 { host.borrow_mut().commit_terrain(hs) })
+                    as Box<dyn FnMut(f64) -> i32>
             );
         }
 

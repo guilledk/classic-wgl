@@ -663,8 +663,8 @@ impl GuestHost {
         self.engine_mut().set_spawn_points_bulk(pairs) as i32
     }
 
-    /// Commit a guest-generated terrain (rebuild mesh + nav overlay).
-    pub fn commit_terrain(&mut self) -> i32 {
-        self.engine_mut().commit_generated_terrain() as i32
+    /// Commit a guest-generated terrain (install or rebuild mesh + nav overlay).
+    pub fn commit_terrain(&mut self, height_scale: f64) -> i32 {
+        self.engine_mut().commit_generated_terrain(height_scale as f32) as i32
     }
 }
