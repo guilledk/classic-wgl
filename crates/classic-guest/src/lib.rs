@@ -12,6 +12,8 @@ pub mod runtime;
 mod runtime_wasmtime;
 #[cfg(target_arch = "wasm32")]
 mod runtime_web;
+#[cfg(target_arch = "wasm32")]
+mod runtime_worker;
 pub mod sdk;
 
 pub use runtime::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
@@ -19,11 +21,14 @@ pub use runtime::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
 pub use runtime_wasmtime::WasmtimeRuntime;
 #[cfg(target_arch = "wasm32")]
 pub use runtime_web::WebWasmRuntime;
+#[cfg(target_arch = "wasm32")]
+pub use runtime_worker::WorkerWasmRuntime;
 
 /// Create the best guest runtime available for the current target: wasmtime on
 /// native (near-native speed, fuel + memory limits); on wasm, browser-native
-/// `WebAssembly` for trusted guests (no fuel API) and wasmi for untrusted
-/// guests (interruptible fuel metering).
+/// `WebAssembly` for trusted guests (no fuel API) and a `Worker`-isolated
+/// browser-native runtime for untrusted guests (terminate watchdog), falling
+/// back to wasmi when `SharedArrayBuffer` is unavailable.
 pub fn create_runtime(
     wasm: &[u8],
     limits: &GuestLimits,
@@ -35,9 +40,11 @@ pub fn create_runtime(
     #[cfg(target_arch = "wasm32")]
     {
         if limits.trusted {
-            WebWasmRuntime::new(wasm, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>)
-        } else {
-            WasmiRuntime::new(wasm, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>)
+            return WebWasmRuntime::new(wasm, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>);
+        }
+        match WorkerWasmRuntime::new(wasm, limits) {
+            Ok(rt) => Ok(Box::new(rt)),
+            Err(_) => WasmiRuntime::new(wasm, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>),
         }
     }
 }

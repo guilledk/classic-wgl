@@ -5,8 +5,10 @@
 The WASM guest runtime for classic-wgl ROMs.  A ROM bundles a compiled `.wasm`
 module (`manifest.code`) that the host runs each frame against a stable host
 API — the "console SDK".  This skill covers the `classic-guest` crate
-(`GuestRuntime`, `WasmiRuntime`, the ABI, the host-side `GuestHost` SDK), the
-sandbox (fuel + memory), and how the ROM wires it in.
+(`GuestRuntime`, `create_runtime`, the four runtime backends — `WasmiRuntime`,
+`WasmtimeRuntime`, `WebWasmRuntime`, `WorkerWasmRuntime` — the ABI, the
+host-side `GuestHost` SDK), the sandbox (fuel + memory + Worker watchdog), and
+how the ROM wires it in.
 
 ## 1. Why WASM (not a scripting language)
 
@@ -31,14 +33,19 @@ crates/classic-guest/
   src/runtime_web.rs      WebWasmRuntime (wasm only, trusted): browser-native
                           `WebAssembly`, host imports as `Closure`s (+ a dispatcher
                           for the 8 imports with >8 args)
+  src/runtime_worker.rs   WorkerWasmRuntime (wasm only, untrusted): `Worker` +
+                          SAB/Atomics synchronous host-import bridge + terminate watchdog
+  src/worker.js           the Worker script (SAB host-import stubs + update loop)
   tests/guest.rs          inline WAT fixtures (wat crate) driven against every backend
 ```
 
 `create_runtime(wasm, limits)` picks the backend: **wasmtime on native**; on
-wasm, **browser-native `WebAssembly` for `trusted` guests** (no fuel API) and
-**wasmi for untrusted guests** (interruptible fuel metering).  All implement the
-same `GuestRuntime` trait and the same `env` import surface (the `GuestHost` SDK
-bodies are not duplicated — only the thin linker/closure layers are).
+wasm, **browser-native `WebAssembly` for `trusted` guests** (no fuel API) and a
+**`Worker`-isolated browser-native runtime for untrusted guests** (terminate
+watchdog), falling back to **wasmi** when `SharedArrayBuffer` is unavailable.
+All implement the same `GuestRuntime` trait and the same `env` import surface
+(the `GuestHost` SDK bodies are not duplicated — only the thin linker/closure
+layers are).
 
 ## 3. The ABI (host imports, module "env")
 
@@ -114,10 +121,14 @@ Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
 
 - **Fuel** (CPU): `Config::consume_fuel(true)` + `Store::set_fuel(per_frame)`
   before each `update`.  Exceeding it traps `TrapCode::OutOfFuel`, surfaced as
-  `GuestError::FuelExhausted`.  Enabled only when `!trusted`.
+  `GuestError::FuelExhausted`.  Enabled only when `!trusted`.  (Native +
+  wasmi/wasmtime backends.)
 - **Memory**: `StoreLimitsBuilder::memory_size(cap)` + `trap_on_grow_failure`
   installed via `Store::limiter(|host| host.resource_limiter())`.  A `memory.grow`
   past the cap traps.
+- **Web Worker watchdog**: browser Wasm has no fuel API, so `WorkerWasmRuntime`
+  enforces a wall-clock budget (`GuestLimits.max_frame_millis`) per call and
+  `worker.terminate()`s on overrun, surfacing `GuestError::FuelExhausted`.
 - **Trusted**: `RomManifest.trusted` (`#[serde(default)]` = false).  The shipped
   demo/lunar ROMs set it true (skip fuel, intended for the fast browser path).
 
@@ -125,21 +136,22 @@ Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
 
 `GuestHost` (`sdk.rs`) holds only `*mut Engine`.  Each native/wasm-interpreter
 backend wraps it in its own store data (`WasmiHost` / `WasmtimeHost`) that also
-owns that backend's resource limiter (`StoreLimits`); `WebWasmRuntime` shares it
-via `Rc<RefCell<GuestHost>>` (captured by the `'static` host-import closures).
-Neither store's host data has a `Send`/`Sync` bound, so the raw pointer is set
-fresh each `init`/`update`/`start` via `GuestHost::set_engine` and deref'd only
-inside that call (single-threaded, `engine` borrowed for the call).  The
-`unsafe` is confined to `GuestHost::engine`/`engine_mut`.
+owns that backend's resource limiter (`StoreLimits`); the web backends share it
+via `Rc<RefCell<GuestHost>>` (captured by `'static` host-import closures, or
+held by `WorkerWasmRuntime` and set fresh per service-loop).  Neither store's
+host data has a `Send`/`Sync` bound, so the raw pointer is set fresh each
+`init`/`update`/`start` via `GuestHost::set_engine` and deref'd only inside that
+call (single-threaded, `engine` borrowed for the call).  The `unsafe` is
+confined to `GuestHost::engine`/`engine_mut`.
 
 ## 6. Wiring (classic-demo)
 
 - `init_guest(&mut Engine, &DemoStateRef, wasm, &GuestLimits)` calls
   `classic_guest::create_runtime` (wasmtime on native; browser-Wasm for trusted /
-  wasmi for untrusted on wasm), runs the optional `init` hook synchronously
-  (before the first frame), stores the boxed runtime on `DemoState.guest`, and
-  registers an `on_update(|e| guest.update(e, dt))` closure that also runs the
-  optional `start` hook once after the first update.
+  Worker for untrusted, with a wasmi fallback, on wasm), runs the optional
+  `init` hook synchronously (before the first frame), stores the boxed runtime
+  on `DemoState.guest`, and registers an `on_update(|e| guest.update(e, dt))`
+  closure that also runs the optional `start` hook once after the first update.
 - `init_engine` reads `rom.resources.code().get("main")` and builds limits from
   `rom.manifest.trusted`; runs the guest on every frame (not gated by
   `host_features`).
@@ -154,9 +166,11 @@ inside that call (single-threaded, `engine` borrowed for the call).  The
 ## 7. Adding a host import (the SDK is a reviewed surface)
 
 1. Add the method to `GuestHost` in `sdk.rs` (call the safe `Engine` helper).
-2. Register it in **both** `runtime.rs::install_imports` (wasmi) and
-   `runtime_wasmtime.rs::install_imports` (wasmtime) via
-   `linker.func_wrap("env", name, …)`.
+2. Register it in every backend's import surface: `runtime.rs::install_imports`
+   (wasmi) and `runtime_wasmtime.rs::install_imports` (wasmtime) via
+   `linker.func_wrap("env", name, …)`; `runtime_web.rs` (browser-Wasm: a
+   `Closure`, or a dispatcher arm for the >8-arg imports); `runtime_worker.rs`'s
+   dispatch match plus the matching stub in `worker.js`.
 3. Marshal strings with the local `read_str`/`write_str` helpers; pairs with
    `write_f64_pair` (they wrap the backend-agnostic `abi::read_str_from` /
    `abi::write_*_to` slice helpers).
@@ -174,4 +188,7 @@ guest-driven test runs against **both** `WasmiRuntime` and (on native)
 trap, and the full SDK surface.  Fixtures are inline WAT (`wat::parse_str`) — no
 committed binaries needed for tests.  The shipped ROM guests live as Rust
 sources under `guest/` and are compiled to `public/code/*.wasm` by
-`scripts/build-guest.mjs` (`npm run assets`).
+`scripts/build-guest.mjs` (`npm run assets`).  The web backends
+(`WebWasmRuntime`, `WorkerWasmRuntime`) are wasm-only and have no unit test —
+they're compile-verified via
+`cargo check --target wasm32-unknown-unknown -p classic-web` and `trunk build`.

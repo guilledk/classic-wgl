@@ -432,6 +432,7 @@ dependencies = [
  "wasmi",
  "wasmtime",
  "wat",
+ "web-sys",
 ]
 
 [[package]]
