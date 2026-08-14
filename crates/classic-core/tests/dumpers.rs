@@ -88,6 +88,7 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
         frame: 333.0,
         tile_set_size: [32.0, 16.0].into(),
         anchor: [0.5, 0.98].into(),
+        frame_offset: glam::Vec3::ZERO,
         footprint: vec![[0.5, -0.5].into(), [0.5, 0.5].into()],
         speed: 2.5,
         anim_speed: 1.0,
@@ -105,6 +106,7 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
             frame: agent.frame,
             tile_set_size: agent.tile_set_size,
             anchor: agent.anchor,
+            frame_offset: glam::Vec3::ZERO,
             footprint: agent.footprint.clone(),
         },
         agent.clone(),
@@ -136,6 +138,7 @@ fn animator_dumper_works() {
         animation: None,
         counter: 0.0,
         frame: 0.0,
+        offset: glam::Vec3::ZERO,
         repeat: true,
         playing: true,
     };
@@ -150,6 +153,59 @@ fn animator_dumper_works() {
     assert_eq!(val["type"], "Animator");
     assert_eq!(val["target"], "navAgent.IsoAgent");
     assert_eq!(val["speed"], 1.0);
+}
+
+#[test]
+fn animator_state_round_trips() {
+    classic_core::registry::clear();
+    register_all_components();
+
+    // A ROM can declare a starting one-shot animation directly in `state.json`.
+    let anim = Animator {
+        target: "rocket.IsoSprite".into(),
+        speed: 1.0,
+        animation: Some("rocketLanding".into()),
+        counter: 0.0,
+        frame: 0.0,
+        offset: glam::Vec3::ZERO,
+        repeat: false,
+        playing: true,
+    };
+
+    let mut world = hecs::World::new();
+    let e = world.spawn((anim,));
+
+    let regs = classic_core::registry::ordered_regs();
+    let anim_reg = regs.iter().find(|r| r.name == "Animator").unwrap();
+    let val = anim_reg.dump.unwrap()(&world, e).unwrap();
+
+    assert_eq!(val["animation"], "rocketLanding");
+    assert_eq!(val["repeat"], false);
+    assert_eq!(val["playing"], true);
+
+    // Spawn it back from the dumped value (minus the "type" key).
+    let mut fields = val.as_object().unwrap().clone();
+    fields.remove("type");
+    let mut builder = hecs::EntityBuilder::new();
+    (anim_reg.spawn)(&mut builder, serde_json::Value::Object(fields)).unwrap();
+    let spawned = world.spawn(builder.build());
+    let round_tripped = world.get::<&Animator>(spawned).unwrap();
+    assert_eq!(round_tripped.animation.as_deref(), Some("rocketLanding"));
+    assert!(!round_tripped.repeat);
+    assert!(round_tripped.playing);
+}
+
+#[test]
+fn animation_offsets_default_empty() {
+    let animation: classic_core::types::AnimationData = serde_json::from_value(serde_json::json!({
+        "name": "rocketLanding",
+        "src": "rocketLanding",
+        "rate": 24.0,
+        "sequence": [0, 1, 2]
+    }))
+    .unwrap();
+
+    assert!(animation.offsets.is_empty());
 }
 
 #[test]

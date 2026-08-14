@@ -209,6 +209,9 @@ pub struct IsoSprite {
     pub tile_set_size: Vec2,
     /// Anchor point in [0..1] range (e.g. `[0.5, 0.98]` = centre-bottom / feet).
     pub anchor: Vec2,
+    /// Visual offset selected by the current animation frame, in iso units.
+    #[serde(skip)]
+    pub frame_offset: Vec3,
     /// Footprint vertices in iso tile coords: `[NE, SE, SW, NW]`.
     #[serde(default = "default_footprint")]
     pub footprint: Vec<Vec2>,
@@ -230,6 +233,9 @@ pub struct IsoAgent {
     pub frame: f32,
     pub tile_set_size: Vec2,
     pub anchor: Vec2,
+    /// Visual offset selected by the current animation frame, in iso units.
+    #[serde(skip)]
+    pub frame_offset: Vec3,
     #[serde(default = "default_footprint")]
     pub footprint: Vec<Vec2>,
     pub speed: f32,
@@ -248,6 +254,7 @@ impl Default for IsoAgent {
             frame: 0.0,
             tile_set_size: Vec2::ONE,
             anchor: Vec2::new(0.5, 0.98),
+            frame_offset: Vec3::ZERO,
             footprint: default_footprint(),
             speed: 2.6,
             anim_speed: 1.0,
@@ -263,15 +270,24 @@ pub struct Animator {
     /// Target component in "entityName.ComponentName" format.
     pub target: String,
     pub speed: f32,
-    #[serde(skip)]
+    /// Animation to play (None = idle / not playing).  Serialized so ROMs can
+    /// declare a starting animation in `state.json` rather than imperatively.
+    #[serde(default)]
     pub animation: Option<String>,
     #[serde(skip)]
     pub counter: f32,
     #[serde(skip)]
     pub frame: f32,
+    /// Visual offset selected by the current animation frame, in iso units.
     #[serde(skip)]
+    pub offset: Vec3,
+    /// Whether the animation loops.  Serialized so ROMs can start one-shot
+    /// animations (e.g. a rocket landing sequence).
+    #[serde(default)]
     pub repeat: bool,
-    #[serde(skip)]
+    /// Whether the animator is advancing.  Serialized so ROMs can start an
+    /// animation from `state.json`.
+    #[serde(default)]
     pub playing: bool,
 }
 

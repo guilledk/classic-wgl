@@ -68,6 +68,9 @@ pub struct AnimationData {
     pub src: String,
     pub rate: f32,
     pub sequence: Vec<u32>,
+    /// Per-sequence-entry visual offsets in iso units. Missing entries are zero.
+    #[serde(default)]
+    pub offsets: Vec<[f32; 3]>,
 }
 
 /// The resource manifest (matches `public/manifest.json`).

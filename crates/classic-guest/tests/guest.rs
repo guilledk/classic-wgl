@@ -452,6 +452,7 @@ fn get_anim_reads_animation() {
                 animation: Some("walkEast".into()),
                 counter: 0.0,
                 frame: 5.0,
+                offset: Vec3::ZERO,
                 repeat: true,
                 playing: true,
             },
