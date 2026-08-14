@@ -64,7 +64,7 @@ pub fn init_animator_system(engine: &mut Engine) {
             .map(|(n, a)| (n.clone(), (a.rate, a.sequence.len())))
             .collect();
 
-        let mut frame_writes: Vec<(hecs::Entity, String, f32)> = Vec::new();
+        let mut frame_writes: Vec<(hecs::Entity, String, f32, glam::Vec3)> = Vec::new();
         for (_e, anim) in engine.world.query::<&mut Animator>().iter() {
             if !anim.playing && !anim.repeat {
                 continue;
@@ -86,6 +86,12 @@ pub fn init_animator_system(engine: &mut Engine) {
             }
 
             let frame_idx = anim.counter.floor() as usize;
+            let animation_data = engine.animations.get(anim_name.as_str());
+            let frame_offset = animation_data
+                .and_then(|a| a.offsets.get(frame_idx))
+                .map(|v| glam::Vec3::from_array(*v))
+                .unwrap_or(glam::Vec3::ZERO);
+            anim.offset = frame_offset;
             if frame_idx >= seq_len {
                 anim.counter = 0.0;
                 anim.frame = engine
@@ -93,6 +99,7 @@ pub fn init_animator_system(engine: &mut Engine) {
                     .get(anim_name.as_str())
                     .and_then(|a| a.sequence.first().copied())
                     .unwrap_or(0) as f32;
+                anim.offset = glam::Vec3::ZERO;
                 if !anim.repeat {
                     anim.playing = false;
                 }
@@ -105,24 +112,27 @@ pub fn init_animator_system(engine: &mut Engine) {
             let parts: Vec<&str> = anim.target.splitn(2, '.').collect();
             if parts.len() == 2 {
                 if let Some(&target_e) = engine.names.get(parts[0]) {
-                    frame_writes.push((target_e, parts[1].to_string(), anim.frame));
+                    frame_writes.push((target_e, parts[1].to_string(), anim.frame, frame_offset));
                 }
             }
         }
 
-        for (target_e, comp_type, frame) in &frame_writes {
+        for (target_e, comp_type, frame, offset) in &frame_writes {
             match comp_type.as_str() {
                 "IsoAgent" => {
                     if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(*target_e) {
                         a.frame = *frame;
+                        a.frame_offset = *offset;
                     }
                     if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
                         s.frame = *frame;
+                        s.frame_offset = *offset;
                     }
                 }
                 "IsoSprite" => {
                     if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
                         s.frame = *frame;
+                        s.frame_offset = *offset;
                     }
                 }
                 _ => {}
