@@ -561,6 +561,54 @@ fn bulk_terrain_upload_roundtrip() {
 }
 
 #[test]
+fn bulk_terrain_upload_populates_empty_grids() {
+    // `state_lunar.json` declares `"data": null` (no `heightData`), so the
+    // loaded Tilemap/NavMesh grids are empty until the guest uploads them.
+    let mut engine = Engine::new_for_test();
+
+    let tilemap = Tilemap {
+        position: Vec3::ZERO,
+        scale: Vec3::ONE,
+        size_x: 3,
+        size_y: 3,
+        tile_set: "lunarTileset".into(),
+        tile_pixel_size: [32, 32],
+        max_tile: 24,
+        data: vec![],
+        height_data: vec![],
+        height_scale: 0.0,
+        tile_set_pixel_size: [0, 0],
+        tiles_per_row: 0,
+        mouse_iso_pos: Vec3::ZERO,
+        selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+        selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+    };
+    let tm_entity = engine.world.spawn((tilemap, Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), tm_entity);
+
+    let nav = NavMesh {
+        position: Vec3::ZERO,
+        scale: Vec3::ONE,
+        map_entity: "tilemap".into(),
+        tile_set: "navTileset".into(),
+        data: vec![],
+        size_x: 3,
+        size_y: 3,
+    };
+    let nav_entity = engine.world.spawn((nav, Role::new(RoleKind::NavMesh)));
+    engine.names.insert("navmesh".into(), nav_entity);
+
+    // Bulk writes key off the component dimensions, not the (empty) buffers.
+    assert!(engine.set_tiles_bulk(&[7u32; 9]));
+    assert!(engine.set_heights_bulk(&[2.5f32; 16]));
+    assert!(engine.set_nav_bulk(&[1u32; 9]));
+
+    assert_eq!(engine.world.get::<&Tilemap>(tm_entity).unwrap().data, vec![7u32; 9]);
+    assert_eq!(engine.world.get::<&Tilemap>(tm_entity).unwrap().height_data, vec![2.5f32; 16]);
+    assert_eq!(engine.world.get::<&NavMesh>(nav_entity).unwrap().data, vec![1u32; 9]);
+}
+
+#[test]
 fn guest_noise_field_imports_wired() {
     with_each_runtime(
         r#"(module

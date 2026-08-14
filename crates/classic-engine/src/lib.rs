@@ -829,38 +829,40 @@ impl Engine {
     }
 
     /// Bulk-write the tilemap tile grid from a guest-provided `u32` array
-    /// (row-major, `size_x * size_y`).  Length must match the Tilemap exactly.
+    /// (row-major, `size_x * size_y`).  Replaces the grid wholesale — the
+    /// loaded component may be empty (`state_lunar.json` declares `"data":
+    /// null`, generated at runtime).
     pub fn set_tiles_bulk(&mut self, tiles: &[u32]) -> bool {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
         let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
-        if tiles.len() != tm.data.len() {
+        if tiles.len() != (tm.size_x * tm.size_y) as usize {
             return false;
         }
-        tm.data.copy_from_slice(tiles);
+        tm.data = tiles.to_vec();
         true
     }
 
     /// Bulk-write the tilemap height vertex grid from a guest-provided `f32`
-    /// array (`(size_x + 1) * (size_y + 1)`).  Length must match exactly.
+    /// array (`(size_x + 1) * (size_y + 1)`).  Replaces the grid wholesale.
     pub fn set_heights_bulk(&mut self, heights: &[f32]) -> bool {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
         let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
-        if heights.len() != tm.height_data.len() {
+        if heights.len() != ((tm.size_x + 1) * (tm.size_y + 1)) as usize {
             return false;
         }
-        tm.height_data.copy_from_slice(heights);
+        tm.height_data = heights.to_vec();
         true
     }
 
     /// Bulk-write the nav walkability grid from a guest-provided `u32` array
-    /// (`size_x * size_y`, `1` = walkable).  Length must match the NavMesh.
+    /// (`size_x * size_y`, `1` = walkable).  Replaces the grid wholesale.
     pub fn set_nav_bulk(&mut self, nav: &[u32]) -> bool {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return false };
         let Ok(mut nm) = self.world.get::<&mut NavMesh>(nav_entity) else { return false };
-        if nav.len() != nm.data.len() {
+        if nav.len() != (nm.size_x * nm.size_y) as usize {
             return false;
         }
-        nm.data.copy_from_slice(nav);
+        nm.data = nav.to_vec();
         true
     }
 
