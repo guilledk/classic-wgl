@@ -240,6 +240,50 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
+            "vehicle_teleport",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, x: f64, y: f64| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().vehicle_teleport(&name, x, y)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "vehicle_spawn",
+            |mut caller: Caller<'_, $host>,
+             def_ptr: i32,
+             def_len: i32,
+             name_ptr: i32,
+             name_len: i32,
+             x: f64,
+             y: f64|
+             -> i32 {
+                let def = $read_str(&mut caller, def_ptr, def_len);
+                let name = $read_str(&mut caller, name_ptr, name_len);
+                caller.data_mut().guest_mut().vehicle_spawn(&def, &name, x, y)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "vehicle_goto",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, tx: i32, ty: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().vehicle_goto(&name, tx, ty)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "vehicle_stop",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().vehicle_stop(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
             "get_camera",
             |mut caller: Caller<'_, $host>, out_ptr: i32| -> i32 {
                 let (x, y, s) = caller.data_mut().guest_mut().get_camera();

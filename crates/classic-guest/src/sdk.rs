@@ -194,6 +194,27 @@ impl GuestHost {
         self.engine().find_path((sx, sy), (ex, ey)).unwrap_or_default()
     }
 
+    /// Reposition a wheeled vehicle (body + 4 wheels) and reset its physics.
+    pub fn vehicle_teleport(&mut self, name: &str, x: f64, y: f64) -> i32 {
+        self.engine_mut().vehicle_teleport(name, x as f32, y as f32) as i32
+    }
+
+    /// Spawn a wheeled vehicle of a declared type at `(x, y)`.
+    pub fn vehicle_spawn(&mut self, def: &str, name: &str, x: f64, y: f64) -> i32 {
+        self.engine_mut().spawn_vehicle(def, name, x as f32, y as f32) as i32
+    }
+
+    /// Set a wheeled vehicle's destination (integer tile coordinates).  The
+    /// host runs its own A* and stores the waypoints on the vehicle.
+    pub fn vehicle_goto(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
+        self.engine_mut().vehicle_goto(name, tx, ty) as i32
+    }
+
+    /// Stop a wheeled vehicle, clearing its movement path.
+    pub fn vehicle_stop(&mut self, name: &str) -> i32 {
+        self.engine_mut().vehicle_stop(name) as i32
+    }
+
     /// Read the camera position (x, y) and uniform scale.
     pub fn get_camera(&mut self) -> (f64, f64, f64) {
         let (x, y, s) = self.engine().get_camera();
