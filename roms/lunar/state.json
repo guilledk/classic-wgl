@@ -17,19 +17,18 @@
                         45,
                         1
                     ],
-                    "sizeX": 400,
-                    "sizeY": 400,
-                    "tileSet": "lunarTileset",
-                    "tilePixelSize": [
+                    "size_x": 400,
+                    "size_y": 400,
+                    "tile_set": "lunarTileset",
+                    "tile_pixel_size": [
                         32,
                         32
                     ],
-                    "maxTile": 24,
-                    "data": null
+                    "max_tile": 24
                 },
                 {
                     "type": "Role",
-                    "value": "Tilemap"
+                    "value": "tilemap"
                 }
             ]
         },
@@ -48,9 +47,9 @@
                         1
                     ],
                     "texture": "cursor",
-                    "ignoreCam": true,
+                    "ignore_cam": true,
                     "frame": 0,
-                    "tileSetSize": [
+                    "tile_set_size": [
                         1,
                         1
                     ],
@@ -61,7 +60,7 @@
                 },
                 {
                     "type": "Role",
-                    "value": "Cursor"
+                    "value": "cursor"
                 }
             ]
         },
@@ -69,14 +68,13 @@
             "components": [
                 {
                     "type": "IsometricNavMesh",
-                    "map": "tilemap",
-                    "sizeX": 400,
-                    "sizeY": 400,
-                    "data": null
+                    "map_entity": "tilemap",
+                    "size_x": 400,
+                    "size_y": 400
                 },
                 {
                     "type": "Role",
-                    "value": "NavMesh"
+                    "value": "nav_mesh"
                 }
             ]
         },
@@ -105,7 +103,7 @@
                     "texture": "rocketLanding",
                     "tilemap": "tilemap",
                     "frame": 0,
-                    "tileSetSize": [
+                    "tile_set_size": [
                         34,
                         9
                     ],

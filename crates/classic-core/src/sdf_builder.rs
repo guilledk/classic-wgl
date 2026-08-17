@@ -38,25 +38,20 @@ pub struct SdfGlyphBuffer {
     pub vertex_count: usize,
 }
 
+/// Space advance (cell px) used when the atlas omits a space glyph.  Matches
+/// `sdf-atlas`'s `SPACE_ADVANCE` (`FONT_CELL_SIZE * 0.28` = 25.6 * 0.28).
+const DEFAULT_SPACE_ADVANCE: f32 = 7.168;
+
 /// Advance width for a character (pixels × scale).
 fn advance_for(metrics: &SdfFontMetrics, ch: char, scale: f32) -> f32 {
-    let ch_str = ch.to_string();
-    if let Some(g) = metrics.glyphs.get(&ch_str) {
+    if let Some(g) = metrics.glyphs.get(&ch.to_string()) {
         return g.x_advance * scale;
     }
-    if ch == ' ' {
-        return metrics.glyphs.get(" ").map(|g| g.x_advance).unwrap_or(metrics.glyph_size * 0.5)
-            * scale;
+    match ch {
+        ' ' => DEFAULT_SPACE_ADVANCE * scale,
+        '\t' => DEFAULT_SPACE_ADVANCE * 4.0 * scale,
+        _ => metrics.glyph_size * 0.5 * scale,
     }
-    if ch == '\t' {
-        return metrics
-            .glyphs
-            .get(" ")
-            .map(|g| g.x_advance * 4.0)
-            .unwrap_or(metrics.glyph_size * 2.0)
-            * scale;
-    }
-    metrics.glyph_size * 0.5 * scale
 }
 
 /// Build an SDF glyph vertex buffer from a text string.

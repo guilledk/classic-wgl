@@ -51,9 +51,9 @@ pub fn main() {
         let rom = query_param("rom").unwrap_or_default();
 
         static ROMS: &[(&str, &[u8])] = &[
-            ("demo", include_bytes!("../../../public/demo.rom")),
-            ("lunar", include_bytes!("../../../public/lunar.rom")),
-            ("moon", include_bytes!("../../../public/lunar.rom")),
+            ("demo", include_bytes!("../../../roms/out/demo.rom")),
+            ("lunar", include_bytes!("../../../roms/out/lunar.rom")),
+            ("moon", include_bytes!("../../../roms/out/lunar.rom")),
         ];
         let rom_bytes = classic_platform::resolve_rom(&rom, ROMS).expect("resolve ROM");
 

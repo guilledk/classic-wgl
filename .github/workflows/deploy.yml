@@ -12,21 +12,14 @@ jobs:
                   submodules: recursive
                   token: ${{ secrets.GH_PAT }}
 
-            - uses: actions/setup-node@v4
-              with:
-                  node-version: 22
-                  cache: npm
-
-            - run: npm ci
-
-            - name: Generate assets
-              run: npm run assets
-
             - uses: dtolnay/rust-toolchain@stable
 
             - uses: Swatinem/rust-cache@v2
               with:
                   workspaces: apps/web -> target
+
+            - name: Generate assets + ROMs
+              run: cargo xtask all
 
             - name: Install trunk
               run: cargo install trunk --locked

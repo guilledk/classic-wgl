@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+classic-rom = { path = "../crates/classic-rom" }
+sdf-atlas = { path = "../crates/sdf-atlas" }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"

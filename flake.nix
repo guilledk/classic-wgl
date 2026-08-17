@@ -58,18 +58,14 @@
 
             echo "┌─────────────────────────────────────────┐"
             echo "│  classic-wgl Rust dev shell             │"
+            echo "│  cargo xtask all          build ROMs    │"
             echo "│  cargo run -p classic-desktop           │"
-            echo "│  cargo build -p classic-desktop         │"
-            echo "│  trunk serve            web dev         │"
-            echo "│  cargo test -- --test-threads=1         │"
+            echo "│  trunk serve              web dev       │"
+            echo "│  cargo test                             │"
             echo "│  cargo clippy --all-targets             │"
             echo "│  cargo fmt --all -- --check             │"
             echo "└─────────────────────────────────────────┘"
           '';
-        };
-
-        devShells.full = pkgs.mkShell {
-          buildInputs = nativeBuildInputs ++ rustDeps ++ (with pkgs; [ nodejs_22 ]);
         };
       }
     );

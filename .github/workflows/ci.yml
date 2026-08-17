@@ -31,7 +31,7 @@ jobs:
         steps:
             - uses: actions/checkout@v4
             - uses: dtolnay/rust-toolchain@stable
-            - run: cargo test -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-guest -p classic-demo -- --test-threads=1
+            - run: cargo test -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-guest -p classic-demo
 
     wasm-check:
         name: wasm check
@@ -49,13 +49,10 @@ jobs:
               with:
                   submodules: recursive
                   token: ${{ secrets.GH_PAT }}
-            - uses: actions/setup-node@v4
-              with: { node-version: 22, cache: npm }
-            # rust-toolchain must precede `npm run assets`: build-guest.mjs
-            # invokes cargo to compile the ROM guest crates.
+            # rust-toolchain precedes `cargo xtask all`: it compiles the ROM
+            # guest crates to wasm32 and generates the SDF atlas.
             - uses: dtolnay/rust-toolchain@stable
-            - run: npm ci
-            - run: npm run assets
+            - run: cargo xtask all
             - run: sudo apt-get update -qq && sudo apt-get install -y -qq libegl1-mesa-dev libgl1-mesa-dri libgbm-dev libx11-dev
             - run: cargo build -p classic-desktop
             - name: demo scene (e2e assertions + golden trace)

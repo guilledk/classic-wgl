@@ -1,0 +1,307 @@
+{
+    "entities": {
+        "camController": {
+            "components": []
+        },
+        "tilemap": {
+            "components": [
+                {
+                    "type": "Tilemap",
+                    "position": [
+                        0,
+                        0,
+                        0
+                    ],
+                    "scale": [
+                        45,
+                        45,
+                        1
+                    ],
+                    "size_x": 200,
+                    "size_y": 200,
+                    "tile_set": "tileSet",
+                    "tile_pixel_size": [
+                        32,
+                        32
+                    ],
+                    "max_tile": 32,
+                    "tiles_grid": "demo.tiles"
+                },
+                {
+                    "type": "Role",
+                    "value": "tilemap"
+                }
+            ]
+        },
+        "semaphore01": {
+            "components": [
+                {
+                    "type": "IsoSprite",
+                    "position": [
+                        22.35,
+                        13.65,
+                        -1
+                    ],
+                    "scale": [
+                        1,
+                        1,
+                        1
+                    ],
+                    "texture": "semaphore01",
+                    "tilemap": "tilemap",
+                    "frame": 0,
+                    "tile_set_size": [
+                        1,
+                        1
+                    ],
+                    "anchor": [
+                        0.125,
+                        0.956
+                    ],
+                    "footprint": [
+                        [
+                            0.5,
+                            -0.5
+                        ],
+                        [
+                            0.5,
+                            0.5
+                        ],
+                        [
+                            -0.5,
+                            0.5
+                        ],
+                        [
+                            -0.5,
+                            -0.5
+                        ]
+                    ]
+                }
+            ]
+        },
+        "semaphore02": {
+            "components": [
+                {
+                    "type": "IsoSprite",
+                    "position": [
+                        22.6,
+                        33.4,
+                        -1
+                    ],
+                    "scale": [
+                        1,
+                        1,
+                        1
+                    ],
+                    "texture": "semaphore02",
+                    "tilemap": "tilemap",
+                    "frame": 0,
+                    "tile_set_size": [
+                        1,
+                        1
+                    ],
+                    "anchor": [
+                        0.5,
+                        0.922
+                    ],
+                    "footprint": [
+                        [
+                            0.5,
+                            -0.5
+                        ],
+                        [
+                            0.5,
+                            0.5
+                        ],
+                        [
+                            -0.5,
+                            0.5
+                        ],
+                        [
+                            -0.5,
+                            -0.5
+                        ]
+                    ]
+                }
+            ]
+        },
+        "tree": {
+            "components": [
+                {
+                    "type": "IsoSprite",
+                    "position": [
+                        43.5,
+                        40.5,
+                        -1
+                    ],
+                    "scale": [
+                        1,
+                        1,
+                        1
+                    ],
+                    "texture": "tree",
+                    "tilemap": "tilemap",
+                    "frame": 0,
+                    "tile_set_size": [
+                        1,
+                        1
+                    ],
+                    "anchor": [
+                        0.5,
+                        0.88
+                    ],
+                    "footprint": [
+                        [
+                            0.5,
+                            -0.5
+                        ],
+                        [
+                            0.5,
+                            0.5
+                        ],
+                        [
+                            -0.5,
+                            0.5
+                        ],
+                        [
+                            -0.5,
+                            -0.5
+                        ]
+                    ]
+                }
+            ]
+        },
+        "house": {
+            "components": [
+                {
+                    "type": "IsoSprite",
+                    "position": [
+                        32.9,
+                        2.86,
+                        -1
+                    ],
+                    "scale": [
+                        1.7,
+                        1.7,
+                        1
+                    ],
+                    "texture": "house",
+                    "tilemap": "tilemap",
+                    "frame": 0,
+                    "tile_set_size": [
+                        1,
+                        1
+                    ],
+                    "anchor": [
+                        0.5,
+                        0.768
+                    ],
+                    "footprint": [
+                        [
+                            6,
+                            -6
+                        ],
+                        [
+                            6,
+                            6
+                        ],
+                        [
+                            -6,
+                            6
+                        ],
+                        [
+                            -6,
+                            -6
+                        ]
+                    ]
+                }
+            ]
+        },
+        "cursor": {
+            "components": [
+                {
+                    "type": "Sprite",
+                    "position": [
+                        1151.6019287109375,
+                        350.79937744140625,
+                        -10000
+                    ],
+                    "scale": [
+                        2,
+                        2,
+                        1
+                    ],
+                    "texture": "cursor",
+                    "ignore_cam": true,
+                    "frame": 0,
+                    "tile_set_size": [
+                        1,
+                        1
+                    ],
+                    "anchor": [
+                        0,
+                        0
+                    ]
+                },
+                {
+                    "type": "Role",
+                    "value": "cursor"
+                }
+            ]
+        },
+        "tilemapNavigation": {
+            "components": [
+                {
+                    "type": "IsometricNavMesh",
+                    "map_entity": "tilemap",
+                    "size_x": 200,
+                    "size_y": 200,
+                    "data_grid": "demo.nav"
+                },
+                {
+                    "type": "Role",
+                    "value": "nav_mesh"
+                }
+            ]
+        },
+        "navAgent": {
+            "components": [
+                {
+                    "type": "Animator",
+                    "target": "navAgent.IsoAgent",
+                    "speed": 1
+                },
+                {
+                    "type": "IsoAgent",
+                    "position": [
+                        12.5,
+                        12.5,
+                        0
+                    ],
+                    "scale": [
+                        1,
+                        1,
+                        1
+                    ],
+                    "texture": "humanoid",
+                    "tilemap": "tilemap",
+                    "frame": 333,
+                    "tile_set_size": [
+                        32,
+                        16
+                    ],
+                    "anchor": [
+                        0.5,
+                        0.98
+                    ],
+                    "speed": 2.6,
+                    "anim_speed": 1
+                },
+                {
+                    "type": "Role",
+                    "value": "agent"
+                }
+            ]
+        }
+    }
+}

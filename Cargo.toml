@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/classic-core",
     "crates/classic-terrain",
+    "crates/sdf-atlas",
     "crates/classic-gfx",
     "crates/classic-platform",
     "crates/classic-engine",
@@ -11,10 +12,11 @@ members = [
     "crates/classic-demo",
     "apps/desktop",
     "apps/web",
+    "xtask",
 ]
 # ROM guest crates are standalone #![no_std] cdylibs built only for
-# wasm32-unknown-unknown (see scripts/build-guest.mjs); they are not host code
-# and must not be compiled by the default workspace build.
+# wasm32-unknown-unknown (see the `xtask` guests subcommand); they are not host
+# code and must not be compiled by the default workspace build.
 exclude = ["guest"]
 
 [workspace.package]

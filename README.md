@@ -1,43 +1,42 @@
-# classic.wgl + layout sys
+# classic-wgl
 
-## Description
+A small isometric game engine with a retained-mode UI/layout layer, written in
+Rust.  Two targets: **native** (winit + glutin, desktop GL) and **web**
+(web-sys + trunk, WebGL 2).  There is no framework — the whole app is a single
+`<canvas>` / winit window.
 
-A classic WebGL game engine.
-<img width="2048" height="1152" alt="2025-07-18-220958_2048x1152_scrot" src="https://github.com/user-attachments/assets/1c4ff7dd-85f6-4401-89c9-88da9ed2a707" />
+Game content ships as self-contained **ROMs**: a zip archive bundling a
+per-scene manifest, entity state, resources (textures, fonts, animations, and
+binary tile/nav/height grids), and a compiled WASM guest module.  See
+`AGENTS.md` for the full architecture and `docs/TS-PARITY.md` for the
+TypeScript parity notes.
 
-A layout layer build on top of the engine
-<img width="2047" height="1151" alt="2025-09-21-161744_2047x1151_scrot" src="https://github.com/user-attachments/assets/6ad47073-357d-4494-8a41-02bf6027116c" />
-
-## Develop (git and nix)
-
-1. Clone the repo and install dep:
-
-```bash
-git clone <repo-url>
-cd classic.wgl
-nix-shell
-npm i
-```
-
-2. Start the development server:
+## Develop (nix)
 
 ```bash
-npm run dev
+nix develop                 # dev shell (Rust toolchain, wasm target, GL/EGL deps)
+
+# build the scene ROMs (assets + SDF font atlas + guest wasm -> roms/out/*.rom)
+cargo xtask all
+
+cargo run -p classic-desktop          # native, interactive
+trunk serve apps/web/index.html       # web dev server
+trunk build apps/web/index.html --release  # web release
 ```
 
 ## Testing
 
-Tests are written with [Vitest](https://vitest.dev) and live under `tests/`,
-mirroring the structure of `src/`.
-
 ```bash
-npm run typecheck    # tsc --noEmit
-npm test             # run the test suite once
-npm run test:watch   # re-run tests on change
-npm run test:coverage # run tests with a v8 coverage report
+cargo test                    # all unit/integration tests
+cargo fmt --all -- --check    # formatting
+cargo clippy --all-targets -- -D warnings
 ```
 
-## GLSL resources:
+The headless e2e + golden harness runs under `LIBGL_ALWAYS_SOFTWARE=1` and
+`EGL_PLATFORM=surfaceless` — see `AGENTS.md` for the exact invocations and the
+`CLASSIC_*` environment-variable reference.
+
+## GLSL resources
 
 https://learnwebgl.brown37.net/12_shader_language/documents/webgl-reference-card-1_0.pdf
 https://learnwebgl.brown37.net/12_shader_language/glsl_mathematical_operations.html
