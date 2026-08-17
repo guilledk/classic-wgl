@@ -4,7 +4,7 @@ precision mediump float;
 
 in mediump vec2 vTexCoord;
 
-uniform sampler2D texSampler;
+uniform sampler2D tex_sampler;
 uniform vec4 color;
 
 out vec4 fragColor;
@@ -19,7 +19,7 @@ vec4 colorize(vec4 grayscale, vec4 c) {
 }
 
 void main(void ) {
-    vec4 texColor = texture(texSampler, vTexCoord);
+    vec4 texColor = texture(tex_sampler, vTexCoord);
     vec4 grayScale = grayscale(texColor);
     fragColor = colorize(grayScale, color);
 }

@@ -444,12 +444,12 @@ impl Gfx {
         let proj = self.projection();
 
         s.bind(gl);
-        s.uniform_mat4(gl, "projectionMatrix", &proj);
-        s.uniform_mat4(gl, "cameraMatrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
-        s.uniform_mat4(gl, "modelMatrix", model);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
+        s.uniform_mat4(gl, "model_matrix", model);
         s.uniform_vec4(gl, "color", color);
 
-        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertexPos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         self.quad.indices.bind(gl);
 
         unsafe {
@@ -482,18 +482,18 @@ impl Gfx {
         s.bind(gl);
         t.bind(gl, 0);
 
-        s.uniform_1i(gl, "texSampler", 0);
-        s.uniform_mat4(gl, "projectionMatrix", &proj);
-        s.uniform_mat4(gl, "cameraMatrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
-        s.uniform_mat4(gl, "modelMatrix", model);
-        s.uniform_1f(gl, "tileIdFlat", frame);
-        s.uniform_vec2(gl, "tileSetSize", tile_set_size);
-        s.uniform_1f(gl, "useIsoDepth", 0.0);
-        s.uniform_vec4(gl, "isoDepthCorners", &[0.0, 0.0, 0.0, 0.0]);
-        s.uniform_1f(gl, "ghostAlpha", ghost_alpha);
+        s.uniform_1i(gl, "tex_sampler", 0);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
+        s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_1f(gl, "tile_id_flat", frame);
+        s.uniform_vec2(gl, "tile_set_size", tile_set_size);
+        s.uniform_1f(gl, "use_iso_depth", 0.0);
+        s.uniform_vec4(gl, "iso_depth_corners", &[0.0, 0.0, 0.0, 0.0]);
+        s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
 
-        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertexPos"), 3, 0, 0);
-        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("texCoord"), 2, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
         self.quad.indices.bind(gl);
 
         unsafe {
@@ -532,21 +532,21 @@ impl Gfx {
         s.bind(gl);
         t.bind(gl, 0);
 
-        s.uniform_1i(gl, "texSampler", 0);
-        s.uniform_mat4(gl, "projectionMatrix", &proj);
-        s.uniform_mat4(gl, "cameraMatrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
-        s.uniform_mat4(gl, "modelMatrix", model);
+        s.uniform_1i(gl, "tex_sampler", 0);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
+        s.uniform_mat4(gl, "model_matrix", model);
         s.uniform_vec4(gl, "color", color);
-        s.uniform_vec4(gl, "outlineColor", outline_color);
-        s.uniform_1f(gl, "outlineWidth", outline_width);
-        s.uniform_1f(gl, "softEdge", 0.08);
+        s.uniform_vec4(gl, "outline_color", outline_color);
+        s.uniform_1f(gl, "outline_width", outline_width);
+        s.uniform_1f(gl, "soft_edge", 0.08);
         s.uniform_1f(gl, "spread", spread);
-        s.uniform_vec2(gl, "atlasSize", atlas_size);
+        s.uniform_vec2(gl, "atlas_size", atlas_size);
         s.uniform_1f(gl, "weight", weight);
         s.uniform_1f(gl, "gamma", gamma);
 
-        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertexPos"), 2, 16, 0);
-        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("texCoord"), 2, 16, 8);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertex_pos"), 2, 16, 0);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("tex_coord"), 2, 16, 8);
 
         unsafe {
             gl.draw_arrays(glow::TRIANGLES, 0, vertex_count);
@@ -572,17 +572,17 @@ impl Gfx {
         s.bind(gl);
         t.bind(gl, 0);
 
-        s.uniform_1i(gl, "texSampler", 0);
-        s.uniform_mat4(gl, "projectionMatrix", &proj);
-        s.uniform_mat4(gl, "cameraMatrix", camera);
-        s.uniform_mat4(gl, "modelMatrix", model);
-        s.uniform_1f(gl, "tileIdFlat", frame);
-        s.uniform_vec2(gl, "tileSetSize", tile_set_size);
-        s.uniform_1f(gl, "useIsoDepth", 1.0);
-        s.uniform_vec4(gl, "isoDepthCorners", iso_depth_corners);
+        s.uniform_1i(gl, "tex_sampler", 0);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", camera);
+        s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_1f(gl, "tile_id_flat", frame);
+        s.uniform_vec2(gl, "tile_set_size", tile_set_size);
+        s.uniform_1f(gl, "use_iso_depth", 1.0);
+        s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
 
-        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertexPos"), 3, 0, 0);
-        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("texCoord"), 2, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
         self.quad.indices.bind(gl);
 
         unsafe {
@@ -592,7 +592,7 @@ impl Gfx {
             // depth_mask=off), PASS 2 draws normally (LEQUAL, depth_mask=on).
             // Must restore depth_mask(true) + depth_func(LEQUAL) after both passes.
             // Ghost pass: visible through occluding terrain
-            s.uniform_1f(gl, "ghostAlpha", 0.4);
+            s.uniform_1f(gl, "ghost_alpha", 0.4);
             gl.depth_func(glow::ALWAYS);
             gl.depth_mask(false);
             gl.draw_elements(
@@ -603,7 +603,7 @@ impl Gfx {
             );
 
             // Normal pass: on top of terrain
-            s.uniform_1f(gl, "ghostAlpha", 0.0);
+            s.uniform_1f(gl, "ghost_alpha", 0.0);
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(false);
             gl.draw_elements(
@@ -634,12 +634,12 @@ impl Gfx {
         let proj = self.projection();
 
         s.bind(gl);
-        s.uniform_mat4(gl, "projectionMatrix", &proj);
-        s.uniform_mat4(gl, "cameraMatrix", camera);
-        s.uniform_mat4(gl, "modelMatrix", model);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", camera);
+        s.uniform_mat4(gl, "model_matrix", model);
         s.uniform_vec4(gl, "color", color);
 
-        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertexPos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertex_pos"), 3, 0, 0);
 
         unsafe {
             gl.depth_func(glow::ALWAYS);
@@ -665,12 +665,12 @@ impl Gfx {
         let proj = self.projection();
 
         s.bind(gl);
-        s.uniform_mat4(gl, "projectionMatrix", &proj);
-        s.uniform_mat4(gl, "cameraMatrix", camera);
-        s.uniform_mat4(gl, "modelMatrix", model);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", camera);
+        s.uniform_mat4(gl, "model_matrix", model);
         s.uniform_vec4(gl, "color", color);
 
-        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertexPos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertex_pos"), 3, 0, 0);
 
         unsafe {
             gl.depth_func(glow::ALWAYS);
@@ -718,9 +718,9 @@ impl Gfx {
         s.bind(gl);
 
         // Interleaved vertex attribs at offsets 0, 12, 20, 24
-        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertexPos"), 3, 36, 0);
-        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("mapCoord"), 2, 36, 12);
-        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("tileId"), 1, 36, 20);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertex_pos"), 3, 36, 0);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("map_coord"), 2, 36, 12);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("tile_id"), 1, 36, 20);
         vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("normal"), 3, 36, 24);
 
         // Texture 0: map data (raw GL texture handle)
@@ -731,27 +731,27 @@ impl Gfx {
         // Texture 1: tileset
         tset.bind(gl, 1);
 
-        s.uniform_1i(gl, "mapData", 0);
-        s.uniform_1i(gl, "tileSet", 1);
-        s.uniform_mat4(gl, "projectionMatrix", &proj);
-        s.uniform_mat4(gl, "cameraMatrix", camera);
-        s.uniform_mat4(gl, "modelMatrix", model);
-        s.uniform_mat4(gl, "isoMatrix", iso_matrix);
-        s.uniform_vec2(gl, "tileSetSize", tile_set_size);
-        s.uniform_vec2(gl, "tilePixelSize", tile_pixel_size);
-        s.uniform_vec2(gl, "mapSize", map_size);
-        s.uniform_vec2(gl, "selectedTile", selected_tile);
-        s.uniform_vec2(gl, "selectionBegin", selection_begin);
-        s.uniform_1i(gl, "selectionMode", selection_mode);
-        s.uniform_vec4(gl, "selectionColor", selection_color);
-        s.uniform_vec4(gl, "wallColor", &[0.3, 0.2, 0.15, 1.0]);
-        s.uniform_1f(gl, "gridRadius", 3.0);
-        s.uniform_1i(gl, "showGrid", if show_grid { 1 } else { 0 });
-        s.uniform_vec3(gl, "gridColor", Vec3::ZERO);
-        s.uniform_mat3(gl, "normalMatrix", normal_matrix);
-        s.uniform_vec3(gl, "ambientColor", Vec3::from_array(*ambient));
-        s.uniform_vec3(gl, "lightDirection", Vec3::from_array(*light_dir));
-        s.uniform_vec3(gl, "lightColor", Vec3::from_array(*light_color));
+        s.uniform_1i(gl, "map_data", 0);
+        s.uniform_1i(gl, "tile_set", 1);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", camera);
+        s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_mat4(gl, "iso_matrix", iso_matrix);
+        s.uniform_vec2(gl, "tile_set_size", tile_set_size);
+        s.uniform_vec2(gl, "tile_pixel_size", tile_pixel_size);
+        s.uniform_vec2(gl, "map_size", map_size);
+        s.uniform_vec2(gl, "selected_tile", selected_tile);
+        s.uniform_vec2(gl, "selection_begin", selection_begin);
+        s.uniform_1i(gl, "selection_mode", selection_mode);
+        s.uniform_vec4(gl, "selection_color", selection_color);
+        s.uniform_vec4(gl, "wall_color", &[0.3, 0.2, 0.15, 1.0]);
+        s.uniform_1f(gl, "grid_radius", 3.0);
+        s.uniform_1i(gl, "show_grid", if show_grid { 1 } else { 0 });
+        s.uniform_vec3(gl, "grid_color", Vec3::ZERO);
+        s.uniform_mat3(gl, "normal_matrix", normal_matrix);
+        s.uniform_vec3(gl, "ambient_color", Vec3::from_array(*ambient));
+        s.uniform_vec3(gl, "light_direction", Vec3::from_array(*light_dir));
+        s.uniform_vec3(gl, "light_color", Vec3::from_array(*light_color));
 
         unsafe {
             gl.enable(glow::DEPTH_TEST);
