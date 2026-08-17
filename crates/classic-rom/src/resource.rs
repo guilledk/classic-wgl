@@ -14,7 +14,7 @@ use crate::archive::RomArchive;
 use crate::loader::AssetLoader;
 use crate::manifest::RomManifest;
 
-/// The four categories of bundleable resource.
+/// The five categories of bundleable resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Texture,
@@ -22,6 +22,8 @@ pub enum ResourceKind {
     Code,
     /// Per-animation renderer metadata (e.g. per-frame visual offsets).
     Animation,
+    /// Raw binary grid (tile / nav / height) data.
+    Grid,
 }
 
 /// Name-keyed byte blobs, grouped by kind.
@@ -31,6 +33,7 @@ pub struct ResourceSet {
     fonts: BTreeMap<String, Vec<u8>>,
     code: BTreeMap<String, Vec<u8>>,
     animations: BTreeMap<String, Vec<u8>>,
+    grids: BTreeMap<String, Vec<u8>>,
 }
 
 impl ResourceSet {
@@ -47,7 +50,11 @@ impl ResourceSet {
 
     /// The total number of resources across all categories.
     pub fn len(&self) -> usize {
-        self.textures.len() + self.fonts.len() + self.code.len() + self.animations.len()
+        self.textures.len()
+            + self.fonts.len()
+            + self.code.len()
+            + self.animations.len()
+            + self.grids.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -68,6 +75,10 @@ impl ResourceSet {
 
     pub fn animations(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.animations
+    }
+
+    pub fn grids(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.grids
     }
 
     /// Build a resource set by reading manifest-declared resources out of a
@@ -107,6 +118,9 @@ impl ResourceSet {
                 set.animations.insert(entry.name.clone(), load(crate::rom_path(metadata))?);
             }
         }
+        for entry in &manifest.grids {
+            set.grids.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
+        }
         Ok(set)
     }
 
@@ -116,6 +130,7 @@ impl ResourceSet {
             ResourceKind::Font => &self.fonts,
             ResourceKind::Code => &self.code,
             ResourceKind::Animation => &self.animations,
+            ResourceKind::Grid => &self.grids,
         }
     }
 
@@ -125,6 +140,7 @@ impl ResourceSet {
             ResourceKind::Font => &mut self.fonts,
             ResourceKind::Code => &mut self.code,
             ResourceKind::Animation => &mut self.animations,
+            ResourceKind::Grid => &mut self.grids,
         }
     }
 }
@@ -145,7 +161,7 @@ mod tests {
         "code": [{"name": "main", "src": "code/main.wasm"}],
         "shaders": [],
         "textures": [{"name": "humanoid", "src": "res/humanoid.png"}],
-        "sdfFonts": [{"name": "dejavusans", "metrics": "res/dejavusans-sdf.json"}],
+        "sdf_fonts": [{"name": "dejavusans", "metrics": "res/dejavusans-sdf.json"}],
         "animations": []
     }"#;
 
@@ -233,5 +249,28 @@ mod tests {
             set.get(ResourceKind::Animation, "rocketLanding"),
             Some(b"{\"positions\":[]}".as_slice())
         );
+    }
+
+    #[test]
+    fn from_archive_populates_grids() {
+        let manifest: RomManifest = serde_json::from_str(
+            r#"{
+                "shaders": [],
+                "textures": [],
+                "animations": [],
+                "grids": [{"name": "demo.tiles", "src": "data/demo.tiles.bin"}]
+            }"#,
+        )
+        .unwrap();
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file("data/demo.tiles.bin", opts).unwrap();
+        writer.write_all(&[1, 0, 0, 0, 2, 0, 0, 0]).unwrap();
+        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+
+        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        assert_eq!(set.get(ResourceKind::Grid, "demo.tiles"), Some(&[1, 0, 0, 0, 2, 0, 0, 0][..]));
     }
 }

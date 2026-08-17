@@ -42,6 +42,7 @@ impl std::fmt::Display for DebugName {
 
 /// The role an entity plays in a scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RoleKind {
     Tilemap,
     NavMesh,
@@ -74,7 +75,6 @@ pub struct RectRender {
 /// Render a sprite (single frame from a sprite sheet).
 /// Port of `Sprite` from `transforms.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SpriteRender {
     pub position: Vec3,
     pub scale: Vec3,
@@ -120,7 +120,6 @@ pub enum TextJustify {
 /// Iso tilemap — the terrain grid.
 /// Port of `Tilemap` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Tilemap {
     pub position: Vec3,
     pub scale: Vec3,
@@ -132,12 +131,21 @@ pub struct Tilemap {
     pub tile_pixel_size: [u32; 2],
     /// Max tile index.
     pub max_tile: u32,
-    /// Tile data (row-major, `size_x * size_y` elements), inlined as base64.
-    #[serde(default, with = "crate::serde_base64::vec_u32")]
+    /// Name of the ROM grid resource holding the tile data (raw little-endian
+    /// `u32`), if any.  Hydrated into `data` at boot by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiles_grid: Option<String>,
+    /// Name of the ROM grid resource holding the height vertex grid (raw
+    /// little-endian `f32`), if any.  Hydrated into `height_data` at boot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heights_grid: Option<String>,
+    /// Tile data (row-major, `size_x * size_y` elements).  Not serialized —
+    /// persisted as the `tiles_grid` resource instead.
+    #[serde(skip)]
     pub data: Vec<u32>,
-    /// Per-tile height data (vertex grid, `(size_x+1) * (size_y+1)` elements),
-    /// inlined as base64.
-    #[serde(default, with = "crate::serde_base64::vec_f32")]
+    /// Per-tile height data (vertex grid, `(size_x+1) * (size_y+1)` elements).
+    /// Not serialized — persisted as the `heights_grid` resource instead.
+    #[serde(skip)]
     pub height_data: Vec<f32>,
     #[serde(default)]
     pub height_scale: f32,
@@ -176,20 +184,23 @@ fn default_nav_tileset() -> String {
 
 /// Port of `IsometricNavMesh` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct NavMesh {
     #[serde(default)]
     pub position: Vec3,
     #[serde(default)]
     pub scale: Vec3,
     /// Entity name of the source Tilemap.
-    #[serde(rename = "map")]
     pub map_entity: String,
     /// Texture name for the nav tileset.
     #[serde(default = "default_nav_tileset")]
     pub tile_set: String,
-    /// Walkability grid (row-major, `1` = walkable), inlined as base64.
-    #[serde(default, with = "crate::serde_base64::vec_u32")]
+    /// Name of the ROM grid resource holding the walkability grid (raw
+    /// little-endian `u32`), if any.  Hydrated into `data` at boot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_grid: Option<String>,
+    /// Walkability grid (row-major, `1` = walkable).  Not serialized —
+    /// persisted as the `data_grid` resource instead.
+    #[serde(skip)]
     pub data: Vec<u32>,
     pub size_x: i32,
     pub size_y: i32,
@@ -198,7 +209,6 @@ pub struct NavMesh {
 /// An isometric sprite (billboard in iso space).
 /// Port of `IsoSprite` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct IsoSprite {
     pub position: Vec3,
     pub scale: Vec3,
@@ -224,7 +234,6 @@ fn default_footprint() -> Vec<Vec2> {
 /// An isometric agent (pathfinding sprite).
 /// Port of `IsoAgent` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct IsoAgent {
     pub position: Vec3,
     pub scale: Vec3,

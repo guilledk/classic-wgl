@@ -62,9 +62,6 @@ tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 ruzstd = "0.9"
 
-# Component registry (distributed slice)
-linkme = "0.3"
-
 # Guest code runtime (WASM interpreter for ROM guest modules)
 wasmi = "0.41"
 

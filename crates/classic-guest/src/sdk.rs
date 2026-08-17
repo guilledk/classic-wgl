@@ -72,6 +72,13 @@ impl GuestHost {
         unsafe { &mut *self.engine }
     }
 
+    /// Qualify a guest-supplied entity name with the active ROM namespace.
+    /// Currently a no-op (single ROM, empty namespace); the indirection point
+    /// where multi-ROM name scoping will be applied.
+    pub fn resolve(&self, name: &str) -> String {
+        self.engine().entity_key(name)
+    }
+
     /// Log a message through the `guest` CLASSIC_LOG channel.
     pub fn log(&mut self, msg: &str) {
         classic_core::cl_info!(Chan::Guest, "{}", msg);

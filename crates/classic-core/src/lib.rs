@@ -6,7 +6,6 @@ pub mod math;
 pub mod pathfinder;
 pub mod registry;
 pub mod sdf_builder;
-pub mod serde_base64;
 pub mod terrain;
 pub mod tilemap;
 pub mod types;
@@ -23,158 +22,151 @@ pub use camera::Camera;
 pub use components::{RoleKind, SpriteRender, Transform};
 pub use types::Rect;
 
-/// Call once at startup to register all known component types.
+/// Install all known component types into the registry.  Idempotent — the
+/// first call wins and later calls are no-ops.
 pub fn register_all_components() {
     use registry::ComponentReg;
 
     // Transform — emitted last; subsumed by components that embed position.
-    registry::register(ComponentReg {
-        name: "Transform",
-        spawn: |b, v| {
-            let tf: Transform = serde_json::from_value(v)?;
-            b.add(tf);
-            Ok(())
+    registry::init(vec![
+        ComponentReg {
+            name: "Transform",
+            spawn: |b, v| {
+                let tf: Transform = serde_json::from_value(v)?;
+                b.add(tf);
+                Ok(())
+            },
+            dump: Some(dumper_transform),
+            order: 50,
+            subsumes: &[],
         },
-        dump: Some(dumper_transform),
-        order: 50,
-        subsumes: &[],
-    });
-
-    registry::register(ComponentReg {
-        name: "Sprite",
-        spawn: |b, v| {
-            let s: SpriteRender = serde_json::from_value(v)?;
-            b.add(Transform::new(s.position, s.scale));
-            b.add(s);
-            Ok(())
+        ComponentReg {
+            name: "Sprite",
+            spawn: |b, v| {
+                let s: SpriteRender = serde_json::from_value(v)?;
+                b.add(Transform::new(s.position, s.scale));
+                b.add(s);
+                Ok(())
+            },
+            dump: Some(dumper_sprite),
+            order: 20,
+            subsumes: &["Transform"],
         },
-        dump: Some(dumper_sprite),
-        order: 20,
-        subsumes: &["Transform"],
-    });
-
-    registry::register(ComponentReg {
-        name: "Tilemap",
-        spawn: |b, v| {
-            let tm: Tilemap = serde_json::from_value(v)?;
-            b.add(Transform::new(tm.position, tm.scale));
-            b.add(tm);
-            Ok(())
+        ComponentReg {
+            name: "Tilemap",
+            spawn: |b, v| {
+                let tm: Tilemap = serde_json::from_value(v)?;
+                b.add(Transform::new(tm.position, tm.scale));
+                b.add(tm);
+                Ok(())
+            },
+            dump: Some(dumper_tilemap),
+            order: 10,
+            subsumes: &["Transform"],
         },
-        dump: Some(dumper_tilemap),
-        order: 10,
-        subsumes: &["Transform"],
-    });
-
-    registry::register(ComponentReg {
-        name: "IsoSprite",
-        spawn: |b, v| {
-            let s: IsoSprite = serde_json::from_value(v)?;
-            b.add(Transform::new(s.position, s.scale));
-            b.add(s);
-            Ok(())
+        ComponentReg {
+            name: "IsoSprite",
+            spawn: |b, v| {
+                let s: IsoSprite = serde_json::from_value(v)?;
+                b.add(Transform::new(s.position, s.scale));
+                b.add(s);
+                Ok(())
+            },
+            dump: Some(dumper_isosprite),
+            order: 30,
+            subsumes: &["Transform"],
         },
-        dump: Some(dumper_isosprite),
-        order: 30,
-        subsumes: &["Transform"],
-    });
-
-    registry::register(ComponentReg {
-        name: "IsoAgent",
-        spawn: |b, v| {
-            let a: IsoAgent = serde_json::from_value(v)?;
-            b.add(Transform::new(a.position, a.scale));
-            b.add(IsoSprite {
-                position: a.position,
-                scale: a.scale,
-                texture: a.texture.clone(),
-                tilemap: a.tilemap.clone(),
-                frame: a.frame,
-                tile_set_size: a.tile_set_size,
-                anchor: a.anchor,
-                frame_offset: a.frame_offset,
-                footprint: a.footprint.clone(),
-            });
-            b.add(a);
-            Ok(())
+        ComponentReg {
+            name: "IsoAgent",
+            spawn: |b, v| {
+                let a: IsoAgent = serde_json::from_value(v)?;
+                b.add(Transform::new(a.position, a.scale));
+                b.add(IsoSprite {
+                    position: a.position,
+                    scale: a.scale,
+                    texture: a.texture.clone(),
+                    tilemap: a.tilemap.clone(),
+                    frame: a.frame,
+                    tile_set_size: a.tile_set_size,
+                    anchor: a.anchor,
+                    frame_offset: a.frame_offset,
+                    footprint: a.footprint.clone(),
+                });
+                b.add(a);
+                Ok(())
+            },
+            dump: Some(dumper_isoagent),
+            order: 40,
+            subsumes: &["IsoSprite", "Transform"],
         },
-        dump: Some(dumper_isoagent),
-        order: 40,
-        subsumes: &["IsoSprite", "Transform"],
-    });
-
-    registry::register(ComponentReg {
-        name: "Animator",
-        spawn: |b, v| {
-            let a: Animator = serde_json::from_value(v)?;
-            b.add(a);
-            Ok(())
+        ComponentReg {
+            name: "Animator",
+            spawn: |b, v| {
+                let a: Animator = serde_json::from_value(v)?;
+                b.add(a);
+                Ok(())
+            },
+            dump: Some(dumper_animator),
+            order: 35,
+            subsumes: &[],
         },
-        dump: Some(dumper_animator),
-        order: 35,
-        subsumes: &[],
-    });
-
-    registry::register(ComponentReg {
-        name: "IsometricNavMesh",
-        spawn: |b, v| {
-            let n: NavMesh = serde_json::from_value(v)?;
-            b.add(Transform::new(n.position, n.scale));
-            b.add(n);
-            Ok(())
+        ComponentReg {
+            name: "IsometricNavMesh",
+            spawn: |b, v| {
+                let n: NavMesh = serde_json::from_value(v)?;
+                b.add(Transform::new(n.position, n.scale));
+                b.add(n);
+                Ok(())
+            },
+            dump: Some(dumper_navmesh),
+            order: 15,
+            subsumes: &["Transform"],
         },
-        dump: Some(dumper_navmesh),
-        order: 15,
-        subsumes: &["Transform"],
-    });
-
-    registry::register(ComponentReg {
-        name: "Rect",
-        spawn: |b, v| {
-            let r: RectRender = serde_json::from_value(v)?;
-            b.add(r);
-            Ok(())
+        ComponentReg {
+            name: "Rect",
+            spawn: |b, v| {
+                let r: RectRender = serde_json::from_value(v)?;
+                b.add(r);
+                Ok(())
+            },
+            dump: Some(dumper_rect),
+            order: 45,
+            subsumes: &[],
         },
-        dump: Some(dumper_rect),
-        order: 45,
-        subsumes: &[],
-    });
-
-    registry::register(ComponentReg {
-        name: "SdfText",
-        spawn: |b, v| {
-            let t: SdfTextRender = serde_json::from_value(v)?;
-            b.add(t);
-            Ok(())
+        ComponentReg {
+            name: "SdfText",
+            spawn: |b, v| {
+                let t: SdfTextRender = serde_json::from_value(v)?;
+                b.add(t);
+                Ok(())
+            },
+            dump: Some(dumper_sdftext),
+            order: 46,
+            subsumes: &[],
         },
-        dump: Some(dumper_sdftext),
-        order: 46,
-        subsumes: &[],
-    });
-
-    registry::register(ComponentReg {
-        name: "Camera",
-        spawn: |b, v| {
-            let c: Camera = serde_json::from_value(v)?;
-            b.add(c);
-            Ok(())
+        ComponentReg {
+            name: "Camera",
+            spawn: |b, v| {
+                let c: Camera = serde_json::from_value(v)?;
+                b.add(c);
+                Ok(())
+            },
+            dump: Some(dumper_camera),
+            order: 48,
+            subsumes: &[],
         },
-        dump: Some(dumper_camera),
-        order: 48,
-        subsumes: &[],
-    });
-
-    registry::register(ComponentReg {
-        name: "Role",
-        spawn: |b, v| {
-            let r: Role = serde_json::from_value(v)?;
-            b.add(r);
-            Ok(())
+        ComponentReg {
+            name: "Role",
+            spawn: |b, v| {
+                let r: Role = serde_json::from_value(v)?;
+                b.add(r);
+                Ok(())
+            },
+            dump: Some(dumper_role),
+            order: 60,
+            subsumes: &[],
         },
-        dump: Some(dumper_role),
-        order: 60,
-        subsumes: &[],
-    });
+    ]);
 }
 
 // Dumper helpers

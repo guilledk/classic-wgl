@@ -21,7 +21,7 @@ pub use format::{detect_format, RomFormat};
 #[cfg(not(target_arch = "wasm32"))]
 pub use loader::FsAssetLoader;
 pub use loader::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
-pub use manifest::{CodeEntry, RomManifest};
+pub use manifest::{CodeEntry, GridEntry, RomManifest};
 pub use resource::{ResourceKind, ResourceSet};
 pub use rom::Rom;
 pub use source::{parse_rom_spec, RomSource, DEFAULT_ROM};

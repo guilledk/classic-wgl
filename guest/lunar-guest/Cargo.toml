@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# Standalone: the guest crates are built out-of-workspace (via `--manifest-path`)
+# so they declare their own empty workspace rather than inheriting the parent's.
+[workspace]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

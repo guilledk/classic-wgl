@@ -3,7 +3,6 @@ use classic_core::{register_all_components, SpriteRender, Transform};
 
 #[test]
 fn sprite_dumper_round_trip_keys() {
-    classic_core::registry::clear();
     register_all_components();
 
     let s = SpriteRender {
@@ -25,13 +24,12 @@ fn sprite_dumper_round_trip_keys() {
 
     assert_eq!(val["type"], "Sprite");
     assert_eq!(val["texture"], "cursor");
-    assert_eq!(val["ignoreCam"], true);
-    assert_eq!(val["tileSetSize"], serde_json::json!([1.0, 1.0]));
+    assert_eq!(val["ignore_cam"], true);
+    assert_eq!(val["tile_set_size"], serde_json::json!([1.0, 1.0]));
 }
 
 #[test]
 fn tilemap_dumper_round_trip_keys() {
-    classic_core::registry::clear();
     register_all_components();
 
     let tm = Tilemap {
@@ -42,6 +40,8 @@ fn tilemap_dumper_round_trip_keys() {
         tile_set: "tileSet".into(),
         tile_pixel_size: [32, 32],
         max_tile: 32,
+        tiles_grid: None,
+        heights_grid: None,
         data: vec![1, 2, 3],
         height_data: vec![1.0; 9],
         height_scale: 32.0,
@@ -63,21 +63,22 @@ fn tilemap_dumper_round_trip_keys() {
     assert_eq!(val["type"], "Tilemap");
     assert_eq!(val["position"], serde_json::json!([1.0, 2.0, 3.0]));
     assert_eq!(val["scale"], serde_json::json!([45.0, 45.0, 1.0]));
-    assert_eq!(val["sizeX"], 200);
-    assert_eq!(val["sizeY"], 200);
-    assert_eq!(val["tileSet"], "tileSet");
-    assert_eq!(val["tilePixelSize"], serde_json::json!([32, 32]));
-    assert_eq!(val["maxTile"], 32);
-    assert_eq!(val["data"], classic_core::serde_base64::encode_u32(&[1, 2, 3]));
-    assert_eq!(val["heightScale"], 32.0);
+    assert_eq!(val["size_x"], 200);
+    assert_eq!(val["size_y"], 200);
+    assert_eq!(val["tile_set"], "tileSet");
+    assert_eq!(val["tile_pixel_size"], serde_json::json!([32, 32]));
+    assert_eq!(val["max_tile"], 32);
+    assert_eq!(val["height_scale"], 32.0);
 
-    // height_data is inlined (base64), no longer a sidecar.
-    assert_eq!(val["heightData"], classic_core::serde_base64::encode_f32(&[1.0; 9]));
+    // Bulk grids are persisted as named ROM resources, not inlined in state.
+    assert!(val.get("data").is_none());
+    assert!(val.get("height_data").is_none());
+    assert!(val.get("tiles_grid").is_none());
+    assert!(val.get("heights_grid").is_none());
 }
 
 #[test]
 fn isoagent_subsume_skips_transform_and_isosprite() {
-    classic_core::registry::clear();
     register_all_components();
 
     let agent = IsoAgent {
@@ -120,16 +121,15 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
     assert_eq!(val["texture"], "humanoid");
     assert_eq!(val["tilemap"], "tilemap");
     assert_eq!(val["speed"], 2.5);
-    assert_eq!(val["animSpeed"], 1.0);
+    assert_eq!(val["anim_speed"], 1.0);
 
-    // "type" must be the first key (critical for TS positional loader)
+    // "type" is emitted first by `component_value`.
     let keys: Vec<&str> = val.as_object().unwrap().keys().map(|s| s.as_str()).collect();
     assert_eq!(keys[0], "type");
 }
 
 #[test]
 fn animator_dumper_works() {
-    classic_core::registry::clear();
     register_all_components();
 
     let anim = Animator {
@@ -157,7 +157,6 @@ fn animator_dumper_works() {
 
 #[test]
 fn animator_state_round_trips() {
-    classic_core::registry::clear();
     register_all_components();
 
     // A ROM can declare a starting one-shot animation directly in `state.json`.
@@ -209,8 +208,7 @@ fn animation_offsets_default_empty() {
 }
 
 #[test]
-fn navmesh_dumper_uses_map_key() {
-    classic_core::registry::clear();
+fn navmesh_dumper_uses_map_entity_key() {
     register_all_components();
 
     let nav = NavMesh {
@@ -218,6 +216,7 @@ fn navmesh_dumper_uses_map_key() {
         scale: [45.0, 45.0, 1.0].into(),
         map_entity: "tilemap".into(),
         tile_set: "".into(),
+        data_grid: None,
         data: vec![0, 1, 1, 0],
         size_x: 200,
         size_y: 200,
@@ -231,16 +230,15 @@ fn navmesh_dumper_uses_map_key() {
     let val = nav_reg.dump.unwrap()(&world, e).unwrap();
 
     assert_eq!(val["type"], "IsometricNavMesh");
-    assert_eq!(val["map"], "tilemap");
-    assert_eq!(val["data"], classic_core::serde_base64::encode_u32(&[0, 1, 1, 0]));
-    // derive-driven: position/scale now round-trip (previously omitted for TS parity)
+    assert_eq!(val["map_entity"], "tilemap");
+    assert!(val.get("data").is_none());
+    assert!(val.get("data_grid").is_none());
     assert_eq!(val["position"], serde_json::json!([0.0, 0.0, 0.0]));
     assert_eq!(val["scale"], serde_json::json!([45.0, 45.0, 1.0]));
 }
 
 #[test]
 fn rect_and_transform_dumpers_round_trip() {
-    classic_core::registry::clear();
     register_all_components();
 
     let rect =
@@ -263,7 +261,6 @@ fn rect_and_transform_dumpers_round_trip() {
 
 #[test]
 fn camera_dumper() {
-    classic_core::registry::clear();
     register_all_components();
 
     let cam = classic_core::Camera::new([5.0, 6.0, 0.0].into(), [0.5, 0.5, 1.0].into());
@@ -284,7 +281,6 @@ fn camera_dumper() {
 
 #[test]
 fn role_dumper_round_trips() {
-    classic_core::registry::clear();
     register_all_components();
 
     let role = classic_core::components::Role::new(classic_core::RoleKind::Tilemap);
@@ -295,11 +291,11 @@ fn role_dumper_round_trips() {
     let role_reg = regs.iter().find(|r| r.name == "Role").unwrap();
     let val = role_reg.dump.unwrap()(&world, e).unwrap();
     assert_eq!(val["type"], "Role");
-    assert_eq!(val["value"], "Tilemap");
+    assert_eq!(val["value"], "tilemap");
 
     // Spawn it back from the dumped value.
     let mut builder = hecs::EntityBuilder::new();
-    let fields = serde_json::json!({ "value": "Tilemap" });
+    let fields = serde_json::json!({ "value": "tilemap" });
     (role_reg.spawn)(&mut builder, fields).unwrap();
     let spawned = world.spawn(builder.build());
     assert_eq!(

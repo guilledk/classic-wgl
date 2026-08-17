@@ -1,10 +1,11 @@
-use classic_core::registry;
+use classic_core::registry::{self, ComponentReg};
 
 /// A dummy "component" — just data we want to spawn.
 #[derive(Debug, PartialEq)]
 struct Dummy {
     value: i32,
 }
+
 struct Other {}
 
 fn spawn_dummy(b: &mut hecs::EntityBuilder, v: serde_json::Value) -> anyhow::Result<()> {
@@ -13,55 +14,38 @@ fn spawn_dummy(b: &mut hecs::EntityBuilder, v: serde_json::Value) -> anyhow::Res
     Ok(())
 }
 
-fn spawn_other(_b: &mut hecs::EntityBuilder, _v: serde_json::Value) -> anyhow::Result<()> {
-    _b.add(Other {});
+fn spawn_other(b: &mut hecs::EntityBuilder, _v: serde_json::Value) -> anyhow::Result<()> {
+    b.add(Other {});
     Ok(())
 }
 
+// The registry is a process-global `OnceLock`, so all assertions live in one
+// test (the "first init wins" semantics make independent tests interfere).
 #[test]
-fn registers_and_looks_up() {
-    registry::clear();
-    registry::register_spawner("Dummy", spawn_dummy);
+fn registry_init_lookup_and_idempotency() {
+    registry::init(vec![
+        ComponentReg { name: "Dummy", spawn: spawn_dummy, dump: None, order: 0, subsumes: &[] },
+        ComponentReg { name: "Other", spawn: spawn_other, dump: None, order: 0, subsumes: &[] },
+    ]);
+
     assert!(registry::lookup("Dummy").is_some());
-}
-
-#[test]
-fn has_reflects_state() {
-    registry::clear();
-    assert!(!registry::has("Dummy"));
-    registry::register_spawner("Dummy", spawn_dummy);
     assert!(registry::has("Dummy"));
-}
-
-#[test]
-fn lookup_returns_none_for_unknown() {
-    registry::clear();
+    assert!(registry::has("Other"));
+    assert!(!registry::has("Nope"));
     assert!(registry::lookup("Nope").is_none());
-}
 
-#[test]
-fn overwriting_registers_warns() {
-    registry::clear();
-    registry::register_spawner("Dummy", spawn_dummy);
-    registry::register_spawner("Dummy", spawn_other);
-    assert!(registry::has("Dummy"));
-}
-
-#[test]
-fn lists_all_names() {
-    registry::clear();
-    registry::register_spawner("Dummy", spawn_dummy);
-    registry::register_spawner("Other", spawn_other);
     let mut names = registry::names();
     names.sort();
     assert_eq!(names, vec!["Dummy", "Other"]);
-}
 
-#[test]
-fn clear_removes_all() {
-    registry::clear();
-    registry::register_spawner("Dummy", spawn_dummy);
-    registry::clear();
-    assert!(registry::names().is_empty());
-    assert!(!registry::has("Dummy"));
+    // Second init is ignored (first wins).
+    registry::init(vec![ComponentReg {
+        name: "Second",
+        spawn: spawn_other,
+        dump: None,
+        order: 0,
+        subsumes: &[],
+    }]);
+    assert!(registry::has("Dummy"));
+    assert!(!registry::has("Second"));
 }

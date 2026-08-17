@@ -5,10 +5,10 @@
 //! buildable area, reachable spawns) rather than pixel output.
 
 use classic_core::pathfinder::find_path;
+use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 use lunar_guest::lunar::{generate_lunar, LandingZone, LunarParams, LunarTerrain};
 use lunar_guest::material::{material_for_tile_id, tile_count};
 use lunar_guest::tileset::{build_default_lunar_tileset, build_lunar_tileset};
-use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 
 /// Smaller than the shipping 200x200 so the suite stays fast; every invariant
 /// under test is scale-independent.

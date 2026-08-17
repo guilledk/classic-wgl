@@ -37,7 +37,6 @@ use classic_gfx::{Gfx, GlBuffer};
 use classic_platform::InputState;
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use glow::HasContext;
-use serde::Deserialize;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
 
@@ -48,12 +47,6 @@ pub struct GuestEvent {
     pub kind: u32,
     /// The subscribed entity's name.
     pub name: String,
-}
-
-/// Default `pixels_per_meter` for animation offsets emitted by older renderers
-/// that did not record it.
-fn default_ppm() -> f32 {
-    8.0
 }
 
 /// Per-entity GPU resources for a tilemap.
@@ -79,6 +72,10 @@ pub struct Engine {
     pub time: Time,
     pub names: HashMap<String, hecs::Entity>,
     pub name_order: Vec<String>,
+    /// Namespace prefix for the loaded ROM's entities (empty = global names).
+    /// Groundwork for multi-ROM loading: when non-empty, `entity_key` qualifies
+    /// names as `"{namespace}::{name}"` so several ROMs can coexist.
+    pub namespace: String,
     pub physics: PhysicsProvider,
     /// Collider pid → entity name, populated by `register_named_collider` so the
     /// guest `pick_at` can resolve a screen point to a gameplay entity.
@@ -186,6 +183,7 @@ impl Engine {
             time: Time::default(),
             names: HashMap::new(),
             name_order: Vec::new(),
+            namespace: String::new(),
             physics: PhysicsProvider::new(),
             collider_names: HashMap::new(),
             subscribed: HashSet::new(),
@@ -277,10 +275,7 @@ impl Engine {
         // manifest is loaded from the ROM's `animations/` resources and folded
         // into the registered `AnimationData`.
         for (name, metadata_bytes) in resources.animations() {
-            let Ok(metadata_json) = std::str::from_utf8(metadata_bytes) else {
-                continue;
-            };
-            self.load_animation_offsets_json(name, metadata_json);
+            self.load_animation_offsets(name, metadata_bytes);
         }
     }
 
@@ -288,55 +283,133 @@ impl Engine {
     /// spawn the entity graph.  Records the ROM's manifest + resources so
     /// [`Engine::dump_rom`] can reconstruct it.
     pub fn load_rom(&mut self, gl: Rc<glow::Context>, rom: &classic_rom::Rom) {
+        self.namespace = rom.manifest.namespace.clone();
         self.init_gfx(gl, &rom.manifest, &rom.resources);
         self.load_state(&rom.state).expect("load ROM state");
+        self.load_grids(&rom.resources);
         self.rom_manifest_json = Some(rom.manifest_json.clone());
         self.rom_manifest = Some(rom.manifest.clone());
         self.rom_resources = Some(rom.resources.clone());
     }
 
+    /// Qualify an entity name with the active namespace (a no-op when the
+    /// namespace is empty).  The single point where multi-ROM namespacing will
+    /// be applied: `names`/`name_order` and every name lookup route through this
+    /// once several ROMs can load concurrently.
+    pub fn entity_key(&self, name: &str) -> String {
+        if self.namespace.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}::{name}", self.namespace)
+        }
+    }
+
+    /// Hydrate the tile/nav/height grids referenced by the entity state from
+    /// the ROM's grid resources (raw little-endian numbers keyed by name).
+    fn load_grids(&mut self, resources: &classic_rom::ResourceSet) {
+        let grids = resources.grids();
+
+        if let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) {
+            let (tiles_grid, heights_grid) = match self.world.get::<&Tilemap>(tm_entity) {
+                Ok(tm) => (tm.tiles_grid.clone(), tm.heights_grid.clone()),
+                Err(_) => (None, None),
+            };
+            if let Some(name) = tiles_grid {
+                if let Some(bytes) = grids.get(&name) {
+                    self.set_tiles_bulk(&decode_u32(bytes));
+                }
+            }
+            if let Some(name) = heights_grid {
+                if let Some(bytes) = grids.get(&name) {
+                    self.set_heights_bulk(&decode_f32(bytes));
+                }
+            }
+        }
+
+        if let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) {
+            let data_grid = match self.world.get::<&NavMesh>(nav_entity) {
+                Ok(nav) => nav.data_grid.clone(),
+                Err(_) => None,
+            };
+            if let Some(name) = data_grid {
+                if let Some(bytes) = grids.get(&name) {
+                    self.set_nav_bulk(&decode_u32(bytes));
+                }
+            }
+        }
+    }
+
     /// Reconstruct a [`classic_rom::Rom`] from the loaded manifest + resources
     /// and the current world state.  Returns `None` if no ROM was loaded.
     pub fn dump_rom(&self) -> Option<classic_rom::Rom> {
+        let mut resources = self.rom_resources.clone()?;
+
+        if let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) {
+            if let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) {
+                if let Some(name) = &tm.tiles_grid {
+                    resources.insert(
+                        classic_rom::ResourceKind::Grid,
+                        name.clone(),
+                        encode_u32(&tm.data),
+                    );
+                }
+                if let Some(name) = &tm.heights_grid {
+                    resources.insert(
+                        classic_rom::ResourceKind::Grid,
+                        name.clone(),
+                        encode_f32(&tm.height_data),
+                    );
+                }
+            }
+        }
+        if let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) {
+            if let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) {
+                if let Some(name) = &nav.data_grid {
+                    resources.insert(
+                        classic_rom::ResourceKind::Grid,
+                        name.clone(),
+                        encode_u32(&nav.data),
+                    );
+                }
+            }
+        }
+
         Some(classic_rom::Rom {
             manifest: self.rom_manifest.clone()?,
             manifest_json: self.rom_manifest_json.clone()?,
-            resources: self.rom_resources.clone()?,
+            resources,
             state: self.dump_state(),
         })
     }
 
     /// Load per-frame visual offsets emitted by the animation renderer.
     ///
+    /// The blob is little-endian: `u32` frame_count, `f32` `pixels_per_meter`,
+    /// then `frame_count × [f32 x, f32 y, f32 z]` `rig_location` triplets.
     /// `rig_location` is Blender world `(x = drift, y = drift, z = altitude)`
     /// in metres.  It is converted here to a cartesian screen-space offset:
     /// the altitude maps onto the vertical (screen-Y, negative = up), and the
     /// drift maps onto screen X/Y, all scaled by `pixels_per_meter` so the
     /// rocket's motion matches the sprite's render resolution.
-    pub fn load_animation_offsets_json(&mut self, animation_name: &str, metadata_json: &str) {
-        #[derive(Deserialize)]
-        struct FramePosition {
-            rig_location: [f32; 3],
+    pub fn load_animation_offsets(&mut self, animation_name: &str, bytes: &[u8]) {
+        if bytes.len() < 8 {
+            return;
         }
-        #[derive(Deserialize)]
-        struct AnimationMetadata {
-            #[serde(default = "default_ppm")]
-            pixels_per_meter: f32,
-            positions: Vec<FramePosition>,
-        }
+        let frame_count = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let ppm = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
 
-        let metadata: AnimationMetadata =
-            serde_json::from_str(metadata_json).expect("parse animation metadata JSON");
-        let ppm = metadata.pixels_per_meter;
-        let offsets = metadata
-            .positions
-            .into_iter()
-            .map(|frame| {
-                let [x, y, z] = frame.rig_location;
-                // Altitude (z) lifts the rocket up = smaller cart_pos.y.
-                Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array()
-            })
-            .collect::<Vec<_>>();
+        let mut offsets = Vec::with_capacity(frame_count);
+        for i in 0..frame_count {
+            let o = 8 + i * 12;
+            if o + 12 > bytes.len() {
+                break;
+            }
+            let x = f32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+            let y = f32::from_le_bytes([bytes[o + 4], bytes[o + 5], bytes[o + 6], bytes[o + 7]]);
+            let z = f32::from_le_bytes([bytes[o + 8], bytes[o + 9], bytes[o + 10], bytes[o + 11]]);
+            // Altitude (z) lifts the rocket up = smaller cart_pos.y.
+            offsets.push(Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array());
+        }
 
         if let Some(animation) = self.animations.get_mut(animation_name) {
             animation.offsets = offsets;
@@ -551,11 +624,7 @@ impl Engine {
         self.entity_by_role(kind).map(|e| self.debug_name(e))
     }
 
-    // "type" must be the first key in each dumped component object.
-    // The TS positional loader relies on this: it splices out "type"
-    // and passes remaining values as positional constructor args.
-    // See docs/TS-PARITY.md for the per-component key ordering.
-    /// Serialise all named entities to a state JSON string (TS-compatible format).
+    /// Serialise all named entities to a state JSON string.
     pub fn dump_state(&self) -> String {
         let entities = self.dump_state_value();
         let root = serde_json::json!({ "entities": entities });
@@ -2664,6 +2733,34 @@ impl Default for Engine {
     }
 }
 
+/// Decode a little-endian `u32` grid byte blob.
+fn decode_u32(bytes: &[u8]) -> Vec<u32> {
+    bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+}
+
+/// Decode a little-endian `f32` grid byte blob.
+fn decode_f32(bytes: &[u8]) -> Vec<f32> {
+    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+}
+
+/// Encode a `u32` grid to little-endian bytes.
+fn encode_u32(vals: &[u32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(vals.len() * 4);
+    for v in vals {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// Encode an `f32` grid to little-endian bytes.
+fn encode_f32(vals: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(vals.len() * 4);
+    for v in vals {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2684,15 +2781,18 @@ mod tests {
             },
         );
 
-        let metadata = r#"{
-            "pixels_per_meter": 8,
-            "positions": [
-                { "rig_location": [0.0, 0.0, 50.0] },
-                { "rig_location": [-1.0, 0.5, 10.0] },
-                { "rig_location": [0.0, 0.0, 0.0] }
-            ]
-        }"#;
-        engine.load_animation_offsets_json("rocketLanding", metadata);
+        // Little-endian: u32 frame_count, f32 ppm, then triples of [x, y, z].
+        let mut metadata = Vec::new();
+        metadata.extend_from_slice(&3u32.to_le_bytes());
+        metadata.extend_from_slice(&8.0f32.to_le_bytes());
+        for (x, y, z) in
+            [(0.0f32, 0.0f32, 50.0f32), (-1.0f32, 0.5f32, 10.0f32), (0.0f32, 0.0f32, 0.0f32)]
+        {
+            metadata.extend_from_slice(&x.to_le_bytes());
+            metadata.extend_from_slice(&y.to_le_bytes());
+            metadata.extend_from_slice(&z.to_le_bytes());
+        }
+        engine.load_animation_offsets("rocketLanding", &metadata);
 
         let offsets = &engine.animations["rocketLanding"].offsets;
         assert_eq!(offsets.len(), 3);

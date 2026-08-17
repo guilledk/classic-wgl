@@ -77,6 +77,12 @@ impl Rom {
                 }
             }
         }
+        for entry in &self.manifest.grids {
+            if let Some(bytes) = self.resources.grids().get(&entry.name) {
+                writer.start_file(crate::rom_path(&entry.src), opts)?;
+                writer.write_all(bytes)?;
+            }
+        }
 
         Ok(writer.finish()?.into_inner())
     }
@@ -93,7 +99,7 @@ mod tests {
         "code": [{"name": "main", "src": "/code/main.wasm"}],
         "shaders": [],
         "textures": [{"name": "humanoid", "src": "/res/humanoid.png"}],
-        "sdfFonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
+        "sdf_fonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
         "animations": []
     }"#;
 
