@@ -293,17 +293,16 @@ software-rasteriser output is version-dependent.
   "entities": {
     "tilemap": {
       "components": [
-        {"type": "Tilemap", "position": [0,0,0], "scale": [1,1,1], "sizeX": 20, "sizeY": 20, ...},
-        {"type": "DebugName", "text": "tilemap"}
+        {"type": "Tilemap", "position": [0,0,0], "scale": [1,1,1], "size_x": 20, "size_y": 20, ...}
       ]
     }
   }
 }
 ```
 
-Component types appear in `type`-first order (the `"type"` key is always
-first, matching the TS positional-loading contract). Key order within a
-component's JSON object equals the constructor argument order.
+Component field keys are snake_case, matching the Rust field names exactly.
+The `"type"` key is emitted first as a convention, but key order is not
+load-bearing (the loader is registry-driven).
 
 ### Diagnostic Uses
 
@@ -407,21 +406,21 @@ CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check \
 3. Check the start and end tiles are walkable (nav mesh value allows
    traversal). Blocked tiles block A* entirely.
 4. Confirm the nav mesh uses the same coordinate convention as the tilemap
-   (both share `sizeX` / `sizeY`).
+   (both share `size_x` / `size_y`).
 5. Check for out-of-bounds start/end — pathfinder returns empty path for
    coordinates outside the nav mesh.
 
 ### Texture Missing / Black Screen
 
 1. Enable `CLASSIC_LOG=asset=debug,gfx=trace,glstate=trace`.
-2. Verify `public/res/` was generated: run `npm run assets`. Missing assets
+2. Verify `roms/out/` was generated: run `cargo xtask all`. Missing assets
    cause `include_bytes!` compile errors, but stale assets may embed zero-byte
    or outdated files.
 3. Check GL state contract: `begin_frame` does NOT enable `DEPTH_TEST`
    globally. Tilemap and iso_sprite shaders enable it within their scopes.
    Enabling it globally depth-rejects UI under ortho projection.
 4. For missing textures: confirm the texture name in the manifest matches
-   the filename in `public/res/`.
+   the filename in `roms/out/res/`.
 5. Verify the shader compiles: check for GLSL 300 es syntax in the
    vertex/fragment sources (no GLSL 100 `attribute`/`varying`/`texture2D`).
 6. On web: check browser console for `WebGL 2.0 not supported` — the engine
@@ -452,7 +451,7 @@ original and will produce no diagnostics when broken:
 | **Entity destruction** | `world.despawn` is called via `Engine::despawn_named`, exposed to ROM guests through the `despawn` SDK import. Entities are also soft-disabled with a `Disabled` component in the UI layer. |
 | **Collider in quadtree (disabled)** | TS inserted all colliders (including disabled) into the quadtree and filtered them at query time. Rust skips disabled colliders at insertion time in `begin_frame()`. This is a deliberate optimisation and can affect click dispatch when toggling collider enabled state within a frame. |
 | **Camera matrix order** | TS does `S(scale) * T(-fix)`; Rust does `T(-fix) * S(scale)`. Both look correct because the fix-point formula compensates, but the raw model matrices differ. Golden traces will show this divergence in `model` fields. |
-| **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(sizeX + 1) * (sizeY + 1)` (vertex grid, one height per vertex). The inlined `height_data` in `state.json` therefore has different array lengths between TS and Rust. |
+| **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(size_x + 1) * (size_y + 1)` (vertex grid, one height per vertex). The `height_data` grid is a binary sidecar resource (`ResourceKind::Grid`), not inlined in `state.json`. |
 | **Root UI tree** | TS attached all UI elements to a single root container and walked the full tree for layout. Rust only attaches the top bar to root; other panels position themselves independently. `CLASSIC_UI_DEBUG` will show fewer elements in the layout tree walk. |
 | **Web Worker pathfinder** | TS ran A* on a Web Worker for non-blocking path computation. Rust runs A* synchronously on the main thread. |
 | **`classic_log` hot-reload** | Channels are parsed once at startup. There is no runtime reload or live toggle — changing channels requires a process restart (or page reload on web). |
