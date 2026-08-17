@@ -61,6 +61,48 @@ pub struct SdfFontManifestEntry {
     pub metrics: String,
 }
 
+/// A manifest entry for a wheeled-vehicle definition sidecar.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct VehicleManifestEntry {
+    pub name: String,
+    pub src: String,
+}
+
+/// A wheeled-vehicle definition: a body plus independent wheel parts, each with
+/// per-direction ground-origin anchors.  Emitted by the Blender exporter and
+/// consumed by `Engine::spawn_vehicle`.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct VehicleDef {
+    pub name: String,
+    pub directions: u32,
+    #[serde(default = "default_vehicle_columns")]
+    pub columns: u32,
+    #[serde(default = "default_vehicle_rows")]
+    pub rows: u32,
+    /// Pixel size of one frame cell (the sprite's drawn size at scale 1).
+    #[serde(default)]
+    pub cell: [f32; 2],
+    pub parts: Vec<VehiclePartDef>,
+}
+
+fn default_vehicle_columns() -> u32 {
+    4
+}
+
+fn default_vehicle_rows() -> u32 {
+    2
+}
+
+/// One part (body or wheel) of a [`VehicleDef`].
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct VehiclePartDef {
+    pub name: String,
+    pub texture: String,
+    /// Ground-origin anchor per direction, `[ax, ay]` normalized to the frame
+    /// (x from left, y from top).
+    pub anchors: Vec<[f32; 2]>,
+}
+
 /// A manifest entry for an animation.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct AnimationData {
@@ -86,6 +128,8 @@ pub struct Manifest {
     pub sdf_fonts: Vec<SdfFontManifestEntry>,
     #[serde(default)]
     pub animations: Vec<AnimationData>,
+    #[serde(default)]
+    pub vehicles: Vec<VehicleManifestEntry>,
 }
 
 /// One component in a serialized entity from `state.json`.
