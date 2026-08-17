@@ -47,10 +47,6 @@ var OP_SPAWN = 1;
 var OP_DESPAWN = 2;
 var OP_HAS = 3;
 var OP_NAMES = 4;
-var OP_GET = 5;
-var OP_GET_COMP = 6;
-var OP_SET = 7;
-var OP_SET_COMP = 8;
 var OP_SET_POS = 9;
 var OP_GET_POS = 10;
 var OP_MOUSE = 11;
@@ -111,6 +107,7 @@ var OP_SET_TILESET = 66;
 var OP_COMMIT_TERRAIN = 68;
 var OP_ISO_TO_SCREEN = 69;
 var OP_SET_GRID = 70;
+var OP_START_ANIM = 71;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -196,23 +193,6 @@ function envImports() {
             if (r.out.length > 0) writeMem(outPtr, r.out);
             return r.ret | 0;
         },
-        get: function (ptr, len, outPtr, outCap) {
-            var r = hostCall(OP_GET, [readStr(ptr, len)], [outPtr, outCap]);
-            if (r.out.length > 0) writeMem(outPtr, r.out);
-            return r.ret | 0;
-        },
-        get_comp: function (ptr, len, compPtr, compLen, outPtr, outCap) {
-            var r = hostCall(OP_GET_COMP, [readStr(ptr, len), readStr(compPtr, compLen)], [outPtr, outCap]);
-            if (r.out.length > 0) writeMem(outPtr, r.out);
-            return r.ret | 0;
-        },
-        set: function (ptr, len, jsonPtr, jsonLen) {
-            return hostCall(OP_SET, [readStr(ptr, len), readStr(jsonPtr, jsonLen)], []).ret | 0;
-        },
-        set_comp: function (ptr, len, compPtr, compLen, jsonPtr, jsonLen) {
-            var r = hostCall(OP_SET_COMP, [readStr(ptr, len), readStr(compPtr, compLen), readStr(jsonPtr, jsonLen)], []);
-            return r.ret | 0;
-        },
         set_pos: function (ptr, len, x, y, z) {
             return hostCall(OP_SET_POS, [readStr(ptr, len)], [x, y, z]).ret | 0;
         },
@@ -241,6 +221,13 @@ function envImports() {
         },
         set_anim: function (ptr, len, animPtr, animLen) {
             return hostCall(OP_SET_ANIM, [readStr(ptr, len), readStr(animPtr, animLen)], []).ret | 0;
+        },
+        start_anim: function (ptr, len, animPtr, animLen, repeat) {
+            return hostCall(
+                OP_START_ANIM,
+                [readStr(ptr, len), readStr(animPtr, animLen)],
+                [repeat],
+            ).ret | 0;
         },
         agent_selected: function () {
             return hostCall(OP_AGENT_SELECTED, [], []).ret | 0;

@@ -49,17 +49,26 @@ mod host {
         pub fn commit_terrain(height_scale: f64) -> i32;
         pub fn iso_to_screen(x: f64, y: f64, out_ptr: i32) -> i32;
         pub fn set_camera(x: f64, y: f64, scale: f64) -> i32;
-        pub fn set_light(a0: f64, a1: f64, a2: f64, d0: f64, d1: f64, d2: f64, c0: f64, c1: f64, c2: f64) -> i32;
+        pub fn set_light(
+            a0: f64,
+            a1: f64,
+            a2: f64,
+            d0: f64,
+            d1: f64,
+            d2: f64,
+            c0: f64,
+            c1: f64,
+            c2: f64,
+        ) -> i32;
         pub fn set_grid(show: i32) -> i32;
         pub fn set_pos(name_ptr: i32, name_len: i32, x: f64, y: f64, z: f64) -> i32;
         pub fn height_at(x: f64, y: f64) -> f64;
-        pub fn set_comp(
+        pub fn start_anim(
             name_ptr: i32,
             name_len: i32,
-            comp_ptr: i32,
-            comp_len: i32,
-            json_ptr: i32,
-            json_len: i32,
+            anim_ptr: i32,
+            anim_len: i32,
+            repeat: i32,
         ) -> i32;
     }
 }
@@ -74,15 +83,11 @@ static KEY_R: &[u8] = b"KeyR";
 #[cfg(target_arch = "wasm32")]
 static ROCKET: &[u8] = b"rocket";
 
-/// Component name + one-shot animation state used to (re)start the landing
-/// rocket.  `set_comp` re-deserialises the `Animator`, which zeroes the
-/// transient `counter`/`frame`/`offset` fields and replays from frame 0.
+/// One-shot animation used to (re)start the landing rocket.  `start_anim`
+/// zeroes the transient `counter`/`frame`/`offset` fields and replays from
+/// frame 0.
 #[cfg(target_arch = "wasm32")]
-static ANIMATOR: &[u8] = b"Animator";
-
-#[cfg(target_arch = "wasm32")]
-static ROCKET_ANIM_RESET: &[u8] =
-    br#"{"target":"rocket.IsoSprite","speed":1,"animation":"rocketLanding","repeat":false,"playing":true}"#;
+static ROCKET_ANIM: &[u8] = b"rocketLanding";
 
 #[cfg(target_arch = "wasm32")]
 static mut SEED_N: u32 = 0;
@@ -104,14 +109,8 @@ fn generate(seed: &str) -> (i32, i32) {
 
     // SAFETY: single-threaded guest; the Vecs stay alive across the imports.
     unsafe {
-        host::set_tiles(
-            terrain.tiles.as_ptr() as i32,
-            (terrain.tiles.len() * 4) as i32,
-        );
-        host::set_heights(
-            terrain.heights.as_ptr() as i32,
-            (terrain.heights.len() * 4) as i32,
-        );
+        host::set_tiles(terrain.tiles.as_ptr() as i32, (terrain.tiles.len() * 4) as i32);
+        host::set_heights(terrain.heights.as_ptr() as i32, (terrain.heights.len() * 4) as i32);
         host::set_nav(terrain.nav.as_ptr() as i32, (terrain.nav.len() * 4) as i32);
         host::set_tileset(rgba.as_ptr() as i32, rgba.len() as i32, tw as i32, th as i32);
     }
@@ -191,9 +190,8 @@ fn reset_rocket(spawn: (i32, i32)) {
     // SAFETY: single-threaded guest.
     unsafe {
         host::set_pos(rp, rl, sx as f64 + 0.5, sy as f64 + 0.5, h);
-        let (ap, al) = (ANIMATOR.as_ptr() as i32, ANIMATOR.len() as i32);
-        let (jp, jl) = (ROCKET_ANIM_RESET.as_ptr() as i32, ROCKET_ANIM_RESET.len() as i32);
-        host::set_comp(rp, rl, ap, al, jp, jl);
+        let (ap, al) = (ROCKET_ANIM.as_ptr() as i32, ROCKET_ANIM.len() as i32);
+        host::start_anim(rp, rl, ap, al, 0);
     }
 }
 

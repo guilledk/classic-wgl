@@ -66,78 +66,6 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
-            "get",
-            |mut caller: Caller<'_, $host>,
-             ptr: i32,
-             len: i32,
-             out_ptr: i32,
-             out_cap: i32|
-             -> i32 {
-                let name = $read_str(&mut caller, ptr, len);
-                let json = caller.data_mut().guest_mut().get(&name);
-                if out_cap < json.len() as i32 {
-                    return -1;
-                }
-                $write_str(&mut caller, out_ptr, &json)
-            },
-        )?;
-
-        $linker.func_wrap(
-            m,
-            "get_comp",
-            |mut caller: Caller<'_, $host>,
-             ptr: i32,
-             len: i32,
-             comp_ptr: i32,
-             comp_len: i32,
-             out_ptr: i32,
-             out_cap: i32|
-             -> i32 {
-                let name = $read_str(&mut caller, ptr, len);
-                let comp = $read_str(&mut caller, comp_ptr, comp_len);
-                let json = caller.data_mut().guest_mut().get_comp(&name, &comp);
-                if out_cap < json.len() as i32 {
-                    return -1;
-                }
-                $write_str(&mut caller, out_ptr, &json)
-            },
-        )?;
-
-        $linker.func_wrap(
-            m,
-            "set",
-            |mut caller: Caller<'_, $host>,
-             ptr: i32,
-             len: i32,
-             json_ptr: i32,
-             json_len: i32|
-             -> i32 {
-                let name = $read_str(&mut caller, ptr, len);
-                let json = $read_str(&mut caller, json_ptr, json_len);
-                caller.data_mut().guest_mut().set(&name, &json)
-            },
-        )?;
-
-        $linker.func_wrap(
-            m,
-            "set_comp",
-            |mut caller: Caller<'_, $host>,
-             ptr: i32,
-             len: i32,
-             comp_ptr: i32,
-             comp_len: i32,
-             json_ptr: i32,
-             json_len: i32|
-             -> i32 {
-                let name = $read_str(&mut caller, ptr, len);
-                let comp = $read_str(&mut caller, comp_ptr, comp_len);
-                let json = $read_str(&mut caller, json_ptr, json_len);
-                caller.data_mut().guest_mut().set_comp(&name, &comp, &json)
-            },
-        )?;
-
-        $linker.func_wrap(
-            m,
             "set_pos",
             |mut caller: Caller<'_, $host>, ptr: i32, len: i32, x: f64, y: f64, z: f64| -> i32 {
                 let name = $read_str(&mut caller, ptr, len);
@@ -208,6 +136,22 @@ macro_rules! install_host_imports {
                 let name = $read_str(&mut caller, ptr, len);
                 let anim = $read_str(&mut caller, anim_ptr, anim_len);
                 caller.data_mut().guest_mut().set_anim(&name, &anim)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "start_anim",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             anim_ptr: i32,
+             anim_len: i32,
+             repeat: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let anim = $read_str(&mut caller, anim_ptr, anim_len);
+                caller.data_mut().guest_mut().start_anim(&name, &anim, repeat)
             },
         )?;
 

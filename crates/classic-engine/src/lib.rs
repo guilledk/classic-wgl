@@ -647,42 +647,6 @@ impl Engine {
         true
     }
 
-    /// Dump a named entity's components to a JSON string (`{"components": [...]}`).
-    pub fn dump_entity_json(&self, name: &str) -> Option<String> {
-        let entity = *self.names.get(name)?;
-        let components = self.dump_entity_components(entity);
-        serde_json::to_string_pretty(&serde_json::json!({ "components": components })).ok()
-    }
-
-    /// Dump a single component of a named entity via the registry dumper.
-    pub fn dump_component_json(&self, name: &str, comp_type: &str) -> Option<String> {
-        let entity = *self.names.get(name)?;
-        let dumper = classic_core::registry::ordered_regs()
-            .into_iter()
-            .find(|r| r.name == comp_type)
-            .and_then(|r| r.dump)?;
-        let val = dumper(&self.world, entity)?;
-        serde_json::to_string_pretty(&val).ok()
-    }
-
-    /// Set a single component of a named entity from its serialized JSON,
-    /// reusing the registry spawner (deserialize → merge onto the entity).
-    pub fn set_component_json(
-        &mut self,
-        name: &str,
-        comp_type: &str,
-        json: serde_json::Value,
-    ) -> anyhow::Result<()> {
-        let spawner = classic_core::registry::lookup(comp_type)
-            .ok_or_else(|| anyhow::anyhow!("unknown component type: {comp_type}"))?;
-        let entity =
-            *self.names.get(name).ok_or_else(|| anyhow::anyhow!("no entity named {name}"))?;
-        let mut builder = hecs::EntityBuilder::new();
-        spawner(&mut builder, json)?;
-        self.world.insert(entity, builder.build())?;
-        Ok(())
-    }
-
     /// Read a named entity's position (from its `Transform`).
     pub fn get_pos(&self, name: &str) -> Option<(f32, f32, f32)> {
         let entity = *self.names.get(name)?;
@@ -864,6 +828,23 @@ impl Engine {
             a.animation = Some(anim.to_string());
             a.playing = true;
             a.repeat = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Restart a named entity's `Animator` from frame zero: reset the transient
+    /// `counter`/`frame`/`offset`, then play `anim` (looping if `repeat`).
+    pub fn start_anim(&mut self, name: &str, anim: &str, repeat: bool) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
+            a.animation = Some(anim.to_string());
+            a.repeat = repeat;
+            a.playing = true;
+            a.counter = 0.0;
+            a.frame = 0.0;
+            a.offset = Vec3::ZERO;
             true
         } else {
             false

@@ -114,6 +114,7 @@ fn install_test_navmesh(engine: &mut Engine) {
         scale: Vec3::ONE,
         map_entity: "tilemap".into(),
         tile_set: "navTileset".into(),
+        data_grid: None,
         data: vec![1u32; 9],
         size_x: 3,
         size_y: 3,
@@ -132,6 +133,8 @@ fn install_test_tilemap(engine: &mut Engine) {
         tile_set: "tileset".into(),
         tile_pixel_size: [32, 32],
         max_tile: 16,
+        tiles_grid: None,
+        heights_grid: None,
         data: vec![0u32; 9],
         height_data: vec![1.0f32; 16],
         height_scale: 1.0,
@@ -464,6 +467,77 @@ fn get_anim_reads_animation() {
 }
 
 #[test]
+fn start_anim_resets_animator_state() {
+    let mut engine = Engine::new_for_test();
+    engine.spawn_named("unit");
+    let entity = *engine.names.get("unit").unwrap();
+    engine
+        .world
+        .insert_one(
+            entity,
+            Animator {
+                target: "unit.IsoAgent".into(),
+                speed: 1.0,
+                animation: Some("walkEast".into()),
+                counter: 7.0,
+                frame: 5.0,
+                offset: Vec3::ONE,
+                repeat: true,
+                playing: false,
+            },
+        )
+        .unwrap();
+
+    assert!(engine.start_anim("unit", "landing", false));
+    let a = engine.world.get::<&Animator>(entity).unwrap();
+    assert_eq!(a.animation.as_deref(), Some("landing"));
+    assert!(!a.repeat);
+    assert!(a.playing);
+    assert_eq!(a.counter, 0.0);
+    assert_eq!(a.frame, 0.0);
+    assert_eq!(a.offset, Vec3::ZERO);
+}
+
+#[test]
+fn guest_start_anim_import_is_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "start_anim" (func $sa (param i32 i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "unit")
+            (data (i32.const 16) "landing")
+            (func (export "update") (param f64)
+                (drop (call $sa (i32.const 0) (i32.const 4) (i32.const 16) (i32.const 7) (i32.const 0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.spawn_named("unit");
+            let entity = *engine.names.get("unit").unwrap();
+            engine
+                .world
+                .insert_one(
+                    entity,
+                    Animator {
+                        target: "unit.IsoAgent".into(),
+                        speed: 1.0,
+                        animation: None,
+                        counter: 9.0,
+                        frame: 4.0,
+                        offset: Vec3::ONE,
+                        repeat: true,
+                        playing: false,
+                    },
+                )
+                .unwrap();
+            rt.update(&mut engine, 0.016).unwrap();
+            let a = engine.world.get::<&Animator>(entity).unwrap();
+            assert_eq!(a.animation.as_deref(), Some("landing"));
+            assert_eq!(a.counter, 0.0);
+        },
+    );
+}
+
+#[test]
 fn guest_init_hook_spawns_once_before_update() {
     with_each_runtime(
         r#"(module
@@ -600,6 +674,8 @@ fn bulk_terrain_upload_populates_empty_grids() {
         tile_set: "lunarTileset".into(),
         tile_pixel_size: [32, 32],
         max_tile: 24,
+        tiles_grid: None,
+        heights_grid: None,
         data: vec![],
         height_data: vec![],
         height_scale: 0.0,
@@ -617,6 +693,7 @@ fn bulk_terrain_upload_populates_empty_grids() {
         scale: Vec3::ONE,
         map_entity: "tilemap".into(),
         tile_set: "navTileset".into(),
+        data_grid: None,
         data: vec![],
         size_x: 3,
         size_y: 3,
