@@ -16,6 +16,7 @@
 pub mod env_config;
 pub mod golden;
 pub mod ui;
+pub mod vehicle;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
@@ -99,6 +100,9 @@ pub struct Engine {
     pub light_color: [f32; 3],
     pub animations: HashMap<String, AnimationData>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
+    /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
+    /// `vehicles` resources at boot.
+    pub vehicles: HashMap<String, classic_core::types::VehicleDef>,
     /// ROM manifest (raw + parsed) and resources, captured by `load_rom` so
     /// `dump_rom` can reconstruct a [`classic_rom::Rom`] with the current state.
     pub rom_manifest_json: Option<String>,
@@ -198,6 +202,7 @@ impl Engine {
             light_color: [1.0, 0.95, 0.85],
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
+            vehicles: HashMap::new(),
             rom_manifest_json: None,
             rom_manifest: None,
             rom_resources: None,
@@ -276,6 +281,19 @@ impl Engine {
         // into the registered `AnimationData`.
         for (name, metadata_bytes) in resources.animations() {
             self.load_animation_offsets(name, metadata_bytes);
+        }
+
+        // Wheeled-vehicle definitions (JSON sidecars) from the `vehicles`
+        // resources, keyed by the manifest-declared name.
+        for (name, bytes) in resources.vehicles() {
+            match serde_json::from_slice::<classic_core::types::VehicleDef>(bytes) {
+                Ok(def) => {
+                    self.vehicles.insert(name.clone(), def);
+                }
+                Err(e) => {
+                    classic_core::cl_error!(Chan::Guest, "vehicle '{name}' parse failed: {e}");
+                }
+            }
         }
     }
 
@@ -1559,6 +1577,11 @@ impl Engine {
             f(self);
         }
         self.update_fns = fns;
+
+        // Wheeled-vehicle simulation runs after the guest update closures
+        // (so a `vehicle_goto` issued this frame is honoured) and before the
+        // render list is built.
+        self.update_vehicles();
 
         // ---- CLASSIC_TEST automated test runner (registered by the demo) ----
         if env_config::EnvConfig::get().test_active() {
