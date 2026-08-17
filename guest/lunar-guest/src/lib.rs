@@ -70,6 +70,19 @@ mod host {
             anim_len: i32,
             repeat: i32,
         ) -> i32;
+        pub fn was_pressed(btn: i32) -> i32;
+        pub fn mouse_iso(out_ptr: i32) -> i32;
+        pub fn ui_consumed_click() -> i32;
+        pub fn vehicle_teleport(name_ptr: i32, name_len: i32, x: f64, y: f64) -> i32;
+        pub fn vehicle_goto(name_ptr: i32, name_len: i32, tx: i32, ty: i32) -> i32;
+        pub fn vehicle_spawn(
+            def_ptr: i32,
+            def_len: i32,
+            name_ptr: i32,
+            name_len: i32,
+            x: f64,
+            y: f64,
+        ) -> i32;
     }
 }
 
@@ -88,6 +101,13 @@ static ROCKET: &[u8] = b"rocket";
 /// frame 0.
 #[cfg(target_arch = "wasm32")]
 static ROCKET_ANIM: &[u8] = b"rocketLanding";
+
+#[cfg(target_arch = "wasm32")]
+static LRV: &[u8] = b"lrv";
+
+/// Vehicle-definition name to spawn (matches the ROM manifest `vehicles` entry).
+#[cfg(target_arch = "wasm32")]
+static LRV_DEF: &[u8] = b"lrv";
 
 #[cfg(target_arch = "wasm32")]
 static mut SEED_N: u32 = 0;
@@ -195,6 +215,51 @@ fn reset_rocket(spawn: (i32, i32)) {
     }
 }
 
+/// Spawn the LRV rover (body + 4 wheels) beside the landing rocket on the same
+/// flat pad, within the default camera view.  Called once on initial generation.
+#[cfg(target_arch = "wasm32")]
+fn spawn_rover(spawn: (i32, i32)) {
+    let (sx, sy) = spawn;
+    let (dp, dl) = (LRV_DEF.as_ptr() as i32, LRV_DEF.len() as i32);
+    let (rp, rl) = (LRV.as_ptr() as i32, LRV.len() as i32);
+    // SAFETY: single-threaded guest.
+    unsafe {
+        host::vehicle_spawn(dp, dl, rp, rl, sx as f64 + 4.0, sy as f64 + 3.0);
+    }
+}
+
+/// Reposition the LRV rover (body + wheels) and reset its suspension physics.
+/// Called on every map re-roll (the entity persists across terrain re-rolls).
+#[cfg(target_arch = "wasm32")]
+fn reset_rover(spawn: (i32, i32)) {
+    let (sx, sy) = spawn;
+    let (rp, rl) = (LRV.as_ptr() as i32, LRV.len() as i32);
+    // SAFETY: single-threaded guest.
+    unsafe {
+        host::vehicle_teleport(rp, rl, sx as f64 + 4.0, sy as f64 + 3.0);
+    }
+}
+
+/// Click-to-move: a left click (not consumed by UI) drives the LRV to the
+/// tile under the cursor via the host's `vehicle_goto` (host-side A*).
+#[cfg(target_arch = "wasm32")]
+fn handle_click() {
+    // SAFETY: single-threaded guest.
+    unsafe {
+        if host::was_pressed(0) == 0 || host::ui_consumed_click() != 0 {
+            return;
+        }
+        let mut mouse = [0u8; 16];
+        if host::mouse_iso(mouse.as_mut_ptr() as i32) != 1 {
+            return;
+        }
+        let mx = read_f64(&mouse[0..8]) as i32;
+        let my = read_f64(&mouse[8..16]) as i32;
+        let (rp, rl) = (LRV.as_ptr() as i32, LRV.len() as i32);
+        host::vehicle_goto(rp, rl, mx, my);
+    }
+}
+
 /// Called once, before the first frame, to generate the initial map.
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
@@ -202,12 +267,16 @@ pub extern "C" fn init() {
     let spawn = generate(&seed_for(0));
     setup_view(spawn);
     reset_rocket(spawn);
+    spawn_rover(spawn);
 }
 
-/// Called once per frame.  `R` re-rolls the terrain with a fresh seed.
+/// Called once per frame.  `R` re-rolls the terrain with a fresh seed; a left
+/// click drives the LRV to the clicked tile.
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn update(_dt: f64) {
+    handle_click();
+
     let (kp, kl) = (KEY_R.as_ptr() as i32, KEY_R.len() as i32);
     // SAFETY: single-threaded guest.
     let pressed = unsafe { host::was_key_pressed(kp, kl) };
@@ -221,4 +290,5 @@ pub extern "C" fn update(_dt: f64) {
     };
     let spawn = generate(&seed_for(n));
     reset_rocket(spawn);
+    reset_rover(spawn);
 }

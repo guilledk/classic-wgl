@@ -21,9 +21,11 @@ jobs:
             - run: cargo fmt --all -- --check
             - run: cargo fmt --manifest-path guest/demo-guest/Cargo.toml -- --check
             - run: cargo fmt --manifest-path guest/lunar-guest/Cargo.toml -- --check
+            - run: cargo fmt --manifest-path guest/lrv-guest/Cargo.toml -- --check
             - run: cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-guest -p classic-demo --all-targets -- -D warnings
             - run: cargo clippy --manifest-path guest/demo-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
             - run: cargo clippy --manifest-path guest/lunar-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+            - run: cargo clippy --manifest-path guest/lrv-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
     test:
         name: test

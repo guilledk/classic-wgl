@@ -6,6 +6,7 @@ static ROMS: &[(&str, &[u8])] = &[
     ("demo", include_bytes!("../../../roms/out/demo.rom")),
     ("lunar", include_bytes!("../../../roms/out/lunar.rom")),
     ("moon", include_bytes!("../../../roms/out/lunar.rom")),
+    ("lrvtest", include_bytes!("../../../roms/out/lrvtest.rom")),
 ];
 
 /// Open the resolved ROM archive and hydrate an engine for it.
