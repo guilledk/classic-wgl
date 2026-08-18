@@ -215,8 +215,8 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
     }
 }
 
-/// Register keyboard toggles for debug overlays (F = footprints, F9 = dump,
-/// F10 = save ROM archive).
+/// Register keyboard toggles for debug overlays (F = footprints, V = vehicle
+/// paths, F9 = dump, F10 = save ROM archive).
 pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
     let state = Rc::clone(state);
     engine.on_update(move |engine| {
@@ -226,6 +226,10 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
                 s.editor.debug_footprints = !s.editor.debug_footprints;
                 engine.show_grid = s.editor.debug_footprints;
             }
+        }
+        if engine.input.was_key_pressed("KeyV") {
+            let mut s = state.borrow_mut();
+            s.debug_vehicle_paths = !s.debug_vehicle_paths;
         }
         // F9: dump state.json (tile/nav/height data is inlined).
         if engine.input.was_key_pressed("F9") {
