@@ -4,10 +4,10 @@
 //! against the `classic-guest` SDK.
 //!
 //! Drives the `navAgent` entity: `init` seeds the agent's position from the
-//! host once, then `update` runs click-to-move (A* path via `find_path` to
-//! the iso tile under the cursor when the editor agent tool is active),
-//! direction-aware idle/walk animation via `set_anim`, and terrain-height
-//! following via `height_at`.
+//! host once, then `update` runs click-to-move (A* path via `request_path` →
+//! `poll_path` to the iso tile under the cursor when the editor agent tool is
+//! active), direction-aware idle/walk animation via `set_anim`, and
+//! terrain-height following via `height_at`.
 
 extern crate alloc;
 
@@ -24,7 +24,8 @@ mod host {
     extern "C" {
         pub fn get_pos(name_ptr: i32, name_len: i32, out_ptr: i32) -> i32;
         pub fn set_pos(name_ptr: i32, name_len: i32, x: f64, y: f64, z: f64) -> i32;
-        pub fn find_path(sx: i32, sy: i32, ex: i32, ey: i32, out_ptr: i32, out_cap: i32) -> i32;
+        pub fn request_path(sx: i32, sy: i32, ex: i32, ey: i32) -> i32;
+        pub fn poll_path(id: i32, out_ptr: i32, out_cap: i32) -> i32;
         pub fn mouse_iso(out_ptr: i32) -> i32;
         pub fn iso_to_screen(x: f64, y: f64, out_ptr: i32) -> i32;
         pub fn height_at(x: f64, y: f64) -> f64;
@@ -67,6 +68,7 @@ static WALK_ANIMS: [&[u8]; 8] = [
 static mut PATH: [[i32; 2]; MAX_WAYPOINTS] = [[0; 2]; MAX_WAYPOINTS];
 static mut PATH_LEN: usize = 0;
 static mut PATH_IDX: usize = 0;
+static mut PENDING_PATH_ID: i32 = -1;
 static mut CUR_X: f64 = 0.0;
 static mut CUR_Y: f64 = 0.0;
 static mut CUR_Z: f64 = 0.0;
@@ -163,12 +165,37 @@ fn handle_click() {
         return;
     }
 
+    // One in-flight path at a time: submit and let `poll_pending` collect the
+    // result on a later frame (the agent idles the 1-2 frames it takes).
     // SAFETY: single-threaded guest.
-    let facing = unsafe {
-        let mut buf = [0i32; MAX_WAYPOINTS * 2];
-        let n = host::find_path(sx, sy, mx, my, buf.as_mut_ptr() as i32, (buf.len() * 4) as i32);
-        if n <= 0 {
+    unsafe {
+        if PENDING_PATH_ID >= 0 {
             return;
+        }
+        PENDING_PATH_ID = host::request_path(sx, sy, mx, my);
+    }
+}
+
+/// Poll the outstanding path request; on delivery, arm the walk.
+fn poll_pending() {
+    // SAFETY: single-threaded guest.
+    unsafe {
+        if PENDING_PATH_ID < 0 {
+            return;
+        }
+        let mut buf = [0i32; MAX_WAYPOINTS * 2];
+        let n = host::poll_path(
+            PENDING_PATH_ID,
+            buf.as_mut_ptr() as i32,
+            (buf.len() * 4) as i32,
+        );
+        if n == 0 {
+            return; // still computing
+        }
+        PENDING_PATH_ID = -1;
+        if n <= 1 {
+            PATH_LEN = 0;
+            return; // no path, or a degenerate single-cell path
         }
         for i in 0..n as usize {
             PATH[i][0] = buf[i * 2];
@@ -177,11 +204,9 @@ fn handle_click() {
         PATH_LEN = n as usize;
         PATH_IDX = 1;
         WALKING = true;
-        let d = dir_index(PATH[1][0] - PATH[0][0], PATH[1][1] - PATH[0][1]);
-        FACING = d;
-        d
-    };
-    play_anim(WALK_ANIMS[facing]);
+        FACING = dir_index(PATH[1][0] - PATH[0][0], PATH[1][1] - PATH[0][1]);
+        play_anim(WALK_ANIMS[FACING]);
+    }
 }
 
 fn step(dt: f64) {
@@ -238,5 +263,6 @@ fn step(dt: f64) {
 #[no_mangle]
 pub extern "C" fn update(dt: f64) {
     handle_click();
+    poll_pending();
     step(dt);
 }

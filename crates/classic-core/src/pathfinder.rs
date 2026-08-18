@@ -154,6 +154,47 @@ fn reconstruct_path(
     path
 }
 
+/// The outcome of polling an asynchronous path request.
+///
+/// `Pending` means the search has not finished (or the id is unknown/consumed);
+/// `Path` carries a found route (inclusive of both endpoints); `NoPath` means
+/// the search finished but found no route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathPoll {
+    Pending,
+    Path(Vec<GridCell>),
+    NoPath,
+}
+
+/// An immutable snapshot of the nav grid, safe to share across threads.
+///
+/// A `PathfinderWorker` (see `classic-worker`) owns an `Arc<NavSnapshot>` so a
+/// background thread can run A* over a consistent copy of the walkability grid
+/// without touching the engine.  Rebuilt (and re-shared) whenever the nav grid
+/// changes (see `Engine::commit_terrain` / `set_nav_bulk` / `sync_nav_heights`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavSnapshot {
+    pub size_x: i32,
+    pub size_y: i32,
+    /// Row-major walkability grid (`1` = walkable, `0` = blocked).
+    pub data: Vec<i32>,
+}
+
+impl NavSnapshot {
+    pub fn new(size_x: i32, size_y: i32, data: Vec<i32>) -> Self {
+        Self { size_x, size_y, data }
+    }
+
+    /// Run A* over this snapshot (see [`find_path`]).
+    pub fn find_path(&self, from: GridCell, to: GridCell) -> Option<Vec<GridCell>> {
+        let cells = (self.size_x * self.size_y) as usize;
+        if self.size_x <= 0 || self.size_y <= 0 || self.data.len() != cells {
+            return None;
+        }
+        find_path(&self.data, self.size_x, self.size_y, from, to)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

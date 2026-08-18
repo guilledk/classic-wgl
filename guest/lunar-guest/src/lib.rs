@@ -3,11 +3,16 @@
 
 //! ROM guest for the `lunar` scene: the procedural lunar map generator.
 //!
-//! Owns the *whole* map-generation behaviour.  `init` generates the 400x400
-//! lunar surface and bulk-uploads the grids + tileset + landing zones to the
-//! host; `update` re-rolls it when `R` is pressed.  The host is a generic
-//! terrain engine (storage + rebuild + pathfinding); the map algorithm lives
-//! here, in the ROM.
+//! Owns the *whole* map-generation behaviour.  `init` submits the initial
+//! 400x400 surface generation to the background guest worker (Tier 3), and
+//! `update` polls for it, bulk-uploads the grids + tileset, and commits the
+//! terrain; `R` re-rolls it the same way.  The heavy, engine-free generation
+//! runs off-thread in the `lunar-worker` module, so the render thread never
+//! blocks on it.
+//!
+//! The host is a generic terrain engine (storage + rebuild + pathfinding); the
+//! map algorithm lives in the ROM (in the shared generator sources, compiled
+//! into both this guest and `lunar-worker`).
 //!
 //! The generator (`material`/`lunar`/`tileset`) is pure and builds on the open
 //! `classic-terrain` noise primitives; the wasm entrypoint (`host` imports,
@@ -25,7 +30,7 @@ pub use material::LunarMaterial;
 pub use tileset::{build_default_lunar_tileset, build_lunar_tileset};
 
 #[cfg(target_arch = "wasm32")]
-use alloc::{format, string::String};
+use alloc::{format, string::String, vec};
 
 #[cfg(target_arch = "wasm32")]
 #[panic_handler]
@@ -83,6 +88,8 @@ mod host {
             x: f64,
             y: f64,
         ) -> i32;
+        pub fn spawn_task(entry_ptr: i32, entry_len: i32, arg_ptr: i32, arg_len: i32) -> i32;
+        pub fn poll_task(id: i32, out_ptr: i32, out_cap: i32) -> i32;
     }
 }
 
@@ -112,35 +119,126 @@ static LRV_DEF: &[u8] = b"lrv";
 #[cfg(target_arch = "wasm32")]
 static mut SEED_N: u32 = 0;
 
+/// The `lunar-worker` export that runs `generate_lunar` off-thread.
+#[cfg(target_arch = "wasm32")]
+static GENERATE_WORKER: &[u8] = b"generate_worker";
+
+/// Buffer cap for the worker result.  A 400x400 map serializes to ~2.1 MiB
+/// (see `lunar-worker::serialize`); 4 MiB leaves ample headroom.
+#[cfg(target_arch = "wasm32")]
+const RESULT_CAP: usize = 4 * 1024 * 1024;
+
+/// The in-flight generation task id, or `-1` when idle.
+#[cfg(target_arch = "wasm32")]
+static mut PENDING_TASK: i32 = -1;
+
+/// Whether the pending generation is the *initial* one (runs `setup_view`).
+#[cfg(target_arch = "wasm32")]
+static mut PENDING_INITIAL: bool = false;
+
 /// Build the seed string for generation `n` (`"0"`, `"1"`, ...).
 #[cfg(target_arch = "wasm32")]
 fn seed_for(n: u32) -> String {
     format!("{n}")
 }
 
-/// Generate the lunar map for a seed and bulk-upload every grid to the host,
-/// then commit the terrain (install on first call, rebuild afterwards).
-/// Returns the first landing-zone spawn point (tile coords), for camera framing.
+/// Submit a generation to the background worker, recording the task id.
 #[cfg(target_arch = "wasm32")]
-fn generate(seed: &str) -> (i32, i32) {
-    let params = LunarParams { seed: String::from(seed), ..LunarParams::default() };
-    let terrain = generate_lunar(&params);
-    let (rgba, tw, th) = build_lunar_tileset(&format!("{seed}:tileset"), 32, 8, 8);
-
-    // SAFETY: single-threaded guest; the Vecs stay alive across the imports.
+fn spawn_generation(seed: &str, initial: bool) {
+    // SAFETY: single-threaded guest; the seed stays alive across the import
+    // (the host copies the argument bytes synchronously).
     unsafe {
-        host::set_tiles(terrain.tiles.as_ptr() as i32, (terrain.tiles.len() * 4) as i32);
-        host::set_heights(terrain.heights.as_ptr() as i32, (terrain.heights.len() * 4) as i32);
-        host::set_nav(terrain.nav.as_ptr() as i32, (terrain.nav.len() * 4) as i32);
-        host::set_tileset(rgba.as_ptr() as i32, rgba.len() as i32, tw as i32, th as i32);
+        let (sp, sl) = (seed.as_ptr() as i32, seed.len() as i32);
+        let (wp, wl) = (GENERATE_WORKER.as_ptr() as i32, GENERATE_WORKER.len() as i32);
+        PENDING_TASK = host::spawn_task(wp, wl, sp, sl);
+        PENDING_INITIAL = initial;
+    }
+}
+
+/// Read one little-endian `i32` from a byte buffer, advancing `off`.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn read_i32_at(buf: &[u8], off: &mut usize) -> i32 {
+    let v = i32::from_le_bytes([buf[*off], buf[*off + 1], buf[*off + 2], buf[*off + 3]]);
+    *off += 4;
+    v
+}
+
+/// Decode a worker result and bulk-upload the grids + tileset, then commit the
+/// terrain.  Returns the first landing-zone spawn point (tile coords).
+#[cfg(target_arch = "wasm32")]
+fn apply_result(buf: &[u8]) -> (i32, i32) {
+    let mut off = 0usize;
+    let sx = read_i32_at(buf, &mut off);
+    let sy = read_i32_at(buf, &mut off);
+    let heights_len = (sx + 1) * (sy + 1);
+    let tiles_len = sx * sy;
+
+    let base = buf.as_ptr() as i32;
+
+    let heights_ptr = base + off as i32;
+    off += heights_len as usize * 4;
+    let tiles_ptr = base + off as i32;
+    off += tiles_len as usize * 4;
+    let nav_ptr = base + off as i32;
+    off += tiles_len as usize * 4;
+
+    let spawn_count = read_i32_at(buf, &mut off);
+    let spawn = if spawn_count > 0 {
+        let x = read_i32_at(buf, &mut off);
+        let y = read_i32_at(buf, &mut off);
+        (x, y)
+    } else {
+        (0, 0)
+    };
+    for _ in 1..spawn_count.max(0) {
+        off += 8;
     }
 
-    // SAFETY: single-threaded guest.
+    let tw = read_i32_at(buf, &mut off);
+    let th = read_i32_at(buf, &mut off);
+    let rgba_ptr = base + off as i32;
+    let rgba_len = tw * th * 4;
+
+    // SAFETY: single-threaded guest; `buf` (the worker result) stays alive
+    // across these imports, and each pointer points into `buf`.
     unsafe {
+        host::set_heights(heights_ptr, heights_len * 4);
+        host::set_tiles(tiles_ptr, tiles_len * 4);
+        host::set_nav(nav_ptr, tiles_len * 4);
+        host::set_tileset(rgba_ptr, rgba_len, tw, th);
         host::commit_terrain(HEIGHT_SCALE);
     }
 
-    terrain.spawn_points.first().copied().unwrap_or((0, 0))
+    spawn
+}
+
+/// Poll the pending generation; when it lands, upload the grids, commit the
+/// terrain, and (re)place the rocket.  No-op when idle or still pending.
+#[cfg(target_arch = "wasm32")]
+fn poll_generation() {
+    unsafe {
+        if PENDING_TASK < 0 {
+            return;
+        }
+        let mut buf = vec![0u8; RESULT_CAP];
+        let n = host::poll_task(PENDING_TASK, buf.as_mut_ptr() as i32, buf.len() as i32);
+        if n <= 0 {
+            // 0 = still pending, -1 = error, -2 = buffer too small.
+            return;
+        }
+        let spawn = apply_result(&buf[..n as usize]);
+        if PENDING_INITIAL {
+            setup_view(spawn);
+        }
+        reset_rocket(spawn);
+        if PENDING_INITIAL {
+            spawn_rover(spawn);
+        } else {
+            reset_rover(spawn);
+        }
+        PENDING_TASK = -1;
+    }
 }
 
 /// Read one little-endian `f64` from a guest buffer.
@@ -260,22 +358,28 @@ fn handle_click() {
     }
 }
 
-/// Called once, before the first frame, to generate the initial map.
+/// Called once, before the first frame, to submit the initial map generation to
+/// the background worker.  When the worker is synchronous (the deterministic
+/// test/golden harness), the result is already buffered here, so `poll` applies
+/// it immediately — terrain, view, rocket and LRV are all in place before the
+/// first frame, exactly like the old inline generation.  Under the async
+/// worker, `poll` is a no-op and everything lands a frame or two later, once
+/// `update` polls it.
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn init() {
-    let spawn = generate(&seed_for(0));
-    setup_view(spawn);
-    reset_rocket(spawn);
-    spawn_rover(spawn);
+    spawn_generation(&seed_for(0), true);
+    poll_generation();
 }
 
-/// Called once per frame.  `R` re-rolls the terrain with a fresh seed; a left
-/// click drives the LRV to the clicked tile.
+/// Called once per frame.  Polls the pending generation, then handles input:
+/// a left click drives the LRV to the clicked tile, `R` re-rolls the terrain
+/// with a fresh seed (when no generation is already in flight).
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn update(_dt: f64) {
     handle_click();
+    poll_generation();
 
     let (kp, kl) = (KEY_R.as_ptr() as i32, KEY_R.len() as i32);
     // SAFETY: single-threaded guest.
@@ -284,11 +388,14 @@ pub extern "C" fn update(_dt: f64) {
         return;
     }
 
+    // Ignore a re-roll request while a generation is already in flight.
+    if unsafe { PENDING_TASK >= 0 } {
+        return;
+    }
+
     let n = unsafe {
         SEED_N += 1;
         SEED_N
     };
-    let spawn = generate(&seed_for(n));
-    reset_rocket(spawn);
-    reset_rover(spawn);
+    spawn_generation(&seed_for(n), false);
 }

@@ -18,8 +18,11 @@ pub mod golden;
 pub mod ui;
 pub mod vehicle;
 
+pub use classic_core::fields;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
@@ -121,6 +124,27 @@ pub struct Engine {
     /// steps, hence the default of 2.0; generated terrain is continuous and
     /// needs a much finer threshold to match the slope rule it was built with.
     pub nav_slope_threshold: f32,
+    /// Immutable nav-grid snapshot shared with the pathfinding worker.
+    nav_snapshot: Arc<pathfinder::NavSnapshot>,
+    /// Monotonic counter bumped each time `nav_snapshot` is rebuilt.
+    nav_version: u64,
+    /// Force pathfinding to run synchronously (deterministic test harness).
+    synchronous_workers: bool,
+    /// Next path-request id handed to a guest.
+    next_path_id: u64,
+    /// Synchronously-computed path results (synchronous_workers mode / web).
+    sync_paths: HashMap<u64, pathfinder::PathPoll>,
+    /// Pathfinding worker (spawned lazily on first async request; native
+    /// thread or web `Worker` depending on target).
+    pathfinder: Option<classic_worker::PathfinderWorker>,
+    /// Next background-task id handed to a guest.
+    next_task_id: u64,
+    /// Background guest worker (Tier 3): a second `.wasm` instance running pure
+    /// guest entry points off-thread (installed by the demo layer, which owns
+    /// the worker module bytes).
+    guest_worker: Option<classic_worker::GuestWorker>,
+    /// Host-owned named-field registry (grid kernels operate over these).
+    pub fields: fields::FieldRegistry,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
     pre_update_hooks: Vec<UpdateFn>,
@@ -211,6 +235,15 @@ impl Engine {
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
             base_height_scale: 32.0,
             nav_slope_threshold: 2.0,
+            nav_snapshot: Arc::new(pathfinder::NavSnapshot::new(0, 0, Vec::new())),
+            nav_version: 0,
+            synchronous_workers: false,
+            next_path_id: 0,
+            sync_paths: HashMap::new(),
+            pathfinder: None,
+            next_task_id: 0,
+            guest_worker: None,
+            fields: fields::FieldRegistry::default(),
             nav_gpu: None,
             debug_frame: 0,
             pre_update_hooks: Vec::new(),
@@ -856,11 +889,14 @@ impl Engine {
     /// (`size_x * size_y`, `1` = walkable).  Replaces the grid wholesale.
     pub fn set_nav_bulk(&mut self, nav: &[u32]) -> bool {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return false };
-        let Ok(mut nm) = self.world.get::<&mut NavMesh>(nav_entity) else { return false };
-        if nav.len() != (nm.size_x * nm.size_y) as usize {
-            return false;
+        {
+            let Ok(mut nm) = self.world.get::<&mut NavMesh>(nav_entity) else { return false };
+            if nav.len() != (nm.size_x * nm.size_y) as usize {
+                return false;
+            }
+            nm.data = nav.to_vec();
         }
-        nm.data = nav.to_vec();
+        self.refresh_nav_snapshot();
         true
     }
 
@@ -905,6 +941,7 @@ impl Engine {
             self.finish_tilemap_init(tm_entity, tiles, heights, Some(height_scale));
         }
         self.rebuild_nav_gpu();
+        self.refresh_nav_snapshot();
         true
     }
 
@@ -980,6 +1017,138 @@ impl Engine {
         let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
         let nav_i32: Vec<i32> = nav.data.iter().map(|&v| v as i32).collect();
         pathfinder::find_path(&nav_i32, nav.size_x, nav.size_y, from, to)
+    }
+
+    /// Rebuild the shared nav snapshot from the live `NavMesh` component and
+    /// re-share it with the pathfinding worker.  Bumps `nav_version`.
+    fn refresh_nav_snapshot(&mut self) {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
+            return;
+        };
+        let (size_x, size_y, data) = {
+            let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) else {
+                return;
+            };
+            (nav.size_x, nav.size_y, nav.data.iter().map(|&v| v as i32).collect::<Vec<_>>())
+        };
+        let snapshot = Arc::new(pathfinder::NavSnapshot::new(size_x, size_y, data));
+        if let Some(worker) = self.pathfinder.as_mut() {
+            worker.set_snapshot(Arc::clone(&snapshot));
+        }
+        self.nav_snapshot = snapshot;
+        self.refresh_guest_worker_nav();
+        self.nav_version = self.nav_version.wrapping_add(1);
+    }
+
+    /// Force pathfinding to run synchronously on the render thread (the
+    /// deterministic test/golden harness) instead of offloading to a worker.
+    pub fn set_synchronous_workers(&mut self, synchronous: bool) {
+        self.synchronous_workers = synchronous;
+    }
+
+    /// The nav-snapshot version, bumped on every rebuild.
+    pub fn nav_version(&self) -> u64 {
+        self.nav_version
+    }
+
+    /// Submit an A* path request over the nav mesh and return its request id.
+    ///
+    /// When `synchronous_workers` is off, the search runs on a background
+    /// worker (native thread or web `Worker`); the result is collected via
+    /// [`Engine::poll_path`].  In synchronous mode the search runs inline and
+    /// the result is immediately available to `poll_path`.
+    pub fn request_path(&mut self, from: (i32, i32), to: (i32, i32)) -> u64 {
+        let id = self.next_path_id;
+        self.next_path_id = self.next_path_id.wrapping_add(1);
+
+        if !self.synchronous_workers {
+            self.ensure_pathfinder();
+            if let Some(worker) = self.pathfinder.as_mut() {
+                worker.request_path(id, from, to);
+                return id;
+            }
+        }
+
+        let poll = match self.nav_snapshot.find_path(from, to) {
+            Some(path) => pathfinder::PathPoll::Path(path),
+            None => pathfinder::PathPoll::NoPath,
+        };
+        self.sync_paths.insert(id, poll);
+        id
+    }
+
+    /// Poll a previously submitted path request (non-blocking).
+    ///
+    /// Returns [`pathfinder::PathPoll::Pending`] while the search is still
+    /// running, [`pathfinder::PathPoll::Path`] with the route, or
+    /// [`pathfinder::PathPoll::NoPath`] if no route exists.
+    pub fn poll_path(&mut self, id: u64) -> pathfinder::PathPoll {
+        if let Some(poll) = self.sync_paths.remove(&id) {
+            return poll;
+        }
+        if let Some(worker) = self.pathfinder.as_mut() {
+            return worker.poll_path(id);
+        }
+        pathfinder::PathPoll::Pending
+    }
+
+    /// Block until all in-flight worker jobs have completed.  Determinism
+    /// barrier, called at frame boundaries when `CLASSIC_TEST` is active
+    /// (no-op on web, where determinism is handled by the sync fallback).
+    pub fn join_workers(&mut self) {
+        if let Some(worker) = self.pathfinder.as_ref() {
+            worker.join();
+        }
+        if let Some(worker) = self.guest_worker.as_ref() {
+            worker.join();
+        }
+    }
+
+    /// Spawn the pathfinding worker on first use, sharing the current nav
+    /// snapshot.
+    fn ensure_pathfinder(&mut self) {
+        if self.pathfinder.is_none() {
+            self.pathfinder =
+                Some(classic_worker::PathfinderWorker::new(Arc::clone(&self.nav_snapshot)));
+        }
+    }
+
+    /// Install the background guest worker (Tier 3), sharing the current nav
+    /// snapshot.  The worker runs a second `.wasm` instance against the reduced
+    /// pure-import surface (see `classic-worker::guest_worker`).  `synchronous`
+    /// forces entries to run inline on the render thread (the deterministic
+    /// test/golden harness).
+    pub fn install_guest_worker(&mut self, wasm: &[u8], synchronous: bool) -> Result<(), String> {
+        let worker =
+            classic_worker::GuestWorker::new(wasm, Arc::clone(&self.nav_snapshot), synchronous)?;
+        self.guest_worker = Some(worker);
+        Ok(())
+    }
+
+    /// Submit a background guest task: run the named export of the worker guest
+    /// with `arg` as its input bytes.  Returns a task id to poll with
+    /// [`Engine::poll_task`].
+    pub fn spawn_task(&mut self, entry: &str, arg: Vec<u8>) -> u64 {
+        let id = self.next_task_id;
+        self.next_task_id = self.next_task_id.wrapping_add(1);
+        if let Some(worker) = self.guest_worker.as_mut() {
+            worker.spawn_task(id, entry, arg);
+        }
+        id
+    }
+
+    /// Poll a previously submitted background task.  `None` while pending,
+    /// `Some(Ok(bytes))` with the result, or `Some(Err(msg))` if it trapped.
+    pub fn poll_task(&mut self, id: u64) -> Option<Result<Vec<u8>, String>> {
+        self.guest_worker.as_mut().and_then(|worker| worker.poll_task(id))
+    }
+
+    /// Re-share the current nav snapshot with the background guest worker (and
+    /// the pathfinding worker), e.g. after a terrain rebuild.
+    fn refresh_guest_worker_nav(&mut self) {
+        if let Some(worker) = self.guest_worker.as_mut() {
+            worker.set_nav(Arc::clone(&self.nav_snapshot));
+        }
     }
 
     /// Read the camera position (x, y) and uniform scale.
@@ -1590,6 +1759,12 @@ impl Engine {
                 r(self);
             }
             self.test_runner = runner;
+        }
+
+        // Determinism barrier: under CLASSIC_TEST, wait for in-flight worker
+        // jobs (pathfinding) so frame boundaries are deterministic.
+        if env_config::EnvConfig::get().test_active() {
+            self.join_workers();
         }
 
         // Wheel decay matches TS: 1.4 * delta, then [-1, 1] clamp.
@@ -2418,22 +2593,29 @@ impl Engine {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
             return;
         };
-        let (size_x, size_y, nav_data, heights, height_scale) = {
+        let (size_x, size_y, nav_data) = {
             let nav = match self.world.get::<&NavMesh>(nav_entity) {
                 Ok(n) => n,
                 Err(_) => return,
             };
-            // Use parent tilemap's actual height data so nav tiles sit on terrain surface
-            let (hd, hs) = self
-                .entity_by_role(RoleKind::Tilemap)
-                .and_then(|e| self.world.get::<&Tilemap>(e).ok())
-                .map(|tm| (tm.height_data.clone(), tm.height_scale))
-                .unwrap_or_else(|| {
-                    let h = vec![1.0f32; (nav.size_x as usize + 1) * (nav.size_y as usize + 1)];
-                    (h, 64.0)
-                });
-            (nav.size_x, nav.size_y, nav.data.clone(), hd, hs)
+            (nav.size_x, nav.size_y, nav.data.clone())
         };
+
+        // A generated map has no nav grid until its guest uploads one (deferred
+        // to `commit_terrain` → `rebuild_nav_gpu`).  A grid of the wrong size is
+        // equally not ready.  Skip building the overlay until then; the nav mesh
+        // overlay is rebuilt once the guest commits.
+        if nav_data.len() != (size_x * size_y) as usize {
+            return;
+        }
+
+        // Use parent tilemap's actual height data so nav tiles sit on terrain surface.
+        let (heights, height_scale) = self
+            .entity_by_role(RoleKind::Tilemap)
+            .and_then(|e| self.world.get::<&Tilemap>(e).ok())
+            .map(|tm| (tm.height_data.clone(), tm.height_scale))
+            .filter(|(h, _)| h.len() == (size_x as usize + 1) * (size_y as usize + 1))
+            .unwrap_or_else(|| (vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)], 64.0));
 
         let Some(gfx) = self.gfx.as_mut() else { return };
 
@@ -2519,6 +2701,7 @@ impl Engine {
         if changed {
             self.rebuild_nav_gpu();
         }
+        self.refresh_nav_snapshot();
     }
 
     /// Upload RGBA `pixels` as a `NEAREST`-filtered `CLAMP_TO_EDGE` 2D texture.

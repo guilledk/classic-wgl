@@ -47,12 +47,17 @@ before considering a task done.
 ## Directory map
 
 ```
-Cargo.toml               workspace root (10 members)
+Cargo.toml               workspace root (11 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
-                          tilemap, instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder
+                          tilemap, instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder, plus the
+                          shared ABI marshalling (abi.rs) and field-buffer registry (fields.rs)
+  classic-worker/         background workers: generic native ThreadPool, PathfinderWorker (native
+                          thread + web Worker), and the Tier-3 GuestWorker (a second .wasm instance
+                          running pure guest entries against a reduced import surface)
   classic-terrain/        #![no_std] open terrain/noise toolkit (simplex, fractal combinators, bulk
-                          noise fields) — the reusable primitives ROM guests build map algorithms on
+                          noise fields, and the grid-kernel catalog in kernels.rs) — the reusable
+                          primitives ROM guests build map algorithms on
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
@@ -71,6 +76,8 @@ apps/
 guest/
   demo-guest/             standalone #![no_std] cdylib guest for the demo ROM -> roms/out/code/demo.wasm
   lunar-guest/            standalone #![no_std] cdylib guest for the lunar ROM -> roms/out/code/lunar.wasm
+  lunar-worker/           standalone #![no_std] cdylib worker guest exporting `generate_worker` (the
+                          pure lunar generation, run off-thread) -> roms/out/code/lunar_worker.wasm
 tests/
   golden/baseline/        demo-scene baseline.{trace.jsonl,png}
   golden/lunar/           lunar-scene render-trace baseline
@@ -125,8 +132,11 @@ plans/
   Colliders are synced via `add_collider_to_elem` → `PhysicsProvider` → `sync_colliders`.
   See `classic-ui` skill.
 - **Isometric/pathfinding**: `classic-core/src/tilemap.rs` builds the 3D tilemap mesh;
-  `classic-core/src/pathfinder.rs` implements A* (single-threaded, no worker — the TS
-  Web Worker pattern was dropped).  See `classic-iso` skill.
+  `classic-core/src/pathfinder.rs` implements A* over an immutable `NavSnapshot`
+  (`Arc`-shared).  The engine offloads searches to a host `PathfinderWorker`
+  (`classic-worker`, native thread / web `Worker`); guests drive it through the
+  async `request_path`/`poll_path` SDK imports (with a synchronous fallback for
+  the deterministic harness).  See `classic-iso` and `classic-physics` skills.
 - **Wheeled vehicles**: `classic-engine/src/vehicle.rs` implements the `IsoVehicle`
   system — `spawn_vehicle` assembles a body + 4 wheel `IsoSprite`s from a
   `VehicleDef` sidecar (per-direction ground-origin anchors emitted by the Blender
@@ -135,15 +145,21 @@ plans/
   through the `vehicle_spawn`/`vehicle_teleport`/`vehicle_goto`/`vehicle_stop` host
   API.  See `classic-ecs` (`IsoVehicle` component) and `classic-iso` (pitch/roll
   frame layout).
-- **Procedural terrain**: `classic-terrain` is the *open* noise toolkit; the
+- **Background guest work (Tier 3)**: the engine hosts a second `.wasm` instance
+  (`classic-worker::GuestWorker`) running pure guest entries (`spawn_task`/
+  `poll_task`) against a reduced import surface (noise/fields/kernels/path plus a
+  result buffer; engine-mutating imports trap).  The `guest/lunar-worker` guest
+  generates the lunar map off-thread and returns the grids; the foreground
+  `lunar-guest` bulk-uploads and commits them.
+- **Procedural terrain**: `classic-terrain` is the *open* noise toolkit plus a
+  grid-kernel catalog (`kernels.rs`); the
   `lunar` map algorithm (a 400x400 surface of layered simplex noise plus an
   age-ordered meteorite crater field, slope relaxation and stamped landing
-  zones) lives in the `guest/lunar-guest` ROM guest, which builds on that
-  toolkit and bulk-uploads the grids + tileset to the host via the guest SDK.
-  Pure, GL-free and natively unit-tested.  The host is a generic terrain
-  engine (storage + rebuild + pathfinding); the map algorithm lives in the ROM.
-  See `classic-terrain`
-  skill.
+  zones) lives in the `guest/lunar-guest`/`guest/lunar-worker` ROM guests, which
+  build on that toolkit and bulk-upload the grids + tileset to the host via the
+  guest SDK.  Pure, GL-free and natively unit-tested.  The host is a generic
+  terrain engine (storage + rebuild + pathfinding); the map algorithm lives in
+  the ROM.  See `classic-terrain` skill.
 - **SDF text**: `classic-core/src/sdf_builder.rs` builds interleaved glyph buffers;
   `classic-gfx` renders them with the `sdf` shader (`dejavusans-sdf` font atlas).
   Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),
@@ -151,7 +167,8 @@ plans/
 - **ROM guest code**: each ROM bundles a compiled `.wasm` module (`manifest.code`) run by
   `classic-guest` (wasmtime on native, wasmi on wasm) against the host SDK (entity lifecycle,
   component JSON round-trip via the registry, 3D position, mouse/mouse_iso/key input, time,
-  `height_at`, `set_anim`, `find_path`, `agent_selected`/`ui_consumed_click`, log).  Untrusted guests
+  `height_at`, `set_anim`, `request_path`/`poll_path`, `agent_selected`/`ui_consumed_click`, log).
+  Untrusted guests
   (`trusted: false`, default) are sandboxed with fuel metering + a memory cap; the shipped
   demo/lunar ROMs set `trusted: true`.  The demo's `navAgent` behaviour (click-to-move +
   idle/walk animation + terrain-z) lives in `guest/demo-guest`, not Rust.  Heavy systems

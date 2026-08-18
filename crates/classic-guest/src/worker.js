@@ -63,7 +63,7 @@ var OP_WAS_KEY_PRESSED = 21;
 var OP_SET_TILE = 23;
 var OP_SET_HEIGHT = 24;
 var OP_REBUILD_TERRAIN = 25;
-var OP_FIND_PATH = 26;
+var OP_REQUEST_PATH = 26;
 var OP_GET_CAMERA = 27;
 var OP_SET_CAMERA = 28;
 var OP_PICK_AT = 29;
@@ -112,6 +112,7 @@ var OP_VEHICLE_TELEPORT = 72;
 var OP_VEHICLE_GOTO = 73;
 var OP_VEHICLE_STOP = 74;
 var OP_VEHICLE_SPAWN = 75;
+var OP_POLL_PATH = 76;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -263,8 +264,11 @@ function envImports() {
         rebuild_terrain: function () {
             return hostCall(OP_REBUILD_TERRAIN, [], []).ret | 0;
         },
-        find_path: function (sx, sy, ex, ey, outPtr, outCap) {
-            var r = hostCall(OP_FIND_PATH, [], [sx, sy, ex, ey, outPtr, outCap]);
+        request_path: function (sx, sy, ex, ey) {
+            return hostCall(OP_REQUEST_PATH, [], [sx, sy, ex, ey]).ret | 0;
+        },
+        poll_path: function (id, outPtr, outCap) {
+            var r = hostCall(OP_POLL_PATH, [], [id, outPtr, outCap]);
             if (r.out.length > 0) writeMem(outPtr, r.out);
             return r.ret | 0;
         },

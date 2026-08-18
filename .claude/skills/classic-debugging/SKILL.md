@@ -453,6 +453,6 @@ original and will produce no diagnostics when broken:
 | **Camera matrix order** | TS does `S(scale) * T(-fix)`; Rust does `T(-fix) * S(scale)`. Both look correct because the fix-point formula compensates, but the raw model matrices differ. Golden traces will show this divergence in `model` fields. |
 | **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(size_x + 1) * (size_y + 1)` (vertex grid, one height per vertex). The `height_data` grid is a binary sidecar resource (`ResourceKind::Grid`), not inlined in `state.json`. |
 | **Root UI tree** | TS attached all UI elements to a single root container and walked the full tree for layout. Rust only attaches the top bar to root; other panels position themselves independently. `CLASSIC_UI_DEBUG` will show fewer elements in the layout tree walk. |
-| **Web Worker pathfinder** | TS ran A* on a Web Worker for non-blocking path computation. Rust runs A* synchronously on the main thread. |
+| **Web Worker pathfinder** | TS ran A* on a Web Worker for non-blocking path computation. Rust runs A* on a host `PathfinderWorker` (native thread / web `Worker`) via async `request_path`/`poll_path`, with a synchronous fallback under the deterministic harness. |
 | **`classic_log` hot-reload** | Channels are parsed once at startup. There is no runtime reload or live toggle — changing channels requires a process restart (or page reload on web). |
 

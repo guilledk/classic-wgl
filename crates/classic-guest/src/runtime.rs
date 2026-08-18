@@ -19,6 +19,10 @@ pub struct GuestLimits {
     /// backend (browser Wasm has no fuel API); exceeding it terminates the
     /// worker.  Ignored by the wasmi/wasmtime backends.
     pub max_frame_millis: u64,
+    /// Force pathfinding (and, later, other heavy host work) to run
+    /// synchronously on the render thread, so the deterministic test/golden
+    /// harness is independent of background-thread scheduling.
+    pub synchronous_workers: bool,
 }
 
 impl Default for GuestLimits {
@@ -28,6 +32,7 @@ impl Default for GuestLimits {
             max_memory_bytes: 64 * 1024 * 1024,
             trusted: false,
             max_frame_millis: 50,
+            synchronous_workers: false,
         }
     }
 }

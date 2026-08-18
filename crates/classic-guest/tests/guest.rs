@@ -158,18 +158,62 @@ fn find_path_returns_waypoints() {
 }
 
 #[test]
-fn guest_find_path_import_is_wired() {
+fn request_poll_path_sync_roundtrip() {
+    let mut engine = Engine::new_for_test();
+    install_test_navmesh(&mut engine);
+    engine.set_nav_bulk(&[1u32; 9]);
+    engine.set_synchronous_workers(true);
+
+    let id = engine.request_path((0, 0), (2, 0));
+    match engine.poll_path(id) {
+        classic_core::pathfinder::PathPoll::Path(path) => {
+            assert_eq!(path, vec![(0, 0), (1, 0), (2, 0)]);
+        }
+        other => panic!("expected a path, got {other:?}"),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn request_poll_path_async_roundtrip() {
+    let mut engine = Engine::new_for_test();
+    install_test_navmesh(&mut engine);
+    engine.set_nav_bulk(&[1u32; 9]);
+
+    let id = engine.request_path((0, 0), (2, 2));
+    let mut result = classic_core::pathfinder::PathPoll::Pending;
+    for _ in 0..1000 {
+        result = engine.poll_path(id);
+        if result != classic_core::pathfinder::PathPoll::Pending {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    match result {
+        classic_core::pathfinder::PathPoll::Path(path) => {
+            assert_eq!(path, vec![(0, 0), (1, 1), (2, 2)]);
+        }
+        other => panic!("expected a path, got {other:?}"),
+    }
+}
+
+#[test]
+fn guest_request_poll_path_imports_wired() {
     with_each_runtime(
         r#"(module
-            (import "env" "find_path" (func $find_path (param i32 i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "request_path" (func $request_path (param i32 i32 i32 i32) (result i32)))
+            (import "env" "poll_path" (func $poll_path (param i32 i32 i32) (result i32)))
             (memory (export "memory") 1)
             (func (export "update") (param f64)
-                (drop (call $find_path (i32.const 0) (i32.const 0) (i32.const 2) (i32.const 0)
+                (drop (call $poll_path
+                    (call $request_path (i32.const 0) (i32.const 0) (i32.const 2) (i32.const 0))
                     (i32.const 64) (i32.const 256)))))"#,
         &GuestLimits::default(),
         |rt| {
             let mut engine = Engine::new_for_test();
             install_test_navmesh(&mut engine);
+            engine.set_nav_bulk(&[1u32; 9]);
+            engine.set_synchronous_workers(true);
             rt.update(&mut engine, 0.016).unwrap();
         },
     );
@@ -218,6 +262,59 @@ fn guest_was_key_pressed_triggers_action() {
             engine.input.keys_pressed.insert("KeyR".to_string(), true);
             rt.update(&mut engine, 0.016).unwrap();
             assert!(engine.has_name("marker"));
+        },
+    );
+}
+
+/// A minimal worker guest module (the "second instance") exporting an `entry`
+/// that returns the two bytes "OK".
+fn worker_ok_wasm() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+            (import "env" "task_return" (func $task_return (param i32 i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "OK")
+            (func (export "entry")
+                (call $task_return (i32.const 0) (i32.const 2))))"#,
+    )
+    .unwrap()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn engine_spawn_poll_task_roundtrip() {
+    let mut engine = Engine::new_for_test();
+    engine.install_guest_worker(&worker_ok_wasm(), false).unwrap();
+
+    let id = engine.spawn_task("entry", vec![1, 2, 3]);
+    let mut result = None;
+    for _ in 0..1000 {
+        result = engine.poll_task(id);
+        if result.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(result, Some(Ok(b"OK".to_vec())));
+}
+
+#[test]
+fn guest_spawn_poll_task_imports_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "spawn_task" (func $spawn_task (param i32 i32 i32 i32) (result i32)))
+            (import "env" "poll_task" (func $poll_task (param i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "entry")
+            (func (export "update") (param f64)
+                (drop (call $poll_task
+                    (call $spawn_task (i32.const 0) (i32.const 5) (i32.const 64) (i32.const 0))
+                    (i32.const 128) (i32.const 256)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.install_guest_worker(&worker_ok_wasm(), false).unwrap();
+            rt.update(&mut engine, 0.016).unwrap();
         },
     );
 }
@@ -786,6 +883,71 @@ fn has_resource_and_texture_size_queries() {
     assert!(!engine.has_texture("nope"));
     // Dimensions are only known once the texture is uploaded to GL.
     assert_eq!(engine.texture_size("tree"), None);
+}
+
+#[test]
+fn guest_field_registry_kernels_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "alloc_field" (func $alloc (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "write_field" (func $write (param i32 i32 i32 i32) (result i32)))
+            (import "env" "map_scalar" (func $map_scalar (param i32 i32 i32 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "h")
+            (data (i32.const 64) "\00\00\80\3f\00\00\00\40\00\00\40\40\00\00\80\40")
+            (func (export "update") (param f64)
+                (drop (call $alloc (i32.const 0) (i32.const 1) (i32.const 2) (i32.const 2) (i32.const 0)))
+                (drop (call $write (i32.const 0) (i32.const 1) (i32.const 64) (i32.const 16)))
+                (drop (call $map_scalar (i32.const 0) (i32.const 0) (i32.const 1) (f64.const 10.0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+            let (data, w, h) = engine.fields.f32("h").unwrap();
+            assert_eq!((w, h), (2, 2));
+            assert_eq!(data, &[11.0, 12.0, 13.0, 14.0]);
+        },
+    );
+}
+
+#[test]
+fn guest_field_kernel_imports_link() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "alloc_field" (func $alloc (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "write_field" (func $write (param i32 i32 i32 i32) (result i32)))
+            (import "env" "read_field" (func $read (param i32 i32 i32 i32) (result i32)))
+            (import "env" "map_field" (func $map_field (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "blur_box_field" (func $blur (param i32 i32 i32) (result i32)))
+            (import "env" "relax_slopes_field" (func $relax (param i32 i32 f64 i32 f64 i32 i32) (result f64)))
+            (import "env" "gradient_magnitude_field" (func $grad (param i32 i32 i32 i32) (result i32)))
+            (import "env" "threshold_le_field" (func $thresh (param i32 i32 i32 i32 f64) (result i32)))
+            (import "env" "prune_components_field" (func $prune (param i32 i32) (result i32)))
+            (import "env" "reduce_field" (func $reduce (param i32 i32 i32) (result f64)))
+            (import "env" "free_field" (func $free (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "h")
+            (data (i32.const 16) "s")
+            (data (i32.const 64) "\00\00\80\3f\00\00\00\40\00\00\40\40\00\00\80\40")
+            (func (export "update") (param f64)
+                (drop (call $alloc (i32.const 0) (i32.const 1) (i32.const 2) (i32.const 2) (i32.const 0)))
+                (drop (call $alloc (i32.const 16) (i32.const 1) (i32.const 2) (i32.const 2) (i32.const 0)))
+                (drop (call $write (i32.const 0) (i32.const 1) (i32.const 64) (i32.const 16)))
+                (drop (call $map_field (i32.const 0) (i32.const 16) (i32.const 1) (i32.const 0) (i32.const 1)))
+                (drop (call $blur (i32.const 0) (i32.const 1) (i32.const 1)))
+                (drop (call $relax (i32.const 0) (i32.const 1) (f64.const 1.0) (i32.const 10) (f64.const 0.01) (i32.const 0) (i32.const 0)))
+                (drop (call $grad (i32.const 0) (i32.const 1) (i32.const 16) (i32.const 1)))
+                (drop (call $thresh (i32.const 0) (i32.const 1) (i32.const 16) (i32.const 1) (f64.const 1.0)))
+                (drop (call $prune (i32.const 16) (i32.const 1)))
+                (drop (call $reduce (i32.const 0) (i32.const 1) (i32.const 0)))
+                (drop (call $read (i32.const 0) (i32.const 1) (i32.const 256) (i32.const 256)))
+                (drop (call $free (i32.const 0) (i32.const 1)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
 }
 
 #[test]

@@ -43,6 +43,11 @@ use alloc::vec::Vec;
 
 use crate::material::{tile_id, LunarMaterial};
 use classic_terrain::fractal::{domain_warp, smoothstep, Fbm};
+use classic_terrain::kernels::{
+    blur_box, carve_corridor_cell, clamp, connected_components, gradient_magnitude, map_scalar,
+    max_adjacent_slope, prune_to_main_component, reduce_field, relax_slopes, threshold_le, FieldOp,
+    Reduce,
+};
 use classic_terrain::simplex_noise::{Random, SimplexNoise};
 
 /// A guaranteed-flat circular region for an RTS start position or base site.
@@ -458,37 +463,20 @@ pub fn generate_lunar(p: &LunarParams) -> LunarTerrain {
     // -- stage 9: normalise the range --------------------------------------
     // Shift rather than clamp: clamping the low end would produce flat
     // "lakes" wherever the terrain dipped below the floor.
-    let mut min_h = f32::MAX;
-    for h in heights.iter() {
-        if *h < min_h {
-            min_h = *h;
-        }
-    }
+    let min_h = reduce_field(&heights, Reduce::Min);
     let shift = p.floor_height - min_h;
-    let mut max_h = f32::MIN;
-    for h in heights.iter_mut() {
-        *h = (*h + shift).min(p.max_height);
-        if *h > max_h {
-            max_h = *h;
-        }
-    }
+    map_scalar(FieldOp::Add, &mut heights, shift);
+    clamp(&mut heights, f32::NEG_INFINITY, p.max_height);
+    let max_h = reduce_field(&heights, Reduce::Max);
 
     // -- stage 10: tile classification -------------------------------------
     let mut tiles = vec![0u32; tw * th];
-    let mut slopes = vec![0f32; tw * th];
+    let slopes = gradient_magnitude(&heights, sx, sy);
     let mut mare_tiles = 0u32;
     let mut buildable = 0u32;
-    for ty in 0..th {
-        for tx in 0..tw {
-            let i = ty * tw + tx;
-            let nw = heights[ty * vw + tx];
-            let ne = heights[ty * vw + tx + 1];
-            let sw = heights[(ty + 1) * vw + tx];
-            let se = heights[(ty + 1) * vw + tx + 1];
-            // Per-tile gradient magnitude, in height units per tile.
-            let dzdx = ((ne + se) - (nw + sw)) * 0.5;
-            let dzdy = ((sw + se) - (nw + ne)) * 0.5;
-            slopes[i] = libm::sqrtf(dzdx * dzdx + dzdy * dzdy);
+    for s in slopes.iter() {
+        if *s <= p.build_max_slope {
+            buildable += 1;
         }
     }
 
@@ -499,15 +487,11 @@ pub fn generate_lunar(p: &LunarParams) -> LunarTerrain {
     // visible checkerboard.  Averaging over the 3x3 neighbourhood also matches
     // how material actually distributes itself: by local context, not by one
     // 45px patch of ground.
-    let shade_slopes = box_blur(&slopes, sx, sy);
+    let shade_slopes = blur_box(&slopes, sx, sy, 1);
 
     for ty in 0..th {
         for tx in 0..tw {
             let i = ty * tw + tx;
-            let slope = slopes[i];
-            if slope <= p.build_max_slope {
-                buildable += 1;
-            }
 
             let m = (mare[ty * vw + tx]
                 + mare[ty * vw + tx + 1]
@@ -542,8 +526,7 @@ pub fn generate_lunar(p: &LunarParams) -> LunarTerrain {
     }
 
     // -- stage 11: navigation ----------------------------------------------
-    let mut nav: Vec<u32> =
-        slopes.iter().map(|s| if *s <= p.nav_max_slope { 1 } else { 0 }).collect();
+    let mut nav: Vec<u32> = threshold_le(&slopes, p.nav_max_slope);
 
     let mut spawn_points: Vec<(i32, i32)> = zones
         .iter()
@@ -562,7 +545,7 @@ pub fn generate_lunar(p: &LunarParams) -> LunarTerrain {
     let total = (tw * th) as f32;
     // Measured last: landing-zone skirts and carved corridors both edit the
     // height field after relaxation, so anything earlier would under-report.
-    let max_slope_actual = measure_max_slope(&heights, vw, vh);
+    let max_slope_actual = max_adjacent_slope(&heights, vw, vh);
 
     let stats = LunarStats {
         craters: craters.len() as u32,
@@ -955,114 +938,6 @@ fn stamp_rays(
     }
 }
 
-/// Thermal-erosion / talus relaxation: repeatedly move material from any
-/// vertex that overhangs a 4-neighbour by more than `max_slope`.
-///
-/// This is the same mass-wasting process that caps real regolith slopes at the
-/// angle of repose, and it doubles as the engine's safety net — `build_mesh`
-/// emits no wall geometry for interior height discontinuities, so unbounded
-/// slopes would render as stretched, badly-lit top faces.
-///
-/// Vertices flagged in `pinned` are held fixed: they still pull on their
-/// neighbours but never move themselves.
-///
-/// Returns `(iterations_used, worst_remaining_over_slope_edge)`.
-#[allow(clippy::too_many_arguments)]
-fn relax_slopes(
-    heights: &mut [f32],
-    vw: usize,
-    vh: usize,
-    max_slope: f32,
-    max_iterations: u32,
-    tolerance: f32,
-    pinned: Option<&[bool]>,
-) -> (u32, f32) {
-    if max_slope <= 0.0 || max_iterations == 0 {
-        return (0, measure_max_slope(heights, vw, vh));
-    }
-    // 4 neighbours at 0.18 each moves at most 0.72 of the excess per pass,
-    // which converges quickly without oscillating.
-    const RATE: f32 = 0.18;
-    let mut scratch = heights.to_vec();
-    let mut used = 0;
-
-    for _ in 0..max_iterations {
-        scratch.copy_from_slice(heights);
-        let mut worst = 0f32;
-        for y in 0..vh {
-            for x in 0..vw {
-                let i = y * vw + x;
-                if pinned.is_some_and(|m| m[i]) {
-                    continue;
-                }
-                let hi = scratch[i];
-                let mut delta = 0f32;
-                let mut neigh = [usize::MAX; 4];
-                if x > 0 {
-                    neigh[0] = i - 1;
-                }
-                if x + 1 < vw {
-                    neigh[1] = i + 1;
-                }
-                if y > 0 {
-                    neigh[2] = i - vw;
-                }
-                if y + 1 < vh {
-                    neigh[3] = i + vw;
-                }
-                for j in neigh {
-                    if j == usize::MAX {
-                        continue;
-                    }
-                    let d = hi - scratch[j];
-                    if d > max_slope {
-                        let excess = d - max_slope;
-                        if excess > worst {
-                            worst = excess;
-                        }
-                        delta -= RATE * excess;
-                    } else if d < -max_slope {
-                        let excess = -d - max_slope;
-                        if excess > worst {
-                            worst = excess;
-                        }
-                        delta += RATE * excess;
-                    }
-                }
-                heights[i] = hi + delta;
-            }
-        }
-        used += 1;
-        if worst <= tolerance {
-            break;
-        }
-    }
-
-    (used, measure_max_slope(heights, vw, vh))
-}
-
-fn measure_max_slope(heights: &[f32], vw: usize, vh: usize) -> f32 {
-    let mut worst = 0f32;
-    for y in 0..vh {
-        for x in 0..vw {
-            let i = y * vw + x;
-            if x + 1 < vw {
-                let d = (heights[i] - heights[i + 1]).abs();
-                if d > worst {
-                    worst = d;
-                }
-            }
-            if y + 1 < vh {
-                let d = (heights[i] - heights[i + vw]).abs();
-                if d > worst {
-                    worst = d;
-                }
-            }
-        }
-    }
-    worst
-}
-
 /// Mark every vertex inside a landing pad core, for pinning during the
 /// post-flatten relaxation pass.
 fn pad_core_mask(zones: &[LandingZone], sx: i32, sy: i32, vw: usize, vh: usize) -> Vec<bool> {
@@ -1126,28 +1001,6 @@ fn flatten_zone(z: &LandingZone, sx: i32, sy: i32, vw: usize, heights: &mut [f32
     }
 }
 
-/// 3x3 box blur over a tile grid, clamping at the edges.
-fn box_blur(src: &[f32], sx: i32, sy: i32) -> Vec<f32> {
-    let tw = sx as usize;
-    let mut out = vec![0f32; src.len()];
-    for ty in 0..sy {
-        for tx in 0..sx {
-            let mut sum = 0f32;
-            let mut n = 0f32;
-            for dy in -1..=1 {
-                for dx in -1..=1 {
-                    let nx = (tx + dx).clamp(0, sx - 1);
-                    let ny = (ty + dy).clamp(0, sy - 1);
-                    sum += src[ny as usize * tw + nx as usize];
-                    n += 1.0;
-                }
-            }
-            out[ty as usize * tw + tx as usize] = sum / n;
-        }
-    }
-    out
-}
-
 /// Decide the material class for one tile.  Order matters: earlier rules win.
 #[allow(clippy::too_many_arguments)]
 fn classify(
@@ -1204,56 +1057,6 @@ fn classify(
 // connectivity
 // ---------------------------------------------------------------------------
 
-/// Label 8-connected walkable components.  Returns `(labels, largest_label)`
-/// where blocked cells are labelled `0`.
-fn label_components(nav: &[u32], sx: i32, sy: i32) -> (Vec<u32>, u32) {
-    let tw = sx as usize;
-    let th = sy as usize;
-    let mut labels = vec![0u32; tw * th];
-    let mut next = 0u32;
-    let mut best = 0u32;
-    let mut best_size = 0usize;
-    let mut stack: Vec<usize> = Vec::new();
-
-    for start in 0..tw * th {
-        if nav[start] != 1 || labels[start] != 0 {
-            continue;
-        }
-        next += 1;
-        let mut size = 0usize;
-        stack.push(start);
-        labels[start] = next;
-        while let Some(i) = stack.pop() {
-            size += 1;
-            let x = (i % tw) as i32;
-            let y = (i / tw) as i32;
-            for dy in -1..=1 {
-                for dx in -1..=1 {
-                    if dx == 0 && dy == 0 {
-                        continue;
-                    }
-                    let nx = x + dx;
-                    let ny = y + dy;
-                    if nx < 0 || ny < 0 || nx >= sx || ny >= sy {
-                        continue;
-                    }
-                    let j = ny as usize * tw + nx as usize;
-                    if nav[j] == 1 && labels[j] == 0 {
-                        labels[j] = next;
-                        stack.push(j);
-                    }
-                }
-            }
-        }
-        if size > best_size {
-            best_size = size;
-            best = next;
-        }
-    }
-
-    (labels, best)
-}
-
 /// Guarantee that every spawn point is walkable and mutually reachable.
 ///
 /// Isolated starts are joined to the main component by carving a corridor:
@@ -1281,7 +1084,7 @@ fn connect_spawns(
 
     // Every spawn should start on walkable ground; landing zones are flat by
     // construction, but snap anyway in case of explicit zone overrides.
-    let (mut labels, mut main) = label_components(nav, sx, sy);
+    let (mut labels, mut main, _) = connected_components(nav, sx, sy);
     for s in spawns.iter_mut() {
         let i = s.1 as usize * tw + s.0 as usize;
         if nav[i] != 1 {
@@ -1307,9 +1110,9 @@ fn connect_spawns(
             carve_corridor_cell(nav, heights, sx, sy, vw, *cx, *cy, nav_max_slope);
         }
         carved += 1;
-        let relabeled = label_components(nav, sx, sy);
-        labels = relabeled.0;
-        main = relabeled.1;
+        let (relabeled, relabeled_main, _) = connected_components(nav, sx, sy);
+        labels = relabeled;
+        main = relabeled_main;
     }
 
     carved
@@ -1402,61 +1205,4 @@ fn route_to_component(
     }
     path.reverse();
     Some(path)
-}
-
-/// Open one corridor cell (and its immediate neighbours) by flattening the
-/// local height field until the slope drops under the walkability threshold.
-#[allow(clippy::too_many_arguments)]
-fn carve_corridor_cell(
-    nav: &mut [u32],
-    heights: &mut [f32],
-    sx: i32,
-    sy: i32,
-    vw: usize,
-    cx: i32,
-    cy: i32,
-    nav_max_slope: f32,
-) {
-    let tw = sx as usize;
-    // Widen by one tile so the corridor is not a single-cell thread.
-    for dy in -1..=1 {
-        for dx in -1..=1 {
-            let tx = cx + dx;
-            let ty = cy + dy;
-            if tx < 0 || ty < 0 || tx >= sx || ty >= sy {
-                continue;
-            }
-            // Average the four corners towards their mean until the tile is
-            // shallow enough to walk.
-            for _ in 0..6 {
-                let i00 = ty as usize * vw + tx as usize;
-                let i10 = i00 + 1;
-                let i01 = i00 + vw;
-                let i11 = i01 + 1;
-                let mean = (heights[i00] + heights[i10] + heights[i01] + heights[i11]) * 0.25;
-                let dzdx = ((heights[i10] + heights[i11]) - (heights[i00] + heights[i01])) * 0.5;
-                let dzdy = ((heights[i01] + heights[i11]) - (heights[i00] + heights[i10])) * 0.5;
-                if libm::sqrtf(dzdx * dzdx + dzdy * dzdy) <= nav_max_slope * 0.7 {
-                    break;
-                }
-                for j in [i00, i10, i01, i11] {
-                    heights[j] += (mean - heights[j]) * 0.5;
-                }
-            }
-            nav[ty as usize * tw + tx as usize] = 1;
-        }
-    }
-}
-
-/// Blank every walkable cell outside the largest connected component.
-fn prune_to_main_component(nav: &mut [u32], sx: i32, sy: i32) {
-    let (labels, main) = label_components(nav, sx, sy);
-    if main == 0 {
-        return;
-    }
-    for (i, v) in nav.iter_mut().enumerate() {
-        if *v == 1 && labels[i] != main {
-            *v = 0;
-        }
-    }
 }

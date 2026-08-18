@@ -249,6 +249,14 @@ fn tri_normal(d1: (f32, f32, f32), d2: (f32, f32, f32)) -> [f32; 3] {
 ///
 /// `heights` has shape `(size_x + 1) × (size_y + 1)` (one sample per edge vertex).
 pub fn bilinear_height(heights: &[f32], size_x: i32, size_y: i32, px: f32, py: f32) -> f32 {
+    // A generated map has no height grid until its guest uploads one, so
+    // callers that sample terrain every frame must tolerate an empty (or
+    // not-yet-committed) grid.  Treat it as flat (height 0) rather than
+    // indexing out of bounds.
+    if heights.len() != (size_x as usize + 1) * (size_y as usize + 1) {
+        return 0.0;
+    }
+
     let ftx = px.floor() as i32;
     let fty = py.floor() as i32;
     let fx = px - ftx as f32;

@@ -7,7 +7,10 @@
 //! `unsafe`.
 
 use classic_core::components::{TextJustify, UiAlign, UiAnchor};
+use classic_core::fields::FieldDtype;
 use classic_core::instrument::Chan;
+use classic_core::pathfinder::PathPoll;
+use classic_core::terrain::kernels::{FieldOp, Reduce};
 use classic_engine::Engine;
 
 /// Map an integer to a [`UiAnchor`] (0..=8, TopLeft → BotRight).
@@ -40,6 +43,27 @@ fn justify(i: i32) -> TextJustify {
         0 => TextJustify::Left,
         2 => TextJustify::Right,
         _ => TextJustify::Center,
+    }
+}
+
+/// Map an integer to a [`FieldOp`] (0 add, 1 sub, 2 mul, 3 min, 4 max).
+fn field_op(i: i32) -> FieldOp {
+    match i {
+        1 => FieldOp::Sub,
+        2 => FieldOp::Mul,
+        3 => FieldOp::Min,
+        4 => FieldOp::Max,
+        _ => FieldOp::Add,
+    }
+}
+
+/// Map an integer to a [`Reduce`] (0 min, 1 max, 2 mean, 3 variance).
+fn reduce_op(i: i32) -> Reduce {
+    match i {
+        1 => Reduce::Max,
+        2 => Reduce::Mean,
+        3 => Reduce::Variance,
+        _ => Reduce::Min,
     }
 }
 
@@ -188,10 +212,30 @@ impl GuestHost {
         self.engine_mut().rebuild_terrain() as i32
     }
 
-    /// A* path over the nav mesh from `(sx, sy)` to `(ex, ey)` as integer tile
-    /// coordinates (empty if no path exists).
-    pub fn find_path(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) -> Vec<(i32, i32)> {
-        self.engine().find_path((sx, sy), (ex, ey)).unwrap_or_default()
+    /// Submit an A* path request over the nav mesh from `(sx, sy)` to
+    /// `(ex, ey)`, returning a request id to poll with [`Self::poll_path`].
+    pub fn request_path(&mut self, sx: i32, sy: i32, ex: i32, ey: i32) -> i32 {
+        self.engine_mut().request_path((sx, sy), (ex, ey)) as i32
+    }
+
+    /// Poll a previously submitted path request by id.  The returned
+    /// [`PathPoll`] maps onto the ABI's `poll_path` result codes (`0` pending,
+    /// `-1` no-path, `>0` waypoint count).
+    pub fn poll_path(&mut self, id: i32) -> PathPoll {
+        self.engine_mut().poll_path(id as u64)
+    }
+
+    /// Submit a background guest task: run the worker guest's named `entry`
+    /// export with `arg` as input bytes.  Returns a task id to poll with
+    /// [`Self::poll_task`].
+    pub fn spawn_task(&mut self, entry: &str, arg: &[u8]) -> i32 {
+        self.engine_mut().spawn_task(entry, arg.to_vec()) as i32
+    }
+
+    /// Poll a previously submitted background task by id.  `None` while
+    /// pending, `Some(Ok(bytes))` with the result, `Some(Err(msg))` on a trap.
+    pub fn poll_task(&mut self, id: i32) -> Option<Result<Vec<u8>, String>> {
+        self.engine_mut().poll_task(id as u64)
     }
 
     /// Reposition a wheeled vehicle (body + 4 wheels) and reset its physics.
@@ -645,5 +689,92 @@ impl GuestHost {
     /// Commit a guest-generated terrain (install or rebuild mesh + nav overlay).
     pub fn commit_terrain(&mut self, height_scale: f64) -> i32 {
         self.engine_mut().commit_terrain(height_scale as f32) as i32
+    }
+
+    // ---- Field-buffer registry + grid kernels (host-owned scratch) --------
+
+    /// Allocate a zero-filled `w`×`h` field (`dtype`: 0 = f32, 1 = u32).
+    pub fn alloc_field(&mut self, name: &str, w: i32, h: i32, dtype: i32) -> i32 {
+        self.engine_mut().fields.alloc(name, w, h, FieldDtype::from_i32(dtype)) as i32
+    }
+
+    /// Remove a named field.
+    pub fn free_field(&mut self, name: &str) -> i32 {
+        self.engine_mut().fields.free(name) as i32
+    }
+
+    /// Overwrite an `f32` field's data from a guest buffer.
+    pub fn write_field(&mut self, name: &str, data: &[f32]) -> i32 {
+        self.engine_mut().fields.write(name, data) as i32
+    }
+
+    /// Overwrite a `u32` field's data from a guest buffer.
+    pub fn write_field_u32(&mut self, name: &str, data: &[u32]) -> i32 {
+        self.engine_mut().fields.write_u32(name, data) as i32
+    }
+
+    /// Download an `f32` field (empty if the field does not exist / is not f32).
+    pub fn read_field(&mut self, name: &str) -> Vec<f32> {
+        self.engine().fields.f32(name).map(|(d, _, _)| d.to_vec()).unwrap_or_default()
+    }
+
+    /// In-place `dst = dst op src` (`op`: 0 add, 1 sub, 2 mul, 3 min, 4 max).
+    pub fn map_field(&mut self, op: i32, dst: &str, src: &str) -> i32 {
+        self.engine_mut().fields.map_field(field_op(op), dst, src) as i32
+    }
+
+    /// In-place `dst = dst op scalar`.
+    pub fn map_scalar(&mut self, op: i32, dst: &str, scalar: f64) -> i32 {
+        self.engine_mut().fields.map_scalar(field_op(op), dst, scalar as f32) as i32
+    }
+
+    /// In-place N×N box blur of an `f32` field.
+    pub fn blur_box_field(&mut self, name: &str, radius: i32) -> i32 {
+        self.engine_mut().fields.blur_box(name, radius) as i32
+    }
+
+    /// In-place slope relaxation; `pinned` is an optional `u32` field name
+    /// (empty string = none).  Returns the worst remaining slope.
+    pub fn relax_slopes_field(
+        &mut self,
+        name: &str,
+        max_slope: f64,
+        iterations: i32,
+        tolerance: f64,
+        pinned: &str,
+    ) -> f64 {
+        let pinned = if pinned.is_empty() { None } else { Some(pinned) };
+        self.engine_mut()
+            .fields
+            .relax_slopes(
+                name,
+                max_slope as f32,
+                iterations.max(0) as u32,
+                tolerance as f32,
+                pinned,
+            )
+            .map(|(_, worst)| worst as f64)
+            .unwrap_or(-1.0)
+    }
+
+    /// Derive a per-tile `f32` gradient field under `dst` from a vertex height
+    /// field.
+    pub fn gradient_magnitude_field(&mut self, heights: &str, dst: &str) -> i32 {
+        self.engine_mut().fields.gradient_magnitude(heights, dst) as i32
+    }
+
+    /// Threshold an `f32` field into a `u32` field (`1` where `<= t`).
+    pub fn threshold_le_field(&mut self, src: &str, dst: &str, t: f64) -> i32 {
+        self.engine_mut().fields.threshold_le(src, dst, t as f32) as i32
+    }
+
+    /// Prune every walkable cell not in the largest component of a `u32` field.
+    pub fn prune_components_field(&mut self, name: &str) -> i32 {
+        self.engine_mut().fields.prune_components(name) as i32
+    }
+
+    /// Reduce an `f32` field (`op`: 0 min, 1 max, 2 mean, 3 variance).
+    pub fn reduce_field(&mut self, name: &str, op: i32) -> f64 {
+        self.engine().fields.reduce(name, reduce_op(op)).unwrap_or(f32::NAN) as f64
     }
 }

@@ -500,8 +500,8 @@ The agent's *behaviour* — click-to-move, path-following, idle/walk animation,
 terrain-z following — lives in the **ROM guest** (`guest/demo-guest`), not in
 Rust.  The retired `init_agent_system` (and the engine's click-to-move wiring)
 were replaced by the guest driving the entity through the `classic-guest` SDK:
-`find_path` (binary waypoints), `set_pos`/`get_pos` (3D), `set_anim`,
-`height_at`, `mouse_iso`, `agent_selected`, `ui_consumed_click`.  The
+`request_path`/`poll_path` (async binary waypoints), `set_pos`/`get_pos` (3D),
+`set_anim`, `height_at`, `mouse_iso`, `agent_selected`, `ui_consumed_click`.  The
 `IsoAgent` component no longer carries runtime state — `path`, `target_index`,
 `delta`, `init_dist`, `direction`, `anim_index`, `state` (and the `AgentState`
 enum) were removed; the guest keeps its own static path buffer.

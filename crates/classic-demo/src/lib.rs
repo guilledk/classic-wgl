@@ -42,6 +42,9 @@ use crate::state::{DemoState, DemoStateRef};
 /// frame), and register a per-frame `on_update` closure that runs `update(dt)`
 /// and — once, after the first update — the optional `start` hook.
 pub fn init_guest(e: &mut Engine, state: &DemoStateRef, wasm: &[u8], limits: &GuestLimits) {
+    // The deterministic harness forces synchronous workers so frame output is
+    // independent of background-thread scheduling.
+    e.set_synchronous_workers(limits.synchronous_workers);
     match create_runtime(wasm, limits) {
         Ok(mut rt) => {
             if let Err(err) = rt.init(e) {
@@ -88,11 +91,31 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
     // guest that sets its own look (lunar) wins over the default.
     lighting::init_lighting(&mut e, &state);
 
+    // Install the background guest worker (Tier 3) *before* the foreground
+    // guest runs its `init` hook, so the lunar guest can submit generation work
+    // from `init` (and apply it synchronously under the golden harness).
+    if let Some(worker_wasm) = rom.resources.code().get("worker") {
+        let env = classic_engine::env_config::EnvConfig::get();
+        if let Err(err) =
+            e.install_guest_worker(worker_wasm, env.test_active() || env.golden_active())
+        {
+            cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
+        }
+    }
+
     // ROM guest code.  Each guest owns its terrain — the lunar guest generates
     // + bulk-uploads the grids, the demo guest commits its hand-authored inline
     // state — and then owns its own view setup.
     if let Some(wasm) = rom.resources.code().get("main") {
-        let limits = GuestLimits { trusted: rom.manifest.trusted, ..GuestLimits::default() };
+        let env = classic_engine::env_config::EnvConfig::get();
+        let limits = GuestLimits {
+            trusted: rom.manifest.trusted,
+            // The deterministic harness (CLASSIC_TEST) and golden capture both
+            // force synchronous workers so frame output is independent of
+            // background-thread scheduling.
+            synchronous_workers: env.test_active() || env.golden_active(),
+            ..GuestLimits::default()
+        };
         init_guest(&mut e, &state, wasm, &limits);
     }
 

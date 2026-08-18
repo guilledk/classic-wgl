@@ -42,6 +42,17 @@ fn bilinear_height_clamps_to_boundary() {
 }
 
 #[test]
+fn bilinear_height_empty_or_short_is_flat() {
+    // A generated map has no height grid until its guest commits it; sampling
+    // before then must return flat (0.0) rather than panic.
+    let sx: i32 = 4;
+    let sy: i32 = 4;
+    assert_eq!(bilinear_height(&[], sx, sy, 2.0, 2.0), 0.0);
+    let short = vec![0.0_f32; 3];
+    assert_eq!(bilinear_height(&short, sx, sy, 2.0, 2.0), 0.0);
+}
+
+#[test]
 fn bilinear_height_interpolates_diagonally() {
     let sx: i32 = 2;
     let sy: i32 = 2;
