@@ -173,20 +173,33 @@ Order: `['sunny', 'cloudy', 'dawn', 'night']`.
 
 ### `type`-first contract
 
-Loading parses keys in insertion order, removes `"type"` from the value list,
-and passes remaining values as positional constructor args.  Therefore **dump()
-key order = constructor argument order** and `"type"` must always be first.
+The Rust loader is **registry-driven** (serde), not positional — it reads the
+`"type"` field, looks up the component spawner, and deserialises the rest of
+the object by field name.  The TS positional loader (which splices out
+`"type"` and passes the remaining values as positional constructor args) was
+deleted with the TS original.  `"type"` is still emitted first as a
+convention, but key order is no longer load-bearing.
 
-### Per-component dump key order
+The dumpers are **derive-driven** (`serde` on each component, with `"type"`
+prepended), so keys follow each component's serde attributes
+(`rename_all = "camelCase"` where set, `#[serde(skip)]`/`#[serde(rename)]`
+honoured).
 
-| Component | Keys (after `type`) |
-|-----------|---------------------|
+### Per-component dump keys (after `type`)
+
+| Component | Keys |
+|-----------|------|
 | **Sprite** | `position`, `scale`, `texture`, `ignoreCam`, `frame`, `tileSetSize`, `anchor` |
 | **IsoSprite** | `position`, `scale`, `texture`, `tilemap`, `frame`, `tileSetSize`, `anchor`, `footprint` |
-| **IsoAgent** | + `speed`, `animSpeed` (appended to IsoSprite) |
-| **Tilemap** | `position`, `scale`, `sizeX`, `sizeY`, `tileSet`, `tilePixelSize`, `maxTile`, `data`, `heightScale` |
-| **IsometricNavMesh** | `map`, `sizeX`, `sizeY`, `data` — does **not** emit `position`/`scale` |
+| **IsoAgent** | + `speed`, `animSpeed`, `animPrefix` (appended to IsoSprite) |
+| **Tilemap** | `position`, `scale`, `sizeX`, `sizeY`, `tileSet`, `tilePixelSize`, `maxTile`, `data` (base64), `heightData` (base64), `heightScale` |
+| **IsometricNavMesh** | `position`, `scale`, `map`, `tileSet`, `data` (base64), `sizeX`, `sizeY` |
 | **Animator** | `target`, `speed` |
+| **Transform** | `position`, `scale` |
+| **Rect** | `color`, `ignore_cam` |
+| **SdfText** | `atlas_name`, `color`, `bgcolor`, `outline_color`, `outline_width`, `shadow_offset`, `shadow_color`, `shadow_blur`, `ignore_cam`, `text`, `justify`, `weight`, `gamma` |
+| **LightState** | `ambient`, `direction`, `color` |
+| **Camera** | `position`, `scale` (`size` is runtime-only) |
 
 ---
 

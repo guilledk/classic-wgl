@@ -67,6 +67,7 @@ pub struct AnimationData {
 
 /// The resource manifest (matches `public/manifest.json`).
 #[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Manifest {
     pub shaders: Vec<ShaderInfo>,
     pub textures: Vec<TextureManifestEntry>,

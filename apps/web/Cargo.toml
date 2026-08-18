@@ -12,6 +12,7 @@ classic-gfx = { path = "../../crates/classic-gfx" }
 classic-platform = { path = "../../crates/classic-platform", default-features = false }
 classic-engine = { path = "../../crates/classic-engine" }
 classic-demo = { path = "../../crates/classic-demo" }
+classic-rom = { path = "../../crates/classic-rom" }
 
 glam.workspace = true
 wasm-bindgen.workspace = true

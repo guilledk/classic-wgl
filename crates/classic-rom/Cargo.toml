@@ -1,0 +1,20 @@
+[package]
+name = "classic-rom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+classic-core = { path = "../classic-core" }
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+tar.workspace = true
+flate2.workspace = true
+ruzstd.workspace = true
+
+[dev-dependencies]
+base64.workspace = true

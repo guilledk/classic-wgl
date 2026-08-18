@@ -47,26 +47,13 @@ pub fn main() {
         if let Some(spec) = query_param("classic_log") {
             classic_core::instrument::init(&spec);
         }
-        let scene = classic_demo::Scene::parse(&query_param("scene").unwrap_or_default());
+        let scene = query_param("scene").unwrap_or_default();
 
-        const ASSETS: classic_demo::DemoAssets<'static> = classic_demo::DemoAssets {
-            manifest_json: include_str!("../../../public/manifest.json"),
-            state_json: include_str!("../../../public/state.json"),
-            state_lunar_json: include_str!("../../../public/state_lunar.json"),
-            tileset_png: include_bytes!("../../../public/res/road_tileset.png"),
-            map_data: include_str!("../../../public/map001.txt"),
-            nav_data: include_str!("../../../public/map001.nav.txt"),
-            sdf_atlas_png: include_bytes!("../../../public/res/dejavusans-sdf.png"),
-            sdf_metrics_json: include_str!("../../../public/res/dejavusans-sdf.json"),
-            semaphore01_png: include_bytes!("../../../public/res/semaphore01.png"),
-            semaphore02_png: include_bytes!("../../../public/res/semaphore02.png"),
-            house_png: include_bytes!("../../../public/res/house01.png"),
-            cursor_png: include_bytes!("../../../public/res/cursor.png"),
-            humanoid_png: include_bytes!("../../../public/res/humanoid.png"),
-            cool_snek_png: include_bytes!("../../../public/res/cool_snek.png"),
-            tree_png: include_bytes!("../../../public/res/tree.png"),
-            editor_icons_png: include_bytes!("../../../public/res/editor_icons.png"),
-            nav_tileset_png: include_bytes!("../../../public/res/nav_tileset.png"),
+        static DEMO_ROM: &[u8] = include_bytes!("../../../public/demo.rom");
+        static LUNAR_ROM: &[u8] = include_bytes!("../../../public/lunar.rom");
+        let rom_bytes: &'static [u8] = match scene.trim().to_ascii_lowercase().as_str() {
+            "lunar" | "moon" => LUNAR_ROM,
+            _ => DEMO_ROM,
         };
 
         use classic_platform::web::WebPlatform;
@@ -84,7 +71,10 @@ pub fn main() {
 
         platform.run_loop(move |gl, input, vw, vh, _delta, should_close| {
             if engine.is_none() {
-                engine = Some(classic_demo::init_engine(gl, &ASSETS, scene));
+                let archive =
+                    classic_rom::RomArchive::from_bytes(rom_bytes).expect("open ROM archive");
+                let rom = classic_rom::Rom::load(&archive).expect("load ROM");
+                engine = Some(classic_demo::init_engine(gl, &rom));
             }
             if let Some(e) = engine.as_mut() {
                 e.frame(input, vw, vh, _delta);

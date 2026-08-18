@@ -42,7 +42,6 @@ fn tilemap_dumper_round_trip_keys() {
         tile_set: "tileSet".into(),
         tile_pixel_size: [32, 32],
         max_tile: 32,
-        data_url: Some("map001.txt".into()),
         data: vec![1, 2, 3],
         height_data: vec![1.0; 9],
         height_scale: 32.0,
@@ -69,11 +68,11 @@ fn tilemap_dumper_round_trip_keys() {
     assert_eq!(val["tileSet"], "tileSet");
     assert_eq!(val["tilePixelSize"], serde_json::json!([32, 32]));
     assert_eq!(val["maxTile"], 32);
-    assert_eq!(val["data"], "map001.txt");
+    assert_eq!(val["data"], classic_core::serde_base64::encode_u32(&[1, 2, 3]));
     assert_eq!(val["heightScale"], 32.0);
 
-    // height_data should NOT be in the dump (it's a sidecar)
-    assert!(val.get("heightData").is_none());
+    // height_data is inlined (base64), no longer a sidecar.
+    assert_eq!(val["heightData"], classic_core::serde_base64::encode_f32(&[1.0; 9]));
 }
 
 #[test]
@@ -171,7 +170,6 @@ fn navmesh_dumper_uses_map_key() {
         map_entity: "tilemap".into(),
         tile_set: "".into(),
         data: vec![0, 1, 1, 0],
-        data_url: Some("map001.nav.txt".into()),
         size_x: 200,
         size_y: 200,
     };
@@ -185,8 +183,86 @@ fn navmesh_dumper_uses_map_key() {
 
     assert_eq!(val["type"], "IsometricNavMesh");
     assert_eq!(val["map"], "tilemap");
-    assert_eq!(val["data"], "map001.nav.txt");
-    // NavMesh dumper should NOT emit position/scale (matches TS)
-    assert!(val.get("position").is_none());
-    assert!(val.get("scale").is_none());
+    assert_eq!(val["data"], classic_core::serde_base64::encode_u32(&[0, 1, 1, 0]));
+    // derive-driven: position/scale now round-trip (previously omitted for TS parity)
+    assert_eq!(val["position"], serde_json::json!([0.0, 0.0, 0.0]));
+    assert_eq!(val["scale"], serde_json::json!([45.0, 45.0, 1.0]));
+}
+
+#[test]
+fn rect_and_transform_dumpers_round_trip() {
+    classic_core::registry::clear();
+    register_all_components();
+
+    let rect =
+        classic_core::components::RectRender { color: [1.0, 0.0, 0.0, 1.0], ignore_cam: true };
+    let mut world = hecs::World::new();
+    let e = world.spawn((Transform::new([10.0, 20.0, 0.0].into(), [2.0, 3.0, 1.0].into()), rect));
+
+    let regs = classic_core::registry::ordered_regs();
+    let rect_val =
+        regs.iter().find(|r| r.name == "Rect").unwrap().dump.unwrap()(&world, e).unwrap();
+    assert_eq!(rect_val["type"], "Rect");
+    assert_eq!(rect_val["color"], serde_json::json!([1.0, 0.0, 0.0, 1.0]));
+    assert_eq!(rect_val["ignore_cam"], true);
+
+    let tf_val =
+        regs.iter().find(|r| r.name == "Transform").unwrap().dump.unwrap()(&world, e).unwrap();
+    assert_eq!(tf_val["type"], "Transform");
+    assert_eq!(tf_val["position"], serde_json::json!([10.0, 20.0, 0.0]));
+}
+
+#[test]
+fn lightstate_and_camera_dumpers() {
+    classic_core::registry::clear();
+    register_all_components();
+
+    let light = classic_core::components::LightState::default();
+    let cam = classic_core::Camera::new([5.0, 6.0, 0.0].into(), [0.5, 0.5, 1.0].into());
+    let expected_ambient = serde_json::to_value(light.ambient).unwrap();
+
+    let mut world = hecs::World::new();
+    let le = world.spawn((light,));
+    let ce = world.spawn((cam,));
+
+    let regs = classic_core::registry::ordered_regs();
+
+    let light_val =
+        regs.iter().find(|r| r.name == "LightState").unwrap().dump.unwrap()(&world, le).unwrap();
+    assert_eq!(light_val["type"], "LightState");
+    assert_eq!(light_val["ambient"], expected_ambient);
+
+    let cam_val =
+        regs.iter().find(|r| r.name == "Camera").unwrap().dump.unwrap()(&world, ce).unwrap();
+    assert_eq!(cam_val["type"], "Camera");
+    assert_eq!(cam_val["position"], serde_json::json!([5.0, 6.0, 0.0]));
+    assert_eq!(cam_val["scale"], serde_json::json!([0.5, 0.5, 1.0]));
+    // `size` is runtime-derived and must not be serialized.
+    assert!(cam_val.get("size").is_none());
+}
+
+#[test]
+fn role_dumper_round_trips() {
+    classic_core::registry::clear();
+    register_all_components();
+
+    let role = classic_core::components::Role::new(classic_core::RoleKind::Tilemap);
+    let mut world = hecs::World::new();
+    let e = world.spawn((role,));
+
+    let regs = classic_core::registry::ordered_regs();
+    let role_reg = regs.iter().find(|r| r.name == "Role").unwrap();
+    let val = role_reg.dump.unwrap()(&world, e).unwrap();
+    assert_eq!(val["type"], "Role");
+    assert_eq!(val["value"], "Tilemap");
+
+    // Spawn it back from the dumped value.
+    let mut builder = hecs::EntityBuilder::new();
+    let fields = serde_json::json!({ "value": "Tilemap" });
+    (role_reg.spawn)(&mut builder, fields).unwrap();
+    let spawned = world.spawn(builder.build());
+    assert_eq!(
+        world.get::<&classic_core::components::Role>(spawned).unwrap().value,
+        classic_core::RoleKind::Tilemap
+    );
 }

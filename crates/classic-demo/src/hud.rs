@@ -397,13 +397,15 @@ pub fn init_iso_coord_overlay(engine: &mut Engine, state: &DemoStateRef) {
 pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
     // Footprints + agent ring, gated on the demo's footprint toggle.
     if state.borrow().editor.debug_footprints {
+        // Resolve roles before mutably borrowing gfx (entity_by_role borrows &Engine).
+        let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap);
+        let agent_entity = engine.entity_by_role(classic_core::RoleKind::Agent);
         let Some(gfx) = engine.gfx.as_mut() else { return };
         let cam = engine.camera.matrix();
         let x_cross: [f32; 12] = [-8.0, -8.0, 0.0, 8.0, 8.0, 0.0, -8.0, 8.0, 0.0, 8.0, -8.0, 0.0];
         let x_cross_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &x_cross, glow::STATIC_DRAW);
 
-        let tm_entity = engine.names.get("tilemap").copied();
         if let Some(tm_e) = tm_entity {
             let (iso_to_cart_world, tilemap_pos, size_x, size_y, hd, hs) = {
                 let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
@@ -457,7 +459,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
 
             // Selection ring around selected agent (yellow diamond).
             if engine.agent_selected {
-                if let Some(agent_e) = engine.names.get("navAgent").copied() {
+                if let Some(agent_e) = agent_entity {
                     if let Ok(agent_tf) = engine.world.get::<&Transform>(agent_e) {
                         let pos = agent_tf.position;
                         let ring_iso: [(f32, f32); 4] = [

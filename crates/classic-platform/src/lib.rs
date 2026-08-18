@@ -95,31 +95,13 @@ pub trait Platform {
 // Asset source (abstracts filesystem vs. fetch)
 // ---------------------------------------------------------------------------
 
-pub enum AssetBytes {
-    Owned(Vec<u8>),
-    Borrowed(&'static [u8]),
-}
-
-impl std::ops::Deref for AssetBytes {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        match self {
-            AssetBytes::Owned(v) => v,
-            AssetBytes::Borrowed(b) => b,
-        }
-    }
-}
-
-pub trait AssetLoader {
-    /// Load a raw byte blob from a path (e.g. "/res/sprite.png" or
-    /// "/manifest.json").  On native this is `std::fs::read`.
-    fn load_bytes(&self, path: &str) -> anyhow::Result<AssetBytes>;
-    /// Load a UTF-8 string from a path.
-    fn load_string(&self, path: &str) -> anyhow::Result<String> {
-        let b = self.load_bytes(path)?;
-        Ok(String::from_utf8(b.to_vec())?)
-    }
-}
+// The `AssetLoader` abstraction lives in `classic-rom` (the resource
+// foundation crate) so `ResourceSet` can build from either a `RomArchive` or
+// an `AssetLoader` without pulling in a platform/GL dependency.  Re-export
+// the surface here for the existing `classic_platform::AssetLoader` callers.
+#[cfg(not(target_arch = "wasm32"))]
+pub use classic_rom::FsAssetLoader;
+pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 
 // ---------------------------------------------------------------------------
 // Native backend  (not wasm32)

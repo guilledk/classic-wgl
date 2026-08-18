@@ -20,10 +20,10 @@ pub mod ui;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use base64::Engine as _;
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    AgentState, DebugName, IsoAgent, IsoSprite, NavMesh, RectRender, SdfTextRender, Tilemap, UiNode,
+    AgentState, DebugName, IsoAgent, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
+    UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -33,7 +33,7 @@ use classic_core::terrain::lunar::LunarTerrain;
 use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 use classic_core::types::AnimationData;
 use classic_core::types::SdfFontMetrics;
-use classic_core::{Camera, SpriteRender, Transform};
+use classic_core::{Camera, RoleKind, SpriteRender, Transform};
 use classic_gfx::{Gfx, GlBuffer};
 use classic_platform::InputState;
 use glam::{Mat3, Mat4, Vec3, Vec4};
@@ -77,6 +77,11 @@ pub struct Engine {
     pub light_color: [f32; 3],
     pub animations: HashMap<String, AnimationData>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
+    /// ROM manifest (raw + parsed) and resources, captured by `load_rom` so
+    /// `dump_rom` can reconstruct a [`classic_rom::Rom`] with the current state.
+    pub rom_manifest_json: Option<String>,
+    pub rom_manifest: Option<classic_rom::RomManifest>,
+    pub rom_resources: Option<classic_rom::ResourceSet>,
     pub ui: Option<ui::UIManager>,
     pub selection_mode: i32,
     pub selection_begin_screen: glam::Vec3,
@@ -167,6 +172,9 @@ impl Engine {
             light_color: [1.0, 0.95, 0.85],
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
+            rom_manifest_json: None,
+            rom_manifest: None,
+            rom_resources: None,
             ui: None,
             selection_mode: -1,
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
@@ -190,19 +198,74 @@ impl Engine {
         }
     }
 
-    pub fn init_gfx(&mut self, gl: Rc<glow::Context>, manifest_json: &str) {
-        let manifest: classic_core::types::Manifest =
-            serde_json::from_str(manifest_json).expect("parse manifest.json");
-        let mut gfx = Gfx::new(gl);
-        for info in &manifest.shaders {
-            let vs = Gfx::resolve_vertex_source(&info.vertex);
-            let fs = Gfx::resolve_fragment_source(&info.fragment);
-            gfx.add_shader(&info.name, vs, fs, &info.attr, &info.unif).expect("compile shader");
+    /// Initialise the GL layer from a ROM manifest + resource set: compile the
+    /// manifest's shaders (built-ins, overridable by a ROM via the named
+    /// shader registry), upload every declared texture, load the SDF fonts, and
+    /// register the animations.
+    pub fn init_gfx(
+        &mut self,
+        gl: Rc<glow::Context>,
+        manifest: &classic_rom::RomManifest,
+        resources: &classic_rom::ResourceSet,
+    ) {
+        self.gfx = Some(Gfx::new(gl));
+        let registry = classic_gfx::ShaderSourceRegistry::builtin();
+        for info in &manifest.manifest.shaders {
+            let vs = registry.resolve_vertex(&info.vertex);
+            let fs = registry.resolve_fragment(&info.fragment);
+            self.gfx
+                .as_mut()
+                .unwrap()
+                .add_shader(&info.name, &vs, &fs, &info.attr, &info.unif)
+                .expect("compile shader");
         }
-        for anim in &manifest.animations {
+
+        // Textures from the manifest (via the resource set), skipping the SDF
+        // atlas textures (those are uploaded by the SDF font path with LINEAR
+        // filtering).
+        let atlas_names: std::collections::HashSet<String> =
+            resources.fonts().keys().map(|f| format!("{f}-sdf")).collect();
+        for (name, bytes) in resources.textures() {
+            if atlas_names.contains(name) {
+                continue;
+            }
+            self.load_texture_png(name, bytes);
+        }
+
+        // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf").
+        for (font_name, metrics_bytes) in resources.fonts() {
+            let atlas_name = format!("{font_name}-sdf");
+            let metrics_str = std::str::from_utf8(metrics_bytes).expect("SDF metrics UTF-8");
+            if let Some(atlas_png) = resources.textures().get(&atlas_name) {
+                self.load_sdf_font(&atlas_name, metrics_str, atlas_png);
+            }
+        }
+
+        for anim in &manifest.manifest.animations {
             self.animations.insert(anim.name.clone(), anim.clone());
         }
-        self.gfx = Some(gfx);
+    }
+
+    /// Hydrate the engine from a ROM: compile shaders, upload resources, and
+    /// spawn the entity graph.  Records the ROM's manifest + resources so
+    /// [`Engine::dump_rom`] can reconstruct it.
+    pub fn load_rom(&mut self, gl: Rc<glow::Context>, rom: &classic_rom::Rom) {
+        self.init_gfx(gl, &rom.manifest, &rom.resources);
+        self.load_state(&rom.state).expect("load ROM state");
+        self.rom_manifest_json = Some(rom.manifest_json.clone());
+        self.rom_manifest = Some(rom.manifest.clone());
+        self.rom_resources = Some(rom.resources.clone());
+    }
+
+    /// Reconstruct a [`classic_rom::Rom`] from the loaded manifest + resources
+    /// and the current world state.  Returns `None` if no ROM was loaded.
+    pub fn dump_rom(&self) -> Option<classic_rom::Rom> {
+        Some(classic_rom::Rom {
+            manifest: self.rom_manifest.clone()?,
+            manifest_json: self.rom_manifest_json.clone()?,
+            resources: self.rom_resources.clone()?,
+            state: self.dump_state(),
+        })
     }
 
     /// Upload a PNG texture from raw bytes.
@@ -232,38 +295,26 @@ impl Engine {
     }
 
     /// Decode base64-encoded JSON array into tile data.
-    pub fn decode_map_data(base64_str: &str) -> Vec<u32> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(base64_str.trim().as_bytes())
-            .expect("base64 decode map data");
-        let json: Vec<u32> = serde_json::from_slice(&bytes).expect("parse map data JSON");
-        json
-    }
-
     /// Build and upload the tilemap mesh + tile data texture for a named entity.
-    /// Build and upload the tilemap mesh + tile data texture for a named
-    /// entity, from a PNG tileset and base64-encoded map data.
-    ///
-    /// Terrain is flat (height 1.0 everywhere), matching the TS
-    /// `heightData.fill(1)`.  For procedurally generated terrain see
+    /// The tile data comes from the entity's `Tilemap.data` (loaded inline from
+    /// `state.json`) and the tileset texture is loaded from the manifest by
+    /// [`Engine::init_gfx`].  Terrain is flat (height 1.0 everywhere), matching
+    /// the TS `heightData.fill(1)`.  For procedurally generated terrain see
     /// [`Engine::init_tilemap_generated`].
-    pub fn init_tilemap(&mut self, entity_name: &str, tileset_png: &[u8], map_data_b64: &str) {
-        let entity = *self.names.get(entity_name).expect("tilemap entity");
+    pub fn init_tilemap(&mut self) {
+        let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
 
-        let (tile_set_name, size_x, size_y) = {
+        let (size_x, size_y, tiles) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.tile_set.clone(), tm.size_x, tm.size_y)
+            (tm.size_x, tm.size_y, tm.data.clone())
         };
 
-        self.load_texture_png(&tile_set_name, tileset_png);
-
-        let tiles = Self::decode_map_data(map_data_b64);
         // height_data stride is (size_x + 1) — vertex grid, not tile grid.
         // The TS used sizeX * sizeY (tile-based). Rust uses (sizeX+1)*(sizeY+1)
         // to avoid off-by-one edge cases. See docs/TS-PARITY.md.
         let heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
 
-        self.finish_tilemap_init(entity_name, entity, tiles, heights, None);
+        self.finish_tilemap_init(entity, tiles, heights, None);
     }
 
     /// Build and upload a tilemap from procedurally generated terrain, with
@@ -275,14 +326,13 @@ impl Engine {
     /// parallax solve.
     pub fn init_tilemap_generated(
         &mut self,
-        entity_name: &str,
         terrain: &LunarTerrain,
         tileset_rgba: &[u8],
         tileset_w: u32,
         tileset_h: u32,
         height_scale: Option<f32>,
     ) {
-        let entity = *self.names.get(entity_name).expect("tilemap entity");
+        let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
 
         let (tile_set_name, size_x, size_y) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
@@ -291,7 +341,7 @@ impl Engine {
         assert_eq!(
             (terrain.size_x, terrain.size_y),
             (size_x, size_y),
-            "generated terrain size does not match the '{entity_name}' Tilemap component"
+            "generated terrain size does not match the Tilemap component"
         );
 
         if let Some(gfx) = self.gfx.as_mut() {
@@ -299,7 +349,6 @@ impl Engine {
         }
 
         self.finish_tilemap_init(
-            entity_name,
             entity,
             terrain.tiles.clone(),
             terrain.heights.clone(),
@@ -315,7 +364,6 @@ impl Engine {
     /// is the main reason this is factored out rather than duplicated.
     fn finish_tilemap_init(
         &mut self,
-        entity_name: &str,
         entity: hecs::Entity,
         tiles: Vec<u32>,
         heights: Vec<f32>,
@@ -355,10 +403,8 @@ impl Engine {
             }
         }
 
-        self.tilemap_gpu.insert(
-            entity_name.to_string(),
-            TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex },
-        );
+        let name = self.debug_name(entity);
+        self.tilemap_gpu.insert(name, TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
 
         // Register updateMousePos: convert screen coords → iso tile coords
         // with 3-iteration height parallax solve.
@@ -478,6 +524,20 @@ impl Engine {
             .unwrap_or_else(|_| format!("e#{:?}", entity.id()))
     }
 
+    /// Find the entity tagged with the given [`RoleKind`].
+    pub fn entity_by_role(&self, kind: RoleKind) -> Option<hecs::Entity> {
+        self.world
+            .query::<&Role>()
+            .iter()
+            .find(|(_, role)| role.value == kind)
+            .map(|(entity, _)| entity)
+    }
+
+    /// Find the name of the entity tagged with the given [`RoleKind`].
+    pub fn name_by_role(&self, kind: RoleKind) -> Option<String> {
+        self.entity_by_role(kind).map(|e| self.debug_name(e))
+    }
+
     // "type" must be the first key in each dumped component object.
     // The TS positional loader relies on this: it splices out "type"
     // and passes remaining values as positional constructor args.
@@ -491,43 +551,10 @@ impl Engine {
 
     fn dump_state_value(&self) -> serde_json::Value {
         let mut entities = serde_json::Map::new();
-        let regs = classic_core::registry::ordered_regs();
 
         for name in &self.name_order {
             let Some(&entity) = self.names.get(name) else { continue };
-            let mut components: Vec<serde_json::Value> = Vec::new();
-            let mut dumped = std::collections::HashSet::new();
-
-            for reg in &regs {
-                if dumped.contains(reg.name) {
-                    continue;
-                }
-                if let Some(dump) = reg.dump {
-                    if let Some(val) = dump(&self.world, entity) {
-                        components.push(val);
-                        dumped.insert(reg.name);
-                        for sub in reg.subsumes {
-                            dumped.insert(sub);
-                        }
-                    }
-                }
-                // Try subsumed components first (they may match)
-                for sub in reg.subsumes {
-                    if dumped.contains(sub) {
-                        continue;
-                    }
-                    // Check if there's a subsumed reg with a dumper
-                    if let Some(sub_dump) =
-                        regs.iter().find(|r| r.name == *sub).and_then(|r| r.dump)
-                    {
-                        if let Some(val) = sub_dump(&self.world, entity) {
-                            components.push(val);
-                            dumped.insert(sub);
-                        }
-                    }
-                }
-            }
-
+            let components = self.dump_entity_components(entity);
             if !components.is_empty() {
                 entities.insert(name.clone(), serde_json::json!({ "components": components }));
             }
@@ -536,34 +563,129 @@ impl Engine {
         serde_json::Value::Object(entities)
     }
 
-    /// Dump tile data as base64-encoded JSON array (for `map001.txt`-style sidecar).
-    pub fn dump_map_data(&self) -> Option<String> {
-        let &e = self.names.get("tilemap")?;
-        let Ok(tm) = self.world.get::<&Tilemap>(e) else { return None };
-        let json = serde_json::to_string(&tm.data).ok()?;
-        let b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json.as_bytes());
-        Some(b64)
+    /// Serialize a single named entity's component list (the `components`
+    /// array of a `state.json` entry), using the registry dumpers.
+    pub fn dump_entity_components(&self, entity: hecs::Entity) -> Vec<serde_json::Value> {
+        let regs = classic_core::registry::ordered_regs();
+        let mut components: Vec<serde_json::Value> = Vec::new();
+        let mut dumped = std::collections::HashSet::new();
+
+        for reg in &regs {
+            if dumped.contains(reg.name) {
+                continue;
+            }
+            if let Some(dump) = reg.dump {
+                if let Some(val) = dump(&self.world, entity) {
+                    components.push(val);
+                    dumped.insert(reg.name);
+                    for sub in reg.subsumes {
+                        dumped.insert(sub);
+                    }
+                }
+            }
+            // Try subsumed components first (they may match)
+            for sub in reg.subsumes {
+                if dumped.contains(sub) {
+                    continue;
+                }
+                // Check if there's a subsumed reg with a dumper
+                if let Some(sub_dump) = regs.iter().find(|r| r.name == *sub).and_then(|r| r.dump) {
+                    if let Some(val) = sub_dump(&self.world, entity) {
+                        components.push(val);
+                        dumped.insert(sub);
+                    }
+                }
+            }
+        }
+
+        components
     }
 
-    /// Dump nav mesh data as base64-encoded JSON array (for `map001.nav.txt`-style sidecar).
-    pub fn dump_nav_data(&self) -> Option<String> {
-        let &e = self.names.get("tilemapNavigation")?;
-        let Ok(nm) = self.world.get::<&NavMesh>(e) else { return None };
-        let json = serde_json::to_string(&nm.data).ok()?;
-        let b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json.as_bytes());
-        Some(b64)
+    /// Named-entity query/access helpers for the guest-code layer.  They mirror
+    /// the `load_state`/`dump_state` bookkeeping (names + name_order) so guest
+    /// code can spawn/despawn/lookup entities and round-trip components through
+    /// the registry without per-field glue.
+    pub fn has_name(&self, name: &str) -> bool {
+        self.names.contains_key(name)
     }
 
-    /// Dump height data as base64-encoded JSON array.
-    pub fn dump_height_data(&self) -> Option<String> {
-        let &e = self.names.get("tilemap")?;
-        let Ok(tm) = self.world.get::<&Tilemap>(e) else { return None };
-        let json = serde_json::to_string(&tm.height_data).ok()?;
-        let b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, json.as_bytes());
-        Some(b64)
+    pub fn entity_names(&self) -> Vec<String> {
+        self.name_order.clone()
+    }
+
+    /// Spawn an empty named entity (registers it in `names`/`name_order`).
+    /// Returns false if the name is already taken.
+    pub fn spawn_named(&mut self, name: &str) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = self.world.spawn(());
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+        true
+    }
+
+    /// Despawn a named entity and drop its name registration.
+    pub fn despawn_named(&mut self, name: &str) -> bool {
+        let Some(entity) = self.names.remove(name) else { return false };
+        self.name_order.retain(|n| n != name);
+        let _ = self.world.despawn(entity);
+        true
+    }
+
+    /// Dump a named entity's components to a JSON string (`{"components": [...]}`).
+    pub fn dump_entity_json(&self, name: &str) -> Option<String> {
+        let entity = *self.names.get(name)?;
+        let components = self.dump_entity_components(entity);
+        serde_json::to_string_pretty(&serde_json::json!({ "components": components })).ok()
+    }
+
+    /// Dump a single component of a named entity via the registry dumper.
+    pub fn dump_component_json(&self, name: &str, comp_type: &str) -> Option<String> {
+        let entity = *self.names.get(name)?;
+        let dumper = classic_core::registry::ordered_regs()
+            .into_iter()
+            .find(|r| r.name == comp_type)
+            .and_then(|r| r.dump)?;
+        let val = dumper(&self.world, entity)?;
+        serde_json::to_string_pretty(&val).ok()
+    }
+
+    /// Set a single component of a named entity from its serialized JSON,
+    /// reusing the registry spawner (deserialize → merge onto the entity).
+    pub fn set_component_json(
+        &mut self,
+        name: &str,
+        comp_type: &str,
+        json: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let spawner = classic_core::registry::lookup(comp_type)
+            .ok_or_else(|| anyhow::anyhow!("unknown component type: {comp_type}"))?;
+        let entity =
+            *self.names.get(name).ok_or_else(|| anyhow::anyhow!("no entity named {name}"))?;
+        let mut builder = hecs::EntityBuilder::new();
+        spawner(&mut builder, json)?;
+        self.world.insert(entity, builder.build())?;
+        Ok(())
+    }
+
+    /// Read a named entity's 2D position (from its `Transform`).
+    pub fn get_pos(&self, name: &str) -> Option<(f32, f32)> {
+        let entity = *self.names.get(name)?;
+        self.world.get::<&Transform>(entity).ok().map(|tf| (tf.position.x, tf.position.y))
+    }
+
+    /// Write a named entity's 2D position (into its `Transform`).
+    pub fn set_pos(&mut self, name: &str, x: f32, y: f32) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        if let Ok(mut tf) = self.world.get::<&mut Transform>(entity) {
+            tf.position.x = x;
+            tf.position.y = y;
+            true
+        } else {
+            false
+        }
     }
 
     /// Save a file, handling both native (filesystem) and web (Blob download).
@@ -689,7 +811,7 @@ impl Engine {
         if self.input.was_mouse_pressed(0) && !self.ui_consumed_click {
             self.selection_mode = 1;
             self.selection_begin_screen = Vec3::new(mp.x, mp.y, 0.0);
-            if let Some(&e) = self.names.get("tilemap") {
+            if let Some(e) = self.entity_by_role(RoleKind::Tilemap) {
                 if let Ok(mut tm) = self.world.get::<&mut Tilemap>(e) {
                     tm.selection_iso_begin = tm.mouse_iso_pos;
                 }
@@ -785,7 +907,7 @@ impl Engine {
             let just_finished_selection = self.selection_mode == 1;
             if self.selection_mode == 1 {
                 self.selection_mode = -1;
-                if let Some(&e) = self.names.get("tilemap") {
+                if let Some(e) = self.entity_by_role(RoleKind::Tilemap) {
                     if let Ok(mut tm) = self.world.get::<&mut Tilemap>(e) {
                         tm.selection_iso_end = tm.mouse_iso_pos;
                     }
@@ -831,7 +953,9 @@ impl Engine {
             if self.is_disabled(e) {
                 continue;
             }
-            if self.debug_name(e) == "tilemapNavigation" && self.nav_gpu.is_some() {
+            if self.world.get::<&Role>(e).is_ok_and(|r| r.value == RoleKind::NavMesh)
+                && self.nav_gpu.is_some()
+            {
                 items.push((19999.0, e, DrawKind::Tilemap));
             }
         }
@@ -943,8 +1067,10 @@ impl Engine {
                     );
                 }
                 DrawKind::Tilemap => {
-                    let entity_name = name_by_entity.get(entity).copied().unwrap_or("");
-                    let is_nav = entity_name == "tilemapNavigation";
+                    let is_nav = self
+                        .world
+                        .get::<&Role>(*entity)
+                        .is_ok_and(|r| r.value == RoleKind::NavMesh);
 
                     if is_nav {
                         let Some(ref gpu) = self.nav_gpu else { continue };
@@ -1553,7 +1679,7 @@ impl Engine {
 
     /// Build and upload GPU resources for the nav mesh overlay.
     pub fn init_nav_mesh_render(&mut self) {
-        let Some(&nav_entity) = self.names.get("tilemapNavigation") else {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
             return;
         };
         let (size_x, size_y, nav_data, heights, height_scale) = {
@@ -1563,9 +1689,8 @@ impl Engine {
             };
             // Use parent tilemap's actual height data so nav tiles sit on terrain surface
             let (hd, hs) = self
-                .names
-                .get("tilemap")
-                .and_then(|&e| self.world.get::<&Tilemap>(e).ok())
+                .entity_by_role(RoleKind::Tilemap)
+                .and_then(|e| self.world.get::<&Tilemap>(e).ok())
                 .map(|tm| (tm.height_data.clone(), tm.height_scale))
                 .unwrap_or_else(|| {
                     let h = vec![1.0f32; (nav.size_x as usize + 1) * (nav.size_y as usize + 1)];
@@ -1589,9 +1714,8 @@ impl Engine {
         // Borrow position + scale from parent tilemap (matches TS IsometricNavMesh constructor).
         {
             let (pos, scl) = self
-                .names
-                .get("tilemap")
-                .and_then(|&e| self.world.get::<&Transform>(e).ok())
+                .entity_by_role(RoleKind::Tilemap)
+                .and_then(|e| self.world.get::<&Transform>(e).ok())
                 .map(|tf| (tf.position, tf.scale))
                 .unwrap_or((glam::Vec3::ZERO, glam::Vec3::ONE));
             let _ = self.world.insert_one(nav_entity, Transform::new(pos, scl));
@@ -1600,10 +1724,10 @@ impl Engine {
 
     /// After height edits, recalculate nav mesh walkability and rebuild GPU resources.
     pub fn sync_nav_heights(&mut self) {
-        let Some(nav_entity) = self.names.get("tilemapNavigation").copied() else {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
             return;
         };
-        let Some(tm_entity) = self.names.get("tilemap").copied() else {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else {
             return;
         };
         let (sx, sy) = {
@@ -1701,7 +1825,7 @@ impl Engine {
 
     /// Rebuild nav mesh GPU buffers from current NavMesh component data.
     pub fn rebuild_nav_gpu(&mut self) {
-        let Some(nav_entity) = self.names.get("tilemapNavigation").copied() else {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
             return;
         };
         let (sx, sy, data) = {
@@ -1716,9 +1840,8 @@ impl Engine {
         // detached from the surface after any nav edit — unnoticeable on the
         // flat demo map, glaring over a crater field.
         let (hs, heights) = self
-            .names
-            .get("tilemap")
-            .and_then(|&e| self.world.get::<&Tilemap>(e).ok())
+            .entity_by_role(RoleKind::Tilemap)
+            .and_then(|e| self.world.get::<&Tilemap>(e).ok())
             .map(|tm| (tm.height_scale, tm.height_data.clone()))
             .filter(|(_, h)| h.len() == (sx as usize + 1) * (sy as usize + 1))
             .unwrap_or_else(|| (64.0, vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)]));
@@ -1733,15 +1856,11 @@ impl Engine {
     }
 
     /// Rebuild the tilemap mesh from current data + heights and re-upload to GPU.
-    pub fn rebuild_tilemap_mesh(&mut self, entity_name: &str) {
-        classic_core::cl_info!(
-            classic_core::instrument::Chan::Editor,
-            "rebuild_tilemap_mesh: entering for '{entity_name}'"
-        );
-        let Some(&tm_entity) = self.names.get(entity_name) else {
+    pub fn rebuild_tilemap_mesh(&mut self) {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else {
             classic_core::cl_warn!(
                 classic_core::instrument::Chan::Editor,
-                "rebuild_tilemap_mesh: entity '{entity_name}' not found"
+                "rebuild_tilemap_mesh: no Tilemap-role entity"
             );
             return;
         };
@@ -1751,7 +1870,7 @@ impl Engine {
                 Err(_) => {
                     classic_core::cl_warn!(
                         classic_core::instrument::Chan::Editor,
-                        "rebuild_tilemap_mesh: no Tilemap on '{entity_name}'"
+                        "rebuild_tilemap_mesh: no Tilemap on the Tilemap-role entity"
                     );
                     return;
                 }
@@ -1777,7 +1896,8 @@ impl Engine {
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &tiles);
         let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
 
-        if let Some(gpu) = self.tilemap_gpu.get_mut(entity_name) {
+        let entity_name = self.debug_name(tm_entity);
+        if let Some(gpu) = self.tilemap_gpu.get_mut(&entity_name) {
             gpu.mesh_buf = mesh_buf;
             gpu.vertex_count = vcount;
             gpu.tile_tex = tile_tex;
@@ -1836,13 +1956,15 @@ impl Engine {
         false
     }
 
-    /// Initialize navigation: load nav mesh data from `map001.nav.txt`,
-    /// sync walkable flags from the parent tilemap heights, and wire the
-    /// click-to-move handler that computes A* paths for the nav agent.
-    /// Load navigation data from a base64-encoded map file and wire
-    /// click-to-move.
-    pub fn init_navigation(&mut self, nav_data_b64: &str) {
-        self.init_navigation_data(Engine::decode_map_data(nav_data_b64));
+    /// Initialize navigation from the nav mesh entity's inline `NavMesh.data`
+    /// (loaded from `state.json`) and wire click-to-move.
+    pub fn init_navigation(&mut self) {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
+        let nav_data = {
+            let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) else { return };
+            nav.data.clone()
+        };
+        self.init_navigation_data(nav_data);
     }
 
     /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked) and
@@ -1851,12 +1973,9 @@ impl Engine {
     /// Used by generated scenes, which derive walkability from real terrain
     /// slope during generation and so must not have it recomputed here.
     pub fn init_navigation_data(&mut self, nav_tiles: Vec<u32>) {
-        let nav_entity = self.names.get("tilemapNavigation").copied();
-        let agent_entity = self.names.get("navAgent").copied();
-
-        let Some(nav_entity) = nav_entity else { return };
-        let Some(agent_entity) = agent_entity else { return };
-        let Some(tilemap_entity) = self.names.get("tilemap").copied() else { return };
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
+        let Some(agent_entity) = self.entity_by_role(RoleKind::Agent) else { return };
+        let Some(tilemap_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
 
         // The supplied grid is authoritative for passability.  A block here
         // used to re-derive walkability from tilemap heights and then discard

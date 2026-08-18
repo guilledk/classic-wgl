@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use classic_core::collision::polygon_from_verts;
 use classic_core::components::{
-    AgentState, Animator, Collider, IsoAgent, IsoSprite, Tilemap, Transform,
+    AgentState, Animator, ColliderData, IsoAgent, IsoSprite, Tilemap, Transform,
 };
 use classic_core::math::iso_to_cartesian_4;
 use classic_core::tilemap::bilinear_height;
@@ -43,7 +43,7 @@ pub fn init_camera_wasd(engine: &mut Engine) {
 
 /// Move the mouse cursor sprite to follow the pointer.
 pub fn init_cursor(engine: &mut Engine) {
-    let cursor_entity = engine.names.get("cursor").copied();
+    let cursor_entity = engine.entity_by_role(classic_core::RoleKind::Cursor);
     engine.on_update(move |engine| {
         let Some(cursor_e) = cursor_entity else { return };
         let mp = engine.input.mouse_pos;
@@ -270,7 +270,8 @@ pub fn init_animator_system(engine: &mut Engine) {
 /// entities.  Port of `initFootprintColliders` from `prefabs.ts`.
 pub fn init_footprint_colliders(engine: &mut Engine) {
     // Look up the tilemap entity once.
-    let tm_entity = engine.names.get("tilemap").copied().expect("tilemap entity");
+    let tm_entity =
+        engine.entity_by_role(classic_core::RoleKind::Tilemap).expect("Tilemap-role entity");
 
     let (isosprite_entities, _tilemap_name, iso_to_cart_world, tilemap_pos) = {
         let tilemap = engine.world.get::<&Tilemap>(tm_entity).unwrap();
@@ -320,7 +321,7 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
         }
 
         let shape = polygon_from_verts(world_verts);
-        let pid = engine.physics.register_collider(Collider::new(shape));
+        let pid = engine.physics.register_collider(ColliderData::new(shape));
         log::debug!("registered footprint collider pid={pid} for sprite");
 
         // Set sprite z-offset from terrain height (matches TS prefabs.ts:367).
@@ -345,23 +346,10 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
                 engine.show_grid = s.editor.debug_footprints;
             }
         }
-        // F9: dump state.json
+        // F9: dump state.json (tile/nav/height data is inlined).
         if engine.input.was_key_pressed("F9") {
             let state_json = engine.dump_state();
             engine.save_file("state.json", &state_json);
-            let shift =
-                engine.input.is_key_down("ShiftLeft") || engine.input.is_key_down("ShiftRight");
-            if shift {
-                if let Some(map_data) = engine.dump_map_data() {
-                    engine.save_file("map001.txt", &map_data);
-                }
-                if let Some(nav_data) = engine.dump_nav_data() {
-                    engine.save_file("map001.nav.txt", &nav_data);
-                }
-                if let Some(h_data) = engine.dump_height_data() {
-                    engine.save_file("map001.height.txt", &h_data);
-                }
-            }
         }
     });
 }

@@ -386,7 +386,7 @@ impl UIManager {
             glam::Vec3::new(0.0, size.y, 0.0),
         ];
         let shape = classic_core::collision::polygon_from_verts(verts);
-        let mut collider = classic_core::components::Collider::new(shape);
+        let mut collider = classic_core::components::ColliderData::new(shape);
         collider.position = glam::Vec3::new(pos.0, pos.1, 0.0);
         collider.scale = glam::Vec3::ONE;
 

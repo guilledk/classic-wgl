@@ -5,6 +5,7 @@ members = [
     "crates/classic-gfx",
     "crates/classic-platform",
     "crates/classic-engine",
+    "crates/classic-rom",
     "crates/classic-demo",
     "apps/desktop",
     "apps/web",
@@ -45,6 +46,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 anyhow = "1"
 thiserror = "2"
 base64 = "0.22"
+
+# Archive reading (ROM packaging)
+zip = { version = "4", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+ruzstd = "0.9"
 
 # Component registry (distributed slice)
 linkme = "0.3"

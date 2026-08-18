@@ -90,7 +90,7 @@ pub fn init_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, params: Lun
     let (tileset, tw, th) =
         build_lunar_tileset(&format!("{}:tileset", params.seed), 32, DEFAULT_COLS, DEFAULT_ROWS);
 
-    engine.init_tilemap_generated("tilemap", &terrain, &tileset, tw, th, Some(LUNAR_HEIGHT_SCALE));
+    engine.init_tilemap_generated(&terrain, &tileset, tw, th, Some(LUNAR_HEIGHT_SCALE));
 
     // Match the editor's walkability rule to the one the generator used,
     // so a height edit does not reclassify the whole map on the next
@@ -110,8 +110,8 @@ pub fn regenerate_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, param
     let t0 = now_ms();
     let terrain = generate_lunar(&params);
 
-    let Some(&tm_entity) = engine.names.get("tilemap") else {
-        cl_warn!(Chan::Terrain, "regenerate: no 'tilemap' entity");
+    let Some(tm_entity) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else {
+        cl_warn!(Chan::Terrain, "regenerate: no Tilemap-role entity");
         return;
     };
 
@@ -120,9 +120,9 @@ pub fn regenerate_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, param
         tm.height_data = terrain.heights.clone();
         tm.height_scale = LUNAR_HEIGHT_SCALE;
     }
-    engine.rebuild_tilemap_mesh("tilemap");
+    engine.rebuild_tilemap_mesh();
 
-    if let Some(&nav_entity) = engine.names.get("tilemapNavigation") {
+    if let Some(nav_entity) = engine.entity_by_role(classic_core::RoleKind::NavMesh) {
         if let Ok(mut nav) = engine.world.get::<&mut NavMesh>(nav_entity) {
             nav.data = terrain.nav.clone();
         }
@@ -148,7 +148,7 @@ pub fn regenerate_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, param
 /// Drop the nav agent onto the first spawn point and clear any path it was
 /// following (which would refer to terrain that no longer exists).
 fn place_agent_at_spawn(engine: &mut Engine, terrain: &LunarTerrain) {
-    let Some(&agent) = engine.names.get("navAgent") else { return };
+    let Some(agent) = engine.entity_by_role(classic_core::RoleKind::Agent) else { return };
     let Some(&(sx, sy)) = terrain.spawn_points.first() else { return };
 
     let h = terrain.height_at(sx, sy) * LUNAR_HEIGHT_SCALE;
@@ -399,7 +399,7 @@ pub fn init_lunar_widget(engine: &mut Engine, state: &DemoStateRef) {
 pub fn focus_camera_on_spawn(engine: &mut Engine, state: &DemoStateRef) {
     let Some(scene) = state.borrow().lunar.clone() else { return };
     let Some(&(sx, sy)) = scene.terrain.spawn_points.first() else { return };
-    let Some(&tm_entity) = engine.names.get("tilemap") else { return };
+    let Some(tm_entity) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else { return };
     let scale = engine
         .world
         .get::<&Tilemap>(tm_entity)
@@ -410,4 +410,28 @@ pub fn focus_camera_on_spawn(engine: &mut Engine, state: &DemoStateRef) {
     let origin = iso.transform_point3(glam::Vec3::new(sx as f32, sy as f32, 0.0));
     engine.camera.position.x = origin.x;
     engine.camera.position.y = origin.y;
+}
+
+/// Install the generated navigation grid and wire click-to-move.
+///
+/// The generator already derived walkability from real terrain slope and
+/// guaranteed every spawn is mutually reachable; re-deriving it from the
+/// coarse height rule here would undo that.
+pub fn hydrate_nav(engine: &mut Engine, state: &DemoStateRef) {
+    let nav = state.borrow().lunar.as_ref().map(|s| s.terrain.nav.clone()).unwrap_or_default();
+    engine.init_navigation_data(nav);
+}
+
+/// Zoom out for the generated terrain, centre on the first spawn, and apply
+/// the airless lunar light preset.
+pub fn setup_view(engine: &mut Engine, state: &DemoStateRef) {
+    // Zoom out: at scale 1.0 a 45px tile fills the view with ~28 tiles, which
+    // shows none of the terrain the generator produces.
+    engine.camera.scale = glam::Vec3::new(0.32, 0.32, 1.0);
+    focus_camera_on_spawn(engine, state);
+    // Airless lighting: near-zero ambient and a hard low sun, which is what
+    // makes the crater relief legible.
+    crate::lighting::apply_light_preset(engine, state, "lunar");
+    // The editor grid overlay fights the natural surface.
+    engine.show_grid = false;
 }

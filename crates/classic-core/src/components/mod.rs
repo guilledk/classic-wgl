@@ -40,6 +40,29 @@ impl std::fmt::Display for DebugName {
     }
 }
 
+/// The role an entity plays in a scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RoleKind {
+    Tilemap,
+    NavMesh,
+    Agent,
+    Cursor,
+}
+
+/// Tag component marking an entity's role, so host features (editor, nav,
+/// agent, cursor) find entities without hardcoded names.  ROMs tag their own
+/// entities in `state.json`; the engine queries by [`RoleKind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Role {
+    pub value: RoleKind,
+}
+
+impl Role {
+    pub fn new(value: RoleKind) -> Self {
+        Self { value }
+    }
+}
+
 /// Render a solid-colour rectangle.
 /// Port of `Rectangle` from `transforms.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,14 +128,12 @@ pub struct Tilemap {
     pub tile_pixel_size: [u32; 2],
     /// Max tile index.
     pub max_tile: u32,
-    /// URL for the tile data (null = auto-generate noise).
-    #[serde(rename = "data")]
-    pub data_url: Option<String>,
-    /// Tile data (row-major, `size_x * size_y` elements).
-    #[serde(skip)]
+    /// Tile data (row-major, `size_x * size_y` elements), inlined as base64.
+    #[serde(default, with = "crate::serde_base64::vec_u32")]
     pub data: Vec<u32>,
-    /// Per-tile height data (row-major).
-    #[serde(default)]
+    /// Per-tile height data (vertex grid, `(size_x+1) * (size_y+1)` elements),
+    /// inlined as base64.
+    #[serde(default, with = "crate::serde_base64::vec_f32")]
     pub height_data: Vec<f32>,
     #[serde(default)]
     pub height_scale: f32,
@@ -156,10 +177,9 @@ pub struct NavMesh {
     /// Texture name for the nav tileset (hardcoded `navTileset` in TS).
     #[serde(default)]
     pub tile_set: String,
-    #[serde(skip)]
+    /// Walkability grid (row-major, `1` = walkable), inlined as base64.
+    #[serde(default, with = "crate::serde_base64::vec_u32")]
     pub data: Vec<u32>,
-    #[serde(rename = "data")]
-    pub data_url: Option<String>,
     pub size_x: i32,
     pub size_y: i32,
 }
@@ -274,15 +294,20 @@ pub struct Animator {
 }
 
 /// Collision shape.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Shape {
     Circle { diameter: f32 },
     Polygon { verts: Vec<Vec3>, center: Vec3, min: Vec3, max: Vec3 },
 }
 
-/// Collider component — enables physics intersection.
-/// Port of `Collider` from `collision.ts`.
-pub struct Collider {
+/// Collider component — serializable physics data (no runtime handlers).
+///
+/// Port of `Collider` from `collision.ts`.  Interaction handlers
+/// (`Box<dyn FnMut>`) are *not* part of this component; they are stored on the
+/// [`PhysicsProvider`](crate::collision::PhysicsProvider) keyed by PID, so the
+/// component round-trips through `state.json` without baked closures.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ColliderData {
     pub shape: Shape,
     pub position: Vec3,
     pub scale: Vec3,
@@ -291,11 +316,9 @@ pub struct Collider {
     pub pid: u32,
     pub consumes_click: bool,
     pub click_priority: i32,
-    pub handlers:
-        std::collections::HashMap<crate::collision::HandlerKind, Vec<Box<dyn FnMut() -> bool>>>,
 }
 
-impl Collider {
+impl ColliderData {
     pub fn new(shape: Shape) -> Self {
         Self {
             shape,
@@ -305,16 +328,26 @@ impl Collider {
             pid: 0,
             consumes_click: false,
             click_priority: 0,
-            handlers: Default::default(),
         }
     }
+}
 
-    pub fn add_handler(
-        &mut self,
-        kind: crate::collision::HandlerKind,
-        f: impl FnMut() -> bool + 'static,
-    ) {
-        self.handlers.entry(kind).or_default().push(Box::new(f));
+/// Scene lighting state (ambient / direction / colour).  Held on a dedicated
+/// `lighting` entity so it round-trips through `state.json`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LightState {
+    pub ambient: [f32; 3],
+    pub direction: [f32; 3],
+    pub color: [f32; 3],
+}
+
+impl Default for LightState {
+    fn default() -> Self {
+        Self {
+            ambient: [0.15, 0.15, 0.2],
+            direction: [0.45, -0.35, 0.82],
+            color: [1.0, 0.95, 0.85],
+        }
     }
 }
 

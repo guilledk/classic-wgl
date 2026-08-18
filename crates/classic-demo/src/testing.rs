@@ -369,7 +369,7 @@ fn run_frame(
         let rel = (frame - start) as i64;
         if rel == 0 {
             // press
-            if let Some(&e) = engine.names.get("tilemap") {
+            if let Some(e) = engine.entity_by_role(classic_core::RoleKind::Tilemap) {
                 if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(e) {
                     tm.selection_iso_begin = from.extend(0.0);
                     tm.mouse_iso_pos = from.extend(0.0);
@@ -378,7 +378,7 @@ fn run_frame(
             }
         } else if rel > 0 && (rel as u64) < hold {
             // drag
-            if let Some(&e) = engine.names.get("tilemap") {
+            if let Some(e) = engine.entity_by_role(classic_core::RoleKind::Tilemap) {
                 if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(e) {
                     let t = rel as f32 / hold as f32;
                     let cur = from.lerp(to, t);
@@ -387,7 +387,7 @@ fn run_frame(
             }
         } else if (rel as u64) == hold {
             // release
-            if let Some(&e) = engine.names.get("tilemap") {
+            if let Some(e) = engine.entity_by_role(classic_core::RoleKind::Tilemap) {
                 if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(e) {
                     tm.selection_iso_end = to.extend(0.0);
                     tm.mouse_iso_pos = to.extend(0.0);
@@ -417,9 +417,6 @@ fn run_frame(
 
             if EnvConfig::get().dump_on_exit {
                 let _ = engine.dump_state();
-                let _ = engine.dump_map_data();
-                let _ = engine.dump_nav_data();
-                let _ = engine.dump_height_data();
             }
         }
         engine.test_should_close = true;
@@ -427,7 +424,7 @@ fn run_frame(
 }
 
 fn assert_tiles(engine: &Engine, region: (i32, i32, i32, i32), expected: u32) -> bool {
-    let Some(&e) = engine.names.get("tilemap") else { return false };
+    let Some(e) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else { return false };
     let Ok(tm) = engine.world.get::<&Tilemap>(e) else {
         return false;
     };
@@ -448,7 +445,7 @@ fn assert_tiles(engine: &Engine, region: (i32, i32, i32, i32), expected: u32) ->
 }
 
 fn assert_heights(engine: &Engine, region: (i32, i32, i32, i32), expected: f32) -> bool {
-    let Some(&e) = engine.names.get("tilemap") else { return false };
+    let Some(e) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else { return false };
     let Ok(tm) = engine.world.get::<&Tilemap>(e) else {
         return false;
     };
