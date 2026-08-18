@@ -152,7 +152,7 @@ shipping 400x400 (160K tiles) map:
 |---|---|---|---|
 | Tile data texture is 1 px per tile | `tilemap::build_tile_texture` | 640 KB, 400x400 px | GPU `MAX_TEXTURE_SIZE` — **never queried anywhere in the engine**; oversize silently corrupts tile lookup, no GL error |
 | Mesh vertex buffer | `tilemap::build_mesh` | ~970K verts, ~35 MB | Memory; the capacity bound is exact |
-| A* allocates 4 arrays of `sx*sy` per query, runs **synchronously on the render thread** | `pathfinder::find_path` | ~0.9 ms typical | An exhaustive search is 21 ms at 400x400 and grows with area |
+| A* allocates 4 arrays of `sx*sy` per query, runs on the host `PathfinderWorker` (off the render thread) | `pathfinder::find_path` | ~0.9 ms typical | An exhaustive search is 21 ms at 400x400 and grows with area |
 | Generation is `O(n²)` per stage | `generate_lunar` | ~230 ms release / ~2 s debug | ~1 s release at 800x800 |
 
 Details worth internalising:
@@ -165,9 +165,9 @@ Details worth internalising:
   bound` so it cannot drift into either reallocation or waste.
 - **Click-to-move (guest) does not pre-reject impassable destinations.**  A*
   against a blocked cell cannot succeed but still exhausts every reachable
-  cell before returning `None`; the guest's `find_path` treats the empty
+  cell before returning `None`; the guest's `poll_path` treats the empty
   result as a no-op (correct behaviour: clicking a cliff does nothing), at the
-  cost of the full search — ~21 ms at 400x400.
+  cost of the full search — ~21 ms at 400x400, paid on the worker thread.
 - **`GL_MAX_TEXTURE_SIZE` is never queried.**  `build_tile_texture` makes a
   texture exactly `size_x × size_y` pixels, no power-of-two padding, no limit
   check in `upload_data_texture` or `GlTexture::from_rgba8`.  WebGL 2
@@ -175,8 +175,9 @@ Details worth internalising:
   thing to do before pushing past ~2000 in either dimension is query the limit
   (or split the data texture into pages indexed in the shader).
 - **Next binding constraint is the pathfinder**, around 600x600 — not the
-  generator.  Past that it needs an iteration budget or to move off the render
-  thread (the TS original used a Web Worker; that was dropped in the port).
+  generator.  A* is already off the render thread (host `PathfinderWorker`),
+  but past that size it needs an iteration budget to keep worst-case searches
+  bounded.
 
 ---
 

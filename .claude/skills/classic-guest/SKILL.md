@@ -116,7 +116,10 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `get_anim` | `(name, out_ptr, out_cap) -> i32` | write the entity's current `frame: f64` + `name_len: u32` + animation name (`0` if no `Animator`) |
 | `has_resource` | `(kind: i32, name_ptr, name_len) -> i32` | resource existence (0=texture, 1=font, 2=animation) |
 | `texture_size` | `(name_ptr, name_len, out_ptr) -> i32` | write a loaded texture's pixel size as two `f64` (`0` if not loaded) |
-| `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
+| `request_path` | `(sx, sy, ex, ey) -> i32` | submit an A* request over the nav mesh; returns a request id to poll (async — the search runs on a host worker) |
+| `poll_path` | `(id, out_ptr, out_cap) -> i32` | poll a path request; `0` pending, `-1` no-path, `-2` buffer too small, `>0` waypoint count (writes little-endian `i32` `[x, y]` pairs) |
+| `spawn_task` | `(entry_ptr, entry_len, arg_ptr, arg_len) -> i32` | submit a background-guest task (Tier 3): run the worker guest's named export with `arg` as input; returns a task id |
+| `poll_task` | `(id, out_ptr, out_cap) -> i32` | poll a background task; `0` pending, `-1` error, `-2` buffer too small, `>0` bytes written |
 | `vehicle_teleport` | `(name_ptr, name_len, x: f64, y: f64) -> i32` | reposition a wheeled vehicle (body + 4 wheels) and reset its physics |
 | `vehicle_goto` | `(name_ptr, name_len, tx: i32, ty: i32) -> i32` | set a vehicle's destination; the host runs A* and stores the waypoints |
 | `vehicle_stop` | `(name_ptr, name_len) -> i32` | stop a vehicle, clearing its movement path |
@@ -150,8 +153,35 @@ Bulk upload (guest writes grids into its memory, host reads them):
 | `commit_terrain` | `(height_scale: f64) -> i32` | install (first call) or rebuild the tilemap mesh + nav overlay (no slope re-derivation) |
 
 The bulk fields are `f32` little-endian; the bulk grids are `u32`/`i32`/`f32`
-little-endian, matching the existing `find_path` binary convention.  Note: the
+little-endian, matching the path-waypoint binary convention.  Note: the
 untrusted Worker backend's SAB bridge caps bulk payloads (see §4).
+
+### 3b. Field-buffer registry + grid kernels (host-owned scratch)
+
+Instead of round-tripping intermediate grids through guest memory mid-generation
+(which hits the SAB bridge's payload cap on web), a guest can allocate a named
+host-resident field, drive grid kernels over it by name, and only download the
+final grids:
+
+| Import | Signature | Purpose |
+|---|---|---|
+| `alloc_field` | `(name_ptr, name_len, w, h, dtype) -> i32` | allocate a zero-filled `w`×`h` field (`dtype` 0=f32, 1=u32) |
+| `free_field` | `(name_ptr, name_len) -> i32` | remove a named field |
+| `write_field` | `(name_ptr, name_len, data_ptr, data_len) -> i32` | overwrite an `f32` field from a guest buffer |
+| `write_field_u32` | `(name_ptr, name_len, data_ptr, data_len) -> i32` | overwrite a `u32` field |
+| `read_field` | `(name_ptr, name_len, out_ptr, out_cap) -> i32` | download an `f32` field |
+| `map_field` | `(op, dst_ptr, dst_len, src_ptr, src_len) -> i32` | `dst = dst op src` (`op` 0=add, 1=sub, 2=mul, 3=min, 4=max) |
+| `map_scalar` | `(op, dst_ptr, dst_len, scalar) -> i32` | `dst = dst op scalar` |
+| `blur_box_field` | `(name_ptr, name_len, radius) -> i32` | N×N box blur |
+| `relax_slopes_field` | `(name_ptr, name_len, max_slope, iterations, tolerance, pinned_ptr, pinned_len) -> f64` | slope relaxation (optional pinned `u32` mask), returns worst slope |
+| `gradient_magnitude_field` | `(heights_ptr, heights_len, dst_ptr, dst_len) -> i32` | per-tile gradient under `dst` |
+| `threshold_le_field` | `(src_ptr, src_len, dst_ptr, dst_len, t) -> i32` | `1` where `<= t` (u32) |
+| `prune_components_field` | `(name_ptr, name_len) -> i32` | keep only the largest connected component |
+| `reduce_field` | `(name_ptr, name_len, op) -> f64` | reduce (`op` 0=min, 1=max, 2=mean, 3=variance) |
+
+The kernels are pure, deterministic, `#![no_std]` (`classic-terrain::kernels`,
+re-exported as `classic_core::terrain::kernels`); the registry lives in
+`classic-core::fields` (`FieldRegistry`).
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into
 guest linear memory.  Functions returning bytes write into a caller-provided
@@ -234,3 +264,23 @@ sources under `guest/` and are compiled to `roms/out/code/*.wasm` by
 (`WebWasmRuntime`, `WorkerWasmRuntime`) are wasm-only and have no unit test —
 they're compile-verified via
 `cargo check --target wasm32-unknown-unknown -p classic-web` and `trunk build`.
+
+## 9. Background guest worker (Tier 3)
+
+A ROM can bundle a second `.wasm` module (`code: [{name:"worker", …}]`) that the
+host runs off-thread for heavy, engine-free computation.  It is **not** the
+foreground `GuestRuntime` — see `classic-worker/src/guest_worker`:
+
+- `WorkerHost` (Send, engine-free) owns an `Arc<NavSnapshot>`, a scratch
+  `FieldRegistry`, and the current task's argument/result buffers.
+- The reduced import surface (`install_worker_imports!`) exposes only the pure
+  subset — `log`, the noise fields, the field/kernel registry, a synchronous
+  `find_path`, and `task_arg`/`task_return`.  Engine-mutating imports
+  (`spawn`, `set_*`, `commit_terrain`, camera/light/input/UI) are registered as
+  **trap stubs**; the rest of the SDK is absent (link-fail).
+- The foreground guest drives it via `spawn_task(entry, arg)` +
+  `poll_task(id, out, cap)`; the worker guest reads `task_arg`, computes, and
+  writes `task_return`.  Native runs it on a `std::thread` (wasmtime); web uses
+  a synchronous wasmi fallback (a real async web `Worker` is deferred).
+- `GuestWorker::new(wasm, nav, synchronous)` — `synchronous` runs entries inline
+  (the deterministic harness forces it under `CLASSIC_TEST`/`CLASSIC_GOLDEN`).

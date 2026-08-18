@@ -321,7 +321,7 @@ counts do: `auto_landing_zones` and `ray_crater_count`, both of which were
 scaled with the area when the map grew from 200x200.
 
 The full scaling envelope — mesh capacity bound, tile data texture size, the
-pathfinder's synchronous-on-render-thread cost, generation `O(n²)` — and the
-scale-free-vs-absolute parameter discipline live in `classic-procmaps` §3 and
-§5.  That skill is the single source of truth for those numbers; if you scale
-the map again, update it there.
+pathfinder cost (off the render thread via the host `PathfinderWorker`),
+generation `O(n²)` — and the scale-free-vs-absolute parameter discipline live
+in `classic-procmaps` §3 and §5.  That skill is the single source of truth for
+those numbers; if you scale the map again, update it there.

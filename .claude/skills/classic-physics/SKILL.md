@@ -296,8 +296,13 @@ computed at insertion time in `begin_frame`.
 
 ## 9. A\* Pathfinding
 
-The pathfinder in `classic-core/src/pathfinder.rs` runs in-thread (no web
-worker — the TS `pathfinder.ts` worker pattern was dropped in the Rust port).
+`classic-core/src/pathfinder.rs` implements A* over an immutable `NavSnapshot`
+(`size_x`/`size_y`/`data`, `Arc`-shared).  The engine offloads searches to a
+host `PathfinderWorker` (`classic-worker` — native `std::thread` on desktop, a
+dedicated `Worker` on web) so the render thread never blocks mid-frame.  The
+engine owns the request id and the snapshot; `request_path` submits, `poll_path`
+collects, `join_workers` is the determinism barrier.  `Engine::find_path` (the
+inline search over the live `NavMesh`) is retained only for tests.
 
 ### Signature
 
@@ -337,19 +342,20 @@ both endpoints.
 
 ### Integration
 
-Pathfinding is exposed to ROM guests as the `find_path` SDK import (see the
-`classic-guest` skill).  Click-to-move is implemented in `guest/demo-guest`:
-on a left click with the agent tool selected (and not consumed by UI), it
-`find_path`s from the agent's tile to `mouse_iso` and follows the waypoints
-via `set_pos`/`get_pos`.  The engine no longer wires click-to-move — it only
-holds the nav grid (installed by `load_state` inline data or the guest's
-`set_nav` + `commit_terrain`).
+Pathfinding is exposed to ROM guests as the async `request_path`/`poll_path`
+SDK imports (see the `classic-guest` skill).  Click-to-move is implemented in
+`guest/demo-guest`: on a left click with the agent tool selected (and not
+consumed by UI), it submits a request and polls each frame until the waypoints
+land, then follows them via `set_pos`/`get_pos`.  The engine no longer wires
+click-to-move — it only holds the nav grid (installed by `load_state` inline
+data or the guest's `set_nav` + `commit_terrain`).
 
 The retired engine click-to-move pre-rejected impassable destinations (so a
 click on a wall never ran A*).  The guest does not: `find_path` exhausts the
 grid and returns an empty path, which the guest treats as no-op.  Functionally
 equivalent (clicking a wall does nothing) at the cost of a full search
-(~3 ms at 200x200, ~21 ms at 400x400).
+(~3 ms at 200x200, ~21 ms at 400x400) — now paid on the worker, not the render
+thread.
 
 ---
 
@@ -415,9 +421,9 @@ texture from the current `NavMesh::data`.  This uses the same `build_mesh` /
   priority values rather than relying on PID ordering.
 
 - **No timeout/abort for long paths**: `find_path` has no iteration limit or
-  timeout, and runs synchronously on the render thread.  On very large grids
-  with complex obstacle mazes it will explore the entire reachable space
-  before returning `None` — measured 3 ms (exhaustive) at 200x200 vs 21 ms at
-  400x400.  The impassable-destination pre-check removes the only routine
-  trigger, but beyond roughly 600x600 a real solution (iteration budget, or
-  moving A* off the render thread as the TS Web Worker did) is required.
+  timeout.  On very large grids with complex obstacle mazes it will explore the
+  entire reachable space before returning `None` — measured 3 ms (exhaustive) at
+  200x200 vs 21 ms at 400x400.  The search now runs on the host `PathfinderWorker`
+  (off the render thread), so the frame cost is hidden; the impassable-destination
+  pre-check remains removed, but beyond roughly 600x600 an iteration budget is
+  still worthwhile.
