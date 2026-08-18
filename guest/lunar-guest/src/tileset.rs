@@ -15,9 +15,13 @@
 //! toroidal distance.  Non-periodic noise would show a hard grid of seams
 //! across every flat region.
 
-use crate::simplex_noise::{Random, SimplexNoise};
-use crate::terrain::fractal::tiling_fbm_2d;
-use crate::terrain::material::{material_for_tile_id, tile_count, MaterialSpec, MATERIALS};
+use alloc::format;
+use alloc::vec;
+use alloc::vec::Vec;
+
+use classic_terrain::fractal::tiling_fbm_2d;
+use crate::material::{material_for_tile_id, tile_count, MaterialSpec, MATERIALS};
+use classic_terrain::simplex_noise::{Random, SimplexNoise};
 
 /// Default tileset geometry: an 8x8 grid of 32px cells, i.e. 256x256, which
 /// matches `tilePixelSize [32, 32]` in the scene description.
@@ -51,7 +55,7 @@ pub fn build_lunar_tileset(seed: &str, tile_px: u32, cols: u32, rows: u32) -> (V
 
     for spec in MATERIALS {
         for variant in 0..spec.variants {
-            let id = crate::terrain::material::tile_id(spec.material, variant);
+            let id = crate::material::tile_id(spec.material, variant);
             let col = id % cols;
             let row = id / cols;
             paint_cell(&mut rgba, w, tile_px, col, row, spec, seed, variant, id);
@@ -86,7 +90,7 @@ fn paint_cell(
 ) {
     let noise = SimplexNoise::new(&format!("{seed}:tex:{id}:{variant}"));
     let period = tile_px as f64;
-    let tau = std::f64::consts::TAU;
+    let tau = core::f64::consts::TAU;
     // `tiling_noise_2d` sweeps an arc of 2*pi*radius per period, so dividing
     // by tau makes `radius` read directly as "cycles across one tile".
     let fine_r = spec.speckle_freq / tau;
@@ -154,7 +158,7 @@ fn craterlet_shade(craterlets: &[Craterlet], px: f32, py: f32, tile_px: f32) -> 
         if dy > tile_px * 0.5 {
             dy = tile_px - dy;
         }
-        let d = (dx * dx + dy * dy).sqrt();
+        let d = libm::sqrtf(dx * dx + dy * dy);
         if d < c.r {
             // Pit: darkest at the centre.
             acc -= 26.0 * c.depth * (1.0 - d / c.r);
@@ -170,6 +174,6 @@ fn craterlet_shade(craterlets: &[Craterlet], px: f32, py: f32, tile_px: f32) -> 
 
 /// Look up which material a generated tile id maps to.  Re-exported here so
 /// callers of the tileset do not have to reach into the material module.
-pub fn tile_material(id: u32) -> Option<crate::terrain::material::LunarMaterial> {
+pub fn tile_material(id: u32) -> Option<crate::material::LunarMaterial> {
     material_for_tile_id(id).map(|(m, _)| m)
 }

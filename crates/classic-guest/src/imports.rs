@@ -17,7 +17,7 @@
 /// remaining arguments are the backend-local memory-marshalling helpers
 /// (`read_str`, `write_str`, `write_bytes`, `write_f64_pair`, `write_f64_triple`).
 macro_rules! install_host_imports {
-    ($linker:ident, $host:ty, $read_str:path, $write_str:path, $write_bytes:path, $write_f64_pair:path, $write_f64_triple:path) => {{
+    ($linker:ident, $host:ty, $read_str:path, $read_bytes:path, $write_str:path, $write_bytes:path, $write_f64_pair:path, $write_f64_triple:path) => {{
         let m = crate::abi::HOST_MODULE;
 
         $linker.func_wrap(m, "log", |mut caller: Caller<'_, $host>, ptr: i32, len: i32| {
@@ -234,22 +234,6 @@ macro_rules! install_host_imports {
             |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
                 let key = $read_str(&mut caller, ptr, len);
                 caller.data_mut().guest_mut().was_key_pressed(&key)
-            },
-        )?;
-
-        $linker.func_wrap(
-            m,
-            "generate_terrain",
-            |mut caller: Caller<'_, $host>,
-             kind_ptr: i32,
-             kind_len: i32,
-             seed_ptr: i32,
-             seed_len: i32,
-             height_scale: f64|
-             -> i32 {
-                let kind = $read_str(&mut caller, kind_ptr, kind_len);
-                let seed = $read_str(&mut caller, seed_ptr, seed_len);
-                caller.data_mut().guest_mut().generate_terrain(&kind, &seed, height_scale)
             },
         )?;
 
@@ -735,6 +719,232 @@ macro_rules! install_host_imports {
                 };
                 $write_f64_pair(&mut caller, out_ptr, w, h);
                 1
+            },
+        )?;
+
+        // ---- Bulk noise fields (host generates → guest buffer) --------------
+
+        $linker.func_wrap(
+            m,
+            "fbm_field",
+            |mut caller: Caller<'_, $host>,
+             w: i32,
+             h: i32,
+             seed_ptr: i32,
+             seed_len: i32,
+             octaves: i32,
+             freq: f64,
+             lacunarity: f64,
+             gain: f64,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let seed = $read_str(&mut caller, seed_ptr, seed_len);
+                let field = caller.data_mut().guest_mut().fbm_field(
+                    w,
+                    h,
+                    &seed,
+                    octaves.max(0) as u32,
+                    freq,
+                    lacunarity,
+                    gain,
+                );
+                let bytes = crate::abi::f32_array_bytes(&field);
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                $write_bytes(&mut caller, out_ptr, &bytes);
+                bytes.len() as i32
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "ridged_field",
+            |mut caller: Caller<'_, $host>,
+             w: i32,
+             h: i32,
+             seed_ptr: i32,
+             seed_len: i32,
+             octaves: i32,
+             freq: f64,
+             lacunarity: f64,
+             gain: f64,
+             warp_amp: f64,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let seed = $read_str(&mut caller, seed_ptr, seed_len);
+                let field = caller.data_mut().guest_mut().ridged_field(
+                    w,
+                    h,
+                    &seed,
+                    octaves.max(0) as u32,
+                    freq,
+                    lacunarity,
+                    gain,
+                    warp_amp,
+                );
+                let bytes = crate::abi::f32_array_bytes(&field);
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                $write_bytes(&mut caller, out_ptr, &bytes);
+                bytes.len() as i32
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "billow_field",
+            |mut caller: Caller<'_, $host>,
+             w: i32,
+             h: i32,
+             seed_ptr: i32,
+             seed_len: i32,
+             octaves: i32,
+             freq: f64,
+             lacunarity: f64,
+             gain: f64,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let seed = $read_str(&mut caller, seed_ptr, seed_len);
+                let field = caller.data_mut().guest_mut().billow_field(
+                    w,
+                    h,
+                    &seed,
+                    octaves.max(0) as u32,
+                    freq,
+                    lacunarity,
+                    gain,
+                );
+                let bytes = crate::abi::f32_array_bytes(&field);
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                $write_bytes(&mut caller, out_ptr, &bytes);
+                bytes.len() as i32
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "tiling_field",
+            |mut caller: Caller<'_, $host>,
+             w: i32,
+             h: i32,
+             seed_ptr: i32,
+             seed_len: i32,
+             period: f64,
+             octaves: i32,
+             radius: f64,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let seed = $read_str(&mut caller, seed_ptr, seed_len);
+                let field = caller.data_mut().guest_mut().tiling_field(
+                    w,
+                    h,
+                    &seed,
+                    period,
+                    octaves.max(0) as u32,
+                    radius,
+                );
+                let bytes = crate::abi::f32_array_bytes(&field);
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                $write_bytes(&mut caller, out_ptr, &bytes);
+                bytes.len() as i32
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "noise_field",
+            |mut caller: Caller<'_, $host>,
+             w: i32,
+             h: i32,
+             seed_ptr: i32,
+             seed_len: i32,
+             freq_x: f64,
+             freq_y: f64,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let seed = $read_str(&mut caller, seed_ptr, seed_len);
+                let field = caller.data_mut().guest_mut().noise_field(w, h, &seed, freq_x, freq_y);
+                let bytes = crate::abi::f32_array_bytes(&field);
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                $write_bytes(&mut caller, out_ptr, &bytes);
+                bytes.len() as i32
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "noise2d",
+            |mut caller: Caller<'_, $host>, seed_ptr: i32, seed_len: i32, x: f64, y: f64| -> f64 {
+                let seed = $read_str(&mut caller, seed_ptr, seed_len);
+                caller.data_mut().guest_mut().noise2d(&seed, x, y)
+            },
+        )?;
+
+        // ---- Bulk terrain upload (guest generates → host stores) ------------
+
+        $linker.func_wrap(
+            m,
+            "set_tiles",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let tiles = crate::abi::bytes_to_u32(&$read_bytes(&mut caller, ptr, len));
+                caller.data_mut().guest_mut().set_tiles(&tiles)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "set_heights",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let heights = crate::abi::bytes_to_f32(&$read_bytes(&mut caller, ptr, len));
+                caller.data_mut().guest_mut().set_heights(&heights)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "set_nav",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let nav = crate::abi::bytes_to_u32(&$read_bytes(&mut caller, ptr, len));
+                caller.data_mut().guest_mut().set_nav(&nav)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "set_tileset",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, w: i32, h: i32| -> i32 {
+                let rgba = $read_bytes(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().set_tileset(&rgba, w.max(0) as u32, h.max(0) as u32)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "set_spawn_points",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let pairs = crate::abi::bytes_to_i32(&$read_bytes(&mut caller, ptr, len));
+                caller.data_mut().guest_mut().set_spawn_points(&pairs)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "commit_terrain",
+            |mut caller: Caller<'_, $host>, height_scale: f64| -> i32 {
+                caller.data_mut().guest_mut().commit_terrain(height_scale)
             },
         )?;
 

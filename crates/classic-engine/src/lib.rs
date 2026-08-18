@@ -112,6 +112,10 @@ pub struct Engine {
     /// steps, hence the default of 2.0; generated terrain is continuous and
     /// needs a much finer threshold to match the slope rule it was built with.
     pub nav_slope_threshold: f32,
+    /// Landing-zone spawn points (tile coords) from the last generated terrain.
+    /// Set by [`Engine::set_spawn_points_bulk`] (guest-driven generation); read
+    /// by the scene layer to focus the camera.
+    pub spawn_points: Vec<(i32, i32)>,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
     pre_update_hooks: Vec<UpdateFn>,
@@ -201,6 +205,7 @@ impl Engine {
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
             base_height_scale: 32.0,
             nav_slope_threshold: 2.0,
+            spawn_points: Vec::new(),
             nav_gpu: None,
             debug_frame: 0,
             pre_update_hooks: Vec::new(),
@@ -336,94 +341,6 @@ impl Engine {
         let heights = vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)];
 
         self.finish_tilemap_init(entity, tiles, heights, None);
-    }
-
-    /// Build and upload a tilemap from a generated
-    /// [`classic_core::terrain::GeneratedTerrain`], with an in-memory RGBA
-    /// tileset instead of a PNG.
-    ///
-    /// `height_scale` overrides the default (`tile_pixel_size[0]`).  Generated
-    /// terrain has a far larger height range than the flat demo map, so the
-    /// default scale would exaggerate the relief and stretch the mouse-picking
-    /// parallax solve.
-    pub fn install_generated_terrain(
-        &mut self,
-        gen: &classic_core::terrain::GeneratedTerrain,
-        height_scale: f32,
-    ) {
-        let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
-
-        let (tile_set_name, size_x, size_y) = {
-            let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.tile_set.clone(), tm.size_x, tm.size_y)
-        };
-        assert_eq!(
-            (gen.terrain.size_x, gen.terrain.size_y),
-            (size_x, size_y),
-            "generated terrain size does not match the Tilemap component"
-        );
-
-        if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_rgba8(
-                &tile_set_name,
-                &gen.tileset.rgba,
-                gen.tileset.width,
-                gen.tileset.height,
-            );
-        }
-
-        self.nav_slope_threshold = gen.nav_slope_threshold;
-
-        self.finish_tilemap_init(
-            entity,
-            gen.terrain.tiles.clone(),
-            gen.terrain.heights.clone(),
-            Some(height_scale),
-        );
-    }
-
-    /// Re-upload a generated terrain in place: update the Tilemap and NavMesh
-    /// data and rebuild their GPU resources.  Assumes the tilemap was already
-    /// installed (boot install or a prior [`Engine::install_generated_terrain`]).
-    pub fn regenerate_terrain(
-        &mut self,
-        gen: &classic_core::terrain::GeneratedTerrain,
-        height_scale: f32,
-    ) {
-        if let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) {
-            if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
-                tm.data = gen.terrain.tiles.clone();
-                tm.height_data = gen.terrain.heights.clone();
-                tm.height_scale = height_scale;
-            }
-        }
-        self.rebuild_tilemap_mesh();
-
-        if let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) {
-            if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
-                nav.data = gen.terrain.nav.clone();
-            }
-        }
-        self.rebuild_nav_gpu();
-
-        self.nav_slope_threshold = gen.nav_slope_threshold;
-    }
-
-    /// Generate a named terrain (see [`classic_core::terrain::generate`]) and
-    /// install or regenerate it.  The generic terrain prefab behind the guest
-    /// `generate_terrain` import.
-    pub fn generate_terrain(&mut self, kind: &str, seed: &str, height_scale: f32) -> bool {
-        let Some(gen) = classic_core::terrain::generate(kind, seed) else { return false };
-        let installed = self
-            .entity_by_role(RoleKind::Tilemap)
-            .map(|e| self.tilemap_gpu.contains_key(&self.debug_name(e)))
-            .unwrap_or(false);
-        if installed {
-            self.regenerate_terrain(&gen, height_scale);
-        } else {
-            self.install_generated_terrain(&gen, height_scale);
-        }
-        true
     }
 
     /// Shared tail of the `init_tilemap*` family: build the mesh and tile-data
@@ -819,6 +736,89 @@ impl Engine {
         }
         self.rebuild_tilemap_mesh();
         self.sync_nav_heights();
+        true
+    }
+
+    /// Bulk-write the tilemap tile grid from a guest-provided `u32` array
+    /// (row-major, `size_x * size_y`).  Replaces the grid wholesale — the
+    /// loaded component may be empty (`state_lunar.json` declares `"data":
+    /// null`, generated at runtime).
+    pub fn set_tiles_bulk(&mut self, tiles: &[u32]) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if tiles.len() != (tm.size_x * tm.size_y) as usize {
+            return false;
+        }
+        tm.data = tiles.to_vec();
+        true
+    }
+
+    /// Bulk-write the tilemap height vertex grid from a guest-provided `f32`
+    /// array (`(size_x + 1) * (size_y + 1)`).  Replaces the grid wholesale.
+    pub fn set_heights_bulk(&mut self, heights: &[f32]) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if heights.len() != ((tm.size_x + 1) * (tm.size_y + 1)) as usize {
+            return false;
+        }
+        tm.height_data = heights.to_vec();
+        true
+    }
+
+    /// Bulk-write the nav walkability grid from a guest-provided `u32` array
+    /// (`size_x * size_y`, `1` = walkable).  Replaces the grid wholesale.
+    pub fn set_nav_bulk(&mut self, nav: &[u32]) -> bool {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return false };
+        let Ok(mut nm) = self.world.get::<&mut NavMesh>(nav_entity) else { return false };
+        if nav.len() != (nm.size_x * nm.size_y) as usize {
+            return false;
+        }
+        nm.data = nav.to_vec();
+        true
+    }
+
+    /// Upload a raw RGBA tileset texture for the tilemap (guest-generated
+    /// tileset).  Replaces the current tileset under the Tilemap's `tile_set`.
+    pub fn set_tileset_bulk(&mut self, rgba: &[u8], w: u32, h: u32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return false };
+        let tile_set = tm.tile_set.clone();
+        let Some(gfx) = self.gfx.as_mut() else { return false };
+        gfx.add_texture_rgba8(&tile_set, rgba, w, h);
+        true
+    }
+
+    /// Bulk-write landing-zone spawn points from guest-provided `i32` pairs.
+    pub fn set_spawn_points_bulk(&mut self, pairs: &[i32]) -> bool {
+        if !pairs.len().is_multiple_of(2) {
+            return false;
+        }
+        self.spawn_points = pairs.chunks(2).map(|c| (c[0], c[1])).collect();
+        true
+    }
+
+    /// Commit a guest-generated terrain: install (first call) or rebuild
+    /// (later calls) the tilemap mesh + tile data texture and re-upload the
+    /// nav overlay from the grids written by the bulk `set_*` imports.  Does
+    /// NOT re-derive walkability (the generator's nav grid is authoritative).
+    pub fn commit_generated_terrain(&mut self, height_scale: f32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else {
+            return false;
+        };
+        if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
+            tm.height_scale = height_scale;
+        }
+        let installed = self.tilemap_gpu.contains_key(&self.debug_name(tm_entity));
+        if installed {
+            self.rebuild_tilemap_mesh();
+        } else {
+            let (tiles, heights) = {
+                let tm = self.world.get::<&Tilemap>(tm_entity).unwrap();
+                (tm.data.clone(), tm.height_data.clone())
+            };
+            self.finish_tilemap_init(tm_entity, tiles, heights, Some(height_scale));
+        }
+        self.rebuild_nav_gpu();
         true
     }
 

@@ -3,8 +3,8 @@
 //!
 //! `cargo run -p classic-core --example dbg_lunar -- [seed] [size]`
 
-use classic_core::terrain::lunar::*;
-use classic_core::terrain::material::{material_for_tile_id, LunarMaterial};
+use lunar_guest::lunar::*;
+use lunar_guest::material::{material_for_tile_id, LunarMaterial};
 
 fn main() {
     let mut args = std::env::args().skip(1);

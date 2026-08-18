@@ -89,7 +89,6 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `key_down` | `(key_ptr, key_len) -> i32` | key held |
 | `key_up` | `(key_ptr, key_len) -> i32` | key released this frame |
 | `was_key_pressed` | `(key_ptr, key_len) -> i32` | key pressed this frame (edge-triggered) |
-| `generate_terrain` | `(kind_ptr, kind_len, seed_ptr, seed_len, height_scale: f64) -> i32` | generate/install a named terrain (generic engine prefab; `kind = "lunar"` today) |
 | `set_tile` | `(x: i32, y: i32, id: i32) -> i32` | write one tile index at tile coordinate `(x, y)` (bounds-checked) |
 | `set_height` | `(x: i32, y: i32, h: f64) -> i32` | write one height vertex at coordinate `(x, y)` (bounds-checked) |
 | `rebuild_terrain` | `() -> i32` | rebuild the tilemap mesh + re-derive nav walkability after in-place edits |
@@ -117,6 +116,38 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `has_resource` | `(kind: i32, name_ptr, name_len) -> i32` | resource existence (0=texture, 1=font, 2=animation) |
 | `texture_size` | `(name_ptr, name_len, out_ptr) -> i32` | write a loaded texture's pixel size as two `f64` (`0` if not loaded) |
 | `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
+
+### 3a. Bulk terrain imports (guest-driven map generation)
+
+The host owns the *noise primitives* and the *storage/rebuild* engine; ROM
+guests own the map algorithm.  Guests compose a map by requesting noise fields
+into their own linear memory and bulk-uploading the resulting grids.
+
+Bulk noise (host fills a guest buffer with `f32` values, returns bytes written):
+
+| Import | Signature | Purpose |
+|---|---|---|
+| `fbm_field` | `(w, h, seed, octaves, freq, lacunarity, gain, out_ptr, out_cap) -> i32` | summed-octave fBm, `[-1, 1]` |
+| `ridged_field` | `(w, h, seed, octaves, freq, lacunarity, gain, warp_amp, out_ptr, out_cap) -> i32` | ridged multifractal, `[0, 1]`, optional domain warp |
+| `billow_field` | `(w, h, seed, octaves, freq, lacunarity, gain, out_ptr, out_cap) -> i32` | billow (abs) fBm, `[0, 1]` |
+| `tiling_field` | `(w, h, seed, period, octaves, radius, out_ptr, out_cap) -> i32` | seamlessly-tiling fBm |
+| `noise_field` | `(w, h, seed, freq_x, freq_y, out_ptr, out_cap) -> i32` | raw single-octave 2D simplex |
+| `noise2d` | `(seed_ptr, seed_len, x, y) -> f64` | raw 2D simplex at one point |
+
+Bulk upload (guest writes grids into its memory, host reads them):
+
+| Import | Signature | Purpose |
+|---|---|---|
+| `set_tiles` | `(ptr, len) -> i32` | bulk `u32` LE tile grid → `Tilemap.data` |
+| `set_heights` | `(ptr, len) -> i32` | bulk `f32` LE vertex heights → `Tilemap.height_data` |
+| `set_nav` | `(ptr, len) -> i32` | bulk `u32` LE walkability → `NavMesh.data` |
+| `set_tileset` | `(ptr, len, w, h) -> i32` | raw RGBA → upload the tilemap's tileset texture |
+| `set_spawn_points` | `(ptr, len) -> i32` | `i32` LE `[x, y]` pairs → `Engine.spawn_points` |
+| `commit_terrain` | `(height_scale: f64) -> i32` | install (first call) or rebuild the tilemap mesh + nav overlay (no slope re-derivation) |
+
+The bulk fields are `f32` little-endian; the bulk grids are `u32`/`i32`/`f32`
+little-endian, matching the existing `find_path` binary convention.  Note: the
+untrusted Worker backend's SAB bridge caps bulk payloads (see §4).
 
 **String convention**: all byte slices cross the boundary as `(ptr, len)` into
 guest linear memory.  Functions returning bytes write into a caller-provided

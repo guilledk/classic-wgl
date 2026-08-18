@@ -5,9 +5,9 @@
 //! buildable area, reachable spawns) rather than pixel output.
 
 use classic_core::pathfinder::find_path;
-use classic_core::terrain::lunar::{generate_lunar, LandingZone, LunarParams, LunarTerrain};
-use classic_core::terrain::material::{material_for_tile_id, tile_count};
-use classic_core::terrain::tileset::{build_default_lunar_tileset, build_lunar_tileset};
+use lunar_guest::lunar::{generate_lunar, LandingZone, LunarParams, LunarTerrain};
+use lunar_guest::material::{material_for_tile_id, tile_count};
+use lunar_guest::tileset::{build_default_lunar_tileset, build_lunar_tileset};
 use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 
 /// Smaller than the shipping 200x200 so the suite stays fast; every invariant
@@ -513,7 +513,7 @@ fn material_classes_are_visually_distinct() {
         }
         (sum as f32) / (32.0 * 32.0 * 3.0)
     };
-    use classic_core::terrain::material::{tile_id, LunarMaterial};
+    use lunar_guest::material::{tile_id, LunarMaterial};
     let mare = mean(tile_id(LunarMaterial::MareSmooth, 0));
     let regolith = mean(tile_id(LunarMaterial::Regolith, 0));
     let ray = mean(tile_id(LunarMaterial::Ray, 0));

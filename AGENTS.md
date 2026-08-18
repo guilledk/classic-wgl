@@ -47,11 +47,12 @@ before considering a task done.
 ## Directory map
 
 ```
-Cargo.toml               workspace root (9 members)
+Cargo.toml               workspace root (10 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
-                          tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder,
-                          terrain/ (fractal noise, lunar generator, material table, tileset painter)
+                          tilemap, instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder
+  classic-terrain/        #![no_std] open terrain/noise toolkit (simplex, fractal combinators, bulk
+                          noise fields) — the reusable primitives ROM guests build map algorithms on
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
@@ -129,11 +130,15 @@ plans/
 - **Isometric/pathfinding**: `classic-core/src/tilemap.rs` builds the 3D tilemap mesh;
   `classic-core/src/pathfinder.rs` implements A* (single-threaded, no worker — the TS
   Web Worker pattern was dropped).  See `classic-iso` skill.
-- **Procedural terrain**: `classic-core/src/terrain/` generates the `lunar` scene — a
-  400x400 map of layered simplex noise plus an age-ordered meteorite crater field,
-  with slope relaxation and stamped landing zones providing the flat, pathable ground
-  an RTS needs.  Pure and GL-free, so it is unit-tested without a GL context.
-  `classic-demo/src/scenes/lunar.rs` installs the result.  See `classic-terrain` skill.
+- **Procedural terrain**: `classic-terrain` is the *open* noise toolkit; the
+  `lunar` map algorithm (a 400x400 surface of layered simplex noise plus an
+  age-ordered meteorite crater field, slope relaxation and stamped landing
+  zones) lives in the `guest/lunar-guest` ROM guest, which builds on that
+  toolkit and bulk-uploads the grids + tileset to the host via the guest SDK.
+  Pure, GL-free and natively unit-tested.  The host is a generic terrain
+  engine (storage + rebuild + pathfinding); the map algorithm lives in the ROM.
+  See `classic-terrain`
+  skill.
 - **SDF text**: `classic-core/src/sdf_builder.rs` builds interleaved glyph buffers;
   `classic-gfx` renders them with the `sdf` shader (`dejavusans-sdf` font atlas).
   Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),
@@ -241,7 +246,7 @@ Engine skills (in `.claude/skills/`):
 | Skill | Covers |
 |---|---|
 | `classic-iso` | Iso coords, tilemap, depth formula, sprite occlusion, mesh gen (Rust-only) |
-| `classic-terrain` | Procedural lunar generator, fractal noise, material table, tileset, scenes |
+| `classic-terrain` | Open noise toolkit (simplex, fractal combinators, bulk noise fields) + the guest-side lunar generator recipe |
 | `classic-procmaps` | Authoring/scaling procedural maps: terrain module, new-generator recipe, scale-free params, size envelope |
 | `classic-ui` | UIManager, anchor layout, collider sync, set_enabled, spawn_button |
 | `classic-text` | SdfText renderer, atlas generator, is_ui justify, scissor clipping |

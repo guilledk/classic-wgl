@@ -37,6 +37,14 @@ fn read_str(mem: &Memory, ptr: i32, len: i32) -> String {
     String::from_utf8_lossy(&view.subarray(start, end).to_vec()).into_owned()
 }
 
+/// Read raw bytes from the guest's linear memory.
+fn read_bytes(mem: &Memory, ptr: i32, len: i32) -> Vec<u8> {
+    let view = mem_view(mem);
+    let start = ptr.max(0) as u32;
+    let end = (start + len.max(0) as u32).min(view.length());
+    view.subarray(start, end).to_vec()
+}
+
 /// Write bytes into the guest's linear memory, returning the number of bytes
 /// written (`-1` if the buffer overruns guest memory).
 fn write_bytes(mem: &Memory, ptr: i32, bytes: &[u8]) -> i32 {
@@ -78,6 +86,11 @@ const OP_UI_BUTTON: u32 = 4;
 const OP_UI_ARRAY: u32 = 5;
 const OP_UI_PADDING: u32 = 6;
 const OP_UI_SPRITE: u32 = 7;
+const OP_FBM_FIELD: u32 = 8;
+const OP_RIDGED_FIELD: u32 = 9;
+const OP_BILLOW_FIELD: u32 = 10;
+const OP_TILING_FIELD: u32 = 11;
+const OP_NOISE_FIELD: u32 = 12;
 
 /// The global symbol the high-arity import shims call into.
 const DISPATCHER_SYMBOL: &str = "__classic_guest_import";
@@ -290,6 +303,149 @@ impl WebWasmRuntime {
                                 arg_f64(&args, 7),
                                 arg_f64(&args, 8),
                             )
+                        }
+                        OP_FBM_FIELD => {
+                            let seed = {
+                                let mem = mem.borrow();
+                                read_str(
+                                    mem.as_ref().unwrap(),
+                                    arg_i32(&args, 2),
+                                    arg_i32(&args, 3),
+                                )
+                            };
+                            let field = host.borrow_mut().fbm_field(
+                                arg_i32(&args, 0),
+                                arg_i32(&args, 1),
+                                &seed,
+                                arg_i32(&args, 4).max(0) as u32,
+                                arg_f64(&args, 5),
+                                arg_f64(&args, 6),
+                                arg_f64(&args, 7),
+                            );
+                            let bytes = abi::f32_array_bytes(&field);
+                            let out_ptr = arg_i32(&args, 8);
+                            let out_cap = arg_i32(&args, 9);
+                            if bytes.len() > out_cap.max(0) as usize {
+                                -1
+                            } else {
+                                let mem = mem.borrow();
+                                write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                                bytes.len() as i32
+                            }
+                        }
+                        OP_RIDGED_FIELD => {
+                            let seed = {
+                                let mem = mem.borrow();
+                                read_str(
+                                    mem.as_ref().unwrap(),
+                                    arg_i32(&args, 2),
+                                    arg_i32(&args, 3),
+                                )
+                            };
+                            let field = host.borrow_mut().ridged_field(
+                                arg_i32(&args, 0),
+                                arg_i32(&args, 1),
+                                &seed,
+                                arg_i32(&args, 4).max(0) as u32,
+                                arg_f64(&args, 5),
+                                arg_f64(&args, 6),
+                                arg_f64(&args, 7),
+                                arg_f64(&args, 8),
+                            );
+                            let bytes = abi::f32_array_bytes(&field);
+                            let out_ptr = arg_i32(&args, 9);
+                            let out_cap = arg_i32(&args, 10);
+                            if bytes.len() > out_cap.max(0) as usize {
+                                -1
+                            } else {
+                                let mem = mem.borrow();
+                                write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                                bytes.len() as i32
+                            }
+                        }
+                        OP_BILLOW_FIELD => {
+                            let seed = {
+                                let mem = mem.borrow();
+                                read_str(
+                                    mem.as_ref().unwrap(),
+                                    arg_i32(&args, 2),
+                                    arg_i32(&args, 3),
+                                )
+                            };
+                            let field = host.borrow_mut().billow_field(
+                                arg_i32(&args, 0),
+                                arg_i32(&args, 1),
+                                &seed,
+                                arg_i32(&args, 4).max(0) as u32,
+                                arg_f64(&args, 5),
+                                arg_f64(&args, 6),
+                                arg_f64(&args, 7),
+                            );
+                            let bytes = abi::f32_array_bytes(&field);
+                            let out_ptr = arg_i32(&args, 8);
+                            let out_cap = arg_i32(&args, 9);
+                            if bytes.len() > out_cap.max(0) as usize {
+                                -1
+                            } else {
+                                let mem = mem.borrow();
+                                write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                                bytes.len() as i32
+                            }
+                        }
+                        OP_TILING_FIELD => {
+                            let seed = {
+                                let mem = mem.borrow();
+                                read_str(
+                                    mem.as_ref().unwrap(),
+                                    arg_i32(&args, 2),
+                                    arg_i32(&args, 3),
+                                )
+                            };
+                            let field = host.borrow_mut().tiling_field(
+                                arg_i32(&args, 0),
+                                arg_i32(&args, 1),
+                                &seed,
+                                arg_f64(&args, 4),
+                                arg_i32(&args, 5).max(0) as u32,
+                                arg_f64(&args, 6),
+                            );
+                            let bytes = abi::f32_array_bytes(&field);
+                            let out_ptr = arg_i32(&args, 7);
+                            let out_cap = arg_i32(&args, 8);
+                            if bytes.len() > out_cap.max(0) as usize {
+                                -1
+                            } else {
+                                let mem = mem.borrow();
+                                write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                                bytes.len() as i32
+                            }
+                        }
+                        OP_NOISE_FIELD => {
+                            let seed = {
+                                let mem = mem.borrow();
+                                read_str(
+                                    mem.as_ref().unwrap(),
+                                    arg_i32(&args, 2),
+                                    arg_i32(&args, 3),
+                                )
+                            };
+                            let field = host.borrow_mut().noise_field(
+                                arg_i32(&args, 0),
+                                arg_i32(&args, 1),
+                                &seed,
+                                arg_f64(&args, 4),
+                                arg_f64(&args, 5),
+                            );
+                            let bytes = abi::f32_array_bytes(&field);
+                            let out_ptr = arg_i32(&args, 6);
+                            let out_cap = arg_i32(&args, 7);
+                            if bytes.len() > out_cap.max(0) as usize {
+                                -1
+                            } else {
+                                let mem = mem.borrow();
+                                write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                                bytes.len() as i32
+                            }
                         }
                         _ => 0,
                     };
@@ -655,30 +811,6 @@ impl WebWasmRuntime {
                     };
                     host.borrow_mut().was_key_pressed(&key)
                 }) as Box<dyn FnMut(i32, i32) -> i32>
-            );
-        }
-
-        // generate_terrain
-        {
-            let host = host.clone();
-            let mem = mem.clone();
-            set_import!(
-                "generate_terrain",
-                Box::new(
-                    move |kind_ptr: i32,
-                          kind_len: i32,
-                          seed_ptr: i32,
-                          seed_len: i32,
-                          height_scale: f64|
-                          -> i32 {
-                        let (kind, seed) = {
-                            let mem = mem.borrow();
-                            let m = mem.as_ref().unwrap();
-                            (read_str(m, kind_ptr, kind_len), read_str(m, seed_ptr, seed_len))
-                        };
-                        host.borrow_mut().generate_terrain(&kind, &seed, height_scale)
-                    },
-                ) as Box<dyn FnMut(i32, i32, i32, i32, f64) -> i32>
             );
         }
 
@@ -1147,6 +1279,114 @@ impl WebWasmRuntime {
                     write_f64_pair(mem.as_ref().unwrap(), out_ptr, w, h);
                     1
                 }) as Box<dyn FnMut(i32, i32, i32) -> i32>
+            );
+        }
+
+        // Bulk noise fields (>8 args → dispatcher).
+        set_import_str!("fbm_field", OP_FBM_FIELD, "a,b,c,d,e,f,g,h,i,j");
+        set_import_str!("ridged_field", OP_RIDGED_FIELD, "a,b,c,d,e,f,g,h,i,j,k");
+        set_import_str!("billow_field", OP_BILLOW_FIELD, "a,b,c,d,e,f,g,h,i,j");
+        set_import_str!("tiling_field", OP_TILING_FIELD, "a,b,c,d,e,f,g,h,i");
+        set_import_str!("noise_field", OP_NOISE_FIELD, "a,b,c,d,e,f,g,h");
+
+        // noise2d
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "noise2d",
+                Box::new(move |seed_ptr: i32, seed_len: i32, x: f64, y: f64| -> f64 {
+                    let seed = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), seed_ptr, seed_len)
+                    };
+                    host.borrow_mut().noise2d(&seed, x, y)
+                }) as Box<dyn FnMut(i32, i32, f64, f64) -> f64>
+            );
+        }
+
+        // Bulk terrain upload (guest → host).
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_tiles",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let tiles = abi::bytes_to_u32(&{
+                        let mem = mem.borrow();
+                        read_bytes(mem.as_ref().unwrap(), ptr, len)
+                    });
+                    host.borrow_mut().set_tiles(&tiles)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_heights",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let heights = abi::bytes_to_f32(&{
+                        let mem = mem.borrow();
+                        read_bytes(mem.as_ref().unwrap(), ptr, len)
+                    });
+                    host.borrow_mut().set_heights(&heights)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_nav",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let nav = abi::bytes_to_u32(&{
+                        let mem = mem.borrow();
+                        read_bytes(mem.as_ref().unwrap(), ptr, len)
+                    });
+                    host.borrow_mut().set_nav(&nav)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_tileset",
+                Box::new(move |ptr: i32, len: i32, w: i32, h: i32| -> i32 {
+                    let rgba = {
+                        let mem = mem.borrow();
+                        read_bytes(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().set_tileset(&rgba, w.max(0) as u32, h.max(0) as u32)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_spawn_points",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let pairs = abi::bytes_to_i32(&{
+                        let mem = mem.borrow();
+                        read_bytes(mem.as_ref().unwrap(), ptr, len)
+                    });
+                    host.borrow_mut().set_spawn_points(&pairs)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            set_import!(
+                "commit_terrain",
+                Box::new(move |hs: f64| -> i32 { host.borrow_mut().commit_terrain(hs) })
+                    as Box<dyn FnMut(f64) -> i32>
             );
         }
 

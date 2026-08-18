@@ -81,3 +81,27 @@ pub fn write_f64_pair_to(data: &mut [u8], ptr: i32, a: f64, b: f64) -> i32 {
 pub fn write_f64_triple_to(data: &mut [u8], ptr: i32, a: f64, b: f64, c: f64) -> i32 {
     write_bytes_to(data, ptr, &f64_triple_bytes(a, b, c))
 }
+
+/// Serialize an `f32` slice to little-endian bytes.
+pub fn f32_array_bytes(data: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() * 4);
+    for v in data {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// Decode little-endian `u32` values from a byte slice.
+pub fn bytes_to_u32(bytes: &[u8]) -> Vec<u32> {
+    bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+}
+
+/// Decode little-endian `f32` values from a byte slice.
+pub fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
+    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+}
+
+/// Decode little-endian `i32` values from a byte slice.
+pub fn bytes_to_i32(bytes: &[u8]) -> Vec<i32> {
+    bytes.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+}
