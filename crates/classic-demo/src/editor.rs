@@ -116,7 +116,7 @@ pub fn init_tool_buttons(engine: &mut Engine, state: &DemoStateRef) {
     // conditional: adding it unconditionally would change the menu height
     // (and therefore the demo scene's layout and golden baseline) for a row
     // that does nothing outside the generated scene.
-    let mut menu_targets: Vec<(&str, &str)> = vec![
+    let menu_targets: Vec<(&str, &str)> = vec![
         ("Tile Editor", "tilemap"),
         ("Nav Editor", "navMesh"),
         ("Height Editor", "height"),
@@ -124,10 +124,6 @@ pub fn init_tool_buttons(engine: &mut Engine, state: &DemoStateRef) {
         ("Footprints", "_footprints"),
         ("Text Demo", "textDemo"),
     ];
-    if state.borrow().lunar.is_some() {
-        menu_targets.push(("Lunar Gen", "lunarGen"));
-    }
-    let menu_targets = menu_targets;
 
     let max_label_len = menu_targets.iter().map(|m| m.0.len()).max().unwrap_or(12);
     let glyph_w = 18.0_f32;
@@ -699,9 +695,6 @@ pub fn init_editor_mode_control(engine: &mut Engine, state: &DemoStateRef) {
         }
         if let Some(e) = state.borrow().light_widget_e {
             engine.set_enabled(e, target == "light");
-        }
-        if let Some(e) = state.borrow().lunar_widget_e {
-            engine.set_enabled(e, target == "lunarGen");
         }
         if let Some(e) = state.borrow().text_showcase_e {
             engine.set_enabled(e, target == "textDemo");

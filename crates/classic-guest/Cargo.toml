@@ -1,0 +1,28 @@
+[package]
+name = "classic-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+classic-core = { path = "../classic-core" }
+classic-engine = { path = "../classic-engine" }
+
+wasmi.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+wat = "1"
+glam.workspace = true
+classic-rom = { path = "../classic-rom" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmtime = { version = "47", default-features = false, features = ["cranelift", "runtime"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+web-sys.workspace = true

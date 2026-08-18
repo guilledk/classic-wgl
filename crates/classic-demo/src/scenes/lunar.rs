@@ -1,23 +1,26 @@
 //! Lunar scene: installs a procedurally generated lunar surface onto the
-//! demo's reused entity names, plus a dev widget to re-roll it at runtime.
+//! demo's reused entity names.
 //!
 //! `classic-core::terrain` does all the generation; this module installs the
-//! result on the ECS entities and GPU, and owns the runtime state needed to
-//! regenerate it.  The scene reuses the demo entity names (`tilemap`,
-//! `tilemapNavigation`, `navAgent`, ...) so the whole editor toolchain works
-//! on a generated map with no further changes.
+//! result on the ECS entities and GPU, and owns the boot-time state the camera
+//! needs.  The scene reuses the demo entity names (`tilemap`,
+//! `tilemapNavigation`, ...) so the whole editor toolchain works on a
+//! generated map with no further changes.  Runtime re-rolling is driven by the
+//! ROM guest (`guest/lunar-guest`) through the generic `generate_terrain` SDK
+//! import, not by a host widget.
 
-use classic_core::components::{IsoAgent, NavMesh, Tilemap, Transform};
+use classic_core::cl_info;
+use classic_core::components::Tilemap;
 use classic_core::instrument::Chan;
 use classic_core::terrain::lunar::{generate_lunar, LunarParams, LunarTerrain};
 use classic_core::terrain::tileset::{build_lunar_tileset, DEFAULT_COLS, DEFAULT_ROWS};
-use classic_core::{cl_info, cl_warn};
+use classic_core::terrain::{GeneratedTerrain, Terrain, Tileset};
 use classic_engine::Engine;
 
 use crate::state::DemoStateRef;
 
-/// Runtime state for the lunar scene, kept so the dev widget can re-roll the
-/// map without re-running the whole bootstrap.
+/// Runtime state for the lunar scene, kept so `focus_camera_on_spawn` can
+/// centre the view on a landing zone at boot.
 #[derive(Clone, Debug)]
 pub struct LunarScene {
     pub params: LunarParams,
@@ -87,312 +90,24 @@ pub fn init_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, params: Lun
         gen_ms
     );
 
-    let (tileset, tw, th) =
+    let (rgba, tw, th) =
         build_lunar_tileset(&format!("{}:tileset", params.seed), 32, DEFAULT_COLS, DEFAULT_ROWS);
 
-    engine.init_tilemap_generated(&terrain, &tileset, tw, th, Some(LUNAR_HEIGHT_SCALE));
-
-    // Match the editor's walkability rule to the one the generator used,
-    // so a height edit does not reclassify the whole map on the next
-    // `sync_nav_heights`.
-    engine.nav_slope_threshold = params.nav_max_slope;
-
-    place_agent_at_spawn(engine, &terrain);
+    let gen = GeneratedTerrain {
+        terrain: Terrain {
+            size_x: terrain.size_x,
+            size_y: terrain.size_y,
+            tiles: terrain.tiles.clone(),
+            heights: terrain.heights.clone(),
+            nav: terrain.nav.clone(),
+        },
+        tileset: Tileset { rgba, width: tw, height: th },
+        nav_slope_threshold: params.nav_max_slope,
+    };
+    engine.install_generated_terrain(&gen, LUNAR_HEIGHT_SCALE);
 
     state.borrow_mut().lunar =
         Some(LunarScene { params, terrain, height_scale: LUNAR_HEIGHT_SCALE });
-}
-
-/// Re-roll the terrain in place and re-upload every derived GPU resource.
-///
-/// Cheap enough (well under 200 ms for 200x200) to drive from a button.
-pub fn regenerate_lunar_terrain(engine: &mut Engine, state: &DemoStateRef, params: LunarParams) {
-    let t0 = now_ms();
-    let terrain = generate_lunar(&params);
-
-    let Some(tm_entity) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else {
-        cl_warn!(Chan::Terrain, "regenerate: no Tilemap-role entity");
-        return;
-    };
-
-    if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(tm_entity) {
-        tm.data = terrain.tiles.clone();
-        tm.height_data = terrain.heights.clone();
-        tm.height_scale = LUNAR_HEIGHT_SCALE;
-    }
-    engine.rebuild_tilemap_mesh();
-
-    if let Some(nav_entity) = engine.entity_by_role(classic_core::RoleKind::NavMesh) {
-        if let Ok(mut nav) = engine.world.get::<&mut NavMesh>(nav_entity) {
-            nav.data = terrain.nav.clone();
-        }
-    }
-    engine.rebuild_nav_gpu();
-
-    engine.nav_slope_threshold = params.nav_max_slope;
-    place_agent_at_spawn(engine, &terrain);
-
-    cl_info!(
-        Chan::Terrain,
-        "lunar regenerated seed '{}': {} craters, {:.0}% walkable ({})",
-        params.seed,
-        terrain.stats.craters,
-        terrain.stats.walkable_fraction * 100.0,
-        since(t0)
-    );
-
-    state.borrow_mut().lunar =
-        Some(LunarScene { params, terrain, height_scale: LUNAR_HEIGHT_SCALE });
-}
-
-/// Drop the nav agent onto the first spawn point and clear any path it was
-/// following (which would refer to terrain that no longer exists).
-fn place_agent_at_spawn(engine: &mut Engine, terrain: &LunarTerrain) {
-    let Some(agent) = engine.entity_by_role(classic_core::RoleKind::Agent) else { return };
-    let Some(&(sx, sy)) = terrain.spawn_points.first() else { return };
-
-    let h = terrain.height_at(sx, sy) * LUNAR_HEIGHT_SCALE;
-    let pos = glam::Vec3::new(sx as f32 + 0.5, sy as f32 + 0.5, h);
-
-    if let Ok(mut tf) = engine.world.get::<&mut Transform>(agent) {
-        tf.position = pos;
-    }
-    if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(agent) {
-        a.position = pos;
-        a.path.clear();
-        a.target_index = 0;
-        a.delta = 0.0;
-        a.state = classic_core::components::AgentState::Idle;
-    }
-}
-
-/// Dev widget: re-roll the map, and nudge the two parameters that most
-/// change its character.
-///
-/// Generation is well under a fifth of a second for 200x200, so tuning by
-/// button is genuinely interactive — which is the fastest way to find
-/// values that both look right and play right.
-pub fn init_lunar_widget(engine: &mut Engine, state: &DemoStateRef) {
-    use classic_core::components::{SdfTextRender, TextJustify, UiAnchor};
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    // Only meaningful once a lunar scene exists.
-    if state.borrow().lunar.is_none() {
-        return;
-    }
-
-    let init_density =
-        state.borrow().lunar.as_ref().map(|s| s.params.crater_density).unwrap_or(14.0);
-    let init_mare = state.borrow().lunar.as_ref().map(|s| s.params.mare_threshold).unwrap_or(-0.02);
-
-    let btn: f32 = 28.0;
-    let label_w: f32 = 132.0;
-    let gap: f32 = 4.0;
-    let widget_w: f32 = gap * 4.0 + btn * 2.0 + label_w;
-    let widget_h: f32 = btn * 4.0 + gap * 5.0;
-
-    // Shared with the update closure; `perform_calls` runs before the
-    // update loop, so a click is visible in the same frame.
-    let seed_n = Rc::new(Cell::new(0u32));
-    let density = Rc::new(Cell::new(init_density));
-    let mare = Rc::new(Cell::new(init_mare));
-    let dirty = Rc::new(Cell::new(false));
-
-    let mut mk_pair = |label: &str,
-                       dec: Box<dyn FnMut() -> bool>,
-                       inc: Box<dyn FnMut() -> bool>|
-     -> (hecs::Entity, hecs::Entity, hecs::Entity) {
-        let ui = engine.ui.as_mut().expect("ui");
-        let minus = ui.spawn_button(
-            &mut engine.world,
-            &mut engine.physics,
-            btn,
-            btn,
-            [0.6, 0.1, 0.1, 1.0],
-            classic_engine::ui::ButtonOptions {
-                text: Some("-".into()),
-                text_scale: 0.5,
-                sdf_text: true,
-                hover: true,
-                click_action: Some(dec),
-                ..Default::default()
-            },
-        );
-        let lbl = ui.spawn_sdf_text(
-            &mut engine.world,
-            label,
-            0.4,
-            220.0,
-            [1.0, 1.0, 1.0, 1.0],
-            TextJustify::Center,
-        );
-        let plus = ui.spawn_button(
-            &mut engine.world,
-            &mut engine.physics,
-            btn,
-            btn,
-            [0.1, 0.6, 0.1, 1.0],
-            classic_engine::ui::ButtonOptions {
-                text: Some("+".into()),
-                text_scale: 0.5,
-                sdf_text: true,
-                hover: true,
-                click_action: Some(inc),
-                ..Default::default()
-            },
-        );
-        (minus, lbl, plus)
-    };
-
-    let (d_minus, d_label, d_plus) = {
-        let (a, b) = (density.clone(), density.clone());
-        let (da, db) = (dirty.clone(), dirty.clone());
-        mk_pair(
-            "craters",
-            Box::new(move || {
-                a.set((a.get() - 2.0).max(0.0));
-                da.set(true);
-                true
-            }),
-            Box::new(move || {
-                b.set((b.get() + 2.0).min(60.0));
-                db.set(true);
-                true
-            }),
-        )
-    };
-
-    let (m_minus, m_label, m_plus) = {
-        let (a, b) = (mare.clone(), mare.clone());
-        let (da, db) = (dirty.clone(), dirty.clone());
-        mk_pair(
-            "mare",
-            Box::new(move || {
-                a.set((a.get() - 0.06).max(-0.9));
-                da.set(true);
-                true
-            }),
-            Box::new(move || {
-                b.set((b.get() + 0.06).min(0.9));
-                db.set(true);
-                true
-            }),
-        )
-    };
-
-    let container = {
-        let ui = engine.ui.as_mut().expect("ui");
-        ui.spawn_container(&mut engine.world, widget_w, widget_h, [0.0, 0.0, 0.0, 0.45])
-    };
-
-    let seed_label = {
-        let ui = engine.ui.as_mut().expect("ui");
-        ui.spawn_sdf_text(
-            &mut engine.world,
-            "seed",
-            0.34,
-            220.0,
-            [0.8, 0.85, 1.0, 1.0],
-            TextJustify::Center,
-        )
-    };
-
-    let regen = {
-        let s = seed_n.clone();
-        let d = dirty.clone();
-        let ui = engine.ui.as_mut().expect("ui");
-        ui.spawn_button(
-            &mut engine.world,
-            &mut engine.physics,
-            widget_w - gap * 2.0,
-            btn,
-            [0.2, 0.3, 0.5, 1.0],
-            classic_engine::ui::ButtonOptions {
-                text: Some("Regenerate".into()),
-                text_scale: 0.36,
-                sdf_text: true,
-                hover: true,
-                click_action: Some(Box::new(move || {
-                    s.set(s.get() + 1);
-                    d.set(true);
-                    true
-                })),
-                ..Default::default()
-            },
-        )
-    };
-
-    {
-        let ui = engine.ui.as_mut().expect("ui");
-        ui.add_children(
-            &mut engine.world,
-            container,
-            &[d_minus, d_label, d_plus, m_minus, m_label, m_plus, seed_label, regen],
-            UiAnchor::TopLeft,
-            UiAnchor::TopLeft,
-        );
-    }
-
-    state.borrow_mut().lunar_widget_e = Some(container);
-    engine.set_enabled(container, false);
-
-    let state = Rc::clone(state);
-    engine.on_update(move |engine| {
-        // Bottom-right, the same slot the height and light widgets use —
-        // only one tool panel is visible at a time.
-        let Some(ref ui) = engine.ui else { return };
-        let x0 = ui.viewport_w - widget_w;
-        let y0 = ui.viewport_h - widget_h;
-        let rows = [gap, btn + gap * 2.0, btn * 2.0 + gap * 3.0, btn * 3.0 + gap * 4.0];
-
-        let place = |engine: &mut Engine, e: hecs::Entity, x: f32, y: f32| {
-            if let Ok(mut tf) = engine.world.get::<&mut Transform>(e) {
-                tf.position = glam::Vec3::new(x, y, tf.position.z);
-            }
-            classic_engine::ui::UIManager::position_children_of(e, &mut engine.world);
-        };
-
-        place(engine, container, x0, y0);
-        let lx = x0 + gap + btn + gap;
-        place(engine, d_minus, x0 + gap, y0 + rows[0]);
-        place(engine, d_label, lx, y0 + rows[0]);
-        place(engine, d_plus, lx + label_w, y0 + rows[0]);
-        place(engine, m_minus, x0 + gap, y0 + rows[1]);
-        place(engine, m_label, lx, y0 + rows[1]);
-        place(engine, m_plus, lx + label_w, y0 + rows[1]);
-        place(engine, seed_label, lx, y0 + rows[2]);
-        place(engine, regen, x0 + gap, y0 + rows[3]);
-
-        if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(d_label) {
-            sdf.text = format!("craters {:.0}", density.get());
-        }
-        if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(m_label) {
-            sdf.text = format!("mare {:.2}", mare.get());
-        }
-        if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(seed_label) {
-            let walk = state
-                .borrow()
-                .lunar
-                .as_ref()
-                .map(|s| s.terrain.stats.walkable_fraction * 100.0)
-                .unwrap_or(0.0);
-            sdf.text = format!("seed #{}  {walk:.0}% open", seed_n.get());
-        }
-
-        if !dirty.replace(false) {
-            return;
-        }
-        let Some(base) = state.borrow().lunar.as_ref().map(|s| s.params.clone()) else { return };
-        let root = base.seed.split('#').next().unwrap_or("apollo").to_string();
-        let params = LunarParams {
-            seed: format!("{root}#{}", seed_n.get()),
-            crater_density: density.get(),
-            mare_threshold: mare.get(),
-            ..base
-        };
-        regenerate_lunar_terrain(engine, &state, params);
-    });
 }
 
 /// Centre the camera on the first landing zone.
@@ -412,7 +127,7 @@ pub fn focus_camera_on_spawn(engine: &mut Engine, state: &DemoStateRef) {
     engine.camera.position.y = origin.y;
 }
 
-/// Install the generated navigation grid and wire click-to-move.
+/// Install the generated navigation grid.
 ///
 /// The generator already derived walkability from real terrain slope and
 /// guaranteed every spawn is mutually reachable; re-deriving it from the

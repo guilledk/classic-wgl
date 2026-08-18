@@ -6,10 +6,15 @@ members = [
     "crates/classic-platform",
     "crates/classic-engine",
     "crates/classic-rom",
+    "crates/classic-guest",
     "crates/classic-demo",
     "apps/desktop",
     "apps/web",
 ]
+# ROM guest crates are standalone #![no_std] cdylibs built only for
+# wasm32-unknown-unknown (see scripts/build-guest.mjs); they are not host code
+# and must not be compiled by the default workspace build.
+exclude = ["guest"]
 
 [workspace.package]
 version = "0.1.0-alpha.0"
@@ -56,6 +61,9 @@ ruzstd = "0.9"
 # Component registry (distributed slice)
 linkme = "0.3"
 
+# Guest code runtime (WASM interpreter for ROM guest modules)
+wasmi = "0.41"
+
 # Safe GPU data casting
 bytemuck = { version = "1", features = ["derive"] }
 
@@ -82,6 +90,9 @@ web-sys = { version = "0.3", features = [
     "WebGlRenderbuffer",
     "AngleInstancedArrays",
     "OesStandardDerivatives",
+    "Worker",
+    "Blob",
+    "Url",
 ] }
 js-sys = "0.3"
 gloo-net = "0.6"

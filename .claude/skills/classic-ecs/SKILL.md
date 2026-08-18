@@ -524,10 +524,11 @@ preserves insertion order).  Each entity gets:
 `self.name_order` is critical for `dump_state()` serialization — it
 reproduces the entity iteration order when writing `state.json`.
 
-### Sidecar decoding
+### Inlined tile/nav data
 
-`Engine::decode_map_data(base64_str)` decodes base64-encoded JSON arrays
-for tilemap and nav mesh data (`map001.txt`, `map001.nav.txt`).
+Tilemap and nav-mesh data are inlined into `state.json` (base64 `Vec<u32>` /
+`Vec<f32>` via `serde_base64`); there are no sidecar files.  `Tilemap.data` /
+`height_data` and `NavMesh.data` are deserialized directly by their spawners.
 
 ---
 

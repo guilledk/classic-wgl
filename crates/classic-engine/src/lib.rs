@@ -17,19 +17,18 @@ pub mod env_config;
 pub mod golden;
 pub mod ui;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    AgentState, DebugName, IsoAgent, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
-    UiNode,
+    Animator, ColliderData, DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender,
+    TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
-use classic_core::terrain::lunar::LunarTerrain;
 use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 use classic_core::types::AnimationData;
 use classic_core::types::SdfFontMetrics;
@@ -40,6 +39,15 @@ use glam::{Mat3, Mat4, Vec3, Vec4};
 use glow::HasContext;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
+
+/// An interaction event queued for a ROM guest.
+#[derive(Clone, Debug)]
+pub struct GuestEvent {
+    /// 0 = click, 1 = enter (hover start), 2 = exit (hover end).
+    pub kind: u32,
+    /// The subscribed entity's name.
+    pub name: String,
+}
 
 /// Per-entity GPU resources for a tilemap.
 struct TilemapGpu {
@@ -65,12 +73,21 @@ pub struct Engine {
     pub names: HashMap<String, hecs::Entity>,
     pub name_order: Vec<String>,
     pub physics: PhysicsProvider,
+    /// Collider pid → entity name, populated by `register_named_collider` so the
+    /// guest `pick_at` can resolve a screen point to a gameplay entity.
+    collider_names: HashMap<u32, String>,
+    /// Entity names the guest has subscribed to for interaction events.
+    subscribed: HashSet<String>,
+    /// Events queued for the guest, drained via `poll_event`.
+    guest_events: VecDeque<GuestEvent>,
+    /// The subscribed entity currently under the mouse (for enter/exit).
+    guest_hover: Option<String>,
     pub ui_consumed_click: bool,
     pub scroll_speed: f32,
     pub input: InputState,
     pub show_grid: bool,
-    /// Selected-agent flag — the generic engine signal the nav click-to-move
-    /// handler reads.  The demo editor toggles it.
+    /// Selected-agent flag — the demo editor toggles it; the ROM guest reads it
+    /// (via `agent_selected`) to gate click-to-move.
     pub agent_selected: bool,
     pub light_ambient: [f32; 3],
     pub light_dir: [f32; 3],
@@ -162,6 +179,10 @@ impl Engine {
             names: HashMap::new(),
             name_order: Vec::new(),
             physics: PhysicsProvider::new(),
+            collider_names: HashMap::new(),
+            subscribed: HashSet::new(),
+            guest_events: VecDeque::new(),
+            guest_hover: None,
             ui_consumed_click: false,
             scroll_speed: 600.0,
             input: InputState::new(),
@@ -317,20 +338,18 @@ impl Engine {
         self.finish_tilemap_init(entity, tiles, heights, None);
     }
 
-    /// Build and upload a tilemap from procedurally generated terrain, with
-    /// an in-memory RGBA tileset instead of a PNG.
+    /// Build and upload a tilemap from a generated
+    /// [`classic_core::terrain::GeneratedTerrain`], with an in-memory RGBA
+    /// tileset instead of a PNG.
     ///
     /// `height_scale` overrides the default (`tile_pixel_size[0]`).  Generated
     /// terrain has a far larger height range than the flat demo map, so the
     /// default scale would exaggerate the relief and stretch the mouse-picking
     /// parallax solve.
-    pub fn init_tilemap_generated(
+    pub fn install_generated_terrain(
         &mut self,
-        terrain: &LunarTerrain,
-        tileset_rgba: &[u8],
-        tileset_w: u32,
-        tileset_h: u32,
-        height_scale: Option<f32>,
+        gen: &classic_core::terrain::GeneratedTerrain,
+        height_scale: f32,
     ) {
         let entity = self.entity_by_role(RoleKind::Tilemap).expect("Tilemap-role entity");
 
@@ -339,21 +358,72 @@ impl Engine {
             (tm.tile_set.clone(), tm.size_x, tm.size_y)
         };
         assert_eq!(
-            (terrain.size_x, terrain.size_y),
+            (gen.terrain.size_x, gen.terrain.size_y),
             (size_x, size_y),
             "generated terrain size does not match the Tilemap component"
         );
 
         if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_rgba8(&tile_set_name, tileset_rgba, tileset_w, tileset_h);
+            gfx.add_texture_rgba8(
+                &tile_set_name,
+                &gen.tileset.rgba,
+                gen.tileset.width,
+                gen.tileset.height,
+            );
         }
+
+        self.nav_slope_threshold = gen.nav_slope_threshold;
 
         self.finish_tilemap_init(
             entity,
-            terrain.tiles.clone(),
-            terrain.heights.clone(),
-            height_scale,
+            gen.terrain.tiles.clone(),
+            gen.terrain.heights.clone(),
+            Some(height_scale),
         );
+    }
+
+    /// Re-upload a generated terrain in place: update the Tilemap and NavMesh
+    /// data and rebuild their GPU resources.  Assumes the tilemap was already
+    /// installed (boot install or a prior [`Engine::install_generated_terrain`]).
+    pub fn regenerate_terrain(
+        &mut self,
+        gen: &classic_core::terrain::GeneratedTerrain,
+        height_scale: f32,
+    ) {
+        if let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) {
+            if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
+                tm.data = gen.terrain.tiles.clone();
+                tm.height_data = gen.terrain.heights.clone();
+                tm.height_scale = height_scale;
+            }
+        }
+        self.rebuild_tilemap_mesh();
+
+        if let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) {
+            if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
+                nav.data = gen.terrain.nav.clone();
+            }
+        }
+        self.rebuild_nav_gpu();
+
+        self.nav_slope_threshold = gen.nav_slope_threshold;
+    }
+
+    /// Generate a named terrain (see [`classic_core::terrain::generate`]) and
+    /// install or regenerate it.  The generic terrain prefab behind the guest
+    /// `generate_terrain` import.
+    pub fn generate_terrain(&mut self, kind: &str, seed: &str, height_scale: f32) -> bool {
+        let Some(gen) = classic_core::terrain::generate(kind, seed) else { return false };
+        let installed = self
+            .entity_by_role(RoleKind::Tilemap)
+            .map(|e| self.tilemap_gpu.contains_key(&self.debug_name(e)))
+            .unwrap_or(false);
+        if installed {
+            self.regenerate_terrain(&gen, height_scale);
+        } else {
+            self.install_generated_terrain(&gen, height_scale);
+        }
+        true
     }
 
     /// Shared tail of the `init_tilemap*` family: build the mesh and tile-data
@@ -670,41 +740,537 @@ impl Engine {
         Ok(())
     }
 
-    /// Read a named entity's 2D position (from its `Transform`).
-    pub fn get_pos(&self, name: &str) -> Option<(f32, f32)> {
+    /// Read a named entity's position (from its `Transform`).
+    pub fn get_pos(&self, name: &str) -> Option<(f32, f32, f32)> {
         let entity = *self.names.get(name)?;
-        self.world.get::<&Transform>(entity).ok().map(|tf| (tf.position.x, tf.position.y))
+        self.world
+            .get::<&Transform>(entity)
+            .ok()
+            .map(|tf| (tf.position.x, tf.position.y, tf.position.z))
     }
 
-    /// Write a named entity's 2D position (into its `Transform`).
-    pub fn set_pos(&mut self, name: &str, x: f32, y: f32) -> bool {
+    /// Write a named entity's position (into its `Transform`, creating a
+    /// default one if the entity has none yet).
+    pub fn set_pos(&mut self, name: &str, x: f32, y: f32, z: f32) -> bool {
         let Some(&entity) = self.names.get(name) else { return false };
+        if self.world.get::<&Transform>(entity).is_err() {
+            let _ = self.world.insert_one(
+                entity,
+                Transform::new(glam::Vec3::new(x, y, z), glam::Vec3::new(1.0, 1.0, 1.0)),
+            );
+            return true;
+        }
         if let Ok(mut tf) = self.world.get::<&mut Transform>(entity) {
             tf.position.x = x;
             tf.position.y = y;
+            tf.position.z = z;
             true
         } else {
             false
         }
     }
 
-    /// Save a file, handling both native (filesystem) and web (Blob download).
-    pub fn save_file(&self, name: &str, data: &str) {
+    /// The iso tile coordinates under the mouse cursor (from the tilemap).
+    pub fn mouse_iso(&self) -> Option<(f32, f32)> {
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+        Some((tm.mouse_iso_pos.x, tm.mouse_iso_pos.y))
+    }
+
+    /// Terrain height (in world z units) at the given iso tile coordinate.
+    pub fn height_at(&self, x: f32, y: f32) -> f32 {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
+        let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return 0.0 };
+        bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
+    }
+
+    /// Write one tile index at tile coordinate `(x, y)` (bounds-checked).
+    pub fn set_tile(&mut self, x: i32, y: i32, id: u32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if x < 0 || y < 0 || x >= tm.size_x || y >= tm.size_y {
+            return false;
+        }
+        let idx = (y as usize) * tm.size_x as usize + x as usize;
+        let Some(t) = tm.data.get_mut(idx) else { return false };
+        *t = id;
+        true
+    }
+
+    /// Write one height vertex at coordinate `(x, y)` (bounds-checked; the
+    /// height grid is a `(size_x + 1) × (size_y + 1)` vertex grid).
+    pub fn set_height(&mut self, x: i32, y: i32, h: f32) -> bool {
+        let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
+        let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) else { return false };
+        if x < 0 || y < 0 || x > tm.size_x || y > tm.size_y {
+            return false;
+        }
+        let idx = (y as usize) * (tm.size_x as usize + 1) + x as usize;
+        let Some(cell) = tm.height_data.get_mut(idx) else { return false };
+        *cell = h.max(0.0);
+        true
+    }
+
+    /// Rebuild the tilemap mesh and re-derive nav walkability after in-place
+    /// tile/height edits (the guest-facing terrain-edit tail).
+    pub fn rebuild_terrain(&mut self) -> bool {
+        if self.entity_by_role(RoleKind::Tilemap).is_none() {
+            return false;
+        }
+        self.rebuild_tilemap_mesh();
+        self.sync_nav_heights();
+        true
+    }
+
+    /// Set a named entity's `Animator` to play a looping animation.
+    pub fn set_anim(&mut self, name: &str, anim: &str) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
+            a.animation = Some(anim.to_string());
+            a.playing = true;
+            a.repeat = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Read a named entity's current animation name and frame.
+    pub fn get_anim(&self, name: &str) -> Option<(String, f32)> {
+        let entity = *self.names.get(name)?;
+        let a = self.world.get::<&Animator>(entity).ok()?;
+        Some((a.animation.clone().unwrap_or_default(), a.frame))
+    }
+
+    /// Whether a named texture is available (declared in the ROM's resources or
+    /// already uploaded to GL).
+    pub fn has_texture(&self, name: &str) -> bool {
+        let in_gfx = self.gfx.as_ref().map(|g| g.textures.contains_key(name)).unwrap_or(false);
+        let in_rom =
+            self.rom_resources.as_ref().map(|r| r.textures().contains_key(name)).unwrap_or(false);
+        in_gfx || in_rom
+    }
+
+    /// Whether a named SDF font is available (declared in the ROM's resources
+    /// or already loaded into `sdf_fonts`).
+    pub fn has_font(&self, name: &str) -> bool {
+        let in_metrics = self.sdf_fonts.contains_key(name);
+        let in_rom =
+            self.rom_resources.as_ref().map(|r| r.fonts().contains_key(name)).unwrap_or(false);
+        in_metrics || in_rom
+    }
+
+    /// Whether a named animation is registered.
+    pub fn has_animation(&self, name: &str) -> bool {
+        self.animations.contains_key(name)
+    }
+
+    /// The pixel dimensions of a loaded texture, if any.
+    pub fn texture_size(&self, name: &str) -> Option<(u32, u32)> {
+        self.gfx.as_ref().and_then(|g| g.textures.get(name)).map(|t| t.size)
+    }
+
+    /// A* path over the nav mesh between two integer tile coordinates.
+    /// Returns the full path (inclusive of both endpoints) or `None`.
+    pub fn find_path(&self, from: (i32, i32), to: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+        let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
+        let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
+        let nav_i32: Vec<i32> = nav.data.iter().map(|&v| v as i32).collect();
+        pathfinder::find_path(&nav_i32, nav.size_x, nav.size_y, from, to)
+    }
+
+    /// Read the camera position (x, y) and uniform scale.
+    pub fn get_camera(&self) -> (f32, f32, f32) {
+        (self.camera.position.x, self.camera.position.y, self.camera.scale.x)
+    }
+
+    /// Set the camera position (x, y) and uniform scale.
+    pub fn set_camera(&mut self, x: f32, y: f32, scale: f32) {
+        self.camera.position.x = x;
+        self.camera.position.y = y;
+        self.camera.scale.x = scale;
+        self.camera.scale.y = scale;
+    }
+
+    /// Register a collider and remember its owning entity's name, so
+    /// [`Engine::pick_at`] can resolve it.
+    pub fn register_named_collider(&mut self, name: &str, collider: ColliderData) -> u32 {
+        let pid = self.physics.register_collider(collider);
+        self.collider_names.insert(pid, name.to_string());
+        pid
+    }
+
+    /// Attach an axis-aligned rectangle collider to a named entity, at a screen
+    /// position and size.  Combined with `subscribe`, this makes arbitrary
+    /// (screen-space) entities clickable/hoverable from a guest.
+    pub fn spawn_collider(&mut self, name: &str, x: f32, y: f32, w: f32, h: f32) -> bool {
+        if !self.names.contains_key(name) {
+            return false;
+        }
+        let verts = vec![
+            glam::Vec3::new(0.0, 0.0, 0.0),
+            glam::Vec3::new(w, 0.0, 0.0),
+            glam::Vec3::new(w, h, 0.0),
+            glam::Vec3::new(0.0, h, 0.0),
+        ];
+        let mut collider = ColliderData::new(classic_core::collision::polygon_from_verts(verts));
+        collider.position = glam::Vec3::new(x, y, 0.0);
+        collider.scale = glam::Vec3::ONE;
+        self.register_named_collider(name, collider);
+        true
+    }
+
+    /// The name of the top gameplay entity under a screen point, if any.
+    pub fn pick_at(&self, x: f32, y: f32) -> Option<String> {
+        let pid = self.physics.point_query(x, y).into_iter().next()?;
+        self.collider_names.get(&pid).cloned()
+    }
+
+    /// The name of the top *subscribed* entity under a screen point, if any.
+    fn pick_subscribed(&self, x: f32, y: f32) -> Option<String> {
+        self.physics.point_query(x, y).into_iter().find_map(|pid| {
+            self.collider_names.get(&pid).cloned().filter(|n| self.subscribed.contains(n))
+        })
+    }
+
+    /// Subscribe a named entity to interaction events (click/enter/exit).
+    pub fn subscribe(&mut self, name: &str) -> bool {
+        if !self.names.contains_key(name) {
+            return false;
+        }
+        self.subscribed.insert(name.to_string());
+        true
+    }
+
+    /// Pop the next queued guest event, if any.
+    pub fn poll_event(&mut self) -> Option<GuestEvent> {
+        self.guest_events.pop_front()
+    }
+
+    /// Read the light uniforms (ambient, direction, color).
+    pub fn get_light(&self) -> ([f32; 3], [f32; 3], [f32; 3]) {
+        (self.light_ambient, self.light_dir, self.light_color)
+    }
+
+    /// Set the light uniforms (ambient, direction, color).
+    pub fn set_light(&mut self, ambient: [f32; 3], dir: [f32; 3], color: [f32; 3]) {
+        self.light_ambient = ambient;
+        self.light_dir = dir;
+        self.light_color = color;
+    }
+
+    /// Spawn a named screen-space solid-color rectangle (a HUD element).
+    pub fn spawn_rect(
+        &mut self,
+        name: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = self.world.spawn((
+            Transform::new(glam::Vec3::new(x, y, 0.0), glam::Vec3::new(w, h, 1.0)),
+            RectRender { color, ignore_cam: true },
+        ));
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+        true
+    }
+
+    /// Spawn a named screen-space SDF text label.
+    pub fn spawn_text(
+        &mut self,
+        name: &str,
+        x: f32,
+        y: f32,
+        text: &str,
+        scale: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = self.world.spawn((
+            Transform::new(glam::Vec3::new(x, y, 0.0), glam::Vec3::new(scale, scale, 1.0)),
+            SdfTextRender {
+                atlas_name: "dejavusans".into(),
+                color,
+                bgcolor: [0.0, 0.0, 0.0, 0.0],
+                outline_color: [0.0, 0.0, 0.0, 0.0],
+                outline_width: 0.0,
+                shadow_offset: [1.0, 1.0],
+                shadow_color: [0.0, 0.0, 0.0, 0.0],
+                shadow_blur: 0.0,
+                ignore_cam: true,
+                text: text.to_string(),
+                justify: classic_core::components::TextJustify::Left,
+                weight: 0.0,
+                gamma: 1.0,
+            },
+        ));
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+        true
+    }
+
+    /// Update a named SDF text label's string.
+    pub fn set_text(&mut self, name: &str, text: &str) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        if let Ok(mut sdf) = self.world.get::<&mut SdfTextRender>(entity) {
+            sdf.text = text.to_string();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Register an already-spawned entity under a guest-visible name.
+    fn register_named_entity(&mut self, name: &str, entity: hecs::Entity) {
+        self.world.insert_one(entity, DebugName(name.to_string())).ok();
+        self.names.insert(name.to_string(), entity);
+        self.name_order.push(name.to_string());
+    }
+
+    // ---- UIManager registration (guest-managed responsive UI) -------------
+    //
+    // These wrap the `UIManager` factories so a guest can create UI elements
+    // that participate in layout (anchoring/array/padding/resize) under a name
+    // it controls, without reimplementing any responsiveness.
+
+    /// Spawn a named UI container (solid-color rectangle managed by layout).
+    pub fn ui_container(&mut self, name: &str, w: f32, h: f32, color: [f32; 4]) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_container(&mut self.world, w, h, color)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named UI SDF text label managed by layout.
+    pub fn ui_text(
+        &mut self,
+        name: &str,
+        text: &str,
+        scale: f32,
+        max_width: f32,
+        color: [f32; 4],
+        justify: TextJustify,
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_sdf_text(&mut self.world, text, scale, max_width, color, justify)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named UI button (container + centered text + click collider).
+    /// The button is registered in the collider-name map and auto-subscribed,
+    /// so its clicks surface through the guest event queue.
+    pub fn ui_button(&mut self, name: &str, text: &str, w: f32, h: f32, color: [f32; 4]) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let (entity, pid) = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            let entity = ui.spawn_button(
+                &mut self.world,
+                &mut self.physics,
+                w,
+                h,
+                color,
+                ui::ButtonOptions {
+                    text: Some(text.to_string()),
+                    text_scale: 0.4,
+                    text_color: [1.0, 1.0, 1.0, 1.0],
+                    sdf_text: true,
+                    hover: true,
+                    click_priority: 1,
+                    ..Default::default()
+                },
+            );
+            let pid = ui.collider_pid_for(entity);
+            (entity, pid)
+        };
+        self.register_named_entity(name, entity);
+        if let Some(pid) = pid {
+            self.collider_names.insert(pid, name.to_string());
+        }
+        self.subscribed.insert(name.to_string());
+        true
+    }
+
+    /// Spawn a named UI array container (vertical or horizontal stacking).
+    pub fn ui_array(
+        &mut self,
+        name: &str,
+        vertical: bool,
+        align: UiAlign,
+        spacing: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_array(&mut self.world, vertical, align, spacing, color)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named UI padding wrapper.
+    pub fn ui_padding(
+        &mut self,
+        name: &str,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        left: f32,
+        color: [f32; 4],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_padding(&mut self.world, top, right, bottom, left, color)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Spawn a named texture-sprite UI element.
+    pub fn ui_sprite(
+        &mut self,
+        name: &str,
+        texture: &str,
+        w: f32,
+        h: f32,
+        frame: f32,
+        tile_set_size: [f32; 2],
+    ) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let entity = {
+            let Some(ui) = self.ui.as_mut() else { return false };
+            ui.spawn_sprite(&mut self.world, texture, w, h, frame, tile_set_size)
+        };
+        self.register_named_entity(name, entity);
+        true
+    }
+
+    /// Attach a named UI element as a child of another (anchor-based layout).
+    pub fn ui_add_child(
+        &mut self,
+        parent: &str,
+        child: &str,
+        self_anchor: UiAnchor,
+        child_anchor: UiAnchor,
+    ) -> bool {
+        let Some(&p) = self.names.get(parent) else { return false };
+        let Some(&c) = self.names.get(child) else { return false };
+        let Some(ui) = self.ui.as_mut() else { return false };
+        ui.container_add_child(&mut self.world, p, c, self_anchor, child_anchor);
+        true
+    }
+
+    /// Attach a named UI element to the root container (viewport-anchored).
+    pub fn ui_add_to_root(
+        &mut self,
+        name: &str,
+        self_anchor: UiAnchor,
+        child_anchor: UiAnchor,
+    ) -> bool {
+        let Some(&c) = self.names.get(name) else { return false };
+        let Some(ui) = self.ui.as_mut() else { return false };
+        ui.root_add_child(&mut self.world, c, self_anchor, child_anchor);
+        true
+    }
+
+    /// Set a named UI element's size.
+    pub fn ui_set_size(&mut self, name: &str, w: f32, h: f32) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        {
+            let Ok(mut n) = self.world.get::<&mut UiNode>(e) else { return false };
+            n.size = glam::Vec2::new(w, h);
+        }
+        if let Some(ui) = self.ui.as_mut() {
+            ui.mark_dirty();
+        }
+        true
+    }
+
+    /// Set a named UI element's anchor.
+    pub fn ui_set_anchor(&mut self, name: &str, anchor: UiAnchor) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        {
+            let Ok(mut n) = self.world.get::<&mut UiNode>(e) else { return false };
+            n.anchor = anchor;
+        }
+        if let Some(ui) = self.ui.as_mut() {
+            ui.mark_dirty();
+        }
+        true
+    }
+
+    /// Set a named UI rectangle's color.
+    pub fn ui_set_color(&mut self, name: &str, color: [f32; 4]) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        if let Ok(mut r) = self.world.get::<&mut RectRender>(e) {
+            r.color = color;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set whether a named UI element is fixed (skips responsive layout).
+    pub fn ui_set_fixed(&mut self, name: &str, fixed: bool) -> bool {
+        let Some(&e) = self.names.get(name) else { return false };
+        {
+            let Ok(mut n) = self.world.get::<&mut UiNode>(e) else { return false };
+            n.fixed = fixed;
+        }
+        if let Some(ui) = self.ui.as_mut() {
+            ui.mark_dirty();
+        }
+        true
+    }
+
+    /// Save raw bytes to a file, handling both native (filesystem) and web
+    /// (Blob download).
+    pub fn save_bytes(&self, name: &str, bytes: &[u8]) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let dir = &crate::env_config::EnvConfig::get().dump_dir;
             let _ = std::fs::create_dir_all(dir);
             let path = format!("{dir}/{name}");
-            if let Err(e) = std::fs::write(&path, data) {
+            if let Err(e) = std::fs::write(&path, bytes) {
                 classic_core::cl_warn!(
                     classic_core::instrument::Chan::Dump,
-                    "save_file: failed to write {path}: {e}"
+                    "save_bytes: failed to write {path}: {e}"
                 );
             } else {
                 classic_core::cl_warn!(
                     classic_core::instrument::Chan::Dump,
-                    "save_file: wrote {path} ({} bytes)",
-                    data.len()
+                    "save_bytes: wrote {path} ({} bytes)",
+                    bytes.len()
                 );
             }
         }
@@ -714,7 +1280,7 @@ impl Engine {
             if let Some(window) = web_sys::window() {
                 let doc = window.document().unwrap();
                 let blob_parts = js_sys::Array::new();
-                blob_parts.push(&js_sys::Uint8Array::from(data.as_bytes()).into());
+                blob_parts.push(&js_sys::Uint8Array::from(bytes).into());
                 let blob = web_sys::Blob::new_with_str_sequence(&blob_parts).unwrap();
                 let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
                 let a = doc.create_element("a").unwrap();
@@ -722,6 +1288,37 @@ impl Engine {
                 a.set_attribute("href", &url).unwrap();
                 a.dyn_ref::<web_sys::HtmlElement>().unwrap().click();
                 web_sys::Url::revoke_object_url(&url).unwrap();
+            }
+        }
+    }
+
+    /// Save a UTF-8 text file (delegates to [`Engine::save_bytes`]).
+    pub fn save_file(&self, name: &str, data: &str) {
+        self.save_bytes(name, data.as_bytes());
+    }
+
+    /// Serialize the current world as a ROM archive and save it to
+    /// `<entrypoint>.rom` — the canonical editor save (F10).
+    pub fn save_rom(&self) -> bool {
+        let Some(rom) = self.dump_rom() else {
+            classic_core::cl_warn!(
+                classic_core::instrument::Chan::Dump,
+                "save_rom: no ROM loaded to save"
+            );
+            return false;
+        };
+        let name = format!("{}.rom", rom.manifest.entrypoint);
+        match rom.pack() {
+            Ok(bytes) => {
+                self.save_bytes(&name, &bytes);
+                true
+            }
+            Err(e) => {
+                classic_core::cl_warn!(
+                    classic_core::instrument::Chan::Dump,
+                    "save_rom: failed to pack ROM: {e}"
+                );
+                false
             }
         }
     }
@@ -806,6 +1403,25 @@ impl Engine {
         // Per-frame hover highlighting for UI elements.
         if let Some(ref mut ui) = self.ui {
             ui.update_hover(&mut self.world, &self.physics);
+        }
+
+        // Guest interaction events: click + enter/exit for subscribed entities.
+        if !self.subscribed.is_empty() {
+            if self.physics.mouse_clicked {
+                if let Some(name) = self.pick_subscribed(mp.x, mp.y) {
+                    self.guest_events.push_back(GuestEvent { kind: 0, name });
+                }
+            }
+            let current = self.pick_subscribed(mp.x, mp.y);
+            if current != self.guest_hover {
+                if let Some(h) = self.guest_hover.clone() {
+                    self.guest_events.push_back(GuestEvent { kind: 2, name: h });
+                }
+                if let Some(c) = current.clone() {
+                    self.guest_events.push_back(GuestEvent { kind: 1, name: c });
+                }
+                self.guest_hover = current;
+            }
         }
 
         if self.input.was_mouse_pressed(0) && !self.ui_consumed_click {
@@ -1957,7 +2573,7 @@ impl Engine {
     }
 
     /// Initialize navigation from the nav mesh entity's inline `NavMesh.data`
-    /// (loaded from `state.json`) and wire click-to-move.
+    /// (loaded from `state.json`).
     pub fn init_navigation(&mut self) {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
         let nav_data = {
@@ -1967,114 +2583,25 @@ impl Engine {
         self.init_navigation_data(nav_data);
     }
 
-    /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked) and
-    /// wire click-to-move.
+    /// Install a pre-built navigation grid (`1` = walkable, `0` = blocked).
     ///
     /// Used by generated scenes, which derive walkability from real terrain
-    /// slope during generation and so must not have it recomputed here.
+    /// slope during generation and so must not have it recomputed here.  Agent
+    /// movement is driven by the ROM guest (which paths over this grid via
+    /// `find_path`); this only installs the grid for the nav-mesh overlay.
     pub fn init_navigation_data(&mut self, nav_tiles: Vec<u32>) {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return };
-        let Some(agent_entity) = self.entity_by_role(RoleKind::Agent) else { return };
-        let Some(tilemap_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
 
         // The supplied grid is authoritative for passability.  A block here
         // used to re-derive walkability from tilemap heights and then discard
         // the result on the very next line; `sync_nav_heights` is now the one
         // place that does that, and only in response to a height edit.
+        //
+        // Installed regardless of whether an agent exists — the nav mesh
+        // overlay still needs it.
         if let Ok(mut nav) = self.world.get::<&mut NavMesh>(nav_entity) {
             nav.data = nav_tiles;
         }
-
-        // 3. Wire click-to-move.  Each frame, if the mouse was just
-        //    clicked, compute an A* path and send it to the agent.
-        let agent_ent = agent_entity;
-        let nav_ent = nav_entity;
-        self.on_update(move |engine| {
-            if !engine.input.was_mouse_pressed(0) || engine.ui_consumed_click {
-                return;
-            }
-
-            let (click_x, click_y, agent_pos, nav_data, s_x, s_y) = {
-                let Ok(tm) = engine.world.get::<&Tilemap>(tilemap_entity) else { return };
-                let Ok(_agent) = engine.world.get::<&IsoAgent>(agent_ent) else { return };
-                let agent_tf = engine.world.get::<&Transform>(agent_ent).unwrap();
-                let nav = engine.world.get::<&NavMesh>(nav_ent).unwrap();
-                (
-                    tm.mouse_iso_pos.x,
-                    tm.mouse_iso_pos.y,
-                    (agent_tf.position.x, agent_tf.position.y),
-                    nav.data.clone(),
-                    nav.size_x,
-                    nav.size_y,
-                )
-            };
-
-            let cx = click_x as i32;
-            let cy = click_y as i32;
-            let ax = agent_pos.0 as i32;
-            let ay = agent_pos.1 as i32;
-
-            // Bounds check.
-            if cx < 0 || cx >= s_x || cy < 0 || cy >= s_y {
-                return;
-            }
-
-            // Reject impassable destinations before running A*.  Without this
-            // the search cannot succeed but still has to exhaust every
-            // reachable cell before it can say so — 21 ms on a 400x400 map,
-            // a dropped frame, on every click against a crater wall.  It also
-            // happens to be the behaviour you want: clicking a cliff should
-            // do nothing rather than walk to somewhere adjacent to it.
-            if nav_data.get((cy * s_x + cx) as usize).copied().unwrap_or(0) == 0 {
-                classic_core::cl_debug!(
-                    classic_core::instrument::Chan::Path,
-                    "click-to-move: ({cx}, {cy}) is impassable, ignoring"
-                );
-                return;
-            }
-
-            let _dist = (((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay)) as f32).sqrt();
-
-            if !engine.agent_selected {
-                return;
-            }
-
-            // Convert nav data to owned i32 slice for the find_path API.
-            let nav_i32: Vec<i32> = nav_data.iter().map(|&v| v as i32).collect();
-            let size = (s_x, s_y);
-            if let Some(raw_path) =
-                pathfinder::find_path(&nav_i32, size.0, size.1, (ax, ay), (cx, cy))
-            {
-                // Offset waypoints by 0.5 to centre within tiles (matches TS).
-                let mut path: Vec<_> = raw_path
-                    .into_iter()
-                    .map(|(x, y)| glam::Vec2::new(x as f32 + 0.5, y as f32 + 0.5))
-                    .collect();
-
-                if let Ok(mut agent) = engine.world.get::<&mut IsoAgent>(agent_ent) {
-                    // Replace first waypoint with agent's exact current position
-                    // (matches TS `this._path[0] = [this.position[0], this.position[1]]`).
-                    let agent_tf = engine.world.get::<&Transform>(agent_ent).unwrap();
-                    path[0] = glam::Vec2::new(agent_tf.position.x, agent_tf.position.y);
-
-                    let waypoint_count = path.len();
-                    agent.path = path;
-                    agent.target_index = 1;
-                    agent.delta = 0.0;
-                    agent.init_dist = glam::Vec2::new(
-                        agent.path[1].x - agent.path[0].x,
-                        agent.path[1].y - agent.path[0].y,
-                    )
-                    .length()
-                    .max(0.001);
-                    agent.state = AgentState::FollowPath;
-                    classic_core::cl_debug!(
-                        classic_core::instrument::Chan::Nav,
-                        "nav: path found with {waypoint_count} waypoints"
-                    );
-                }
-            }
-        });
     }
 
     /// Compute the model matrix for an IsoSprite (matches TS `IsoSprite.modelMatrix()`).

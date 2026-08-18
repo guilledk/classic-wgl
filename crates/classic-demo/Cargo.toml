@@ -8,6 +8,7 @@ classic-core = { path = "../classic-core" }
 classic-gfx = { path = "../classic-gfx" }
 classic-engine = { path = "../classic-engine" }
 classic-rom = { path = "../classic-rom" }
+classic-guest = { path = "../classic-guest" }
 
 glam.workspace = true
 glow.workspace = true

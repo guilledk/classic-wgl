@@ -221,9 +221,9 @@ e.init_navigation_data(nav);          // NOT init_navigation
 ```
 
 - The lunar scene **reuses the demo entity names** (`tilemap`,
-  `tilemapNavigation`, `navAgent`, `cursor`).  `apply_editor_selection`,
-  `sync_nav_heights` and the dumpers all look those names up directly, so
-  reuse means the whole editor toolchain works on a generated map for free.
+  `tilemapNavigation`, `cursor`).  `apply_editor_selection` and
+  `sync_nav_heights` look those names up by role, so reuse means the whole
+  editor toolchain works on a generated map for free.
 - `LUNAR_HEIGHT_SCALE = 14.0` overrides the default `tile_pixel_size[0]` (32).
   Generated terrain spans ~7 height units; at 32 the relief is overblown and
   the 3-pass mouse-picking parallax solve is stretched to ~7 tiles of
@@ -236,8 +236,9 @@ e.init_navigation_data(nav);          // NOT init_navigation
 
 ### Scene selection
 
-`CLASSIC_SCENE=lunar` (native) / `?scene=lunar` (web) → `Scene::parse`.
-Unknown values fall back to `Scene::Demo`.
+`CLASSIC_SCENE=lunar` (native) / `?scene=lunar` (web) selects the embedded
+`lunar.rom` (anything else → `demo.rom`); the ROM's `entrypoint` drives the
+`is_lunar` branch in `init_engine`.
 
 ---
 

@@ -20,6 +20,11 @@ impl Rect {
             && self.y <= other.y + other.height
             && self.y + self.height >= other.y
     }
+
+    /// Whether the point `(px, py)` lies inside (or on) this rect.
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height
+    }
 }
 
 /// Collider event names from `collision.ts:138`.

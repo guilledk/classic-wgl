@@ -17,7 +17,7 @@
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 /// Number of channels in the `Chan` enum (auto-derived from the last variant).
-pub const CHAN_COUNT: usize = Chan::Platform as usize + 1;
+pub const CHAN_COUNT: usize = Chan::Guest as usize + 1;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -46,6 +46,7 @@ pub enum Chan {
     Golden,
     Dump,
     Platform,
+    Guest,
 }
 
 #[repr(u8)]
@@ -224,6 +225,7 @@ pub fn chan_name(chan: Chan) -> &'static str {
         Chan::Golden => "golden",
         Chan::Dump => "dump",
         Chan::Platform => "platform",
+        Chan::Guest => "guest",
     }
 }
 
@@ -248,7 +250,7 @@ pub fn channel_help() {
         Chan::Frame, Chan::Input, Chan::Ui, Chan::Layout, Chan::Collision, Chan::Click,
         Chan::Render, Chan::Gfx, Chan::GlState, Chan::Text, Chan::Iso, Chan::Nav,
         Chan::Terrain, Chan::Path, Chan::Ecs, Chan::State, Chan::Editor, Chan::Asset, Chan::Camera,
-        Chan::Anim, Chan::Test, Chan::Golden, Chan::Dump, Chan::Platform,
+        Chan::Anim, Chan::Test, Chan::Golden, Chan::Dump, Chan::Platform, Chan::Guest,
     ];
 
     eprint!("CLASSIC_LOG channels ({total} total):", total = CHAN_COUNT);
@@ -317,6 +319,7 @@ fn resolve_channels(name: &str, _negate: bool) -> Vec<Chan> {
         "golden" => vec![Chan::Golden],
         "dump" => vec![Chan::Dump],
         "platform" => vec![Chan::Platform],
+        "guest" => vec![Chan::Guest],
         // Alias groups for convenience
         "physics" => vec![Chan::Collision, Chan::Click],
         "render-all" | "draw" => vec![Chan::Render, Chan::Gfx, Chan::GlState],

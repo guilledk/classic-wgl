@@ -462,64 +462,33 @@ Custom footprints (e.g. for rectangular buildings) can have more vertices.
 
 ---
 
-## 9. IsoAgent State Machine
+## 9. IsoAgent
 
-IsoAgent is a pathfinding-capable IsoSprite subtype.  Registered by
-`init_agent_system`.
+`IsoAgent` is a pathfinding-capable `IsoSprite` subtype (its registry spawner
+creates both an `IsoAgent` and an `IsoSprite`).  It adds `speed`, `anim_speed`,
+and `anim_prefix` over `IsoSprite`.
 
-### Component (`IsoAgent`)
+The agent's *behaviour* — click-to-move, path-following, idle/walk animation,
+terrain-z following — lives in the **ROM guest** (`guest/demo-guest`), not in
+Rust.  The retired `init_agent_system` (and the engine's click-to-move wiring)
+were replaced by the guest driving the entity through the `classic-guest` SDK:
+`find_path` (binary waypoints), `set_pos`/`get_pos` (3D), `set_anim`,
+`height_at`, `mouse_iso`, `agent_selected`, `ui_consumed_click`.  The
+`IsoAgent` component no longer carries runtime state — `path`, `target_index`,
+`delta`, `init_dist`, `direction`, `anim_index`, `state` (and the `AgentState`
+enum) were removed; the guest keeps its own static path buffer.
 
-Extends IsoSprite with:
-- `speed` — movement speed factor.
-- `anim_speed` — animation playback rate multiplier.
-- `path: Vec<Vec2>` — waypoint sequence.
-- `target_index: usize` — current path segment index.
-- `delta: f32` — [0..1] lerp progress on the current segment.
-- `direction: f32` — heading in degrees (for animation selection).
-- `anim_index: usize` — 0..7 for the 8 cardinal directions.
-- `state: AgentState` — `Idle` or `FollowPath`.
-
-### State machine
-
-**`AgentState::Idle`:**
-Sets animation to `"idle{Dir}"` (e.g. `"idleSouthEast"`).  The 8 direction
-names are `[East, SouthEast, South, SouthWest, West, NorthWest, North, NorthEast]`.
-
-**`AgentState::FollowPath`:**
-1. At each waypoint arrival (`delta >= 1.0`), advance `target_index`.
-2. Compute heading from `atan2(dy, dx)`, quantize to 45° buckets:
-   ```
-   anim_index = floor(degrees / 45) % 8  (with negative wrap)
-   ```
-3. Set animation to `"walk{Dir}"`.
-4. Lerp position between current and next waypoint:
-   ```
-   position = start + (end - start) * delta
-   ```
-5. Sample terrain height via bilinear interpolation at `(px, py)`.
-6. Adjust speed by steepness:
-   ```
-   steepness = sqrt(dx_h^2 + dy_h^2)
-   speed_factor = 1.0 - (min(steepness, 3.0) / 3.0) * 0.5
-   ```
-   Where `dx_h` and `dy_h` are bilinear-interpolated height partial
-   derivatives at the agent's position.  Movement slows by up to 50% on
-   steep terrain.
-7. Advance `delta` by `(speed * speed_factor * frame_dt) / init_dist`.
-8. In a **second phase**, smooth-interpolate Z position toward the target
-   terrain height:
-   ```
-   z_speed = min(dt * 4.0, 1.0)
-   z += (target_z - z) * z_speed
-   ```
-   This avoids snapping the sprite vertically on sloped terrain.
+The 8 direction names remain `[East, SouthEast, South, SouthWest, West,
+NorthWest, North, NorthEast]`; the guest maps a step delta `(dx, dy)` to an
+index directly (no `atan2` — unavailable in `core`).
 
 ### Animator integration
 
-`init_animator_system` advances all `Animator` counters each frame.  It
-pushes the current frame value to the agent's `IsoAgent.frame` and
-`IsoSprite.frame` (both are kept in sync).  The `Animator.target` string
-format is `"entityName.IsoAgent"`, parsed to resolve the target entity.
+`init_animator_system` (still Rust) advances all `Animator` counters each frame
+and pushes the current frame value to the target's `IsoAgent.frame` and
+`IsoSprite.frame` (both kept in sync).  The guest selects which animation plays
+via `set_anim`; the `Animator.target` string format is `"entityName.IsoAgent"`,
+parsed to resolve the target entity.
 
 ---
 

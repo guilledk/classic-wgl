@@ -67,7 +67,8 @@ pub struct DemoState {
     pub iso_coord_z_e: Option<Entity>,
     /// Procedural lunar scene state, present only in the lunar scene.
     pub lunar: Option<crate::scenes::lunar::LunarScene>,
-    pub lunar_widget_e: Option<Entity>,
+    /// The ROM guest runtime (installed by `init_guest`).
+    pub guest: Option<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
 }
 
 impl Default for DemoState {
@@ -86,7 +87,7 @@ impl Default for DemoState {
             iso_coord_y_e: None,
             iso_coord_z_e: None,
             lunar: None,
-            lunar_widget_e: None,
+            guest: None,
         }
     }
 }

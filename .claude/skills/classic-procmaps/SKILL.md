@@ -5,7 +5,7 @@ description: >
     Covers the generic `terrain/` module contract (fractal noise, material
     table, tileset painter, generator), the recipe for adding a new biome or
     scene, the scale-free-vs-absolute parameter discipline, scene wiring
-    (entity-name reuse, init order, DemoAssets, Scene::parse), and the
+    (entity-name reuse, init order, ROM entrypoint dispatch), and the
     map-size scaling envelope (mesh capacity bound, tile data texture,
     pathfinder on the render thread).  Use when adding a generator, scaling
     a map, wiring a new scene, or deciding whether a parameter is safe to
@@ -69,19 +69,22 @@ The `lunar` scene is the worked example.  To add another (`<name>`):
 3. **Tileset** — the shared `build_lunar_tileset` (or a new
    `build_<name>_tileset`) already paints `MATERIALS`; if you reuse it, this
    step is automatic.
-4. **Scene description** — `public/state_<name>.json` with the SAME entity
-   names as `state.json` / `state_lunar.json` (`tilemap`, `tilemapNavigation`,
-   `navAgent`, `cursor`, `camController`).  See §4 for why.
-5. **Scene enum** — add a variant + `parse()` arm in `classic-demo`.
-6. **Dispatch** — a `Scene::<Name>` arm in `init_engine` that does
-   `load_state(state_<name>_json)` then `init_<name>_terrain(...)`, and installs
-   nav via `init_navigation_data` (NOT `init_navigation`, which would
-   re-derive walkability from heights and clobber the generator's own).
-7. **Wiring fn** — `classic-demo/src/scenes/lunar.rs` (or a sibling) with
-   `init_<name>_terrain`, `regenerate_<name>_terrain`, `focus_camera_on_spawn`.
-8. **Golden** — `tests/golden/<name>/` + a CI job (the lunar job needs
+4. **Scene description** — `public/state_<name>.json` with the demo entity
+   names (`tilemap`, `tilemapNavigation`, `cursor`; the agent `navAgent` is
+   demo-only — generated scenes have no agent).  See §4 for why.
+5. **ROM + entrypoint** — add a `pack(...)` call in `scripts/build-roms.mjs`
+   (injects `format_version`/`entrypoint`/`host_features`/`trusted`/`code`) so
+   the scene ships as `<name>.rom`; the apps resolve `CLASSIC_SCENE`/`?scene=`
+   to the embedded ROM.
+6. **Scene assembler** — `classic-demo/src/scenes/<name>.rs` with
+   `init_<name>_terrain`, `regenerate_<name>_terrain`, `focus_camera_on_spawn`,
+   `hydrate_nav` (via `init_navigation_data`, NOT `init_navigation`, which
+   would re-derive walkability from heights and clobber the generator's own),
+   and `setup_view`.  `init_engine` dispatches on the ROM's `entrypoint`
+   (`is_lunar` → `scenes::lunar`, else demo).
+7. **Golden** — `tests/golden/<name>/` + a CI job (the lunar job needs
    `CLASSIC_FIXED_DT` so the idle animator lands on a deterministic frame).
-9. **Tests** — a `classic-core/tests/terrain_<name>.rs` asserting the
+8. **Tests** — a `classic-core/tests/terrain_<name>.rs` asserting the
    *gameplay guarantees* (lengths, slope bound, flat pads, buildable fraction,
    mutual spawn reachability via `pathfinder::find_path`), not pixels.
 
@@ -115,12 +118,12 @@ in band.  Add the same test for a new generator.  It is the difference between
 
 ## 4. Scene wiring
 
-- **Reuse the demo entity names.**  `apply_editor_selection`,
-  `sync_nav_heights`, and the `dump_map_data` / `dump_nav_data` /
-  `dump_height_data` dumpers all look up `"tilemap"` and `"tilemapNavigation"`
-  by string.  Reusing those names means the entire editor toolchain (height
-  brush, tile palette, nav editor, agent click-to-move) works on a generated
-  map with zero extra code.  A new scene with fresh names loses all of it.
+- **Reuse the demo entity names.**  `apply_editor_selection` and
+  `sync_nav_heights` look up `"tilemap"` and `"tilemapNavigation"` by role
+  (`RoleKind::Tilemap` / `NavMesh`).  Reusing those names means the entire
+  editor toolchain (height brush, tile palette, nav editor) works on a
+  generated map with zero extra code.  A new scene with fresh names loses all
+  of it.
 - **Init order:** `load_state` → `init_<name>_terrain` → shared texture/UI init
   → `init_navigation_data` → `init_nav_mesh_render`.  The terrain step must
   precede navigation because the nav installer reads the generated `nav`.
@@ -128,7 +131,9 @@ in band.  Add the same test for a new generator.  It is the difference between
   registers the in-memory tileset via `Gfx::add_texture_rgba8`, so no commit to
   the private `assets/` submodule and no new `include_bytes!`.
 - **Scene selection:** `CLASSIC_SCENE=<name>` (native) / `?scene=<name>` (web)
-  → `Scene::parse`, unknown values fall back to `Demo`.
+  selects the embedded ROM (`demo.rom` / `lunar.rom`); `Rom::load` → the
+  `entrypoint` drives `is_lunar` in `init_engine`.  Unknown values fall back to
+  `demo.rom`.
 
 ---
 
@@ -152,11 +157,11 @@ Details worth internalising:
   `30 * 9` for *every* tile — 5x too much, i.e. 173 MB instead of 35 MB at
   400x400, all of it touched by the allocator.  A test asserts `capacity ==
   bound` so it cannot drift into either reallocation or waste.
-- **Click-to-move rejects impassable destinations before A*.**  A* against a
-  blocked cell cannot succeed but still exhausts every reachable cell before it
-  can return `None`.  Rejecting `nav[cy*sx+cx] == 0` up front removes the only
-  routine way to trigger the 21 ms exhaustive case (and is the correct
-  behaviour: clicking a cliff should do nothing).
+- **Click-to-move (guest) does not pre-reject impassable destinations.**  A*
+  against a blocked cell cannot succeed but still exhausts every reachable
+  cell before returning `None`; the guest's `find_path` treats the empty
+  result as a no-op (correct behaviour: clicking a cliff does nothing), at the
+  cost of the full search — ~21 ms at 400x400.
 - **`GL_MAX_TEXTURE_SIZE` is never queried.**  `build_tile_texture` makes a
   texture exactly `size_x × size_y` pixels, no power-of-two padding, no limit
   check in `upload_data_texture` or `GlTexture::from_rgba8`.  WebGL 2

@@ -79,45 +79,6 @@
                     "value": "NavMesh"
                 }
             ]
-        },
-        "navAgent": {
-            "components": [
-                {
-                    "type": "Animator",
-                    "target": "navAgent.IsoAgent",
-                    "speed": 1
-                },
-                {
-                    "type": "IsoAgent",
-                    "position": [
-                        100.5,
-                        100.5,
-                        0
-                    ],
-                    "scale": [
-                        1,
-                        1,
-                        1
-                    ],
-                    "texture": "humanoid",
-                    "tilemap": "tilemap",
-                    "frame": 333,
-                    "tileSetSize": [
-                        32,
-                        16
-                    ],
-                    "anchor": [
-                        0.5,
-                        0.98
-                    ],
-                    "speed": 2.6,
-                    "animSpeed": 1
-                },
-                {
-                    "type": "Role",
-                    "value": "Agent"
-                }
-            ]
         }
     }
 }
