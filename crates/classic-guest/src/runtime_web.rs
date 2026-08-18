@@ -14,6 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use classic_core::pathfinder::PathPoll;
 use classic_engine::Engine;
 use js_sys::WebAssembly::{Instance, Memory, Module};
 use wasm_bindgen::closure::Closure;
@@ -785,28 +786,79 @@ impl WebWasmRuntime {
             );
         }
 
-        // find_path
+        // request_path
+        {
+            let host = host.clone();
+            set_import!(
+                "request_path",
+                Box::new(move |sx: i32, sy: i32, ex: i32, ey: i32| -> i32 {
+                    host.borrow_mut().request_path(sx, sy, ex, ey)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // poll_path
         {
             let host = host.clone();
             let mem = mem.clone();
             set_import!(
-                "find_path",
-                Box::new(
-                    move |sx: i32, sy: i32, ex: i32, ey: i32, out_ptr: i32, out_cap: i32| -> i32 {
-                        let cells = host.borrow_mut().find_path(sx, sy, ex, ey);
-                        let mut bytes = Vec::with_capacity(cells.len() * 8);
-                        for (x, y) in &cells {
-                            bytes.extend_from_slice(&x.to_le_bytes());
-                            bytes.extend_from_slice(&y.to_le_bytes());
+                "poll_path",
+                Box::new(move |id: i32, out_ptr: i32, out_cap: i32| -> i32 {
+                    match host.borrow_mut().poll_path(id) {
+                        PathPoll::Pending => 0,
+                        PathPoll::NoPath => -1,
+                        PathPoll::Path(cells) => {
+                            let bytes = abi::path_cells_bytes(&cells);
+                            if bytes.len() > out_cap.max(0) as usize {
+                                return -2;
+                            }
+                            let mem = mem.borrow();
+                            write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                            cells.len() as i32
                         }
-                        if bytes.len() > out_cap.max(0) as usize {
-                            return -1;
+                    }
+                }) as Box<dyn FnMut(i32, i32, i32) -> i32>
+            );
+        }
+
+        // spawn_task
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "spawn_task",
+                Box::new(move |entry_ptr: i32, entry_len: i32, arg_ptr: i32, arg_len: i32| -> i32 {
+                    let mem = mem.borrow();
+                    let entry = read_str(mem.as_ref().unwrap(), entry_ptr, entry_len);
+                    let arg = read_bytes(mem.as_ref().unwrap(), arg_ptr, arg_len);
+                    host.borrow_mut().spawn_task(&entry, &arg)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // poll_task
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "poll_task",
+                Box::new(move |id: i32, out_ptr: i32, out_cap: i32| -> i32 {
+                    match host.borrow_mut().poll_task(id) {
+                        None => 0,
+                        Some(Err(e)) => {
+                            host.borrow_mut().log(&format!("task {id} failed: {e}"));
+                            -1
                         }
-                        let mem = mem.borrow();
-                        write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
-                        cells.len() as i32
-                    },
-                ) as Box<dyn FnMut(i32, i32, i32, i32, i32, i32) -> i32>
+                        Some(Ok(bytes)) => {
+                            if bytes.len() > out_cap.max(0) as usize {
+                                return -2;
+                            }
+                            let mem = mem.borrow();
+                            write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                            bytes.len() as i32
+                        }
+                    }
+                }) as Box<dyn FnMut(i32, i32, i32) -> i32>
             );
         }
 
@@ -1394,6 +1446,238 @@ impl WebWasmRuntime {
                 "commit_terrain",
                 Box::new(move |hs: f64| -> i32 { host.borrow_mut().commit_terrain(hs) })
                     as Box<dyn FnMut(f64) -> i32>
+            );
+        }
+
+        // ---- Field-buffer registry + grid kernels --------------------------
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "alloc_field",
+                Box::new(move |ptr: i32, len: i32, w: i32, h: i32, dtype: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().alloc_field(&name, w, h, dtype)
+                }) as Box<dyn FnMut(i32, i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "free_field",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().free_field(&name)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "write_field",
+                Box::new(move |ptr: i32, len: i32, data_ptr: i32, data_len: i32| -> i32 {
+                    let (name, data) = {
+                        let mem = mem.borrow();
+                        let m = mem.as_ref().unwrap();
+                        (
+                            read_str(m, ptr, len),
+                            abi::bytes_to_f32(&read_bytes(m, data_ptr, data_len)),
+                        )
+                    };
+                    host.borrow_mut().write_field(&name, &data)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "write_field_u32",
+                Box::new(move |ptr: i32, len: i32, data_ptr: i32, data_len: i32| -> i32 {
+                    let (name, data) = {
+                        let mem = mem.borrow();
+                        let m = mem.as_ref().unwrap();
+                        (
+                            read_str(m, ptr, len),
+                            abi::bytes_to_u32(&read_bytes(m, data_ptr, data_len)),
+                        )
+                    };
+                    host.borrow_mut().write_field_u32(&name, &data)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "read_field",
+                Box::new(move |ptr: i32, len: i32, out_ptr: i32, out_cap: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    let field = host.borrow_mut().read_field(&name);
+                    let bytes = abi::f32_array_bytes(&field);
+                    if bytes.len() > out_cap.max(0) as usize {
+                        return -1;
+                    }
+                    let mem = mem.borrow();
+                    write_bytes(mem.as_ref().unwrap(), out_ptr, &bytes);
+                    bytes.len() as i32
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "map_field",
+                Box::new(
+                    move |op: i32, dst_ptr: i32, dst_len: i32, src_ptr: i32, src_len: i32| -> i32 {
+                        let (dst, src) = {
+                            let mem = mem.borrow();
+                            let m = mem.as_ref().unwrap();
+                            (read_str(m, dst_ptr, dst_len), read_str(m, src_ptr, src_len))
+                        };
+                        host.borrow_mut().map_field(op, &dst, &src)
+                    },
+                ) as Box<dyn FnMut(i32, i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "map_scalar",
+                Box::new(move |op: i32, dst_ptr: i32, dst_len: i32, scalar: f64| -> i32 {
+                    let dst = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), dst_ptr, dst_len)
+                    };
+                    host.borrow_mut().map_scalar(op, &dst, scalar)
+                }) as Box<dyn FnMut(i32, i32, i32, f64) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "blur_box_field",
+                Box::new(move |ptr: i32, len: i32, radius: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().blur_box_field(&name, radius)
+                }) as Box<dyn FnMut(i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "relax_slopes_field",
+                Box::new(
+                    move |ptr: i32,
+                          len: i32,
+                          max_slope: f64,
+                          iterations: i32,
+                          tolerance: f64,
+                          pinned_ptr: i32,
+                          pinned_len: i32|
+                          -> f64 {
+                        let (name, pinned) = {
+                            let mem = mem.borrow();
+                            let m = mem.as_ref().unwrap();
+                            (read_str(m, ptr, len), read_str(m, pinned_ptr, pinned_len))
+                        };
+                        host.borrow_mut()
+                            .relax_slopes_field(&name, max_slope, iterations, tolerance, &pinned)
+                    },
+                ) as Box<dyn FnMut(i32, i32, f64, i32, f64, i32, i32) -> f64>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "gradient_magnitude_field",
+                Box::new(
+                    move |heights_ptr: i32, heights_len: i32, dst_ptr: i32, dst_len: i32| -> i32 {
+                        let (heights, dst) = {
+                            let mem = mem.borrow();
+                            let m = mem.as_ref().unwrap();
+                            (read_str(m, heights_ptr, heights_len), read_str(m, dst_ptr, dst_len))
+                        };
+                        host.borrow_mut().gradient_magnitude_field(&heights, &dst)
+                    },
+                ) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "threshold_le_field",
+                Box::new(
+                    move |src_ptr: i32, src_len: i32, dst_ptr: i32, dst_len: i32, t: f64| -> i32 {
+                        let (src, dst) = {
+                            let mem = mem.borrow();
+                            let m = mem.as_ref().unwrap();
+                            (read_str(m, src_ptr, src_len), read_str(m, dst_ptr, dst_len))
+                        };
+                        host.borrow_mut().threshold_le_field(&src, &dst, t)
+                    },
+                ) as Box<dyn FnMut(i32, i32, i32, i32, f64) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "prune_components_field",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().prune_components_field(&name)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "reduce_field",
+                Box::new(move |ptr: i32, len: i32, op: i32| -> f64 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().reduce_field(&name, op)
+                }) as Box<dyn FnMut(i32, i32, i32) -> f64>
             );
         }
 

@@ -205,9 +205,12 @@ fn build_guests(root: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(&out_code)?;
     let target = root.join("target");
 
-    for (crate_name, out_name) in
-        [("demo-guest", "demo.wasm"), ("lunar-guest", "lunar.wasm"), ("lrv-guest", "lrv.wasm")]
-    {
+    for (crate_name, out_name) in [
+        ("demo-guest", "demo.wasm"),
+        ("lunar-guest", "lunar.wasm"),
+        ("lrv-guest", "lrv.wasm"),
+        ("lunar-worker", "lunar_worker.wasm"),
+    ] {
         let manifest = root.join("guest").join(crate_name).join("Cargo.toml");
         let status = Command::new("cargo")
             .arg("build")
@@ -243,7 +246,7 @@ fn pack_roms(root: &Path) -> anyhow::Result<()> {
         "demo",
         "roms/demo/manifest.json",
         "roms/demo/state.json",
-        "demo.wasm",
+        &[("main", "demo.wasm")],
         &[
             Grid { name: "demo.tiles", source: "roms/demo/maps/tiles.json", element: "u32" },
             Grid { name: "demo.nav", source: "roms/demo/maps/nav.json", element: "u32" },
@@ -254,7 +257,7 @@ fn pack_roms(root: &Path) -> anyhow::Result<()> {
         "lunar",
         "roms/lunar/manifest.json",
         "roms/lunar/state.json",
-        "lunar.wasm",
+        &[("main", "lunar.wasm"), ("worker", "lunar_worker.wasm")],
         &[],
     )?;
     pack_scene(
@@ -262,7 +265,7 @@ fn pack_roms(root: &Path) -> anyhow::Result<()> {
         "lrvtest",
         "roms/lrvtest/manifest.json",
         "roms/lrvtest/state.json",
-        "lrv.wasm",
+        &[("main", "lrv.wasm")],
         &[
             Grid { name: "lrvtest.tiles", source: "roms/lrvtest/maps/tiles.json", element: "u32" },
             Grid {
@@ -280,7 +283,7 @@ fn pack_scene(
     name: &str,
     manifest_rel: &str,
     state_rel: &str,
-    guest_wasm: &str,
+    code: &[(&str, &str)],
     grids: &[Grid],
 ) -> anyhow::Result<()> {
     let out = root.join("roms/out");
@@ -297,7 +300,12 @@ fn pack_scene(
     obj.insert("trusted".into(), serde_json::json!(true));
     obj.insert(
         "code".into(),
-        serde_json::json!([{ "name": "main", "src": format!("/code/{guest_wasm}") }]),
+        serde_json::json!(code
+            .iter()
+            .map(
+                |(entry, wasm)| serde_json::json!({ "name": entry, "src": format!("/code/{wasm}") })
+            )
+            .collect::<Vec<_>>()),
     );
     obj.insert(
         "grids".into(),
@@ -415,7 +423,7 @@ mod tests {
             "demo",
             "scene/manifest.json",
             "scene/state.json",
-            "demo.wasm",
+            &[("main", "demo.wasm")],
             &[Grid { name: "demo.tiles", source: "scene/maps/tiles.json", element: "u32" }],
         )
         .unwrap();

@@ -93,6 +93,13 @@ impl EnvConfig {
     pub fn test_active(&self) -> bool {
         !self.test.is_empty() && self.test != "0"
     }
+
+    /// Whether a golden-trace comparison is active (`CLASSIC_GOLDEN` is
+    /// `check` or `update`).  Golden capture must be deterministic, so this
+    /// also forces synchronous workers.
+    pub fn golden_active(&self) -> bool {
+        !self.golden_mode.is_empty()
+    }
 }
 
 fn read(key: &str) -> String {

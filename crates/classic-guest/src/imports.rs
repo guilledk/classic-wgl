@@ -215,26 +215,65 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
-            "find_path",
+            "request_path",
+            |mut caller: Caller<'_, $host>, sx: i32, sy: i32, ex: i32, ey: i32| -> i32 {
+                caller.data_mut().guest_mut().request_path(sx, sy, ex, ey)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "poll_path",
+            |mut caller: Caller<'_, $host>, id: i32, out_ptr: i32, out_cap: i32| -> i32 {
+                match caller.data_mut().guest_mut().poll_path(id) {
+                    classic_core::pathfinder::PathPoll::Pending => 0,
+                    classic_core::pathfinder::PathPoll::NoPath => -1,
+                    classic_core::pathfinder::PathPoll::Path(cells) => {
+                        let bytes = crate::abi::path_cells_bytes(&cells);
+                        if bytes.len() > out_cap.max(0) as usize {
+                            return -2;
+                        }
+                        $write_bytes(&mut caller, out_ptr, &bytes);
+                        cells.len() as i32
+                    }
+                }
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "spawn_task",
             |mut caller: Caller<'_, $host>,
-             sx: i32,
-             sy: i32,
-             ex: i32,
-             ey: i32,
-             out_ptr: i32,
-             out_cap: i32|
+             entry_ptr: i32,
+             entry_len: i32,
+             arg_ptr: i32,
+             arg_len: i32|
              -> i32 {
-                let cells = caller.data_mut().guest_mut().find_path(sx, sy, ex, ey);
-                let mut bytes = Vec::with_capacity(cells.len() * 8);
-                for (x, y) in &cells {
-                    bytes.extend_from_slice(&x.to_le_bytes());
-                    bytes.extend_from_slice(&y.to_le_bytes());
+                let entry = $read_str(&mut caller, entry_ptr, entry_len);
+                let arg = $read_bytes(&mut caller, arg_ptr, arg_len);
+                caller.data_mut().guest_mut().spawn_task(&entry, &arg)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "poll_task",
+            |mut caller: Caller<'_, $host>, id: i32, out_ptr: i32, out_cap: i32| -> i32 {
+                let poll = caller.data_mut().guest_mut().poll_task(id);
+                match poll {
+                    None => 0,
+                    Some(Err(e)) => {
+                        caller.data_mut().guest_mut().log(&format!("task {id} failed: {e}"));
+                        -1
+                    }
+                    Some(Ok(bytes)) => {
+                        if bytes.len() > out_cap.max(0) as usize {
+                            return -2;
+                        }
+                        $write_bytes(&mut caller, out_ptr, &bytes);
+                        bytes.len() as i32
+                    }
                 }
-                if bytes.len() > out_cap.max(0) as usize {
-                    return -1;
-                }
-                $write_bytes(&mut caller, out_ptr, &bytes);
-                cells.len() as i32
             },
         )?;
 
@@ -940,6 +979,191 @@ macro_rules! install_host_imports {
             "commit_terrain",
             |mut caller: Caller<'_, $host>, height_scale: f64| -> i32 {
                 caller.data_mut().guest_mut().commit_terrain(height_scale)
+            },
+        )?;
+
+        // ---- Field-buffer registry + grid kernels --------------------------
+
+        $linker.func_wrap(
+            m,
+            "alloc_field",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             w: i32,
+             h: i32,
+             dtype: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().alloc_field(&name, w, h, dtype)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "free_field",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().free_field(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "write_field",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             data_ptr: i32,
+             data_len: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let data = crate::abi::bytes_to_f32(&$read_bytes(&mut caller, data_ptr, data_len));
+                caller.data_mut().guest_mut().write_field(&name, &data)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "write_field_u32",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             data_ptr: i32,
+             data_len: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let data = crate::abi::bytes_to_u32(&$read_bytes(&mut caller, data_ptr, data_len));
+                caller.data_mut().guest_mut().write_field_u32(&name, &data)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "read_field",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let field = caller.data_mut().guest_mut().read_field(&name);
+                let bytes = crate::abi::f32_array_bytes(&field);
+                if bytes.len() > out_cap.max(0) as usize {
+                    return -1;
+                }
+                $write_bytes(&mut caller, out_ptr, &bytes);
+                bytes.len() as i32
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "map_field",
+            |mut caller: Caller<'_, $host>,
+             op: i32,
+             dst_ptr: i32,
+             dst_len: i32,
+             src_ptr: i32,
+             src_len: i32|
+             -> i32 {
+                let dst = $read_str(&mut caller, dst_ptr, dst_len);
+                let src = $read_str(&mut caller, src_ptr, src_len);
+                caller.data_mut().guest_mut().map_field(op, &dst, &src)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "map_scalar",
+            |mut caller: Caller<'_, $host>,
+             op: i32,
+             dst_ptr: i32,
+             dst_len: i32,
+             scalar: f64|
+             -> i32 {
+                let dst = $read_str(&mut caller, dst_ptr, dst_len);
+                caller.data_mut().guest_mut().map_scalar(op, &dst, scalar)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "blur_box_field",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, radius: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().blur_box_field(&name, radius)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "relax_slopes_field",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             max_slope: f64,
+             iterations: i32,
+             tolerance: f64,
+             pinned_ptr: i32,
+             pinned_len: i32|
+             -> f64 {
+                let name = $read_str(&mut caller, ptr, len);
+                let pinned = $read_str(&mut caller, pinned_ptr, pinned_len);
+                caller
+                    .data_mut()
+                    .guest_mut()
+                    .relax_slopes_field(&name, max_slope, iterations, tolerance, &pinned)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "gradient_magnitude_field",
+            |mut caller: Caller<'_, $host>,
+             heights_ptr: i32,
+             heights_len: i32,
+             dst_ptr: i32,
+             dst_len: i32|
+             -> i32 {
+                let heights = $read_str(&mut caller, heights_ptr, heights_len);
+                let dst = $read_str(&mut caller, dst_ptr, dst_len);
+                caller.data_mut().guest_mut().gradient_magnitude_field(&heights, &dst)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "threshold_le_field",
+            |mut caller: Caller<'_, $host>,
+             src_ptr: i32,
+             src_len: i32,
+             dst_ptr: i32,
+             dst_len: i32,
+             t: f64|
+             -> i32 {
+                let src = $read_str(&mut caller, src_ptr, src_len);
+                let dst = $read_str(&mut caller, dst_ptr, dst_len);
+                caller.data_mut().guest_mut().threshold_le_field(&src, &dst, t)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "prune_components_field",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().prune_components_field(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "reduce_field",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, op: i32| -> f64 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().reduce_field(&name, op)
             },
         )?;
 

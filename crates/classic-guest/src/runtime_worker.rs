@@ -14,6 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use classic_core::pathfinder::PathPoll;
 use classic_engine::Engine;
 use wasm_bindgen::JsValue;
 
@@ -74,7 +75,7 @@ const OP_WAS_KEY_PRESSED: i32 = 21;
 const OP_SET_TILE: i32 = 23;
 const OP_SET_HEIGHT: i32 = 24;
 const OP_REBUILD_TERRAIN: i32 = 25;
-const OP_FIND_PATH: i32 = 26;
+const OP_REQUEST_PATH: i32 = 26;
 const OP_GET_CAMERA: i32 = 27;
 const OP_SET_CAMERA: i32 = 28;
 const OP_PICK_AT: i32 = 29;
@@ -123,6 +124,7 @@ const OP_VEHICLE_TELEPORT: i32 = 72;
 const OP_VEHICLE_GOTO: i32 = 73;
 const OP_VEHICLE_STOP: i32 = 74;
 const OP_VEHICLE_SPAWN: i32 = 75;
+const OP_POLL_PATH: i32 = 76;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -266,19 +268,19 @@ impl WorkerWasmRuntime {
             OP_SET_TILE => (host.set_tile(ni(0), ni(1), ni(2)) as f64, None),
             OP_SET_HEIGHT => (host.set_height(ni(0), ni(1), nf(2)) as f64, None),
             OP_REBUILD_TERRAIN => (host.rebuild_terrain() as f64, None),
-            OP_FIND_PATH => {
-                let cells = host.find_path(ni(0), ni(1), ni(2), ni(3));
-                let mut bytes = Vec::with_capacity(cells.len() * 8);
-                for (x, y) in &cells {
-                    bytes.extend_from_slice(&x.to_le_bytes());
-                    bytes.extend_from_slice(&y.to_le_bytes());
+            OP_REQUEST_PATH => (host.request_path(ni(0), ni(1), ni(2), ni(3)) as f64, None),
+            OP_POLL_PATH => match host.poll_path(ni(0)) {
+                PathPoll::Pending => (0.0, None),
+                PathPoll::NoPath => (-1.0, None),
+                PathPoll::Path(cells) => {
+                    let bytes = crate::abi::path_cells_bytes(&cells);
+                    if bytes.len() > ni(2).max(0) as usize || bytes.len() as u32 > OUT_BYTES {
+                        (-2.0, None)
+                    } else {
+                        (cells.len() as f64, Some(bytes))
+                    }
                 }
-                if bytes.len() > ni(5).max(0) as usize || bytes.len() as u32 > OUT_BYTES {
-                    (-1.0, None)
-                } else {
-                    (cells.len() as f64, Some(bytes))
-                }
-            }
+            },
             OP_VEHICLE_TELEPORT => (host.vehicle_teleport(&strs[0], nf(0), nf(1)) as f64, None),
             OP_VEHICLE_GOTO => (host.vehicle_goto(&strs[0], ni(0), ni(1)) as f64, None),
             OP_VEHICLE_STOP => (host.vehicle_stop(&strs[0]) as f64, None),
