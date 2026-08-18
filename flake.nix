@@ -58,7 +58,7 @@
 
             echo "┌─────────────────────────────────────────┐"
             echo "│  classic-wgl Rust dev shell             │"
-            echo "│  cargo xtask all          build ROMs    │"
+            echo "│  cargo xtask fetch-roms  fetch ROMs    │"
             echo "│  cargo run -p classic-desktop           │"
             echo "│  trunk serve              web dev       │"
             echo "│  cargo test                             │"

@@ -8,9 +8,8 @@ isometric game engine — the process is intentionally lightweight.
 ```bash
 git clone <repo-url>
 cd classic-wgl
-git submodule update --init   # private assets repo (needs a repo-scoped token)
 nix develop                   # Rust toolchain + wasm target + GL/EGL deps
-cargo xtask all               # build the scene ROMs into roms/out/
+cargo xtask fetch-roms        # download the published scene ROMs into roms/out/
 ```
 
 See `AGENTS.md` for a full architecture/conventions overview before making

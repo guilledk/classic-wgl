@@ -245,15 +245,15 @@ Both representations produce the same flat heights (all 1.0) for the demo.
 
 ## Rust-only: procedural terrain
 
-`guest/lunar-guest/` has no TypeScript ancestor.  It exists to generate the
+The `lunar` ROM guest (compiled wasm, no TypeScript ancestor) generates the
 `lunar` demo scene (`CLASSIC_ROM=rom:lunar`) and is documented in full by the
 `classic-terrain` skill.  Notes relevant to parity:
 
 - The TS `Tilemap.data` comment "null = auto-generate noise" described a
   feature that was never implemented on either side.  The Rust `lunar` scene
   supersedes it: `data` is `null` in `state_lunar.json`, and terrain, tiles and
-  nav data are all generated + bulk-uploaded by the `guest/lunar-guest` ROM
-  guest (then `commit_terrain`) after `load_state`.
+  nav data are all generated + bulk-uploaded by the `lunar` ROM guest
+  (then `commit_terrain`) after `load_state`.
 - `SimplexNoise` was a faithful TS port but had no callers.  It now underpins
   the generator; `Random::next_f64` was fixed to honour its documented `[0, 1)`
   range (it divided the top 16 bits of the LCG state by 32768 instead of

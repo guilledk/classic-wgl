@@ -8,9 +8,6 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
-              with:
-                  submodules: recursive
-                  token: ${{ secrets.GH_PAT }}
 
             - uses: dtolnay/rust-toolchain@stable
 
@@ -18,8 +15,8 @@ jobs:
               with:
                   workspaces: apps/web -> target
 
-            - name: Generate assets + ROMs
-              run: cargo xtask all
+            # The web app fetches scene ROMs at runtime from classic-wgl's
+            # `rom-assets` GitHub Release; it needs no assets/guests to build.
 
             - name: Install trunk
               run: cargo install trunk --locked

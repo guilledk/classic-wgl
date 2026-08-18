@@ -489,6 +489,7 @@ dependencies = [
 name = "classic-web"
 version = "0.1.0-alpha.0"
 dependencies = [
+ "anyhow",
  "classic-core",
  "classic-demo",
  "classic-engine",
@@ -3804,9 +3805,9 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "classic-rom",
- "sdf-atlas",
  "serde_json",
+ "sha2",
+ "ureq",
 ]
 
 [[package]]

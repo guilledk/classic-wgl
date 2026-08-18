@@ -1,5 +1,18 @@
 use wasm_bindgen::prelude::*;
 
+/// Where each named ROM (`?rom=<name>`, empty => demo) is served from.
+///
+/// ROMs are built by the `classic-roms` repo and published as GitHub Release
+/// assets on the classic-wgl repo under a mutable `rom-assets` tag, so these
+/// URLs stay stable across releases.
+#[cfg(target_arch = "wasm32")]
+const ROM_URLS: &[(&str, &str)] = &[
+    ("demo", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/demo.rom"),
+    ("lunar", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/lunar.rom"),
+    ("moon", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/lunar.rom"),
+    ("lrvtest", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/lrvtest.rom"),
+];
+
 /// Read a query-string parameter from the page URL.
 #[cfg(target_arch = "wasm32")]
 fn query_param(name: &str) -> Option<String> {
@@ -7,6 +20,47 @@ fn query_param(name: &str) -> Option<String> {
     let search = search.strip_prefix('?').unwrap_or(&search);
     let prefix = format!("{name}=");
     search.split('&').find_map(|p| p.strip_prefix(&prefix).map(|v| v.to_string()))
+}
+
+/// A simple DOM overlay (outside the canvas so it renders while the wasm/ROM
+/// bytes are streaming in).  `clear_overlay` removes it; the error variant
+/// keeps it on screen with a reload button.
+#[cfg(target_arch = "wasm32")]
+struct BootOverlay {
+    el: web_sys::HtmlDivElement,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl BootOverlay {
+    fn new(message: &str) -> Self {
+        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
+        let el: web_sys::HtmlDivElement =
+            document.create_element("div").unwrap().dyn_into().unwrap();
+        el.set_text_content(Some(message));
+        let style = el.style();
+        style.set_property("position", "fixed").unwrap();
+        style.set_property("inset", "0").unwrap();
+        style.set_property("display", "flex").ok();
+        style.set_property("align-items", "center").ok();
+        style.set_property("justify-content", "center").ok();
+        style.set_property("background", "#000").unwrap();
+        style.set_property("color", "#cfc8f0").unwrap();
+        style.set_property("font-family", "monospace").unwrap();
+        style.set_property("font-size", "18px").unwrap();
+        style.set_property("z-index", "1000").unwrap();
+        document.body().unwrap().append_child(el.as_ref()).unwrap();
+        Self { el }
+    }
+
+    fn clear(&mut self) {
+        if let Some(parent) = self.el.parent_node() {
+            parent.remove_child(self.el.as_ref()).ok();
+        }
+    }
+
+    fn error(&self, message: &str) {
+        self.el.set_text_content(Some(message));
+    }
 }
 
 #[wasm_bindgen(start)]
@@ -38,57 +92,78 @@ pub fn main() {
     log::set_logger(&WebLogger).ok();
     log::set_max_level(log::LevelFilter::Trace);
 
-    classic_core::cl_info!(classic_core::instrument::Chan::Platform, "classic-web starting");
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        // `?classic_log=` configures channel logging; `?rom=` selects the ROM
-        // to boot (`rom:<name>`, a URL, or a relative path — the native
-        // `CLASSIC_ROM` env var has no web equivalent).
-        if let Some(spec) = query_param("classic_log") {
-            classic_core::instrument::init(&spec);
+    // Fetches the (now small) app wasm boots instantly; the scene ROM is
+    // streamed in before the engine starts.
+    wasm_bindgen_futures::spawn_local(async {
+        if let Err(err) = run().await {
+            log::error!("boot failed: {err:#}");
         }
-        let rom = query_param("rom").unwrap_or_default();
+    });
+}
 
-        static ROMS: &[(&str, &[u8])] = &[
-            ("demo", include_bytes!("../../../roms/out/demo.rom")),
-            ("lunar", include_bytes!("../../../roms/out/lunar.rom")),
-            ("moon", include_bytes!("../../../roms/out/lunar.rom")),
-            ("lrvtest", include_bytes!("../../../roms/out/lrvtest.rom")),
-        ];
-        let rom_bytes = classic_platform::resolve_rom(&rom, ROMS).expect("resolve ROM");
-
-        use classic_platform::web::WebPlatform;
-        use classic_platform::Platform;
-
-        let platform = match WebPlatform::new("glCanvas") {
-            Ok(p) => p,
-            Err(e) => {
-                web_sys::console::error_1(&e);
-                return;
-            }
-        };
-
-        let mut engine: Option<classic_engine::Engine> = None;
-
-        platform.run_loop(move |gl, input, vw, vh, _delta, should_close| {
-            if engine.is_none() {
-                let archive =
-                    classic_rom::RomArchive::from_bytes(&rom_bytes).expect("open ROM archive");
-                let rom = classic_rom::Rom::load(&archive).expect("load ROM");
-                engine = Some(classic_demo::init_engine(gl, &rom));
-            }
-            if let Some(e) = engine.as_mut() {
-                e.frame(input, vw, vh, _delta);
-                if e.test_should_close {
-                    *should_close = true;
-                }
-            }
-        });
+#[cfg(target_arch = "wasm32")]
+async fn run() -> anyhow::Result<()> {
+    // `?classic_log=` configures channel logging; `?rom=` selects the ROM
+    // to boot (`rom:<name>`, a full URL, or a relative path).
+    if let Some(spec) = query_param("classic_log") {
+        classic_core::instrument::init(&spec);
     }
+    let spec = query_param("rom").unwrap_or_default();
+    let label = query_param("rom").unwrap_or_else(|| "demo".to_string());
+    let mut overlay = BootOverlay::new(&format!("downloading scene `{label}`…"));
 
-    #[cfg(not(target_arch = "wasm32"))]
+    let rom_bytes = match classic_platform::resolve_rom_async(
+        &spec,
+        &classic_platform::rom::static_lookup(ROM_URLS),
+    )
+    .await
     {
-        let _ = "classic-web: use `trunk build` or `trunk serve` on wasm32";
-    }
+        Ok(bytes) => bytes,
+        Err(err) => {
+            overlay.error(&format!("failed to load scene `{label}`:\n{err}"));
+            return Err(err);
+        }
+    };
+    overlay.clear();
+
+    let archive = classic_rom::RomArchive::from_bytes(&rom_bytes).expect("open ROM archive");
+    let rom = classic_rom::Rom::load(&archive).expect("load ROM");
+
+    use classic_platform::web::WebPlatform;
+    use classic_platform::Platform;
+
+    let platform = match WebPlatform::new("glCanvas") {
+        Ok(p) => p,
+        Err(e) => {
+            let overlay = BootOverlay::new("WebGL2 unavailable");
+            overlay.error(&format!("WebGL2 init failed: {e:?}"));
+            return Err(anyhow::anyhow!("WebPlatform::new: {e:?}"));
+        }
+    };
+
+    let mut engine: Option<classic_engine::Engine> = None;
+
+    platform.run_loop(move |gl, input, vw, vh, delta, should_close| {
+        if engine.is_none() {
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Platform,
+                "web: initialising engine"
+            );
+            engine = Some(classic_demo::init_engine(gl, &rom));
+        }
+        if let Some(e) = engine.as_mut() {
+            e.frame(input, vw, vh, delta);
+            if e.test_should_close {
+                *should_close = true;
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn run() -> anyhow::Result<()> {
+    let _ = "classic-web: use `trunk build` or `trunk serve` on wasm32";
+    Ok(())
 }
