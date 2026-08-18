@@ -53,9 +53,10 @@ crates/
                           tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
-  classic-engine/         Engine god-object: lib.rs (lifecycle), ui.rs (UIManager), golden.rs (traces),
-                          env_config.rs, testing/
-  classic-demo/           init_engine() bootstrap (stub — init_* prefabs still live in classic-engine)
+  classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
+                          golden.rs (traces), env_config.rs
+  classic-demo/           application/prefab layer: init_engine() bootstrap, DemoState + EditorState
+                          (state.rs), prefabs.rs, lighting.rs, editor.rs, hud.rs, testing.rs
 apps/
   desktop/                native binary: include_bytes! assets, init_* calls, winit event loop
   web/                    wasm cdylib: wasm-bindgen main, trunk build, canvas pointer-lock
@@ -81,18 +82,22 @@ plans/
   `crates/classic-core/src/components/mod.rs`.  Entities are `hecs::Entity` handles.
   There is no system scheduler; update logic lives in `Engine::on_update(FnMut(&mut Engine))`
   closures registered by `init_*` prefabs.
-- **The `Engine` struct** (`crates/classic-engine/src/lib.rs`) is the god object:
-  `World`, `PhysicsProvider`, `Camera`, `Time`, `InputState`, `Gfx`, `UIManager`,
-  editor state, and test-harness state.  `Engine::frame(input, vw, vh, delta)` runs
-  once per render frame: physics → update closures → build render list → draw sorted items.
+- **The `Engine` struct** (`crates/classic-engine/src/lib.rs`) is the generic engine core:
+  `World`, `PhysicsProvider`, `Camera`, `Time`, `InputState`, `Gfx`, `UIManager`, and
+  tilemap/nav plumbing.  It holds **no demo state** — editor/widget handles and light
+  presets live in `classic-demo`'s `DemoState`.  `Engine::frame(input, vw, vh, delta)` runs
+  once per render frame: physics → pre-update hooks → update closures → test runner →
+  build render list → draw sorted items → overlay hooks.
 - **Component registry** (`crates/classic-core/src/registry.rs`) is bidirectional:
   `ComponentReg { name, spawn, dump, order, subsumes }`.  The `spawn` fn constructs a
   component from JSON; the `dump` fn serializes it back.  `subsumes` prevents fan-out
   duplicates (e.g. `IsoAgent ⊃ {IsoSprite, Transform}`).  Tests sharing the global
   registry must use `--test-threads=1` (it's a global `RwLock<HashMap>`).
-- **Prefab functions** (`init_*` methods on `Engine`) are the idiomatic way to build
-  gameplay: they spawn entities, add components, register `on_update` closures, and
-  return `Engine` handles for later reference.
+- **Prefab functions** (`init_*` free functions in `classic-demo`) are the idiomatic way to
+  build gameplay: they take `&mut Engine` + `Rc<RefCell<DemoState>>`, spawn entities, add
+  components, and register `on_update` / hook closures.  The demo layer is installed via
+  `Engine`'s hook surface (`on_update`, `on_pre_update`, `on_selection_end`, `add_overlay`,
+  `set_test_runner`).
 - **GL rendering** (`classic-gfx/src/lib.rs`) provides 7 `draw_*` functions (`draw_tilemap`,
   `draw_iso_sprite`, `draw_sprite`, `draw_rect`, `draw_sdf`, `draw_line_loop`, `draw_line_strip`).
   Each binds a named shader, sets projection/camera/model uniforms, and draws.
