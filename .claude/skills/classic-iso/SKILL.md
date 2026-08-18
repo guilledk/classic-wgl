@@ -255,7 +255,7 @@ Each vertex is **9 floats = 36 bytes**, interleaved:
 | 0 | 3×f32 | `vertexPos` | Position in tile-grid space `(x, y, z)` |
 | 12 | 2×f32 | `mapCoord` | Normalized map UV `[0..1, 0..1]` |
 | 20 | 1×f32 | `tileId` | Tile index (≤0 = steep face, >0 = wall) |
-| 24 | 3×f32 | `normal` | Face normal vector |
+| 24 | 3×f32 | `normal` | Smooth per-vertex normal |
 
 Drawn as non-indexed `TRIANGLES`.
 
@@ -290,16 +290,26 @@ shader).  Walls only generate when the average height > 0.
 
 ### Normals
 
-Top-face normals are computed via `tri_normal(d1, d2)`, which takes two edge
-vectors and returns a unit normal via cross product.  These are passed through
-a `normalMatrix` uniform (transpose of the inverse of the iso matrix) in the
-vertex shader for correct lighting.
+Top-face normals are **smooth per-vertex normals**, built by
+`build_vertex_normals`: the two triangle normals of every adjacent tile are
+accumulated onto its four corner vertices and then normalised.  This hides the
+triangulation — per-face normals made the herringbone of facets visible on any
+non-level terrain.  On a flat map every face normal is already `+Z`, so the
+averaged result is bit-identical to the old per-face value and flat scenes
+(including the demo golden baseline) are unaffected.
+
+The normals are passed through a `normalMatrix` uniform (transpose of the
+inverse of the iso matrix) in the vertex shader for correct lighting.
 
 ### Allocation
 
-The mesh pre-allocates `size_x * size_y * 30 * 9` floats (worst case: 2 face
-triangles + 4 wall twisted-quads per tile).  Empty tiles (tile ID = 0 and all
-four corners at height 0) are skipped.
+The mesh pre-allocates the **exact** vertex count, not a worst-case guess:
+`6` vertices per non-empty tile (two top-face triangles) plus `6` per wall,
+and walls only exist on the map perimeter — `(6 * size_x * size_y + 6 * 2 *
+(size_x + size_y)) * 9` floats.  The old formula (`size_x * size_y * 30 * 9`)
+assumed all four walls could appear on *every* tile, over-reserving by 5x
+(173 MB instead of 35 MB at 400x400).  A test asserts `capacity == bound`.
+Empty tiles (tile ID = 0 and all four corners at height 0) are skipped.
 
 ---
 

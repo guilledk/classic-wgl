@@ -374,6 +374,13 @@ if missing.
 Tile ID data is uploaded as raw `glow::Texture` (not `GlTexture`) — each pixel
 encodes `tile_id / 256.0`, decoded as `floor(R * 256.0)` in the fragment shader.
 
+**The data texture is one pixel per tile** (`size_x × size_y`), with no
+power-of-two padding.  `build_tile_texture` and `upload_data_texture` never
+query `GL_MAX_TEXTURE_SIZE`, so a map dimension beyond the GPU limit (WebGL 2
+guarantees only 2048; desktop GL usually 8192–16384) silently produces a
+garbage texture and corrupts every tile lookup — no GL error is raised.  See
+`classic-procmaps` §5 for the full scaling envelope.
+
 ---
 
 ## 14. draw_iso_sprite Ghost Pass Numeric Constraint

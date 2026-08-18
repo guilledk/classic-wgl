@@ -13,6 +13,14 @@ impl Random {
         s
     }
 
+    /// Deterministically seed from a string.  Prefer this over
+    /// [`Random::from_entropy`] anywhere the result must be reproducible
+    /// (golden traces, unit tests) or must build for `wasm32` (entropy
+    /// seeding reads the system clock).
+    pub fn from_seed_str(seed: &str) -> Self {
+        Self::from_seed(hash_string(seed))
+    }
+
     pub fn from_entropy() -> Self {
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
@@ -20,9 +28,16 @@ impl Random {
     }
 
     /// Return a `f64` in `[0, 1)`.
+    ///
+    /// `self.0 >> 16` keeps the top 16 bits of the LCG state (the low bits of
+    /// an LCG have famously short periods), so the divisor must be 65536.
+    /// Dividing by 32768 returned `[0, 2)` instead, which silently broke every
+    /// caller that assumed the documented range — including the Fisher-Yates
+    /// shuffle in `build_perm` just below, where out-of-range draws were being
+    /// swallowed by a `.min(255)` clamp and biasing the permutation table.
     pub fn next_f64(&mut self) -> f64 {
         self.0 = self.0.wrapping_mul(1103515245).wrapping_add(12345);
-        (self.0 >> 16) as f64 / 32768.0
+        (self.0 >> 16) as f64 / 65536.0
     }
 }
 
@@ -388,7 +403,10 @@ impl SimplexNoise {
 }
 
 /// Simple string hash with good avalanche properties (FNV-1a style).
-fn hash_string(s: &str) -> u32 {
+///
+/// Public so callers can derive a deterministic [`Random`] seed from a
+/// human-readable string (see [`Random::from_seed_str`]).
+pub fn hash_string(s: &str) -> u32 {
     let mut h: u32 = 0x811c9dc5;
     for b in s.bytes() {
         h ^= b as u32;

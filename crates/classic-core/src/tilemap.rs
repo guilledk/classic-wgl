@@ -36,9 +36,16 @@ pub fn build_mesh(
     let mx: Vec<f32> = (0..=size_x).map(|i| i as f32 / size_x as f32).collect();
     let my: Vec<f32> = (0..=size_y).map(|i| i as f32 / size_y as f32).collect();
 
-    // Worst-case allocation: 2 faces + 4 walls = 30 vertices × 9 floats per tile.
-    let max_verts = (size_x * size_y * 30) as usize * VERT_FLOATS;
-    let mut data: Vec<f32> = Vec::with_capacity(max_verts);
+    // Exact upper bound: 6 vertices for every tile's two top-face triangles,
+    // plus 6 per wall.  Walls are only ever emitted on the map perimeter —
+    // one per exterior edge, so `2 * (size_x + size_y)` of them.
+    //
+    // Budgeting 30 vertices for *every* tile (as if all four walls could
+    // appear anywhere) over-reserves by 5x: 173 MB rather than 35 MB on a
+    // 400x400 map, all of it touched by the allocator and immediately wasted.
+    let top_verts = (size_x as usize) * (size_y as usize) * 6;
+    let wall_verts = 2 * (size_x as usize + size_y as usize) * 6;
+    let mut data: Vec<f32> = Vec::with_capacity((top_verts + wall_verts) * VERT_FLOATS);
 
     let at = |tx: i32, ty: i32| -> f32 {
         let tx = tx.clamp(0, size_x) as usize;
@@ -52,6 +59,19 @@ pub fn build_mesh(
         } else {
             tiles[(ty * size_x + tx) as usize]
         }
+    };
+
+    // Smooth per-vertex normals, accumulated from the two triangles of every
+    // adjacent tile.  Flat (per-face) normals make the triangulation of a
+    // continuous height field plainly visible as a herringbone of facets.
+    //
+    // On a level map every face normal is already +Z, so the averaged result
+    // is bit-identical to the per-face value and existing flat scenes are
+    // unaffected.
+    let vnormals = build_vertex_normals(size_x, size_y, height_scale, &at);
+    let vn = |tx: i32, ty: i32| -> [f32; 3] {
+        vnormals
+            [ty.clamp(0, size_y) as usize * (size_x as usize + 1) + tx.clamp(0, size_x) as usize]
     };
 
     for ty in 0..size_y {
@@ -78,8 +98,10 @@ pub fn build_mesh(
             let my1 = my[ty as usize + 1];
 
             // Top face: two triangles NW→NE→SW, NE→SE→SW.
-            let n_top = tri_normal((1.0, 0.0, z_ne - z_nw), (0.0, 1.0, z_sw - z_nw));
-            let n_top2 = tri_normal((0.0, 1.0, z_se - z_ne), (-1.0, 1.0, z_sw - z_ne));
+            let n_nw = vn(tx, ty);
+            let n_ne = vn(tx + 1, ty);
+            let n_sw = vn(tx, ty + 1);
+            let n_se = vn(tx + 1, ty + 1);
 
             // Face tileId = -steepness (always ≤ 0.5 for fragment shader to route to tileset).
             let z_max = z_nw.max(z_ne).max(z_sw).max(z_se);
@@ -87,21 +109,12 @@ pub fn build_mesh(
             let steepness = ((z_max - z_min) / height_scale.max(0.001)).min(1.0);
             let face_tid = -steepness;
 
-            push_vert(&mut data, tx as f32, ty as f32, z_nw, mx0, my0, face_tid, n_top);
-            push_vert(&mut data, tx as f32 + 1.0, ty as f32, z_ne, mx1, my0, face_tid, n_top);
-            push_vert(&mut data, tx as f32, ty as f32 + 1.0, z_sw, mx0, my1, face_tid, n_top);
-            push_vert(&mut data, tx as f32 + 1.0, ty as f32, z_ne, mx1, my0, face_tid, n_top2);
-            push_vert(
-                &mut data,
-                tx as f32 + 1.0,
-                ty as f32 + 1.0,
-                z_se,
-                mx1,
-                my1,
-                face_tid,
-                n_top2,
-            );
-            push_vert(&mut data, tx as f32, ty as f32 + 1.0, z_sw, mx0, my1, face_tid, n_top2);
+            push_vert(&mut data, tx as f32, ty as f32, z_nw, mx0, my0, face_tid, n_nw);
+            push_vert(&mut data, tx as f32 + 1.0, ty as f32, z_ne, mx1, my0, face_tid, n_ne);
+            push_vert(&mut data, tx as f32, ty as f32 + 1.0, z_sw, mx0, my1, face_tid, n_sw);
+            push_vert(&mut data, tx as f32 + 1.0, ty as f32, z_ne, mx1, my0, face_tid, n_ne);
+            push_vert(&mut data, tx as f32 + 1.0, ty as f32 + 1.0, z_se, mx1, my1, face_tid, n_se);
+            push_vert(&mut data, tx as f32, ty as f32 + 1.0, z_sw, mx0, my1, face_tid, n_sw);
 
             // Wall faces — only at map borders (outer cliff sides).
             let wall_tid = tid.max(1) as f32;
@@ -132,6 +145,57 @@ pub fn build_mesh(
 
     let vcount = data.len() / VERT_FLOATS;
     (data, vcount)
+}
+
+/// Accumulate the two triangle normals of every tile onto its four corner
+/// vertices, then normalise.  Produces the smooth shading normals used by the
+/// top faces.
+fn build_vertex_normals(
+    size_x: i32,
+    size_y: i32,
+    height_scale: f32,
+    at: &impl Fn(i32, i32) -> f32,
+) -> Vec<[f32; 3]> {
+    let stride = size_x as usize + 1;
+    let mut acc = vec![[0f32; 3]; stride * (size_y as usize + 1)];
+
+    for ty in 0..size_y {
+        for tx in 0..size_x {
+            let z_nw = at(tx, ty) * height_scale;
+            let z_ne = at(tx + 1, ty) * height_scale;
+            let z_sw = at(tx, ty + 1) * height_scale;
+            let z_se = at(tx + 1, ty + 1) * height_scale;
+
+            let n1 = tri_normal((1.0, 0.0, z_ne - z_nw), (0.0, 1.0, z_sw - z_nw));
+            let n2 = tri_normal((0.0, 1.0, z_se - z_ne), (-1.0, 1.0, z_sw - z_ne));
+
+            let mut add = |vx: i32, vy: i32, n: [f32; 3]| {
+                let i = vy as usize * stride + vx as usize;
+                acc[i][0] += n[0];
+                acc[i][1] += n[1];
+                acc[i][2] += n[2];
+            };
+            // Triangle 1 touches NW, NE, SW; triangle 2 touches NE, SE, SW.
+            add(tx, ty, n1);
+            add(tx + 1, ty, n1);
+            add(tx, ty + 1, n1);
+            add(tx + 1, ty, n2);
+            add(tx + 1, ty + 1, n2);
+            add(tx, ty + 1, n2);
+        }
+    }
+
+    for n in acc.iter_mut() {
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len > 1e-6 {
+            n[0] /= len;
+            n[1] /= len;
+            n[2] /= len;
+        } else {
+            *n = [0.0, 0.0, 1.0];
+        }
+    }
+    acc
 }
 
 #[allow(clippy::too_many_arguments)]

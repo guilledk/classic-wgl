@@ -112,7 +112,11 @@ pub fn init_tool_buttons(engine: &mut Engine, state: &DemoStateRef) {
     let menu_panel_gap: f32 = 0.0;
     let agent_pad: f32 = 8.0;
 
-    let menu_targets: [(&str, &str); 6] = [
+    // Built as a Vec rather than a fixed array so the lunar entry can be
+    // conditional: adding it unconditionally would change the menu height
+    // (and therefore the demo scene's layout and golden baseline) for a row
+    // that does nothing outside the generated scene.
+    let mut menu_targets: Vec<(&str, &str)> = vec![
         ("Tile Editor", "tilemap"),
         ("Nav Editor", "navMesh"),
         ("Height Editor", "height"),
@@ -120,6 +124,10 @@ pub fn init_tool_buttons(engine: &mut Engine, state: &DemoStateRef) {
         ("Footprints", "_footprints"),
         ("Text Demo", "textDemo"),
     ];
+    if state.borrow().lunar.is_some() {
+        menu_targets.push(("Lunar Gen", "lunarGen"));
+    }
+    let menu_targets = menu_targets;
 
     let max_label_len = menu_targets.iter().map(|m| m.0.len()).max().unwrap_or(12);
     let glyph_w = 18.0_f32;
@@ -615,11 +623,14 @@ pub fn init_height_widget(engine: &mut Engine, state: &DemoStateRef) {
             s.editor.height_mode = es.height_mode.clone();
         }
 
-        // Apply height scale to tilemap when it changes
+        // Apply height scale to tilemap when it changes.  Relative to the
+        // scale the mesh was actually built with, not to the tile pixel
+        // size (which generated scenes deliberately do not use).
         let prev_hs = editor_rc_clone.borrow().height_scale;
+        let base_hs = engine.base_height_scale;
         if let Some(_e) = engine.names.get("tilemap").copied() {
             if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(_e) {
-                tm.height_scale = tm.tile_pixel_size[0] as f32 * prev_hs as f32;
+                tm.height_scale = base_hs * prev_hs as f32;
             }
         }
 
@@ -689,6 +700,9 @@ pub fn init_editor_mode_control(engine: &mut Engine, state: &DemoStateRef) {
         if let Some(e) = state.borrow().light_widget_e {
             engine.set_enabled(e, target == "light");
         }
+        if let Some(e) = state.borrow().lunar_widget_e {
+            engine.set_enabled(e, target == "lunarGen");
+        }
         if let Some(e) = state.borrow().text_showcase_e {
             engine.set_enabled(e, target == "textDemo");
         }
@@ -701,11 +715,20 @@ pub fn init_editor_mode_control(engine: &mut Engine, state: &DemoStateRef) {
 /// Tile palette: shows the tileset texture with click-to-select and a selector overlay.
 pub fn init_tile_palette(engine: &mut Engine, state: &DemoStateRef) {
     let Some(&tm_entity) = engine.names.get("tilemap") else { return };
-    let (tile_px, tile_py, max_tile, tiles_per_row) = {
+    // Read the tileset name from the component rather than hardcoding
+    // "tileSet", so a scene using a different (or procedurally generated)
+    // tileset gets a palette showing its own tiles.
+    let (tile_px, tile_py, max_tile, tiles_per_row, tile_set) = {
         let Ok(tm) = engine.world.get::<&Tilemap>(tm_entity) else {
             return;
         };
-        (tm.tile_pixel_size[0], tm.tile_pixel_size[1], tm.max_tile, tm.tiles_per_row)
+        (
+            tm.tile_pixel_size[0],
+            tm.tile_pixel_size[1],
+            tm.max_tile,
+            tm.tiles_per_row,
+            tm.tile_set.clone(),
+        )
     };
     let Some(ref mut ui) = engine.ui else { return };
 
@@ -717,7 +740,7 @@ pub fn init_tile_palette(engine: &mut Engine, state: &DemoStateRef) {
     let container =
         ui.spawn_container(&mut engine.world, palette_w, palette_h, [0.0, 0.0, 0.0, 0.2]);
     let sprite =
-        ui.spawn_sprite(&mut engine.world, "tileSet", palette_w, palette_h, 0.0, [1.0, 1.0]);
+        ui.spawn_sprite(&mut engine.world, &tile_set, palette_w, palette_h, 0.0, [1.0, 1.0]);
     ui.container_add_child(
         &mut engine.world,
         container,

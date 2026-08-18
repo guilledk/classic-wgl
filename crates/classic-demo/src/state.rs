@@ -65,6 +65,9 @@ pub struct DemoState {
     pub iso_coord_x_e: Option<Entity>,
     pub iso_coord_y_e: Option<Entity>,
     pub iso_coord_z_e: Option<Entity>,
+    /// Procedural lunar scene state, present only in the lunar scene.
+    pub lunar: Option<crate::scenes::lunar::LunarScene>,
+    pub lunar_widget_e: Option<Entity>,
 }
 
 impl Default for DemoState {
@@ -82,6 +85,8 @@ impl Default for DemoState {
             iso_coord_x_e: None,
             iso_coord_y_e: None,
             iso_coord_z_e: None,
+            lunar: None,
+            lunar_widget_e: None,
         }
     }
 }

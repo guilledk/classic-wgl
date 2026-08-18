@@ -50,21 +50,25 @@ before considering a task done.
 Cargo.toml               workspace root (7 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
-                          tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder
+                          tilemap, instrument (CLASSIC_LOG), simplex noise, GJK, quadtree, sdf_builder,
+                          terrain/ (fractal noise, lunar generator, material table, tileset painter)
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
                           golden.rs (traces), env_config.rs
-  classic-demo/           application/prefab layer: init_engine() bootstrap, DemoState + EditorState
-                          (state.rs), prefabs.rs, lighting.rs, editor.rs, hud.rs, testing.rs
+  classic-demo/           application/prefab layer: init_engine(gl, &DemoAssets, Scene) bootstrap,
+                          DemoState + EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs,
+                          hud.rs, testing.rs, scenes/ (demo + lunar)
 apps/
   desktop/                native binary: include_bytes! assets, init_* calls, winit event loop
   web/                    wasm cdylib: wasm-bindgen main, trunk build, canvas pointer-lock
 tests/
-  golden/                 baseline.{trace.jsonl,png} for render-trace + pixel golden checks
+  golden/baseline/        demo-scene baseline.{trace.jsonl,png}
+  golden/lunar/           lunar-scene render-trace baseline
 public/
   manifest.json           shader/texture/animation declarations (used by Rust loader)
   state.json              persisted demo entities
+  state_lunar.json        lunar scene entities, 400x400 (same names; terrain generated at boot)
   map001.{txt,nav.txt}    tilemap + nav mesh data (base64 JSON arrays)
 assets/                   git submodule -> guilledk/classic-assets (source assets)
 scripts/
@@ -114,6 +118,11 @@ plans/
 - **Isometric/pathfinding**: `classic-core/src/tilemap.rs` builds the 3D tilemap mesh;
   `classic-core/src/pathfinder.rs` implements A* (single-threaded, no worker — the TS
   Web Worker pattern was dropped).  See `classic-iso` skill.
+- **Procedural terrain**: `classic-core/src/terrain/` generates the `lunar` scene — a
+  400x400 map of layered simplex noise plus an age-ordered meteorite crater field,
+  with slope relaxation and stamped landing zones providing the flat, pathable ground
+  an RTS needs.  Pure and GL-free, so it is unit-tested without a GL context.
+  `classic-demo/src/scenes/lunar.rs` installs the result.  See `classic-terrain` skill.
 - **SDF text**: `classic-core/src/sdf_builder.rs` builds interleaved glyph buffers;
   `classic-gfx` renders them with the `sdf` shader (`dejavusans-sdf` font atlas).
   Entities with `SdfTextRender` are in the main z-sorted render list (`DrawKind::SdfText`),
@@ -133,9 +142,14 @@ plans/
 ## Testing
 
 - **Unit/integration tests**: `cargo test -- --test-threads=1` (threads=1 required
-  because the global component registry is shared state).  46 tests in `classic-core`
+  because the global component registry is shared state).  Tests in `classic-core`
   cover pathfinding, GJK, quadtree, camera, tile mesh building, SDF builder, dumper
-  round-trips, and camera math.
+  round-trips, camera math, fractal noise, and the lunar terrain generator.
+- **Terrain generator**: `crates/classic-core/tests/terrain_lunar.rs` is the primary
+  regression net for the lunar scene.  It needs no GL and asserts the *gameplay*
+  guarantees — bounded slopes, flat landing pads, buildable area, and mutual
+  reachability of every spawn pair (checked with the engine's own A*) across
+  several seeds — rather than pixel output.
 - **classic-engine** and **classic-gfx** have no unit tests (no mock GL — deferred).
 - **CLASSIC_TEST e2e**: `CLASSIC_TEST=1 CLASSIC_FRAMES=60 cargo run -p classic-desktop`.
   One scenario (12 assertions) testing height blend/set, tile painting, zero-delta,
@@ -145,6 +159,10 @@ plans/
 - **Golden trace**: `CLASSIC_GOLDEN=check|update` compares a render-trace `.jsonl`
   against `tests/golden/baseline/baseline.trace.jsonl`.  Run with:
   `CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop`.
+- **Lunar golden trace**: a second baseline in `tests/golden/lunar/`.  Requires an
+  explicit `CLASSIC_FIXED_DT` — without `CLASSIC_TEST` the idle animator advances on
+  real delta and lands on a different frame each run:
+  `CLASSIC_SCENE=lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar cargo run -p classic-desktop`
 - **Pixel golden**: `CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=check` compares a pixel buffer
   against `tests/golden/baseline/baseline.png` (not run in CI by default — software-
   rasteriser version-dependent).
@@ -167,6 +185,7 @@ plans/
 | Var | Purpose | Default |
 |---|---|---|
 | `CLASSIC_TEST` | Enable e2e test runner | off |
+| `CLASSIC_SCENE` | Demo scene to boot: `demo` or `lunar` | `demo` |
 | `CLASSIC_FRAMES` | Max frames in headless mode | unlimited |
 | `CLASSIC_FIXED_DT` | Fixed delta time (auto 1/60 under test) | real dt |
 | `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Forced viewport | window size |
@@ -175,6 +194,7 @@ plans/
 | `CLASSIC_GOLDEN` | `check` or `update` golden trace | off |
 | `CLASSIC_GOLDEN_PNG` | Enable pixel PNG capture | off |
 | `CLASSIC_GOLDEN_TOL` | Pixel channel tolerance | 2 |
+| `CLASSIC_GOLDEN_DIR` | Golden baseline directory (per-scene) | `tests/golden/baseline` |
 | `CLASSIC_DUMP_DIR` | Native dump output dir | `./dump/` |
 | `CLASSIC_LOG` | Channel-gated logging (see `classic-debugging` skill) | off |
 | `CLASSIC_UI_DEBUG` | Per-frame UI entity dump (first 120 frames) | off |
@@ -192,6 +212,8 @@ Engine skills (in `.claude/skills/`):
 | Skill | Covers |
 |---|---|
 | `classic-iso` | Iso coords, tilemap, depth formula, sprite occlusion, mesh gen (Rust-only) |
+| `classic-terrain` | Procedural lunar generator, fractal noise, material table, tileset, scenes |
+| `classic-procmaps` | Authoring/scaling procedural maps: terrain module, new-generator recipe, scale-free params, size envelope |
 | `classic-ui` | UIManager, anchor layout, collider sync, set_enabled, spawn_button |
 | `classic-text` | SdfText renderer, atlas generator, is_ui justify, scissor clipping |
 | `classic-gfx` | draw_* functions, GL state contract, GlBuffer, begin_frame, z-clipping |
