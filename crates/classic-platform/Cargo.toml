@@ -37,3 +37,4 @@ web-sys.workspace = true
 js-sys.workspace = true
 gloo-net.workspace = true
 console_error_panic_hook.workspace = true
+serde_json.workspace = true

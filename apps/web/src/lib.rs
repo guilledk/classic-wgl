@@ -12,6 +12,10 @@ const ROM_URLS: &[(&str, &str)] = &[
     ("lrvtest", "https://classic-roms.com/lrvtest.rom"),
 ];
 
+/// The `roms.json` checksum index, used to content-address cached ROMs.
+#[cfg(target_arch = "wasm32")]
+const ROM_INDEX_URL: &str = "https://classic-roms.com/roms.json";
+
 /// Read a query-string parameter from the page URL.
 #[cfg(target_arch = "wasm32")]
 fn query_param(name: &str) -> Option<String> {
@@ -100,6 +104,35 @@ pub fn main() {
     });
 }
 
+/// Resolve the `?rom=` selector to archive bytes, caching named ROMs in the
+/// browser's Cache API (keyed by their `roms.json` sha256) so repeat loads
+/// don't re-download.  Arbitrary URLs/paths fall back to a plain fetch.
+#[cfg(target_arch = "wasm32")]
+async fn resolve_web_rom(spec: &str) -> anyhow::Result<classic_rom::AssetBytes> {
+    use classic_rom::RomSource;
+
+    match classic_rom::parse_rom_spec(spec) {
+        RomSource::Embedded(name) => {
+            let url = ROM_URLS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, url)| *url)
+                .ok_or_else(|| anyhow::anyhow!("unknown ROM `{name}`"))?;
+            // `moon` is a legacy alias for the `lunar` scene; its checksum
+            // index entry is `lunar`.
+            let index_key = if name == "moon" { "lunar" } else { &name };
+            classic_platform::rom::resolve_named_rom_cached(index_key, url, ROM_INDEX_URL).await
+        }
+        _ => {
+            classic_platform::resolve_rom_async(
+                spec,
+                &classic_platform::rom::static_lookup(ROM_URLS),
+            )
+            .await
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn run() -> anyhow::Result<()> {
     // `?classic_log=` configures channel logging; `?rom=` selects the ROM
@@ -111,12 +144,7 @@ async fn run() -> anyhow::Result<()> {
     let label = query_param("rom").unwrap_or_else(|| "demo".to_string());
     let mut overlay = BootOverlay::new(&format!("downloading scene `{label}`…"));
 
-    let rom_bytes = match classic_platform::resolve_rom_async(
-        &spec,
-        &classic_platform::rom::static_lookup(ROM_URLS),
-    )
-    .await
-    {
+    let rom_bytes = match resolve_web_rom(&spec).await {
         Ok(bytes) => bytes,
         Err(err) => {
             overlay.error(&format!("failed to load scene `{label}`:\n{err}"));

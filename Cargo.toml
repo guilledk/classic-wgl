@@ -98,6 +98,8 @@ web-sys = { version = "0.3", features = [
     "XmlHttpRequestEventTarget",
     "XmlHttpRequestResponseType",
     "Response",
+    "Cache",
+    "CacheStorage",
 ] }
 js-sys = "0.3"
 gloo-net = "0.6"

@@ -115,6 +115,13 @@ pub async fn resolve_rom_async(
 /// Fetch a URL as raw bytes via the async `fetch` API (web).
 #[cfg(target_arch = "wasm32")]
 async fn fetch_url_async(url: &str) -> anyhow::Result<Vec<u8>> {
+    let resp = fetch_response(url).await?;
+    response_bytes(&resp).await
+}
+
+/// Fetch a URL and return the `web_sys::Response` (checking the HTTP status).
+#[cfg(target_arch = "wasm32")]
+async fn fetch_response(url: &str) -> anyhow::Result<web_sys::Response> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
 
@@ -128,12 +135,104 @@ async fn fetch_url_async(url: &str) -> anyhow::Result<Vec<u8>> {
     if !response.ok() {
         anyhow::bail!("fetch {url}: HTTP {}", response.status());
     }
+    Ok(response)
+}
+
+/// Read a `web_sys::Response` body as raw bytes.
+#[cfg(target_arch = "wasm32")]
+async fn response_bytes(response: &web_sys::Response) -> anyhow::Result<Vec<u8>> {
+    use wasm_bindgen_futures::JsFuture;
+
     let buffer = JsFuture::from(
-        response
-            .array_buffer()
-            .map_err(|e| anyhow::anyhow!("fetch {url}: array_buffer failed: {e:?}"))?,
+        response.array_buffer().map_err(|e| anyhow::anyhow!("array_buffer failed: {e:?}"))?,
     )
     .await
-    .map_err(|e| anyhow::anyhow!("read {url}: {e:?}"))?;
+    .map_err(|e| anyhow::anyhow!("read body: {e:?}"))?;
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}
+
+/// Resolve a *named* ROM to bytes, caching the downloaded archive in the
+/// browser's Cache API keyed by the content `sha256` published in `roms.json`.
+///
+/// The (tiny) checksum index is fetched fresh on every call; if the cache
+/// already holds a copy with a matching hash it is reused verbatim, otherwise
+/// the archive is fetched and stored.  Repeat page loads therefore serve the
+/// ROM locally (no re-download) while still picking up newly published ROMs.
+#[cfg(target_arch = "wasm32")]
+pub async fn resolve_named_rom_cached(
+    index_key: &str,
+    url: &str,
+    index_url: &str,
+) -> anyhow::Result<AssetBytes> {
+    let sha = rom_sha256(index_key, index_url).await?;
+    let key = format!("{url}?v={sha}");
+
+    if let Some(cache) = rom_cache().await {
+        if let Some(resp) = cache_match(&cache, &key).await? {
+            return response_bytes(&resp).await.map(AssetBytes::Owned);
+        }
+    }
+
+    let resp = fetch_response(url).await?;
+    if let Some(cache) = rom_cache().await {
+        let _ = cache_put(&cache, &key, &resp).await;
+    }
+    response_bytes(&resp).await.map(AssetBytes::Owned)
+}
+
+/// Fetch the `roms.json` checksum index and return the `sha256` for `name`.
+#[cfg(target_arch = "wasm32")]
+async fn rom_sha256(name: &str, index_url: &str) -> anyhow::Result<String> {
+    let url = format!("{index_url}?t={}", js_sys::Date::now() as u64);
+    let bytes = fetch_url_async(&url).await?;
+    let index: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!("parse {index_url}: {e}"))?;
+    index
+        .get(name)
+        .and_then(|e| e.get("sha256"))
+        .and_then(|s| s.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("{index_url} has no sha256 entry for `{name}`"))
+}
+
+/// Open (or create) the `classic-roms` Cache API cache, if available.
+#[cfg(target_arch = "wasm32")]
+async fn rom_cache() -> Option<web_sys::Cache> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let window = web_sys::window()?;
+    let caches = window.caches().ok()?;
+    let promise = caches.open("classic-roms");
+    let cache = JsFuture::from(promise).await.ok()?;
+    cache.dyn_into::<web_sys::Cache>().ok()
+}
+
+/// Look up `key` in a Cache API cache (None on a miss).
+#[cfg(target_arch = "wasm32")]
+async fn cache_match(
+    cache: &web_sys::Cache,
+    key: &str,
+) -> anyhow::Result<Option<web_sys::Response>> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let promise = cache.match_with_str(key);
+    let value = JsFuture::from(promise).await.map_err(|e| anyhow::anyhow!("cache.match: {e:?}"))?;
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let resp = value
+        .dyn_into::<web_sys::Response>()
+        .map_err(|_| anyhow::anyhow!("cache.match: entry was not a Response"))?;
+    Ok(Some(resp))
+}
+
+/// Store `response` under `key` in a Cache API cache.
+#[cfg(target_arch = "wasm32")]
+async fn cache_put(cache: &web_sys::Cache, key: &str, response: &web_sys::Response) {
+    use wasm_bindgen_futures::JsFuture;
+
+    let promise = cache.put_with_str(key, response);
+    let _ = JsFuture::from(promise).await;
 }
