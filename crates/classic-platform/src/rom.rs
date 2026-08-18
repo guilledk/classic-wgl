@@ -175,7 +175,11 @@ pub async fn resolve_named_rom_cached(
 
     let resp = fetch_response(url).await?;
     if let Some(cache) = rom_cache().await {
-        let _ = cache_put(&cache, &key, &resp).await;
+        // `Cache::put` consumes the body, so stash a teed copy in the cache
+        // (via the JS `Response.clone`) and read the original below.
+        if let Ok(cached) = web_sys::Response::clone(&resp) {
+            let _ = cache_put(&cache, &key, &cached).await;
+        }
     }
     response_bytes(&resp).await.map(AssetBytes::Owned)
 }
