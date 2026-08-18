@@ -6,4 +6,5 @@
 //! lunar algorithm) live in ROM guest code, not here.
 
 pub use classic_terrain::fractal;
+pub use classic_terrain::kernels;
 pub use classic_terrain::noise_fields;

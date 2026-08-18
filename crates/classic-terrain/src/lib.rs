@@ -18,5 +18,6 @@
 extern crate alloc;
 
 pub mod fractal;
+pub mod kernels;
 pub mod noise_fields;
 pub mod simplex_noise;
