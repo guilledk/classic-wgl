@@ -42,8 +42,8 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
-            # ROMs are published by the classic-roms repo (released under a
-            # mutable `rom-assets` tag); fetch the current set instead of
+            # ROMs are built by the classic-roms repo and published to an R2
+            # bucket (classic-roms.com); fetch the current set instead of
             # building assets/guests from the private submodule.
             - uses: dtolnay/rust-toolchain@stable
             - run: cargo xtask fetch-roms

@@ -44,7 +44,8 @@ CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test`
 `cargo fmt -- --check`, `cargo clippy`, and `cargo test`
 before considering a task done.  The CI golden job calls `cargo xtask fetch-roms`
 instead of the old `cargo xtask all` — the ROMs come from the published
-`rom-assets` GitHub Release, not from the deleted `guest/` submodule.
+Cloudflare R2 bucket (`classic-roms.com`), not from the deleted `guest/`
+submodule.
 
 ## Directory map
 
@@ -220,16 +221,19 @@ plans/
 
 ## Assets / ROMs
 
-- The staged scene ROMs (`demo.rom`, `lunar.rom` + worker wasm) are published on
-  the `classic-wgl` GitHub repo under the mutable `rom-assets` release tag (from
-  the `classic-roms` source repo).  They are **fetched, not built**: `cargo xtask
-  fetch-roms` downloads them into `roms/out/` (gitignored).  The `guest/`
-  submodule and its ROM-generation pipelines were deleted.
+- The staged scene ROMs (`demo.rom`, `lunar.rom`, `lrvtest.rom` + worker wasm) are
+  built by the `classic-roms` repo and published to a Cloudflare R2 public bucket
+  served at `classic-roms.com` (CORS-enabled, so the browser web app can fetch
+  them too).  They are **fetched, not built**: `cargo xtask fetch-roms` downloads
+  them (verifying against `roms.json`) into `roms/out/` (gitignored).  The
+  `guest/` submodule and its ROM-generation pipelines were deleted.
 - `roms/out/` is GENERATED and gitignored.  Regenerate with: `cargo xtask fetch-roms`.
-- Rust apps embed the two ROMs at compile time via `include_bytes!` and boot them with
-  `RomArchive::from_bytes` → `Rom::load` → `classic_demo::init_engine` (see
-  `apps/desktop/src/main.rs` and `apps/web/src/lib.rs`).
-- CI and deploy run `cargo xtask fetch-roms` before `cargo build` / `trunk build`.
+- The desktop app reads the ROMs from `roms/out/` at runtime (overridable via
+  `CLASSIC_ROM_DIR`); the web app fetches them from `classic-roms.com`.  Both boot
+  them with `RomArchive::from_bytes` → `Rom::load` → `classic_demo::init_engine`
+  (see `apps/desktop/src/main.rs` and `apps/web/src/lib.rs`).
+- CI runs `cargo xtask fetch-roms` before `cargo build`; deploy stages nothing
+  (the web app fetches R2 directly).
 
 ## CLASSIC_* environment variables
 

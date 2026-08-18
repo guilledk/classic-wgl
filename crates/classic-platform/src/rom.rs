@@ -1,8 +1,8 @@
 //! ROM resolution: materialise a `CLASSIC_ROM` / `?rom=` selector into bytes.
 //!
-//! ROMs are no longer compiled into the binaries.  They are built and released
+//! ROMs are no longer compiled into the binaries.  They are built and published
 //! from the separate `classic-roms` repo, and each app references them by
-//! location: a release-asset URL on web, a cached path (or URL) on native.
+//! location: a CDN URL on web, a cached path (or URL) on native.
 //!
 //! [`resolve_rom_source`] is the shared front-end: it parses the selector via
 //! [`classic_rom::parse_rom_spec`] and dispatches named ROMs (`rom:<name>`, or
@@ -15,8 +15,8 @@ use classic_rom::{AssetBytes, RomSource};
 
 /// Build a lookup closure from a static `name -> URL/path` table.
 ///
-/// Convenience for apps with a fixed registry (the web app's release-asset
-/// URLs).  Desktop builds its own runtime closure over `roms/out/` instead.
+/// Convenience for apps with a fixed registry (the web app's CDN URLs).
+/// Desktop builds its own runtime closure over `roms/out/` instead.
 pub fn static_lookup<'a>(table: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
     move |name: &str| table.iter().find(|(n, _)| *n == name).map(|(_, l)| (*l).to_string())
 }

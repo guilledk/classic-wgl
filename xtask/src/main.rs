@@ -1,15 +1,14 @@
 //! `xtask`: classic-wgl's slim task runner.
 //!
-//! ROM archives are no longer built here.  The `classic-roms` repo authors,
-//! builds and releases them as GitHub Release assets on `guilledk/classic-wgl`
-//! under a mutable `rom-assets` tag; the only thing this tool needs to do is
-//! stage a local copy so the native app, dev loop and golden tests can boot
-//! offline.
+//! ROM archives are no longer built here.  The `classic-roms` repo authors and
+//! builds them, then publishes them to a Cloudflare R2 public bucket served at
+//! `https://classic-roms.com/`; the only thing this tool needs to do is stage a
+//! local copy so the native app, dev loop and golden tests can boot offline.
 //!
 //! Usage:
-//!   cargo xtask fetch-roms                       # download roms into roms/out/
-//!   cargo xtask fetch-roms --url <release-base>  # override the release base URL
-//!   cargo xtask                                  # alias for fetch-roms
+//!   cargo xtask fetch-roms                     # download roms into roms/out/
+//!   cargo xtask fetch-roms --url <rom-base>    # override the ROM base URL
+//!   cargo xtask                                # alias for fetch-roms
 
 use std::fs;
 use std::io::Read;
@@ -19,9 +18,9 @@ use std::time::Duration;
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 
-/// Default release base for the published ROMs (the mutable `rom-assets` tag).
-const DEFAULT_RELEASE_BASE: &str =
-    "https://github.com/guilledk/classic-wgl/releases/download/rom-assets";
+/// Default base URL for the published ROMs (the R2 bucket behind
+/// `classic-roms.com`).
+const DEFAULT_ROM_BASE: &str = "https://classic-roms.com";
 
 /// The ROMs shipped by `classic-roms`.  (`moon` is a resolve-time alias for
 /// `lunar` only — the desktop/web `rom_lookup`/`static_lookup` handle it — so it
@@ -31,7 +30,7 @@ const ROMS: &[(&str, &str)] =
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut url = DEFAULT_RELEASE_BASE.to_string();
+    let mut url = DEFAULT_ROM_BASE.to_string();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {

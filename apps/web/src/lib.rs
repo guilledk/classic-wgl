@@ -2,15 +2,14 @@ use wasm_bindgen::prelude::*;
 
 /// Where each named ROM (`?rom=<name>`, empty => demo) is served from.
 ///
-/// ROMs are built by the `classic-roms` repo and published as GitHub Release
-/// assets on the classic-wgl repo under a mutable `rom-assets` tag, so these
-/// URLs stay stable across releases.
+/// ROMs are built by the `classic-roms` repo and published to a Cloudflare R2
+/// public bucket served at `classic-roms.com` (CORS-enabled).
 #[cfg(target_arch = "wasm32")]
 const ROM_URLS: &[(&str, &str)] = &[
-    ("demo", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/demo.rom"),
-    ("lunar", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/lunar.rom"),
-    ("moon", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/lunar.rom"),
-    ("lrvtest", "https://github.com/guilledk/classic-wgl/releases/download/rom-assets/lrvtest.rom"),
+    ("demo", "https://classic-roms.com/demo.rom"),
+    ("lunar", "https://classic-roms.com/lunar.rom"),
+    ("moon", "https://classic-roms.com/lunar.rom"),
+    ("lrvtest", "https://classic-roms.com/lrvtest.rom"),
 ];
 
 /// Read a query-string parameter from the page URL.

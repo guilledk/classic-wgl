@@ -15,8 +15,8 @@ jobs:
               with:
                   workspaces: apps/web -> target
 
-            # The web app fetches scene ROMs at runtime from classic-wgl's
-            # `rom-assets` GitHub Release; it needs no assets/guests to build.
+            # The web app fetches scene ROMs at runtime from the R2 bucket at
+            # classic-roms.com; it needs no assets/guests to build.
 
             - name: Install trunk
               run: cargo install trunk --locked
