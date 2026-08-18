@@ -46,6 +46,15 @@ const SPRING_DAMPING: f32 = 8.0;
 /// off a cliff).
 const AIRBORNE_PITCH: f32 = -0.26;
 
+/// Distance from the final waypoint (in tiles) at which the pure-pursuit
+/// follower considers the goal reached and stops.
+const GOAL_TOLERANCE: f32 = 0.5;
+
+/// Cost multiplier for a downward "jump" step in A* (`>= 1.0`).  A mild
+/// penalty makes the vehicle prefer flat routes but take a jump when it
+/// clearly shortens the path.
+const JUMP_COST: f32 = 1.3;
+
 /// A terrain-height sampler snapshot, cloned once per frame so the mutation
 /// pass can sample heights without re-borrowing the world.
 struct TerrainSnapshot {
@@ -75,6 +84,102 @@ pub fn dir_index(dx: i32, dy: i32) -> usize {
         (1, -1) => 7,
         _ => 0,
     }
+}
+
+/// The heading angle (tile-space radians, `atan2(dy, dx)`) for a direction
+/// frame.  `0` = East (frame 0), `FRAC_PI_2` = South (frame 2), etc.
+fn dir_to_heading(dir: u32) -> f32 {
+    (dir % 8) as f32 * std::f32::consts::FRAC_PI_4
+}
+
+/// Quantize a continuous heading angle to the nearest of the 8 direction
+/// frames (0..7), wrapping at `2π`.
+fn heading_to_dir(heading: f32) -> u32 {
+    let theta = heading.rem_euclid(std::f32::consts::TAU);
+    (theta / std::f32::consts::FRAC_PI_4).round() as u32 % 8
+}
+
+/// Wrap an angle to `[-π, π]`.
+fn wrap_pi(a: f32) -> f32 {
+    let mut a = a;
+    while a > std::f32::consts::PI {
+        a -= std::f32::consts::TAU;
+    }
+    while a < -std::f32::consts::PI {
+        a += std::f32::consts::TAU;
+    }
+    a
+}
+
+/// Lerp a per-direction `[f32; 2]` value (wheel offset or anchor) between the
+/// two direction frames straddling a continuous heading.
+fn lerp_dir2(vals: &[[f32; 2]; 8], heading: f32) -> [f32; 2] {
+    let theta = heading.rem_euclid(std::f32::consts::TAU);
+    let dir_f = theta / std::f32::consts::FRAC_PI_4;
+    let a = dir_f.floor() as usize % 8;
+    let b = (a + 1) % 8;
+    let t = dir_f - dir_f.floor();
+    [vals[a][0] * (1.0 - t) + vals[b][0] * t, vals[a][1] * (1.0 - t) + vals[b][1] * t]
+}
+
+/// Pure-pursuit look-ahead over a waypoint path.
+///
+/// Returns `(target_x, target_y, next_idx)` where the target is the point
+/// `lookahead` tiles along the path polyline from `(x, y)` (interpolated
+/// between waypoint centers) and `next_idx` is the index of the waypoint whose
+/// segment contains the target.  The caller advances `path_idx` to `next_idx`
+/// each frame, which is always monotonic — a forward-only vehicle never
+/// backtracks to a corner it already rounded.  Waypoints the vehicle has passed
+/// are skipped up front, so a target that lies "behind" the vehicle (e.g. after
+/// overshooting a corner) can't make it spin back around.  When the path is
+/// exhausted before `lookahead`, the target is the final waypoint center and
+/// `next_idx == path.len()`.
+fn lookahead(
+    path: &[[i32; 2]],
+    path_idx: usize,
+    x: f32,
+    y: f32,
+    lookahead: f32,
+) -> (f32, f32, usize) {
+    let mut idx = path_idx;
+
+    // Skip waypoints whose segment the vehicle has already traversed (its
+    // perpendicular projection onto `path[idx] -> path[idx+1]` is past the end).
+    while idx + 1 < path.len() {
+        let (ax, ay) = (path[idx][0] as f32 + 0.5, path[idx][1] as f32 + 0.5);
+        let (bx, by) = (path[idx + 1][0] as f32 + 0.5, path[idx + 1][1] as f32 + 0.5);
+        let segx = bx - ax;
+        let segy = by - ay;
+        let seglen2 = segx * segx + segy * segy;
+        let proj = ((x - ax) * segx + (y - ay) * segy) / seglen2.max(1e-6);
+        if proj >= 1.0 {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    // Walk forward from the vehicle accumulating `lookahead` tiles of distance.
+    let mut remaining = lookahead;
+    let (mut px, mut py) = (x, y);
+    while idx < path.len() {
+        let (wx, wy) = (path[idx][0] as f32 + 0.5, path[idx][1] as f32 + 0.5);
+        let dx = wx - px;
+        let dy = wy - py;
+        let seg = (dx * dx + dy * dy).sqrt();
+        if remaining <= seg {
+            let t = if seg > 1e-6 { remaining / seg } else { 0.0 };
+            return (px + dx * t, py + dy * t, idx);
+        }
+        remaining -= seg;
+        px = wx;
+        py = wy;
+        idx += 1;
+    }
+
+    // Path exhausted: target the final waypoint center.
+    let (lx, ly) = (path[path.len() - 1][0] as f32 + 0.5, path[path.len() - 1][1] as f32 + 0.5);
+    (lx, ly, path.len())
 }
 
 /// Quantize a signed pitch angle (radians) to a pitch frame index in
@@ -228,6 +333,27 @@ impl Engine {
             (left - right).length() * tile_scale
         };
 
+        // Collision footprint for pathfinding: explicit def override, else
+        // auto-derived from the wheelbase/track — half the wheelbase
+        // (front-rear) along the heading axis and half the track (left-right)
+        // across it, rounded out.  This matches the vehicle's actual footprint
+        // in a single heading rather than the union of all 8 (which
+        // over-estimates on diagonal headings).
+        let footprint: Vec<(i32, i32)> = match &def.path_footprint {
+            Some(fp) => fp.clone(),
+            None => {
+                let half_x = ((wheelbase_px / tile_scale) * 0.5).ceil() as i32;
+                let half_y = ((track_px / tile_scale) * 0.5).ceil() as i32;
+                let mut fp = Vec::with_capacity(((half_x * 2 + 1) * (half_y * 2 + 1)) as usize);
+                for dy in -half_y..=half_y {
+                    for dx in -half_x..=half_x {
+                        fp.push((dx, dy));
+                    }
+                }
+                fp
+            }
+        };
+
         let wheel_names: [String; 4] = WHEEL_SUFFIXES.map(|s| format!("{entity_name}Wheel{s}"));
         let tilemap_name = "tilemap".to_string();
 
@@ -281,6 +407,9 @@ impl Engine {
             roll_levels: def.roll_levels,
             roll_max: def.roll_max_deg.to_radians(),
             track_px,
+            path_footprint: footprint,
+            turn_rate: def.turn_rate_deg_per_sec.to_radians(),
+            safe_fall_px: def.safe_fall_px,
             ..Default::default()
         };
         let be = self.world.spawn((
@@ -323,39 +452,55 @@ impl Engine {
         let write = {
             let Some(mut v) = self.world.get::<&mut IsoVehicle>(ve).ok() else { return };
 
-            // -- movement along the A* path ---------------------------------
+            // -- movement along the A* path (bounded-turn, forward-only) ----
             let mut x = body_x;
             let mut y = body_y;
-            if !v.path.is_empty() && v.path_idx < v.path.len() {
-                let tx = v.path[v.path_idx][0] as f32 + 0.5;
-                let ty = v.path[v.path_idx][1] as f32 + 0.5;
-                let dx = tx - x;
-                let dy = ty - y;
-                let mag = dx.abs() + dy.abs();
-                let step = v.speed * delta;
-                if mag <= step || mag <= 1e-4 {
-                    x = tx;
-                    y = ty;
-                    v.path_idx += 1;
+            if !v.path.is_empty() {
+                // Arrive once the final waypoint is within tolerance; snap to
+                // its center and stop.
+                let goal = (
+                    v.path[v.path.len() - 1][0] as f32 + 0.5,
+                    v.path[v.path.len() - 1][1] as f32 + 0.5,
+                );
+                let dx = goal.0 - x;
+                let dy = goal.1 - y;
+                if dx * dx + dy * dy <= GOAL_TOLERANCE * GOAL_TOLERANCE {
+                    x = goal.0;
+                    y = goal.1;
+                    v.path.clear();
+                    v.path_idx = 0;
                 } else {
-                    let f = step / mag;
-                    x += dx * f;
-                    y += dy * f;
-                }
-                let (ddx, ddy) = (dx.round() as i32, dy.round() as i32);
-                if ddx != 0 || ddy != 0 {
-                    v.direction = dir_index(ddx, ddy) as u32;
+                    // Pure-pursuit: lead the target by ~1.5× the minimum
+                    // turning radius (speed / turn_rate) so the vehicle arcs
+                    // through corners rather than orbiting a waypoint inside
+                    // its turning circle.
+                    let turn_radius = v.speed / v.turn_rate.max(1e-3);
+                    let lookahead_dist = (turn_radius * 1.5).max(1.0);
+                    let (gx, gy, next_idx) = lookahead(&v.path, v.path_idx, x, y, lookahead_dist);
+                    v.path_idx = next_idx;
+
+                    // Steer the heading toward the look-ahead target, bounded
+                    // by the max turn rate.
+                    let desired = (gy - y).atan2(gx - x);
+                    let err = wrap_pi(desired - v.heading);
+                    let max_turn = v.turn_rate * delta;
+                    v.heading = wrap_pi(v.heading + err.clamp(-max_turn, max_turn));
+
+                    // Advance forward only (a wheeled vehicle never reverses).
+                    let step = v.speed * delta;
+                    x += v.heading.cos() * step;
+                    y += v.heading.sin() * step;
                 }
             }
 
-            let direction = v.direction as usize;
+            // Quantize the continuous heading for the 8-way sprite sheets.
+            v.direction = heading_to_dir(v.heading);
 
             // -- wheel ground contacts --------------------------------------
             let mut wheel_xy = [[0.0f32; 2]; 4];
             let mut wheel_ground = [0.0f32; 4];
             for i in 0..4 {
-                let (ox, oy) =
-                    (v.wheel_tile_offsets[i][direction][0], v.wheel_tile_offsets[i][direction][1]);
+                let [ox, oy] = lerp_dir2(&v.wheel_tile_offsets[i], v.heading);
                 let wx = x + ox;
                 let wy = y + oy;
                 wheel_xy[i] = [wx, wy];
@@ -376,6 +521,7 @@ impl Engine {
                     v.vel_z = 0.0;
                 }
             }
+            v.airborne = airborne;
             let body_offset_y = -(v.altitude - body_terrain);
 
             // -- per-wheel suspension ---------------------------------------
@@ -396,7 +542,7 @@ impl Engine {
 
             let mut wheel_anchors = [[0.0f32; 2]; 4];
             for (i, a) in wheel_anchors.iter_mut().enumerate() {
-                *a = v.wheel_anchors[i][direction];
+                *a = lerp_dir2(&v.wheel_anchors[i], v.heading);
             }
 
             // -- body pitch (angular spring-damper) --------------------------
@@ -435,7 +581,7 @@ impl Engine {
             VehicleWrite {
                 body: [x, y, v.altitude],
                 body_offset_y,
-                body_anchor: v.body_anchors[direction],
+                body_anchor: lerp_dir2(&v.body_anchors, v.heading),
                 direction: v.direction,
                 body_frame,
                 wheel_xy,
@@ -493,6 +639,8 @@ impl Engine {
             let direction = v.direction as usize;
             v.altitude = terrain.height(x, y);
             v.vel_z = 0.0;
+            v.airborne = false;
+            v.heading = dir_to_heading(v.direction);
             v.path.clear();
             v.path_idx = 0;
 
@@ -546,12 +694,53 @@ impl Engine {
     }
 
     /// Set a vehicle's destination (integer tile coordinates).  The host runs
-    /// its own A* and stores the waypoints on the vehicle.
+    /// footprint-, slope- and jump-aware A* (see `Engine::find_vehicle_path`)
+    /// and stores the waypoints on the vehicle.
     pub fn vehicle_goto(&mut self, name: &str, tx: i32, ty: i32) -> bool {
-        let Some(&ve) = self.names.get(name) else { return false };
-        let Some(tf) = self.world.get::<&Transform>(ve).ok() else { return false };
-        let from = (tf.position.x.floor() as i32, tf.position.y.floor() as i32);
-        let Some(path) = self.find_path(from, (tx, ty)) else { return false };
+        let Some(&ve) = self.names.get(name) else {
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Path,
+                "vehicle_goto: no entity named {name}"
+            );
+            return false;
+        };
+        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px) = {
+            let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return false };
+            // Reject new paths while airborne: the vehicle keeps its current
+            // trajectory until its wheels touch down again (issue #40).
+            if v.airborne {
+                classic_core::cl_info!(
+                    classic_core::instrument::Chan::Path,
+                    "vehicle_goto {name}: airborne, rejecting"
+                );
+                return false;
+            }
+            (
+                v.path_footprint.clone(),
+                v.pitch_max,
+                v.roll_max,
+                v.wheelbase_px,
+                v.track_px,
+                v.safe_fall_px,
+            )
+        };
+        let from = {
+            let Some(tf) = self.world.get::<&Transform>(ve).ok() else { return false };
+            (tf.position.x.floor() as i32, tf.position.y.floor() as i32)
+        };
+        let Some(path) = self.find_vehicle_path(
+            from,
+            (tx, ty),
+            &footprint,
+            pitch_max,
+            roll_max,
+            wheelbase_px,
+            track_px,
+            safe_fall_px,
+            JUMP_COST,
+        ) else {
+            return false;
+        };
         let path: Vec<[i32; 2]> = path.into_iter().map(|(x, y)| [x, y]).collect();
         if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
             v.path = path;
@@ -577,21 +766,26 @@ mod tests {
     use super::*;
     use classic_core::components::{NavMesh, Role};
     use classic_core::math::iso_to_cartesian_4;
-    use classic_core::types::VehicleDef;
+    use classic_core::types::{VehicleDef, VehiclePartDef};
 
     fn test_tilemap() -> Tilemap {
+        flat_tilemap(3, 3)
+    }
+
+    /// A flat, fully-walkable-looking tilemap of arbitrary size (heights all 1).
+    fn flat_tilemap(size_x: i32, size_y: i32) -> Tilemap {
         Tilemap {
             position: Vec3::ZERO,
             scale: Vec3::new(45.0, 45.0, 1.0),
-            size_x: 3,
-            size_y: 3,
+            size_x,
+            size_y,
             tile_set: "tileset".into(),
             tile_pixel_size: [32, 32],
             max_tile: 16,
             tiles_grid: None,
             heights_grid: None,
-            data: vec![0; 9],
-            height_data: vec![1.0; 16],
+            data: vec![0; (size_x * size_y) as usize],
+            height_data: vec![1.0; ((size_x + 1) * (size_y + 1)) as usize],
             height_scale: 14.0,
             tile_set_pixel_size: [0, 0],
             tiles_per_row: 0,
@@ -724,6 +918,9 @@ mod tests {
             pitch_max_deg: 20.0,
             roll_levels: 1,
             roll_max_deg: 20.0,
+            path_footprint: Some(vec![(0, 0)]),
+            safe_fall_px: 0.0,
+            turn_rate_deg_per_sec: 720.0,
             parts: vec![
                 serde_json::from_value(serde_json::json!({
                     "name": "body", "texture": "lrvBody",
@@ -820,6 +1017,9 @@ mod tests {
             pitch_max_deg: 20.0,
             roll_levels: 3,
             roll_max_deg: 20.0,
+            path_footprint: Some(vec![(0, 0)]),
+            safe_fall_px: 0.0,
+            turn_rate_deg_per_sec: 720.0,
             parts: vec![
                 serde_json::from_value(serde_json::json!({
                     "name": "body", "texture": "lrvBody", "anchors": body
@@ -861,5 +1061,561 @@ mod tests {
         assert_eq!(veh.roll_levels, 3);
         assert!((veh.roll_max - 20.0f32.to_radians()).abs() < 1e-6);
         assert!(veh.track_px > 0.0);
+    }
+
+    #[test]
+    fn goto_rejected_while_airborne() {
+        let mut engine = Engine::new_for_test();
+        let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
+        engine.names.insert("tilemap".into(), tm);
+        let nav = NavMesh {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            map_entity: "tilemap".into(),
+            tile_set: "navTileset".into(),
+            data_grid: None,
+            data: vec![1; 9],
+            size_x: 3,
+            size_y: 3,
+        };
+        let nm = engine.world.spawn((nav, Role::new(RoleKind::NavMesh)));
+        engine.names.insert("navmesh".into(), nm);
+
+        let def = VehicleDef {
+            name: "lrv".into(),
+            directions: 8,
+            columns: 4,
+            rows: 2,
+            cell: [247.0, 247.0],
+            pitch_levels: 1,
+            pitch_max_deg: 20.0,
+            roll_levels: 1,
+            roll_max_deg: 20.0,
+            path_footprint: Some(vec![(0, 0)]),
+            safe_fall_px: 0.0,
+            turn_rate_deg_per_sec: 720.0,
+            parts: vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "body", "texture": "lrvBody",
+                    "anchors": [[0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352],
+                                [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352]]
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_fl", "texture": "lrvWheelFl",
+                    "anchors": [[0.566, 0.618], [0.712, 0.676], [0.733, 0.768], [0.618, 0.841],
+                                [0.434, 0.852], [0.288, 0.794], [0.267, 0.702], [0.382, 0.629]]
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_fr", "texture": "lrvWheelFr",
+                    "anchors": [[0.734, 0.702], [0.712, 0.794], [0.566, 0.852], [0.382, 0.841],
+                                [0.266, 0.768], [0.288, 0.676], [0.434, 0.618], [0.618, 0.629]]
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_rl", "texture": "lrvWheelRl",
+                    "anchors": [[0.211, 0.796], [0.210, 0.676], [0.378, 0.591], [0.618, 0.590],
+                                [0.789, 0.674], [0.790, 0.794], [0.622, 0.880], [0.382, 0.880]]
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_rr", "texture": "lrvWheelRr",
+                    "anchors": [[0.379, 0.880], [0.210, 0.794], [0.211, 0.674], [0.382, 0.590],
+                                [0.621, 0.591], [0.790, 0.676], [0.789, 0.796], [0.618, 0.880]]
+                }))
+                .unwrap(),
+            ],
+        };
+        engine.vehicles.insert("lrv".into(), def);
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
+        let body = *engine.names.get("lrv").unwrap();
+
+        // Grounded: goto succeeds.
+        assert!(engine.vehicle_goto("lrv", 2, 1));
+        assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
+        engine.vehicle_stop("lrv");
+
+        // Airborne: goto is rejected and the path stays empty.
+        engine.world.get::<&mut IsoVehicle>(body).unwrap().airborne = true;
+        assert!(!engine.vehicle_goto("lrv", 2, 1));
+        assert!(engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
+    }
+
+    #[test]
+    fn heading_and_dir_round_trip() {
+        for d in 0..8u32 {
+            assert_eq!(heading_to_dir(dir_to_heading(d)), d, "direction {d} round-trips");
+        }
+        // Negative and wrapped headings quantize to the expected frames.
+        assert_eq!(heading_to_dir(-std::f32::consts::FRAC_PI_4), 7);
+        assert_eq!(heading_to_dir(std::f32::consts::TAU), 0);
+        assert_eq!(heading_to_dir(std::f32::consts::FRAC_PI_2), 2);
+    }
+
+    #[test]
+    fn wrap_pi_bounds_angles() {
+        assert!(wrap_pi(0.0).abs() < 1e-6);
+        assert!((wrap_pi(0.5) - 0.5).abs() < 1e-6);
+        assert!((wrap_pi(std::f32::consts::PI) - std::f32::consts::PI).abs() < 1e-4);
+        assert!((wrap_pi(3.0 * std::f32::consts::PI) - std::f32::consts::PI).abs() < 1e-4);
+        assert!((wrap_pi(-3.0 * std::f32::consts::PI) + std::f32::consts::PI).abs() < 1e-4);
+    }
+
+    #[test]
+    fn lerp_dir2_interpolates_between_frames() {
+        let vals = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+            [-10.0, 10.0],
+            [-10.0, 0.0],
+            [-10.0, -10.0],
+            [0.0, -10.0],
+        ];
+        // Midway between East (0) and SouthEast (1) at heading π/8.
+        let mid = lerp_dir2(&vals, std::f32::consts::FRAC_PI_8);
+        assert!((mid[0] - 5.0).abs() < 1e-6 && mid[1].abs() < 1e-6);
+        // Exactly at a frame reproduces that frame's values.
+        let at_east = lerp_dir2(&vals, 0.0);
+        assert_eq!(at_east, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn bounded_turn_steers_forward_only() {
+        // Start heading East, waypoint due South — the vehicle must arc forward
+        // (never reverse) and turn no faster than the configured rate.
+        let mut heading = 0.0f32;
+        let turn_rate = 45.0f32.to_radians();
+        let dt = 1.0 / 60.0;
+        let (tx, ty) = (1.5f32, 5.0f32);
+        let (mut x, mut y) = (1.0f32, 1.0f32);
+        let mut prev_heading = heading;
+
+        for _ in 0..120 {
+            let desired = (ty - y).atan2(tx - x);
+            let err = wrap_pi(desired - heading);
+            let max_turn = turn_rate * dt;
+            let dh = err.clamp(-max_turn, max_turn);
+            assert!(dh.abs() <= max_turn + 1e-6, "turn rate bounded");
+            heading = wrap_pi(heading + dh);
+            assert!(heading >= prev_heading - 1e-6, "no reverse — heading monotonic");
+            prev_heading = heading;
+
+            let step = 1.0 * dt;
+            x += heading.cos() * step;
+            y += heading.sin() * step;
+        }
+
+        assert!(
+            (heading - std::f32::consts::FRAC_PI_2).abs() < 0.4,
+            "heading should converge toward south: {heading}"
+        );
+    }
+
+    /// Build a minimal LRV vehicle definition (body + 4 wheels, flat anchors)
+    /// with a configurable turn rate for movement tests.
+    fn lrv_def(turn_rate_deg: f32) -> VehicleDef {
+        let part = |name: &str, texture: &str, anchors: [f32; 2]| VehiclePartDef {
+            name: name.into(),
+            texture: texture.into(),
+            anchors: vec![anchors],
+        };
+        VehicleDef {
+            name: "lrv".into(),
+            directions: 8,
+            columns: 4,
+            rows: 2,
+            cell: [247.0, 247.0],
+            pitch_levels: 1,
+            pitch_max_deg: 20.0,
+            roll_levels: 1,
+            roll_max_deg: 20.0,
+            path_footprint: None,
+            safe_fall_px: 0.0,
+            turn_rate_deg_per_sec: turn_rate_deg,
+            parts: vec![
+                part("body", "lrvBody", [0.5, 0.7352]),
+                part("wheel_fl", "lrvWheelFl", [0.566, 0.618]),
+                part("wheel_fr", "lrvWheelFr", [0.734, 0.702]),
+                part("wheel_rl", "lrvWheelRl", [0.211, 0.796]),
+                part("wheel_rr", "lrvWheelRr", [0.379, 0.880]),
+            ],
+        }
+    }
+
+    #[test]
+    fn spawn_vehicle_auto_derives_footprint() {
+        let mut engine = Engine::new_for_test();
+        let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
+        engine.names.insert("tilemap".into(), tm);
+        engine.vehicles.insert("lrv".into(), lrv_def(90.0));
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
+        let body = *engine.names.get("lrv").unwrap();
+        let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+
+        // Auto-derived footprint is a full rectangle covering the wheel extent
+        // plus a 1-tile margin.
+        assert!(!v.path_footprint.is_empty());
+        let half_x = v.path_footprint.iter().map(|p| p.0.abs()).max().unwrap();
+        let half_y = v.path_footprint.iter().map(|p| p.1.abs()).max().unwrap();
+        assert!(half_x >= 1 && half_y >= 1, "footprint should cover the wheel extent");
+        assert_eq!(
+            v.path_footprint.len() as i32,
+            (half_x * 2 + 1) * (half_y * 2 + 1),
+            "footprint must be a full rectangle"
+        );
+    }
+
+    #[test]
+    fn lookahead_targets_a_point_ahead() {
+        // Straight east path, vehicle at (1, 1): with lookahead 2 the target
+        // lands two tiles east of the vehicle on the first segment.
+        let path = [[1, 1], [5, 1], [9, 1]];
+        let (gx, gy, idx) = lookahead(&path, 1, 1.5, 1.5, 2.0);
+        assert_eq!(idx, 1);
+        assert!((gx - 3.5).abs() < 1e-4 && (gy - 1.5).abs() < 1e-4, "got ({gx}, {gy})");
+
+        // A longer look-ahead crosses into the next segment and advances idx.
+        let (gx, gy, idx) = lookahead(&path, 1, 1.5, 1.5, 6.0);
+        assert_eq!(idx, 2);
+        assert!((gx - 7.5).abs() < 1e-4 && (gy - 1.5).abs() < 1e-4, "got ({gx}, {gy})");
+
+        // Exhausting the path returns the final waypoint center.
+        let (gx, gy, idx) = lookahead(&path, 1, 1.5, 1.5, 100.0);
+        assert_eq!(idx, path.len());
+        assert!((gx - 9.5).abs() < 1e-4 && (gy - 1.5).abs() < 1e-4, "got ({gx}, {gy})");
+    }
+
+    #[test]
+    fn lookahead_skips_a_passed_waypoint() {
+        // Vehicle past the corner: path goes east then south, but the vehicle is
+        // already east of the corner.  It must skip the corner waypoint rather
+        // than target a point behind it.
+        let path = [[1, 1], [5, 1], [5, 5]];
+        let (gx, gy, idx) = lookahead(&path, 1, 5.5, 1.5, 2.0);
+        // The corner (5,1) is behind the vehicle; look-ahead continues south.
+        assert!(idx >= 2, "corner waypoint should be skipped, got idx {idx}");
+        assert!((gx - 5.5).abs() < 1e-4 && gy > 1.5, "got ({gx}, {gy})");
+    }
+
+    #[test]
+    fn pure_pursuit_reaches_goal_without_orbiting() {
+        let mut engine = Engine::new_for_test();
+        let size = 20i32;
+        let tm_e = engine.world.spawn((flat_tilemap(size, size), Role::new(RoleKind::Tilemap)));
+        engine.names.insert("tilemap".into(), tm_e);
+        engine.vehicles.insert("lrv".into(), lrv_def(90.0));
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
+        let body = *engine.names.get("lrv").unwrap();
+
+        // L-shaped path with a 90-degree corner: (1,1) -> (5,1) -> (5,5).
+        {
+            let mut v = engine.world.get::<&mut IsoVehicle>(body).unwrap();
+            v.path = vec![[1, 1], [5, 1], [5, 5]];
+            v.path_idx = 1;
+        }
+
+        let mut last_idx = 0usize;
+        let mut reached = false;
+        for _ in 0..600 {
+            engine.time.delta = 1.0 / 60.0;
+            engine.update_vehicles();
+            let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+            if v.path.is_empty() {
+                reached = true;
+                break;
+            }
+            assert!(v.path_idx >= last_idx, "path_idx went backwards");
+            last_idx = v.path_idx;
+        }
+        assert!(reached, "vehicle never reached the goal after 600 frames");
+
+        let (gx, gy, _) = engine.get_pos("lrv").unwrap();
+        assert!(
+            (gx - 5.5).abs() < 0.01 && (gy - 5.5).abs() < 0.01,
+            "not snapped to goal: ({gx}, {gy})"
+        );
+    }
+
+    /// A rectangular footprint `[-hx..=hx] × [-hy..=hy]`.
+    fn rect_footprint(hx: i32, hy: i32) -> Vec<(i32, i32)> {
+        let mut fp = Vec::new();
+        for dy in -hy..=hy {
+            for dx in -hx..=hx {
+                fp.push((dx, dy));
+            }
+        }
+        fp
+    }
+
+    /// The real LRV sidecar anchors (8 directions per part) from `lrv.json`.
+    fn lrv_def_real() -> VehicleDef {
+        let part = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| VehiclePartDef {
+            name: name.into(),
+            texture: texture.into(),
+            anchors,
+        };
+        VehicleDef {
+            name: "lrv".into(),
+            directions: 8,
+            columns: 4,
+            rows: 2,
+            cell: [331.0, 331.0],
+            pitch_levels: 5,
+            pitch_max_deg: 20.0,
+            roll_levels: 3,
+            roll_max_deg: 20.0,
+            path_footprint: None,
+            turn_rate_deg_per_sec: 90.0,
+            safe_fall_px: 96.0,
+            parts: vec![
+                part("body", "lrvBody", vec![[0.5, 0.6618]; 8]),
+                part(
+                    "wheel_fl",
+                    "lrvWheelFl",
+                    vec![
+                        [0.549373, 0.574673],
+                        [0.658127, 0.617648],
+                        [0.674253, 0.686486],
+                        [0.588304, 0.740864],
+                        [0.450627, 0.748927],
+                        [0.341873, 0.705952],
+                        [0.325747, 0.637114],
+                        [0.411696, 0.582736],
+                    ],
+                ),
+                part(
+                    "wheel_fr",
+                    "lrvWheelFr",
+                    vec![
+                        [0.674361, 0.637148],
+                        [0.658154, 0.706015],
+                        [0.549303, 0.74898],
+                        [0.411571, 0.740877],
+                        [0.325639, 0.686452],
+                        [0.341846, 0.617585],
+                        [0.450697, 0.57462],
+                        [0.588429, 0.582723],
+                    ],
+                ),
+                part(
+                    "wheel_rl",
+                    "lrvWheelRl",
+                    vec![
+                        [0.284399, 0.70716],
+                        [0.283399, 0.617648],
+                        [0.40928, 0.554],
+                        [0.588304, 0.553499],
+                        [0.715601, 0.61644],
+                        [0.716601, 0.705952],
+                        [0.59072, 0.7696],
+                        [0.411696, 0.770101],
+                    ],
+                ),
+                part(
+                    "wheel_rr",
+                    "lrvWheelRr",
+                    vec![
+                        [0.409349, 0.769654],
+                        [0.283371, 0.706014],
+                        [0.284292, 0.616474],
+                        [0.411571, 0.553486],
+                        [0.590651, 0.553946],
+                        [0.716629, 0.617586],
+                        [0.715708, 0.707126],
+                        [0.588429, 0.770114],
+                    ],
+                ),
+            ],
+        }
+    }
+
+    /// Build an engine with a 48×48 tilemap + all-walkable nav (the lrvtest
+    /// shape), spawn a vehicle with a 7×5 footprint + safe_fall, and assert a
+    /// flat click-to-move finds a path.
+    fn engine_with_lrvtest_like_map(heights: Option<Vec<f32>>) -> Engine {
+        let mut engine = Engine::new_for_test();
+        let size = 48;
+        let mut tm = flat_tilemap(size, size);
+        tm.height_scale = 32.0; // matches commit_terrain(32.0) in lrv-guest
+        if let Some(h) = heights {
+            tm.height_data = h;
+        }
+        let tm_e = engine.world.spawn((tm, Role::new(RoleKind::Tilemap)));
+        engine.names.insert("tilemap".into(), tm_e);
+
+        let nav = NavMesh {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            map_entity: "tilemap".into(),
+            tile_set: "navTileset".into(),
+            data_grid: None,
+            data: vec![1; (size * size) as usize],
+            size_x: size,
+            size_y: size,
+        };
+        let nm = engine.world.spawn((nav, Role::new(RoleKind::NavMesh)));
+        engine.names.insert("navmesh".into(), nm);
+
+        let mut def = lrv_def(90.0);
+        def.path_footprint = Some(rect_footprint(3, 2)); // 7x5, matches auto-derive
+        def.safe_fall_px = 96.0;
+        engine.vehicles.insert("lrv".into(), def);
+
+        engine
+    }
+
+    #[test]
+    fn vehicle_goto_paths_across_flat_lrvtest_like_map() {
+        let mut engine = engine_with_lrvtest_like_map(None);
+        assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
+        assert!(engine.vehicle_goto("lrv", 24, 24), "flat click-to-move should path");
+        let body = *engine.names.get("lrv").unwrap();
+        assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
+    }
+
+    #[test]
+    fn vehicle_goto_paths_around_features() {
+        // A gentle ramp band (0.375 units/tile) and a steep curb (1.0 unit/tile)
+        // like the lrvtest map: the flat base and ramp faces must stay reachable.
+        let size = 48;
+        let n = (size + 1) as usize;
+        let mut heights = vec![1.0f32; n * n];
+        // East ramp: x in 33..=41, y in 20..=29, rise 3 units over 8 tiles.
+        for y in 20..=29 {
+            for x in 33..=41 {
+                heights[y * n + x] = heights[y * n + x].max(1.0 + 3.0 * (x - 33) as f32 / 8.0);
+            }
+        }
+        // Curb: x in 20..=36, y in 42..=47, +1 unit.
+        for x in 20..=36 {
+            for y in 42..=47 {
+                heights[y * n + x] = heights[y * n + x].max(2.0);
+            }
+        }
+
+        let mut engine = engine_with_lrvtest_like_map(Some(heights));
+        assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
+        // Flat destination far from features.
+        assert!(engine.vehicle_goto("lrv", 10, 10), "flat destination should path");
+        // Ramp face (gentle) should be reachable.
+        assert!(engine.vehicle_goto("lrv", 33, 25), "gentle ramp face should path");
+    }
+
+    #[test]
+    fn real_lrv_def_auto_derives_and_paths() {
+        let mut engine = engine_with_lrvtest_like_map(None);
+        engine.vehicles.insert("lrv".into(), lrv_def_real());
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
+        let body = *engine.names.get("lrv").unwrap();
+        let (half_x, half_y) = {
+            let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+            let half_x = v.path_footprint.iter().map(|p| p.0.abs()).max().unwrap();
+            let half_y = v.path_footprint.iter().map(|p| p.1.abs()).max().unwrap();
+            (half_x, half_y)
+        };
+        let footprint_len = {
+            let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+            v.path_footprint.len() as i32
+        };
+        assert_eq!(footprint_len, (half_x * 2 + 1) * (half_y * 2 + 1));
+
+        assert!(engine.vehicle_goto("lrv", 24, 24), "goto with real def + auto footprint");
+    }
+
+    /// The full `lrvtest` ramp-course height field, mirroring
+    /// `gen_lrvtest_map` in classic-roms: base 1.0, a central hill, four
+    /// cardinal + four diagonal ramps, and a raised curb.
+    fn lrvtest_heights() -> Vec<f32> {
+        let size = 48usize;
+        let n = size + 1;
+        let mut h = vec![1.0f32; n * n];
+        let idx = |x: usize, y: usize| y * n + x;
+
+        // Central hill: +2 peak at (24,24), radius 5.
+        for y in 0..n {
+            for x in 0..n {
+                let dx = x as f32 - 24.0;
+                let dy = y as f32 - 24.0;
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < 5.0 {
+                    let bump = 2.0 * (1.0 - d / 5.0);
+                    h[idx(x, y)] = h[idx(x, y)].max(1.0 + bump);
+                }
+            }
+        }
+        // Cardinal ramps.
+        for y in 20..=29 {
+            for x in 33..=41 {
+                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (x - 33) as f32 / 8.0);
+            }
+            for x in 7..=15 {
+                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (15 - x) as f32 / 8.0);
+            }
+        }
+        for x in 20..=29 {
+            for y in 33..=41 {
+                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (y - 33) as f32 / 8.0);
+            }
+            for y in 7..=15 {
+                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (15 - y) as f32 / 8.0);
+            }
+        }
+        // Diagonal ramps.
+        for x in 33..=41 {
+            for y in 33..=41 {
+                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * ((x + y) as f32 - 66.0) / 16.0);
+            }
+            for y in 7..=15 {
+                h[idx(x, y)] =
+                    h[idx(x, y)].max(1.0 + 3.0 * (x as f32 + (15.0 - y as f32) - 40.0) / 16.0);
+            }
+        }
+        for x in 7..=15 {
+            for y in 7..=15 {
+                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (30.0 - (x + y) as f32) / 16.0);
+            }
+            for y in 33..=41 {
+                h[idx(x, y)] =
+                    h[idx(x, y)].max(1.0 + 3.0 * (15.0 - x as f32 + y as f32 - 40.0) / 16.0);
+            }
+        }
+        // Curb.
+        for x in 20..=36 {
+            for y in 42..=47 {
+                h[idx(x, y)] = h[idx(x, y)].max(2.0);
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn vehicle_goto_paths_on_full_lrvtest_map() {
+        let mut engine = engine_with_lrvtest_like_map(Some(lrvtest_heights()));
+        engine.vehicles.insert("lrv".into(), lrv_def_real());
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
+
+        // Flat base, the ramp faces (gentle slopes), and the central hill must
+        // be reachable.
+        assert!(engine.vehicle_goto("lrv", 20, 20), "flat base should path");
+        assert!(engine.vehicle_goto("lrv", 11, 25), "west ramp face should path");
+        assert!(engine.vehicle_goto("lrv", 33, 25), "east ramp face should path");
+        assert!(engine.vehicle_goto("lrv", 24, 24), "central hill should path");
+        assert!(engine.vehicle_goto("lrv", 16, 29), "flat tile beside the ramp should path");
+        assert!(engine.vehicle_goto("lrv", 10, 10), "nw diagonal ramp face should path");
+        // The 1-unit curb is a ~14.5° pitch over the wheelbase — within the
+        // 20° limit, so the vehicle can drive over it.
+        assert!(engine.vehicle_goto("lrv", 28, 45), "1-unit curb should be traversable");
+
+        // The ramp's 3-unit cliff sides are a ~38° pitch over the wheelbase —
+        // beyond the 20° limit, so the vehicle can't stand on them.
+        assert!(!engine.vehicle_goto("lrv", 7, 29), "ramp cliff edge should not path");
     }
 }

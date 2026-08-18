@@ -112,6 +112,23 @@ pub struct VehicleDef {
     /// the exporter.
     #[serde(default = "default_vehicle_roll_max_deg")]
     pub roll_max_deg: f32,
+    /// Collision footprint for pathfinding: integer tile offsets from the body
+    /// anchor cell that the vehicle occupies.  `None` auto-derives the
+    /// footprint from the wheel extent at spawn (see `Engine::spawn_vehicle`);
+    /// `Some` is an explicit override.  A* treats a cell as passable only when
+    /// every offset is walkable (issue #35).
+    #[serde(default)]
+    pub path_footprint: Option<Vec<(i32, i32)>>,
+    /// Max body heading change while driving, in degrees per second.  Drives
+    /// the bounded-turn follow controller (issue #35).  Defaults high so the
+    /// movement approximates the old instant-turn behaviour for simple defs.
+    #[serde(default = "default_vehicle_turn_rate")]
+    pub turn_rate_deg_per_sec: f32,
+    /// Max drop (in pixels) the suspension absorbs without damage.  The A* may
+    /// route a downward "jump" over a small cliff whose drop is within this
+    /// distance; larger drops are impassable (issue #35).  `0` disables jumps.
+    #[serde(default)]
+    pub safe_fall_px: f32,
     pub parts: Vec<VehiclePartDef>,
 }
 
@@ -137,6 +154,10 @@ fn default_vehicle_roll_levels() -> u32 {
 
 fn default_vehicle_roll_max_deg() -> f32 {
     20.0
+}
+
+fn default_vehicle_turn_rate() -> f32 {
+    720.0
 }
 
 /// One part (body or wheel) of a [`VehicleDef`].
@@ -269,5 +290,50 @@ impl Viewport {
     /// Left=0, right=w, bottom=h, top=0, near=-10000, far=10000.
     pub fn ortho_matrix(&self) -> glam::Mat4 {
         glam::Mat4::orthographic_rh(0.0, self.width, self.height, 0.0, -10000.0, 10000.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lock the cross-repo `VehicleDef` sidecar contract: the fields the
+    /// `classic-roms` xtask injects (`turn_rate_deg_per_sec`, `safe_fall_px`)
+    /// plus the exporter's extra `depth_range` (ignored) and an absent
+    /// `path_footprint` (auto-derived at spawn).
+    #[test]
+    fn vehicle_def_deserializes_lrv_sidecar_shape() {
+        let json = serde_json::json!({
+            "name": "lrv",
+            "directions": 8,
+            "columns": 4,
+            "rows": 2,
+            "pitch_levels": 5,
+            "pitch_max_deg": 20.0,
+            "roll_levels": 3,
+            "roll_max_deg": 20.0,
+            "depth_range": 0.02400137797794352,
+            "cell": [331, 331],
+            "turn_rate_deg_per_sec": 90.0,
+            "safe_fall_px": 96.0,
+            "parts": [
+                { "name": "body", "texture": "lrvBody", "anchors": [[0.5, 0.6618]] }
+            ]
+        });
+        let def: VehicleDef = serde_json::from_value(json).expect("deserialize lrv.json");
+        assert_eq!(def.name, "lrv");
+        assert_eq!(def.turn_rate_deg_per_sec, 90.0);
+        assert_eq!(def.safe_fall_px, 96.0);
+        assert!(def.path_footprint.is_none(), "absent path_footprint -> None (auto-derive)");
+
+        // An explicit footprint deserializes into Some.
+        let json = serde_json::json!({
+            "name": "lrv",
+            "directions": 8,
+            "parts": [ { "name": "body", "texture": "lrvBody", "anchors": [[0.5, 0.6618]] } ],
+            "path_footprint": [[0, 0], [-1, -1]]
+        });
+        let def: VehicleDef = serde_json::from_value(json).expect("footprint override");
+        assert_eq!(def.path_footprint, Some(vec![(0, 0), (-1, -1)]));
     }
 }

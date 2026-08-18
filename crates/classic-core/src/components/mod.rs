@@ -374,6 +374,20 @@ pub struct IsoVehicle {
     /// offsets and tile scale at spawn).
     #[serde(skip)]
     pub track_px: f32,
+    /// Collision footprint for pathfinding: integer tile offsets from the body
+    /// anchor cell (copied from the vehicle def at spawn).  A* erodes the nav
+    /// grid by this footprint before searching (issue #35).
+    #[serde(skip)]
+    pub path_footprint: Vec<(i32, i32)>,
+    /// Max heading change while driving, in radians per second (copied from the
+    /// vehicle def at spawn).  Drives the bounded-turn follow controller.
+    #[serde(skip)]
+    pub turn_rate: f32,
+    /// Max safe drop (pixels) the suspension absorbs; the A* may route a
+    /// downward jump within this distance (copied from the vehicle def at
+    /// spawn).  `0` disables jumps.
+    #[serde(skip)]
+    pub safe_fall_px: f32,
 
     // -- transient simulation state (not serialized) ----------------------
     /// Per-wheel, per-direction tile-space offset from the body, derived from
@@ -400,6 +414,16 @@ pub struct IsoVehicle {
     /// Index of the waypoint currently being driven toward.
     #[serde(skip)]
     pub path_idx: usize,
+    /// Whether the body is airborne (off the supporting terrain).  Persisted so
+    /// `vehicle_goto` can reject new paths until the wheels are back on the
+    /// ground (issue #40).
+    #[serde(skip)]
+    pub airborne: bool,
+    /// Continuous body heading (tile-space radians, `atan2(dy, dx)`).  Steered
+    /// by the bounded-turn follow controller; `direction` is its 8-way
+    /// quantization for sprite-frame selection (issue #35).
+    #[serde(skip)]
+    pub heading: f32,
 }
 
 fn default_vehicle_speed() -> f32 {
@@ -427,6 +451,9 @@ impl Default for IsoVehicle {
             roll_levels: 1,
             roll_max: 20.0f32.to_radians(),
             track_px: 0.0,
+            path_footprint: vec![(0, 0)],
+            turn_rate: 720.0f32.to_radians(),
+            safe_fall_px: 0.0,
             wheel_tile_offsets: [[[0.0, 0.0]; 8]; 4],
             altitude: 0.0,
             vel_z: 0.0,
@@ -434,6 +461,8 @@ impl Default for IsoVehicle {
             wheel_v: [0.0; 4],
             path: Vec::new(),
             path_idx: 0,
+            airborne: false,
+            heading: 0.0,
         }
     }
 }

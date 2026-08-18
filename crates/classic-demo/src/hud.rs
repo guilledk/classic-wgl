@@ -3,7 +3,8 @@
 //! `Engine::frame`.  These draw via the engine's overlay hook.
 
 use classic_core::components::{
-    DebugName, IsoSprite, SdfTextRender, TextJustify, Tilemap, Transform, UiAnchor, UiNode,
+    DebugName, IsoSprite, IsoVehicle, SdfTextRender, TextJustify, Tilemap, Transform, UiAnchor,
+    UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::iso_to_cartesian_4;
@@ -487,6 +488,80 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                         gfx.draw_line_loop(&rb, 4, &Mat4::IDENTITY, &cam, &[1.0, 1.0, 0.0, 0.8]);
                     }
                 }
+            }
+        }
+    }
+
+    // Vehicle path indicators (planned A* routes), gated on KeyV.
+    if state.borrow().debug_vehicle_paths {
+        let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap);
+        let Some(gfx) = engine.gfx.as_mut() else { return };
+        let cam = engine.camera.matrix();
+        if let Some(tm_e) = tm_entity {
+            let (iso_to_cart_world, tilemap_pos, size_x, size_y, hd, hs) = {
+                let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
+                let tm_tf = engine.world.get::<&Transform>(tm_e).unwrap();
+                let iso_to_cart = iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale);
+                (
+                    iso_to_cart,
+                    tm_tf.position,
+                    tm.size_x,
+                    tm.size_y,
+                    tm.height_data.clone(),
+                    tm.height_scale,
+                )
+            };
+            for (_e, (vehicle, tf)) in engine.world.query::<(&IsoVehicle, &Transform)>().iter() {
+                if vehicle.path.is_empty() || vehicle.path_idx >= vehicle.path.len() {
+                    continue;
+                }
+                let to_world = |px: f32, py: f32| -> [f32; 3] {
+                    let h = bilinear_height(&hd, size_x, size_y, px, py);
+                    let mut v = Vec3::new(px, py, 0.0);
+                    v = iso_to_cart_world.transform_point3(v);
+                    v += tilemap_pos;
+                    v.y -= h * hs;
+                    [v.x, v.y, v.z]
+                };
+
+                // Remaining waypoints, with the body's current position as the
+                // lead vertex so the line connects to the vehicle.
+                let mut verts: Vec<f32> =
+                    Vec::with_capacity((vehicle.path.len() - vehicle.path_idx + 1) * 3);
+                verts.extend_from_slice(&to_world(tf.position.x, tf.position.y));
+                for &[ix, iy] in &vehicle.path[vehicle.path_idx..] {
+                    verts.extend_from_slice(&to_world(ix as f32 + 0.5, iy as f32 + 0.5));
+                }
+                let buf =
+                    GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &verts, glow::STREAM_DRAW);
+                let count = (verts.len() / 3) as i32;
+                if count >= 2 {
+                    gfx.draw_line_strip(
+                        &buf,
+                        0,
+                        count,
+                        &Mat4::IDENTITY,
+                        &cam,
+                        &[1.0, 0.6, 0.0, 0.9],
+                    );
+                }
+
+                // Diamond marker at the waypoint currently being driven toward.
+                let [tx, ty] = vehicle.path[vehicle.path_idx];
+                let px = tx as f32 + 0.5;
+                let py = ty as f32 + 0.5;
+                let diamond = [(px, py - 0.5), (px + 0.5, py), (px, py + 0.5), (px - 0.5, py)];
+                let mut ring_verts: Vec<f32> = Vec::with_capacity(12);
+                for (ix, iy) in diamond {
+                    ring_verts.extend_from_slice(&to_world(ix, iy));
+                }
+                let rb = GlBuffer::from_slice(
+                    &gfx.gl,
+                    glow::ARRAY_BUFFER,
+                    &ring_verts,
+                    glow::STREAM_DRAW,
+                );
+                gfx.draw_line_loop(&rb, 4, &Mat4::IDENTITY, &cam, &[1.0, 0.9, 0.2, 0.95]);
             }
         }
     }
