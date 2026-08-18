@@ -213,7 +213,7 @@ noise gradient amplifies into a faint but real seam.
 ## 9. Engine wiring
 
 ```rust
-e.load_state(state_lunar_json)?;      // must come first
+e.load_state(&rom.state)?;            // must come first
 // ... shared init ...
 // the lunar guest uploads nav + tiles + heights, then commit_terrain(height_scale)
 ```
@@ -311,7 +311,7 @@ running away — check the deposit and excavation limits first.
 
 The shipping size is **400x400** (160K tiles), set in three places that must
 agree — `LunarParams::default()` and both the `Tilemap` and
-`IsometricNavMesh` entries in `public/state_lunar.json`.  `commit_terrain`
+`IsometricNavMesh` entries in `roms/lunar/state.json`.  `commit_terrain`
 builds the mesh from the uploaded grids, so the state-file dimensions must
 agree with `LunarParams::default()`.
 

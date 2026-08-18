@@ -13,7 +13,7 @@ description: >
     Trigger phrases: "procedural map", "new biome", "new generator",
     "add a scene", "map size", "scale the map", "terrain module",
     "generate_lunar", "LunarParams", "scene wiring", "CLASSIC_ROM",
-    "state_lunar.json", "scale-free", "GL_MAX_TEXTURE_SIZE".
+    "roms/<scene>/state.json", "scale-free", "GL_MAX_TEXTURE_SIZE".
 ---
 
 # Procedural Maps in classic-wgl
@@ -73,12 +73,12 @@ The `lunar` scene is the worked example.  To add another (`<name>`):
 3. **Tileset** — the shared `build_lunar_tileset` (or a new
    `build_<name>_tileset`) already paints `MATERIALS`; if you reuse it, this
    step is automatic.
-4. **Scene description** — `public/state_<name>.json` with the demo entity
+4. **Scene description** — `roms/<name>/state.json` with the demo entity
    names (`tilemap`, `tilemapNavigation`, `cursor`; the agent `navAgent` is
    demo-only — generated scenes have no agent).  See §4 for why.
-5. **ROM + entrypoint** — add a `pack(...)` call in `scripts/build-roms.mjs`
+5. **ROM + entrypoint** — add a `pack_scene(...)` call in `xtask/src/main.rs`
    (injects `format_version`/`entrypoint`/`state`/`host_features`/`trusted`/
-   `code`) so the scene ships as `<name>.rom`; the apps resolve
+   `code`) so the scene ships as `roms/out/<name>.rom`; the apps resolve
    `CLASSIC_ROM`/`?rom=` (a `rom:<name>` selector, file path, or URL) to the
    embedded ROM.
 6. **Guest** — `guest/<name>-guest/src/lib.rs`: `init()` generates the map,

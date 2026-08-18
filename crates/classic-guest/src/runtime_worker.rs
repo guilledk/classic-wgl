@@ -58,10 +58,6 @@ const OP_SPAWN: i32 = 1;
 const OP_DESPAWN: i32 = 2;
 const OP_HAS: i32 = 3;
 const OP_NAMES: i32 = 4;
-const OP_GET: i32 = 5;
-const OP_GET_COMP: i32 = 6;
-const OP_SET: i32 = 7;
-const OP_SET_COMP: i32 = 8;
 const OP_SET_POS: i32 = 9;
 const OP_GET_POS: i32 = 10;
 const OP_MOUSE: i32 = 11;
@@ -122,6 +118,7 @@ const OP_SET_TILESET: i32 = 66;
 const OP_COMMIT_TERRAIN: i32 = 68;
 const OP_ISO_TO_SCREEN: i32 = 69;
 const OP_SET_GRID: i32 = 70;
+const OP_START_ANIM: i32 = 71;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -235,24 +232,6 @@ impl WorkerWasmRuntime {
                     (json.len() as f64, Some(json.into_bytes()))
                 }
             }
-            OP_GET => {
-                let json = host.get(&strs[0]);
-                if ni(2) < json.len() as i32 || json.len() as u32 > OUT_BYTES {
-                    (-1.0, None)
-                } else {
-                    (json.len() as f64, Some(json.into_bytes()))
-                }
-            }
-            OP_GET_COMP => {
-                let json = host.get_comp(&strs[0], &strs[1]);
-                if ni(4) < json.len() as i32 || json.len() as u32 > OUT_BYTES {
-                    (-1.0, None)
-                } else {
-                    (json.len() as f64, Some(json.into_bytes()))
-                }
-            }
-            OP_SET => (host.set(&strs[0], &strs[1]) as f64, None),
-            OP_SET_COMP => (host.set_comp(&strs[0], &strs[1], &strs[2]) as f64, None),
             OP_SET_POS => (host.set_pos(&strs[0], nf(0), nf(1), nf(2)) as f64, None),
             OP_GET_POS => match host.get_pos(&strs[0]) {
                 Some((x, y, z)) => (1.0, Some(enc_f64s(&[x, y, z]))),
@@ -272,6 +251,7 @@ impl WorkerWasmRuntime {
             },
             OP_HEIGHT_AT => (host.height_at(nf(0), nf(1)), None),
             OP_SET_ANIM => (host.set_anim(&strs[0], &strs[1]) as f64, None),
+            OP_START_ANIM => (host.start_anim(&strs[0], &strs[1], ni(0)) as f64, None),
             OP_AGENT_SELECTED => (host.agent_selected() as f64, None),
             OP_UI_CONSUMED_CLICK => (host.ui_consumed_click() as f64, None),
             OP_DELTA => (host.delta(), None),

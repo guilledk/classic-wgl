@@ -72,6 +72,13 @@ impl GuestHost {
         unsafe { &mut *self.engine }
     }
 
+    /// Qualify a guest-supplied entity name with the active ROM namespace.
+    /// Currently a no-op (single ROM, empty namespace); the indirection point
+    /// where multi-ROM name scoping will be applied.
+    pub fn resolve(&self, name: &str) -> String {
+        self.engine().entity_key(name)
+    }
+
     /// Log a message through the `guest` CLASSIC_LOG channel.
     pub fn log(&mut self, msg: &str) {
         classic_core::cl_info!(Chan::Guest, "{}", msg);
@@ -92,61 +99,6 @@ impl GuestHost {
     /// The ordered list of entity names, as a JSON array.
     pub fn names(&mut self) -> String {
         serde_json::to_string(&self.engine().entity_names()).unwrap_or_default()
-    }
-
-    /// Dump a named entity's components to a JSON string.
-    pub fn get(&mut self, name: &str) -> String {
-        self.engine().dump_entity_json(name).unwrap_or_default()
-    }
-
-    /// Dump one component of a named entity to a JSON string.
-    pub fn get_comp(&mut self, name: &str, comp: &str) -> String {
-        self.engine().dump_component_json(name, comp).unwrap_or_default()
-    }
-
-    /// Set a named entity's components from a JSON `{"components": [...]}` string.
-    pub fn set(&mut self, name: &str, json: &str) -> i32 {
-        let value: serde_json::Value = match serde_json::from_str(json) {
-            Ok(v) => v,
-            Err(e) => {
-                classic_core::cl_error!(Chan::Guest, "set('{name}'): bad JSON: {e}");
-                return 0;
-            }
-        };
-        let Some(components) = value.get("components").and_then(|v| v.as_array()) else {
-            classic_core::cl_error!(Chan::Guest, "set('{name}'): missing components array");
-            return 0;
-        };
-        let mut ok = true;
-        for comp in components {
-            let Some(comp_type) = comp.get("type").and_then(|v| v.as_str()) else {
-                ok = false;
-                continue;
-            };
-            if let Err(e) = self.engine_mut().set_component_json(name, comp_type, comp.clone()) {
-                classic_core::cl_error!(Chan::Guest, "set('{name}', '{comp_type}'): {e}");
-                ok = false;
-            }
-        }
-        ok as i32
-    }
-
-    /// Set one component of a named entity from a JSON string.
-    pub fn set_comp(&mut self, name: &str, comp: &str, json: &str) -> i32 {
-        let value: serde_json::Value = match serde_json::from_str(json) {
-            Ok(v) => v,
-            Err(e) => {
-                classic_core::cl_error!(Chan::Guest, "set_comp('{name}', '{comp}'): bad JSON: {e}");
-                return 0;
-            }
-        };
-        match self.engine_mut().set_component_json(name, comp, value) {
-            Ok(()) => 1,
-            Err(e) => {
-                classic_core::cl_error!(Chan::Guest, "set_comp('{name}', '{comp}'): {e}");
-                0
-            }
-        }
     }
 
     pub fn set_pos(&mut self, name: &str, x: f64, y: f64, z: f64) -> i32 {
@@ -180,6 +132,11 @@ impl GuestHost {
     /// Set a named entity's animator to play a looping animation.
     pub fn set_anim(&mut self, name: &str, anim: &str) -> i32 {
         self.engine_mut().set_anim(name, anim) as i32
+    }
+
+    /// Restart a named entity's animator from frame zero (optionally one-shot).
+    pub fn start_anim(&mut self, name: &str, anim: &str, repeat: i32) -> i32 {
+        self.engine_mut().start_anim(name, anim, repeat != 0) as i32
     }
 
     /// Whether the editor's agent tool is active.

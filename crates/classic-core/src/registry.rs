@@ -2,8 +2,7 @@
 //!
 //! **Read `.claude/skills/classic-ecs/SKILL.md` before working on this module.**
 //!
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::OnceLock;
 
 /// Spawner function signature: takes the entity builder, raw JSON value,
 /// and adds one or more components to the builder.
@@ -29,48 +28,34 @@ pub struct ComponentReg {
     pub subsumes: &'static [&'static str],
 }
 
-static REGISTRY: std::sync::LazyLock<RwLock<HashMap<&'static str, ComponentReg>>> =
-    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+/// The immutable component registry.  Populated once via [`init`]; lookups are
+/// read-only, so tests sharing the process no longer need `--test-threads=1`.
+static REGISTRY: OnceLock<Vec<ComponentReg>> = OnceLock::new();
 
-/// Register a component with its spawner, dumper, priority, and subsumes rules.
-pub fn register(reg: ComponentReg) {
-    if REGISTRY.write().unwrap().insert(reg.name, reg).is_some() {
-        crate::cl_warn!(
-            crate::instrument::Chan::Ecs,
-            "Component \"{}\" is already registered. Overwriting.",
-            reg.name
-        );
-    }
-}
-
-/// Register a spawner-only component (backward-compatible convenience).
-pub fn register_spawner(name: &'static str, spawner: Spawner) {
-    register(ComponentReg { name, spawn: spawner, dump: None, order: 0, subsumes: &[] });
+/// Install the component registry.  Idempotent: the first call wins and later
+/// calls are no-ops.
+pub fn init(regs: Vec<ComponentReg>) {
+    let _ = REGISTRY.set(regs);
 }
 
 /// Look up a component spawner by name.
 pub fn lookup(name: &str) -> Option<Spawner> {
-    REGISTRY.read().unwrap().get(name).map(|r| r.spawn)
+    REGISTRY.get().and_then(|r| r.iter().find(|c| c.name == name)).map(|c| c.spawn)
 }
 
 /// Get all registrations ordered by dump priority (lowest first).
 pub fn ordered_regs() -> Vec<ComponentReg> {
-    let mut regs: Vec<_> = REGISTRY.read().unwrap().values().cloned().collect();
+    let mut regs = REGISTRY.get().cloned().unwrap_or_default();
     regs.sort_by_key(|r| r.order);
     regs
 }
 
 /// Check whether a component name is registered.
 pub fn has(name: &str) -> bool {
-    REGISTRY.read().unwrap().contains_key(name)
-}
-
-/// Clear all registered components (for tests).
-pub fn clear() {
-    REGISTRY.write().unwrap().clear();
+    REGISTRY.get().is_some_and(|r| r.iter().any(|c| c.name == name))
 }
 
 /// Return all registered component names.
 pub fn names() -> Vec<&'static str> {
-    REGISTRY.read().unwrap().keys().copied().collect()
+    REGISTRY.get().map(|r| r.iter().map(|c| c.name).collect()).unwrap_or_default()
 }

@@ -6,60 +6,60 @@ in mediump vec2 vMapCoord;
 in mediump float vTileId;
 in mediump vec3 vNormal;
 
-uniform sampler2D mapData;
-uniform vec2 mapSize;
+uniform sampler2D map_data;
+uniform vec2 map_size;
 
-uniform sampler2D tileSet;
-uniform vec2 tileSetSize;
-uniform vec2 tilePixelSize;
+uniform sampler2D tile_set;
+uniform vec2 tile_set_size;
+uniform vec2 tile_pixel_size;
 
-uniform vec2 selectedTile;
-uniform vec2 selectionBegin;
-uniform vec4 selectionColor;
-uniform int selectionMode;
-uniform vec4 wallColor;
+uniform vec2 selected_tile;
+uniform vec2 selection_begin;
+uniform vec4 selection_color;
+uniform int selection_mode;
+uniform vec4 wall_color;
 
-uniform float gridRadius;
-uniform int showGrid;
-uniform vec3 gridColor;
+uniform float grid_radius;
+uniform int show_grid;
+uniform vec3 grid_color;
 
-uniform vec3 ambientColor;
-uniform vec3 lightDirection;
-uniform vec3 lightColor;
+uniform vec3 ambient_color;
+uniform vec3 light_direction;
+uniform vec3 light_color;
 
 out vec4 fragColor;
 
 float getMapData(vec2 pos) {
-    vec4 rawData = texture(mapData, pos);
+    vec4 rawData = texture(map_data, pos);
     return floor(rawData.r * 256.0);
 }
 
-vec4 getTilePixel(float tileIdFlat, vec2 mapCoord) {
-    vec2 tileId = vec2(floor(mod(tileIdFlat, tileSetSize.x)), floor(tileIdFlat / tileSetSize.x));
+vec4 getTilePixel(float tile_id_flat, vec2 map_coord) {
+    vec2 tile_id = vec2(floor(mod(tile_id_flat, tile_set_size.x)), floor(tile_id_flat / tile_set_size.x));
 
-    vec2 mapTileNormalSize = vec2(1, 1) / mapSize;
-    vec2 setNormalSize = vec2(1, 1) / tileSetSize;
+    vec2 mapTileNormalSize = vec2(1, 1) / map_size;
+    vec2 setNormalSize = vec2(1, 1) / tile_set_size;
 
-    vec2 tileCornerNorm = tileId * setNormalSize;
+    vec2 tileCornerNorm = tile_id * setNormalSize;
 
-    vec2 localTileCoord = fract(mapCoord / mapTileNormalSize) * setNormalSize;
+    vec2 localTileCoord = fract(map_coord / mapTileNormalSize) * setNormalSize;
 
-    vec4 texColor = texture(tileSet, tileCornerNorm + localTileCoord);
+    vec4 texColor = texture(tile_set, tileCornerNorm + localTileCoord);
 
-    if (selectionMode != -1) {
-        vec2 selectedNormalStart = floor(min(selectionBegin, selectedTile)) * mapTileNormalSize;
-        vec2 selectedNormalEnd = ceil(max(selectionBegin, selectedTile)) * mapTileNormalSize;
+    if (selection_mode != -1) {
+        vec2 selectedNormalStart = floor(min(selection_begin, selected_tile)) * mapTileNormalSize;
+        vec2 selectedNormalEnd = ceil(max(selection_begin, selected_tile)) * mapTileNormalSize;
 
-        bvec2 selectStart = greaterThanEqual(mapCoord, selectedNormalStart);
-        bvec2 selectEnd = lessThanEqual(mapCoord, selectedNormalEnd);
+        bvec2 selectStart = greaterThanEqual(map_coord, selectedNormalStart);
+        bvec2 selectEnd = lessThanEqual(map_coord, selectedNormalEnd);
 
         if (all(selectStart) && all(selectEnd)) {
-            if (selectionMode == 0)
+            if (selection_mode == 0)
                 return vec4(1.0 - texColor.r, 1.0 - texColor.g, 1.0 - texColor.b, 1.0);
 
-            if (selectionMode == 1) {
+            if (selection_mode == 1) {
                 float average = (texColor.r + texColor.g + texColor.b) / 3.0;
-                return vec4(average, average, average, texColor.a) * selectionColor;
+                return vec4(average, average, average, texColor.a) * selection_color;
             }
         }
     }
@@ -71,33 +71,33 @@ void main(void ) {
     vec4 color;
 
     if (vTileId > 0.5) {
-        color = wallColor;
+        color = wall_color;
     } else {
-        vec2 mapCoord = vec2(vMapCoord.x, vMapCoord.y);
-        color = getTilePixel(getMapData(mapCoord), mapCoord);
+        vec2 map_coord = vec2(vMapCoord.x, vMapCoord.y);
+        color = getTilePixel(getMapData(map_coord), map_coord);
     }
 
     if (color.a < 0.01) discard;
 
-    float diff = max(dot(normalize(vNormal), lightDirection), 0.0);
-    color.rgb *= ambientColor + diff * lightColor;
+    float diff = max(dot(normalize(vNormal), light_direction), 0.0);
+    color.rgb *= ambient_color + diff * light_color;
 
-    if (showGrid > 0 && selectionMode == -1 && vTileId <= 0.5) {
-        vec2 tileCoord = vMapCoord * mapSize;
+    if (show_grid > 0 && selection_mode == -1 && vTileId <= 0.5) {
+        vec2 tileCoord = vMapCoord * map_size;
         vec2 localUV = fract(tileCoord);
-        float mt = floor(selectedTile.x);
-        float nt = floor(selectedTile.y);
+        float mt = floor(selected_tile.x);
+        float nt = floor(selected_tile.y);
         float ct = floor(tileCoord.x);
         float rt = floor(tileCoord.y);
         float dist = max(abs(ct - mt), abs(nt - rt));
-        if (dist <= gridRadius) {
+        if (dist <= grid_radius) {
             float edge = 0.04;
             float dx = min(localUV.x, 1.0 - localUV.x);
             float dy = min(localUV.y, 1.0 - localUV.y);
             float edgeDist = min(dx, dy);
             float border = 1.0 - smoothstep(0.0, edge, edgeDist);
-            float fade = 1.0 - dist / max(gridRadius, 0.01);
-            color.rgb = mix(color.rgb, gridColor, border * fade * 0.85);
+            float fade = 1.0 - dist / max(grid_radius, 0.01);
+            color.rgb = mix(color.rgb, grid_color, border * fade * 0.85);
         }
     }
 

@@ -300,20 +300,20 @@ CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=update CLAS
 
 ## 8. Unit Test Patterns
 
-### `--test-threads=1`
+### Test parallelism
 
-All unit and integration tests must run with `--test-threads=1`.  This is
-required because the global component registry (`ComponentReg`) is backed
-by a `RwLock<HashMap>` that is shared across tests via `LazyLock`.  Parallel
-test execution causes races on registry registration and lookup.
+Tests run in parallel (`cargo test`, no `--test-threads=1`).  The component
+registry is a populate-once `OnceLock<Vec<ComponentReg>>` (read-only after
+`register_all_components()`), and the `CLASSIC_LOG` channel table is guarded
+by a per-test mutex in `classic-core/tests/instrument.rs`.
 
 ### `instrument::reset_for_test`
 
 Tests that interact with the `CLASSIC_LOG` channel system should call
 `classic_core::instrument::reset_for_test()` to zero out the atomic level
-table.  This prevents test ordering from leaking channel levels.  Currently
-used in `classic-core/tests/instrument.rs`; not needed by integration tests
-that don't touch logging.
+table, and hold the `SETUP_LOCK` guard across setup + assertions (see
+`classic-core/tests/instrument.rs`).  This prevents test ordering from
+leaking channel levels.
 
 ### Mock GL approach
 
@@ -368,7 +368,7 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
   The runner processes `STEPS` as a `LazyLock`, computed once per process
   lifetime.  Running multiple scenarios requires separate invocations.
 
-- **No headless assets check**: CI runs `npm run assets` before building,
-  but there is no automated check that `public/res/` matches the committed
-  asset submodule.  A stale `public/res/` (missing regenerated assets)
+- **No headless assets check**: CI runs `cargo xtask all` before building,
+  but there is no automated check that `roms/out/res/` matches the committed
+  asset submodule.  A stale `roms/out/` (missing regenerated assets)
   causes runtime errors only, not build-time errors.

@@ -13,6 +13,15 @@ pub struct CodeEntry {
     pub src: String,
 }
 
+/// A bundled binary grid resource (tile / nav / height data) in a ROM
+/// manifest.  The payload is raw little-endian numbers; the element type is
+/// implied by the consumer (tiles/nav are `u32`, heights are `f32`).
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct GridEntry {
+    pub name: String,
+    pub src: String,
+}
+
 /// The default ROM state entry name.
 pub const DEFAULT_STATE_ENTRY: &str = "state.json";
 
@@ -29,11 +38,20 @@ pub struct RomManifest {
     pub format_version: u32,
     #[serde(default)]
     pub entrypoint: String,
+    /// Namespace prefix for this ROM's entities (empty = global, un-namespaced
+    /// names).  Groundwork for multi-ROM loading: when non-empty, entity names
+    /// are qualified as `"{namespace}::{name}"`.
+    #[serde(default)]
+    pub namespace: String,
     /// Archive entry holding the serialized entity state (default `state.json`).
     #[serde(default = "default_state_entry")]
     pub state: String,
     #[serde(default)]
     pub code: Vec<CodeEntry>,
+    /// Bundled binary grid resources (tile / nav / height data), referenced by
+    /// name from the entity state.
+    #[serde(default)]
+    pub grids: Vec<GridEntry>,
     /// Whether this ROM ships the host toolchain (editor HUD, widgets, debug
     /// overlays, test runner).  Bare gameplay ROMs leave this false and skip
     /// the editor; the demo/lunar ROMs opt in.
@@ -62,7 +80,7 @@ mod tests {
             "code": [{"name": "main", "src": "code/main.wasm"}],
             "shaders": [],
             "textures": [{"name": "humanoid", "src": "/res/humanoid.png"}],
-            "sdfFonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
+            "sdf_fonts": [{"name": "dejavusans", "metrics": "/res/dejavusans-sdf.json"}],
             "animations": []
         }"#;
         let m: RomManifest = serde_json::from_str(json).unwrap();

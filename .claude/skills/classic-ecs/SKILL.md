@@ -203,7 +203,8 @@ UI sprites (`SpriteRender` on an entity with `UiNode.kind == Sprite`) use the
 
 The registry in `classic-core/src/registry.rs` is a bidirectional system that
 maps component type names to spawners (JSON → ECS) and dumpers (ECS → JSON).
-It is a global `LazyLock<RwLock<HashMap>>`.
+It is an immutable `OnceLock<Vec<ComponentReg>>` populated once by
+`registry::init` (via `register_all_components()`).
 
 ### ComponentReg fields
 
@@ -249,22 +250,27 @@ sorts after it.
 
 ### Registering a component
 
-```rust
-registry::register(ComponentReg {
-    name: "Sprite",
-    spawn: |b, v| { ... b.add(sprite); Ok(()) },
-    dump: Some(dumper_sprite),
-    order: 20,
-    subsumes: &["Transform"],
-});
-```
+`register_all_components()` (in `classic-core/src/lib.rs`) installs the full
+list in one `registry::init(vec![...])` call:
 
-Spawn-only (no dumper) can use `registry::register_spawner(name, spawner)`.
+```rust
+registry::init(vec![
+    ComponentReg {
+        name: "Sprite",
+        spawn: |b, v| { ... b.add(sprite); Ok(()) },
+        dump: Some(dumper_sprite),
+        order: 20,
+        subsumes: &["Transform"],
+    },
+    // ...
+]);
+```
 
 ### Thread safety
 
-The global registry requires `--test-threads=1` for test binaries that share
-the registry across tests (clearing via `registry::clear()`).
+`init` is idempotent (the first call wins; later calls are no-ops).  The
+registry is read-only after that, so tests run in parallel with no
+`--test-threads=1` requirement.
 
 ---
 
@@ -552,11 +558,15 @@ preserves insertion order).  Each entity gets:
 `self.name_order` is critical for `dump_state()` serialization — it
 reproduces the entity iteration order when writing `state.json`.
 
-### Inlined tile/nav data
+### Grid data as binary sidecars
 
-Tilemap and nav-mesh data are inlined into `state.json` (base64 `Vec<u32>` /
-`Vec<f32>` via `serde_base64`); there are no sidecar files.  `Tilemap.data` /
-`height_data` and `NavMesh.data` are deserialized directly by their spawners.
+Tilemap and nav-mesh grids are NOT in `state.json`.  They are binary ROM
+resources (`ResourceKind::Grid`) keyed by name, referenced from the components
+via `Tilemap.tiles_grid` / `heights_grid` / `NavMesh.data_grid`
+(`Option<String>`).  The host hydrates them in `Engine::load_grids` (raw
+little-endian `u32`/`f32` → `set_tiles_bulk`/`set_heights_bulk`/`set_nav_bulk`)
+after `load_state`.  `Tilemap.data`/`height_data` and `NavMesh.data` are
+`#[serde(skip)]`.
 
 ---
 
@@ -582,11 +592,11 @@ coordinating with the TS `state.json` schema.
 Tests of render-list queries and physics dispatch are end-to-end only
 (CLASSIC_TEST).  There is no mock `hecs::World` or component spy layer.
 
-### Global registry is not async-safe
+### Registry is immutable (populate-once)
 
-The `LazyLock<RwLock<HashMap>>` global registry is safe for single-threaded
-use and parallel tests with `--test-threads=1`.  It would need an
-`Arc<RwLock>` pattern for multi-threaded workloads.
+`registry::init` is populate-once via `OnceLock`, so the registry is read-only
+after startup.  Adding a component type still requires a source edit in
+`register_all_components()` — there is no dynamic registration.
 
 ### Camera does not support rotation or 3D orbit
 

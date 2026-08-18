@@ -165,40 +165,45 @@ Order: `['sunny', 'cloudy', 'dawn', 'night']`.
 
 ## State Dump Format
 
+> Note: the Rust state format no longer follows TS camelCase conventions.  All
+> component field keys are snake_case, matching the Rust field names exactly.
+
 ### Overall JSON
 
 ```json
 {"entities": {"<name>": {"components": [{"type": "...", ...}, ...]}}}
 ```
 
-### `type`-first contract
+### `type` discriminator
 
 The Rust loader is **registry-driven** (serde), not positional — it reads the
 `"type"` field, looks up the component spawner, and deserialises the rest of
-the object by field name.  The TS positional loader (which splices out
-`"type"` and passes the remaining values as positional constructor args) was
-deleted with the TS original.  `"type"` is still emitted first as a
-convention, but key order is no longer load-bearing.
+the object by field name.  The TS positional loader (which spliced out `"type"`
+and passed the remaining values as positional constructor args) was deleted
+with the TS original.  `"type"` is emitted first as a convention, but key order
+is not load-bearing.
 
 The dumpers are **derive-driven** (`serde` on each component, with `"type"`
 prepended), so keys follow each component's serde attributes
-(`rename_all = "camelCase"` where set, `#[serde(skip)]`/`#[serde(rename)]`
-honoured).
+(`#[serde(skip)]`/`#[serde(rename)]` honoured).
 
 ### Per-component dump keys (after `type`)
 
 | Component | Keys |
 |-----------|------|
-| **Sprite** | `position`, `scale`, `texture`, `ignoreCam`, `frame`, `tileSetSize`, `anchor` |
-| **IsoSprite** | `position`, `scale`, `texture`, `tilemap`, `frame`, `tileSetSize`, `anchor`, `footprint` |
-| **IsoAgent** | + `speed`, `animSpeed`, `animPrefix` (appended to IsoSprite) |
-| **Tilemap** | `position`, `scale`, `sizeX`, `sizeY`, `tileSet`, `tilePixelSize`, `maxTile`, `data` (base64), `heightData` (base64), `heightScale` |
-| **IsometricNavMesh** | `position`, `scale`, `map`, `tileSet`, `data` (base64), `sizeX`, `sizeY` |
+| **Sprite** | `position`, `scale`, `texture`, `ignore_cam`, `frame`, `tile_set_size`, `anchor` |
+| **IsoSprite** | `position`, `scale`, `texture`, `tilemap`, `frame`, `tile_set_size`, `anchor`, `footprint` |
+| **IsoAgent** | + `speed`, `anim_speed`, `anim_prefix` (appended to IsoSprite) |
+| **Tilemap** | `position`, `scale`, `size_x`, `size_y`, `tile_set`, `tile_pixel_size`, `max_tile`, `data` (base64), `height_data` (base64), `height_scale` |
+| **IsometricNavMesh** | `position`, `scale`, `map_entity`, `tile_set`, `data` (base64), `size_x`, `size_y` |
 | **Animator** | `target`, `speed` |
 | **Transform** | `position`, `scale` |
 | **Rect** | `color`, `ignore_cam` |
 | **SdfText** | `atlas_name`, `color`, `bgcolor`, `outline_color`, `outline_width`, `shadow_offset`, `shadow_color`, `shadow_blur`, `ignore_cam`, `text`, `justify`, `weight`, `gamma` |
 | **Camera** | `position`, `scale` (`size` is runtime-only) |
+
+`Role.value` is serialized as the snake_case variant name (`tilemap`,
+`nav_mesh`, `agent`, `cursor`).
 
 ---
 

@@ -19,8 +19,8 @@ use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use classic_terrain::fractal::tiling_fbm_2d;
 use crate::material::{material_for_tile_id, tile_count, MaterialSpec, MATERIALS};
+use classic_terrain::fractal::tiling_fbm_2d;
 use classic_terrain::simplex_noise::{Random, SimplexNoise};
 
 /// Default tileset geometry: an 8x8 grid of 32px cells, i.e. 256x256, which

@@ -41,8 +41,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use classic_terrain::fractal::{domain_warp, smoothstep, Fbm};
 use crate::material::{tile_id, LunarMaterial};
+use classic_terrain::fractal::{domain_warp, smoothstep, Fbm};
 use classic_terrain::simplex_noise::{Random, SimplexNoise};
 
 /// A guaranteed-flat circular region for an RTS start position or base site.

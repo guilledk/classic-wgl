@@ -207,9 +207,12 @@ pass via the dirty-text check.
 
 ## 9. Atlas Generator
 
-`scripts/make-font-atlas.mjs` is a Node.js script that produces:
-- `public/res/{name}-sdf.png` — grayscale SDF atlas texture (power-of-two)
-- `public/res/{name}-sdf.json` — glyph metrics JSON
+The `crates/sdf-atlas` Rust crate (invoked by `cargo xtask assets`) produces:
+- `roms/out/res/{name}-sdf.png` — grayscale SDF atlas texture (power-of-two)
+- `roms/out/res/{name}-sdf.json` — glyph metrics JSON (snake_case keys)
+
+It ports the former `make-font-atlas.mjs` (fontdue rasterization + Felzenszwalb
+separable EDT + shelf packing).
 
 Key parameters:
 - `GLYPH_SIZE = 64` (cell pixels in the source raster)
@@ -225,13 +228,13 @@ Process per glyph:
 3. Normalizes distances to [-1, 1] and encodes as byte values (128 = on-edge)
 4. Packs glyphs into a power-of-two atlas texture
 
-Metrics JSON fields:
-- `atlasSize: [w, h]` — atlas pixel dimensions
-- `glyphSize: 64`
+Metrics JSON fields (snake_case):
+- `atlas_size: [w, h]` — atlas pixel dimensions
+- `glyph_size: 64`
 - `spread: 4`
 - `baseline` — `fontSize * 0.78` (in cell pixels)
-- `lineHeight` — `fontSize * 1.3`
-- `glyphs: { char: { x, y, w, h, xOffset, yOffset, xAdvance } }`
+- `line_height` — `fontSize * 1.3`
+- `glyphs: { char: { x, y, w, h, x_offset, y_offset, x_advance } }`
 
 The generator also has a content-hash cache (`*-sdf.sig`) to skip regeneration
 when inputs are unchanged.

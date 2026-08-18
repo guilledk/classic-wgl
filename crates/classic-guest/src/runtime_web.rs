@@ -541,103 +541,6 @@ impl WebWasmRuntime {
             );
         }
 
-        // get
-        {
-            let host = host.clone();
-            let mem = mem.clone();
-            set_import!(
-                "get",
-                Box::new(move |ptr: i32, len: i32, out_ptr: i32, out_cap: i32| -> i32 {
-                    let name = {
-                        let mem = mem.borrow();
-                        read_str(mem.as_ref().unwrap(), ptr, len)
-                    };
-                    let json = host.borrow_mut().get(&name);
-                    if out_cap < json.len() as i32 {
-                        return -1;
-                    }
-                    let mem = mem.borrow();
-                    write_str(mem.as_ref().unwrap(), out_ptr, &json)
-                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
-            );
-        }
-
-        // get_comp
-        {
-            let host = host.clone();
-            let mem = mem.clone();
-            set_import!(
-                "get_comp",
-                Box::new(
-                    move |ptr: i32,
-                          len: i32,
-                          comp_ptr: i32,
-                          comp_len: i32,
-                          out_ptr: i32,
-                          out_cap: i32|
-                          -> i32 {
-                        let (name, comp) = {
-                            let mem = mem.borrow();
-                            let m = mem.as_ref().unwrap();
-                            (read_str(m, ptr, len), read_str(m, comp_ptr, comp_len))
-                        };
-                        let json = host.borrow_mut().get_comp(&name, &comp);
-                        if out_cap < json.len() as i32 {
-                            return -1;
-                        }
-                        let mem = mem.borrow();
-                        write_str(mem.as_ref().unwrap(), out_ptr, &json)
-                    },
-                ) as Box<dyn FnMut(i32, i32, i32, i32, i32, i32) -> i32>
-            );
-        }
-
-        // set
-        {
-            let host = host.clone();
-            let mem = mem.clone();
-            set_import!(
-                "set",
-                Box::new(move |ptr: i32, len: i32, json_ptr: i32, json_len: i32| -> i32 {
-                    let (name, json) = {
-                        let mem = mem.borrow();
-                        let m = mem.as_ref().unwrap();
-                        (read_str(m, ptr, len), read_str(m, json_ptr, json_len))
-                    };
-                    host.borrow_mut().set(&name, &json)
-                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
-            );
-        }
-
-        // set_comp
-        {
-            let host = host.clone();
-            let mem = mem.clone();
-            set_import!(
-                "set_comp",
-                Box::new(
-                    move |ptr: i32,
-                          len: i32,
-                          comp_ptr: i32,
-                          comp_len: i32,
-                          json_ptr: i32,
-                          json_len: i32|
-                          -> i32 {
-                        let (name, comp, json) = {
-                            let mem = mem.borrow();
-                            let m = mem.as_ref().unwrap();
-                            (
-                                read_str(m, ptr, len),
-                                read_str(m, comp_ptr, comp_len),
-                                read_str(m, json_ptr, json_len),
-                            )
-                        };
-                        host.borrow_mut().set_comp(&name, &comp, &json)
-                    },
-                ) as Box<dyn FnMut(i32, i32, i32, i32, i32, i32) -> i32>
-            );
-        }
-
         // set_pos
         {
             let host = host.clone();
@@ -748,6 +651,25 @@ impl WebWasmRuntime {
                     };
                     host.borrow_mut().set_anim(&name, &anim)
                 }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // start_anim
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "start_anim",
+                Box::new(
+                    move |ptr: i32, len: i32, anim_ptr: i32, anim_len: i32, repeat: i32| -> i32 {
+                        let (name, anim) = {
+                            let mem = mem.borrow();
+                            let m = mem.as_ref().unwrap();
+                            (read_str(m, ptr, len), read_str(m, anim_ptr, anim_len))
+                        };
+                        host.borrow_mut().start_anim(&name, &anim, repeat)
+                    },
+                ) as Box<dyn FnMut(i32, i32, i32, i32, i32) -> i32>
             );
         }
 

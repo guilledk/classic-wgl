@@ -661,7 +661,7 @@ This corrects normals for the non-uniform 2:1 scale of the isometric transform.
 ### Height data format divergence
 
 - **TS:**  height data is `sizeX * sizeY` (per-tile grid).
-- **Rust:**  height data is `(sizeX + 1) * (sizeY + 1)` (per-vertex grid).
+- **Rust:**  height data is `(size_x + 1) * (size_y + 1)` (per-vertex grid).
 - **Impact:**  The vertex grid avoids an off-by-one interpolation boundary
   condition.  For flat height data (all 1.0) both produce identical results.
   The vertex grid naturally supports per-vertex heights from `build_mesh`.
