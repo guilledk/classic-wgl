@@ -1,0 +1,21 @@
+[package]
+name = "classic-web"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+classic-core = { path = "../../crates/classic-core" }
+classic-gfx = { path = "../../crates/classic-gfx" }
+classic-platform = { path = "../../crates/classic-platform", default-features = false }
+classic-engine = { path = "../../crates/classic-engine" }
+classic-demo = { path = "../../crates/classic-demo" }
+
+glam.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true
+console_error_panic_hook.workspace = true
+log.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "classic-demo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+classic-core = { path = "../classic-core" }
+classic-gfx = { path = "../classic-gfx" }
+classic-engine = { path = "../classic-engine" }
+
+glam.workspace = true
+glow.workspace = true
+hecs.workspace = true
+anyhow.workspace = true
+log.workspace = true

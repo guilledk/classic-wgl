@@ -2,36 +2,11 @@
     "name": "classic-wgl",
     "description": "classic webgl game engine",
     "version": "0.1.0-alpha.0",
-    "type": "module",
-    "main": "index.js",
+    "private": true,
     "scripts": {
-        "assets": "node scripts/copy-assets.mjs && node scripts/make-font-atlas.mjs assets/fonts/DejaVuSans.ttf --family DejaVuSans",
-        "dev": "npm run assets && vite",
-        "build": "npm run assets && vite build",
-        "preview": "vite preview",
-        "typecheck": "tsc --noEmit",
-        "test": "vitest run",
-        "test:watch": "vitest",
-        "test:coverage": "vitest run --coverage",
-        "format": "prettier --write .",
-        "format:check": "prettier --check ."
-    },
-    "keywords": [],
-    "author": "",
-    "license": "UNLICENSED",
-    "dependencies": {
-        "gl-matrix": "^3.4.3"
+        "assets": "node scripts/copy-assets.mjs && node scripts/make-font-atlas.mjs assets/fonts/DejaVuSans.ttf --family DejaVuSans"
     },
     "devDependencies": {
-        "@napi-rs/canvas": "^1.0.3",
-        "@types/node": "^26.1.1",
-        "@types/webgl2": "^0.0.11",
-        "@vitest/coverage-v8": "^4.1.10",
-        "jsdom": "^29.1.1",
-        "prettier": "^3.9.6",
-        "prettier-plugin-glsl": "^0.3.0",
-        "typescript": "^5.8.3",
-        "vite": "^6.3.5",
-        "vitest": "^4.1.10"
+        "@napi-rs/canvas": "^1.0.3"
     }
 }

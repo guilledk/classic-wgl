@@ -1,0 +1,16 @@
+[package]
+name = "classic-gfx"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+classic-core = { path = "../classic-core" }
+
+glow.workspace = true
+glam.workspace = true
+image.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bytemuck.workspace = true

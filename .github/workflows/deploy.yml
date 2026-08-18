@@ -11,17 +11,35 @@ jobs:
               with:
                   submodules: recursive
                   token: ${{ secrets.GH_PAT }}
+
             - uses: actions/setup-node@v4
               with:
                   node-version: 22
                   cache: npm
+
             - run: npm ci
-            - run: npm run assets
-            - run: npm run build
+
+            - name: Generate assets
+              run: npm run assets
+
+            - uses: dtolnay/rust-toolchain@stable
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: apps/web -> target
+
+            - name: Install trunk
+              run: cargo install trunk --locked
+
+            - name: Build web app
+              run: |
+                cd apps/web
+                trunk build index.html --release
+
             - uses: peaceiris/actions-gh-pages@v4
               with:
                   deploy_key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
                   external_repository: guilledk/guilledk.github.io
-                  publish_dir: dist
+                  publish_dir: apps/web/dist
                   publish_branch: master
                   force_orphan: true
