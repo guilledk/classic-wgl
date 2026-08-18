@@ -144,6 +144,21 @@ categories:
   (`"entityName.ComponentName"` format).  Fields: `speed: f32`, plus
   runtime-only `animation`, `counter`, `frame`, `repeat`, `playing`.
 
+### Vehicles
+
+- **`IsoVehicle`** — wheeled-vehicle sim.  Lives on the **body** entity (which
+  also carries `IsoSprite` + `Transform`) and references four wheel entities by
+  name.  Serialized fields: `tilemap`, `wheel_entities: [String; 4]` (`[fl, fr,
+  rl, rr]`), `body_anchors`/`wheel_anchors` (per-direction ground-origin
+  anchors, `[[f32; 2]; 8]`), `speed`, `direction` (0..7).  Transient
+  (`#[serde(skip)]`): `pitch`/`pitch_vel`/`pitch_index` + `roll`/`roll_vel`/
+  `roll_index` (underdamped spring angles in radians, driven by
+  `Engine::update_vehicles`), `wheelbase_px`/`track_px` (front-rear / left-right
+  axle distances in px), `wheel_tile_offsets` (`[[[f32; 2]; 8]; 4]`), per-wheel
+  suspension state (`wheel_h`/`wheel_v`), and the `path`/`path_idx` A* waypoints.
+  The body sprite's `frame` indexes a pitch×roll×direction sheet — see
+  `classic-iso`.
+
 ### Collision / UI
 
 - **`ColliderData`** — serializable physics shape.  Contains `shape: Shape`

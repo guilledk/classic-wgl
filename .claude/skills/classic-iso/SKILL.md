@@ -464,6 +464,30 @@ NE: (0.5, -0.5), SE: (0.5, 0.5), SW: (-0.5, 0.5), NW: (-0.5, -0.5)
 
 Custom footprints (e.g. for rectangular buildings) can have more vertices.
 
+### Vehicle body pitch/roll frames
+
+The `IsoVehicle` body is a single `IsoSprite` whose sheet carries **more than
+8 directions**: it stacks `pitch_levels` × `roll_levels` direction blocks
+vertically (the exporter renders the body tilted about its ground origin on a
+`yaw → pitch → roll` rig; wheels stay flat at 8 directions).
+
+- Body `tile_set_size = [columns, rows · pitch_levels · roll_levels]`; wheel
+  sheets stay `[columns, rows]`.
+- Body `frame = (pitch_index · roll_levels + roll_index) · directions +
+  direction`, where `pitch_index 0..pitch_levels` (0 = nose-down, centre =
+  level, top = nose-up) and `roll_index 0..roll_levels` (0 = right-up, centre =
+  level, top = left-up).
+- The ground-origin `anchor` is pose-invariant (the tilt pivots on the fixed
+  ground origin), so the body keeps one anchor per direction, not per pose.
+- `VehicleDef` (the `vehicles` manifest sidecar, `classic-core/src/types.rs`)
+  carries `directions`/`columns`/`rows`/`cell`, `pitch_levels`/`pitch_max_deg`
+  and `roll_levels`/`roll_max_deg`, plus per-part ground-origin `anchors`; the
+  exporter emits it and `Engine::spawn_vehicle` derives the wheel tile offsets
+  from it.
+- `Engine::update_vehicles` (`classic-engine/src/vehicle.rs`) computes the body
+  pitch/roll as angles and quantizes them against `pitch_max`/`roll_max` to pick
+  the frame; `frame_offset.y` still carries the suspension/jump delta.
+
 ---
 
 ## 9. IsoAgent
