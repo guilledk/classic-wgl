@@ -108,6 +108,10 @@ var OP_COMMIT_TERRAIN = 68;
 var OP_ISO_TO_SCREEN = 69;
 var OP_SET_GRID = 70;
 var OP_START_ANIM = 71;
+var OP_VEHICLE_TELEPORT = 72;
+var OP_VEHICLE_GOTO = 73;
+var OP_VEHICLE_STOP = 74;
+var OP_VEHICLE_SPAWN = 75;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -263,6 +267,22 @@ function envImports() {
             var r = hostCall(OP_FIND_PATH, [], [sx, sy, ex, ey, outPtr, outCap]);
             if (r.out.length > 0) writeMem(outPtr, r.out);
             return r.ret | 0;
+        },
+        vehicle_teleport: function (ptr, len, x, y) {
+            return hostCall(OP_VEHICLE_TELEPORT, [readStr(ptr, len)], [x, y]).ret | 0;
+        },
+        vehicle_spawn: function (defPtr, defLen, namePtr, nameLen, x, y) {
+            return hostCall(
+                OP_VEHICLE_SPAWN,
+                [readStr(defPtr, defLen), readStr(namePtr, nameLen)],
+                [x, y],
+            ).ret | 0;
+        },
+        vehicle_goto: function (ptr, len, tx, ty) {
+            return hostCall(OP_VEHICLE_GOTO, [readStr(ptr, len)], [tx, ty]).ret | 0;
+        },
+        vehicle_stop: function (ptr, len) {
+            return hostCall(OP_VEHICLE_STOP, [readStr(ptr, len)], []).ret | 0;
         },
         get_camera: function (outPtr) {
             var r = hostCall(OP_GET_CAMERA, [], [outPtr]);

@@ -28,15 +28,102 @@ fn main() -> anyhow::Result<()> {
         "assets" => copy_assets(&root),
         "guests" => build_guests(&root),
         "roms" => pack_roms(&root),
+        "lrvtest-map" => gen_lrvtest_map(&root),
         "all" => {
             copy_assets(&root)?;
             build_guests(&root)?;
             pack_roms(&root)
         }
         other => {
-            anyhow::bail!("unknown command `{other}` (expected assets|guests|roms|all)")
+            anyhow::bail!("unknown command `{other}` (expected assets|guests|roms|lrvtest-map|all)")
         }
     }
+}
+
+/// Generate the hand-authored `lrvtest` ramp-course grids
+/// (`roms/lrvtest/maps/{tiles,heights,nav}.json`).  A small deterministic test
+/// track for visually tuning the wheeled-vehicle suspension/jump: a flat base
+/// with a ramp rising in each of the eight directions, a central hill to launch
+/// off, and a raised step (curb) to cross.
+fn gen_lrvtest_map(root: &Path) -> anyhow::Result<()> {
+    let size: usize = 48; // tiles per axis
+    let n = size + 1; // vertices per axis (height grid)
+
+    let tiles = vec![9u32; size * size];
+    let nav = vec![1u32; size * size];
+
+    let mut h = vec![1.0f32; n * n];
+    let idx = |x: usize, y: usize| y * n + x;
+    let rise = 3.0f32; // ramp top = base + rise
+    let len = 8.0f32; // ramp run, in tiles
+
+    // Central hill (crest to launch off): +2 peak at (24,24), radius 5.
+    for y in 0..n {
+        for x in 0..n {
+            let dx = x as f32 - 24.0;
+            let dy = y as f32 - 24.0;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d < 5.0 {
+                let bump = 2.0 * (1.0 - d / 5.0);
+                h[idx(x, y)] = h[idx(x, y)].max(1.0 + bump);
+            }
+        }
+    }
+
+    // Cardinal ramps (rise along +x / -x / +y / -y).
+    for y in 20..=29 {
+        for x in 33..=41 {
+            h[idx(x, y)] = h[idx(x, y)].max(1.0 + rise * (x - 33) as f32 / len);
+        }
+        for x in 7..=15 {
+            h[idx(x, y)] = h[idx(x, y)].max(1.0 + rise * (15 - x) as f32 / len);
+        }
+    }
+    for x in 20..=29 {
+        for y in 33..=41 {
+            h[idx(x, y)] = h[idx(x, y)].max(1.0 + rise * (y - 33) as f32 / len);
+        }
+        for y in 7..=15 {
+            h[idx(x, y)] = h[idx(x, y)].max(1.0 + rise * (15 - y) as f32 / len);
+        }
+    }
+
+    // Diagonal ramps (rise along the four diagonals).
+    for x in 33..=41 {
+        for y in 33..=41 {
+            h[idx(x, y)] = h[idx(x, y)].max(1.0 + rise * ((x + y) as f32 - 66.0) / 16.0);
+        }
+        for y in 7..=15 {
+            h[idx(x, y)] =
+                h[idx(x, y)].max(1.0 + rise * (x as f32 + (15.0 - y as f32) - 40.0) / 16.0);
+        }
+    }
+    for x in 7..=15 {
+        for y in 7..=15 {
+            h[idx(x, y)] = h[idx(x, y)].max(1.0 + rise * (30.0 - (x + y) as f32) / 16.0);
+        }
+        for y in 33..=41 {
+            h[idx(x, y)] =
+                h[idx(x, y)].max(1.0 + rise * (15.0 - x as f32 + y as f32 - 40.0) / 16.0);
+        }
+    }
+
+    // Step (curb): a raised +1 plateau in the south band, east of the south ramp.
+    for x in 20..=36 {
+        for y in 42..=47 {
+            h[idx(x, y)] = h[idx(x, y)].max(2.0);
+        }
+    }
+
+    let out_dir = root.join("roms/lrvtest/maps");
+    fs::create_dir_all(&out_dir)?;
+    fs::write(out_dir.join("tiles.json"), serde_json::to_string(&tiles)?)?;
+    fs::write(out_dir.join("nav.json"), serde_json::to_string(&nav)?)?;
+
+    let heights: Vec<f32> = h.iter().map(|v| (v * 100.0).round() / 100.0).collect();
+    fs::write(out_dir.join("heights.json"), serde_json::to_string(&heights)?)?;
+    println!("wrote roms/lrvtest/maps/tiles.json, nav.json, heights.json ({}x{} grid)", size, size);
+    Ok(())
 }
 
 /// Copy source game assets from the `assets/` submodule into `roms/out/res/`
@@ -80,6 +167,23 @@ fn copy_assets(root: &Path) -> anyhow::Result<()> {
         }
     }
 
+    // LRV rover: body + 4 wheel spritesheets (each 8 directions) + the vehicle
+    // definition sidecar.
+    let lrv = root.join("assets/vehicles/lrv");
+    for (src, dst) in [
+        ("lrv_body.png", "lrv_body.png"),
+        ("lrv_wheel_fl.png", "lrv_wheel_fl.png"),
+        ("lrv_wheel_fr.png", "lrv_wheel_fr.png"),
+        ("lrv_wheel_rl.png", "lrv_wheel_rl.png"),
+        ("lrv_wheel_rr.png", "lrv_wheel_rr.png"),
+        ("lrv.json", "lrv.json"),
+    ] {
+        let s = lrv.join(src);
+        if s.is_file() {
+            fs::copy(&s, out_res.join(dst))?;
+        }
+    }
+
     // SDF font atlas (Rust `sdf-atlas` crate).
     let font_path = root.join("assets/fonts/DejaVuSans.ttf");
     let font_bytes =
@@ -101,7 +205,9 @@ fn build_guests(root: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(&out_code)?;
     let target = root.join("target");
 
-    for (crate_name, out_name) in [("demo-guest", "demo.wasm"), ("lunar-guest", "lunar.wasm")] {
+    for (crate_name, out_name) in
+        [("demo-guest", "demo.wasm"), ("lunar-guest", "lunar.wasm"), ("lrv-guest", "lrv.wasm")]
+    {
         let manifest = root.join("guest").join(crate_name).join("Cargo.toml");
         let status = Command::new("cargo")
             .arg("build")
@@ -150,6 +256,22 @@ fn pack_roms(root: &Path) -> anyhow::Result<()> {
         "roms/lunar/state.json",
         "lunar.wasm",
         &[],
+    )?;
+    pack_scene(
+        root,
+        "lrvtest",
+        "roms/lrvtest/manifest.json",
+        "roms/lrvtest/state.json",
+        "lrv.wasm",
+        &[
+            Grid { name: "lrvtest.tiles", source: "roms/lrvtest/maps/tiles.json", element: "u32" },
+            Grid {
+                name: "lrvtest.heights",
+                source: "roms/lrvtest/maps/heights.json",
+                element: "f32",
+            },
+            Grid { name: "lrvtest.nav", source: "roms/lrvtest/maps/nav.json", element: "u32" },
+        ],
     )
 }
 
@@ -225,6 +347,10 @@ fn pack_scene(
             other => anyhow::bail!("unknown grid element type `{other}`"),
         };
         resources.insert(ResourceKind::Grid, g.name.to_string(), bytes);
+    }
+    for v in &manifest.manifest.vehicles {
+        let bytes = fs::read(res.join(file_name(&v.src)))?;
+        resources.insert(ResourceKind::Vehicle, v.name.clone(), bytes);
     }
 
     let state = fs::read_to_string(root.join(state_rel))?;

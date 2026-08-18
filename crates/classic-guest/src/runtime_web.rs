@@ -810,6 +810,79 @@ impl WebWasmRuntime {
             );
         }
 
+        // vehicle_teleport
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_teleport",
+                Box::new(move |ptr: i32, len: i32, x: f64, y: f64| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().vehicle_teleport(&name, x, y)
+                }) as Box<dyn FnMut(i32, i32, f64, f64) -> i32>
+            );
+        }
+
+        // vehicle_spawn
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_spawn",
+                Box::new(
+                    move |def_ptr: i32,
+                          def_len: i32,
+                          name_ptr: i32,
+                          name_len: i32,
+                          x: f64,
+                          y: f64|
+                          -> i32 {
+                        let (def, name) = {
+                            let mem = mem.borrow();
+                            let m = mem.as_ref().unwrap();
+                            (read_str(m, def_ptr, def_len), read_str(m, name_ptr, name_len))
+                        };
+                        host.borrow_mut().vehicle_spawn(&def, &name, x, y)
+                    },
+                ) as Box<dyn FnMut(i32, i32, i32, i32, f64, f64) -> i32>
+            );
+        }
+
+        // vehicle_goto
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_goto",
+                Box::new(move |ptr: i32, len: i32, tx: i32, ty: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().vehicle_goto(&name, tx, ty)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // vehicle_stop
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_stop",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().vehicle_stop(&name)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
         // get_camera
         {
             let host = host.clone();

@@ -14,7 +14,7 @@ use crate::archive::RomArchive;
 use crate::loader::AssetLoader;
 use crate::manifest::RomManifest;
 
-/// The five categories of bundleable resource.
+/// The six categories of bundleable resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Texture,
@@ -24,6 +24,8 @@ pub enum ResourceKind {
     Animation,
     /// Raw binary grid (tile / nav / height) data.
     Grid,
+    /// Wheeled-vehicle definition sidecar (`vehicle.json`).
+    Vehicle,
 }
 
 /// Name-keyed byte blobs, grouped by kind.
@@ -34,6 +36,7 @@ pub struct ResourceSet {
     code: BTreeMap<String, Vec<u8>>,
     animations: BTreeMap<String, Vec<u8>>,
     grids: BTreeMap<String, Vec<u8>>,
+    vehicles: BTreeMap<String, Vec<u8>>,
 }
 
 impl ResourceSet {
@@ -55,6 +58,7 @@ impl ResourceSet {
             + self.code.len()
             + self.animations.len()
             + self.grids.len()
+            + self.vehicles.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -79,6 +83,10 @@ impl ResourceSet {
 
     pub fn grids(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.grids
+    }
+
+    pub fn vehicles(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.vehicles
     }
 
     /// Build a resource set by reading manifest-declared resources out of a
@@ -121,6 +129,9 @@ impl ResourceSet {
         for entry in &manifest.grids {
             set.grids.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
+        for entry in &manifest.manifest.vehicles {
+            set.vehicles.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
+        }
         Ok(set)
     }
 
@@ -131,6 +142,7 @@ impl ResourceSet {
             ResourceKind::Code => &self.code,
             ResourceKind::Animation => &self.animations,
             ResourceKind::Grid => &self.grids,
+            ResourceKind::Vehicle => &self.vehicles,
         }
     }
 
@@ -141,6 +153,7 @@ impl ResourceSet {
             ResourceKind::Code => &mut self.code,
             ResourceKind::Animation => &mut self.animations,
             ResourceKind::Grid => &mut self.grids,
+            ResourceKind::Vehicle => &mut self.vehicles,
         }
     }
 }

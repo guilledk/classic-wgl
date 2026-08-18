@@ -117,6 +117,10 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `has_resource` | `(kind: i32, name_ptr, name_len) -> i32` | resource existence (0=texture, 1=font, 2=animation) |
 | `texture_size` | `(name_ptr, name_len, out_ptr) -> i32` | write a loaded texture's pixel size as two `f64` (`0` if not loaded) |
 | `find_path` | `(sx, sy, ex, ey, out_ptr, out_cap) -> i32` | A* over the nav mesh; writes little-endian `i32` `[x, y]` waypoint pairs, returns the waypoint count (`-1` if buffer too small) |
+| `vehicle_teleport` | `(name_ptr, name_len, x: f64, y: f64) -> i32` | reposition a wheeled vehicle (body + 4 wheels) and reset its physics |
+| `vehicle_goto` | `(name_ptr, name_len, tx: i32, ty: i32) -> i32` | set a vehicle's destination; the host runs A* and stores the waypoints |
+| `vehicle_stop` | `(name_ptr, name_len) -> i32` | stop a vehicle, clearing its movement path |
+| `vehicle_spawn` | `(def_ptr, def_len, name_ptr, name_len, x: f64, y: f64) -> i32` | spawn a vehicle of a declared definition at `(x, y)` |
 
 ### 3a. Bulk terrain imports (guest-driven map generation)
 

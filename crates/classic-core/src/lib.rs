@@ -15,7 +15,7 @@ pub mod quadtree;
 pub mod simplex_noise;
 
 use components::{
-    Animator, IsoAgent, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
+    Animator, IsoAgent, IsoSprite, IsoVehicle, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
 };
 
 pub use camera::Camera;
@@ -111,6 +111,17 @@ pub fn register_all_components() {
             subsumes: &[],
         },
         ComponentReg {
+            name: "IsoVehicle",
+            spawn: |b, v| {
+                let veh: IsoVehicle = serde_json::from_value(v)?;
+                b.add(veh);
+                Ok(())
+            },
+            dump: Some(dumper_isovehicle),
+            order: 37,
+            subsumes: &[],
+        },
+        ComponentReg {
             name: "IsometricNavMesh",
             spawn: |b, v| {
                 let n: NavMesh = serde_json::from_value(v)?;
@@ -194,6 +205,11 @@ fn dumper_isoagent(world: &hecs::World, entity: hecs::Entity) -> Option<serde_js
 fn dumper_animator(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let a = world.get::<&Animator>(entity).ok()?;
     serde_json::to_value(&*a).ok().map(|v| component_value("Animator", v))
+}
+
+fn dumper_isovehicle(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let v = world.get::<&IsoVehicle>(entity).ok()?;
+    serde_json::to_value(&*v).ok().map(|v| component_value("IsoVehicle", v))
 }
 
 fn dumper_navmesh(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {

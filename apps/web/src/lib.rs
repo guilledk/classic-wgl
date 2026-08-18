@@ -54,6 +54,7 @@ pub fn main() {
             ("demo", include_bytes!("../../../roms/out/demo.rom")),
             ("lunar", include_bytes!("../../../roms/out/lunar.rom")),
             ("moon", include_bytes!("../../../roms/out/lunar.rom")),
+            ("lrvtest", include_bytes!("../../../roms/out/lrvtest.rom")),
         ];
         let rom_bytes = classic_platform::resolve_rom(&rom, ROMS).expect("resolve ROM");
 

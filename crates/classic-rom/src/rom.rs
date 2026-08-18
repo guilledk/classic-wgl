@@ -83,6 +83,12 @@ impl Rom {
                 writer.write_all(bytes)?;
             }
         }
+        for entry in &self.manifest.manifest.vehicles {
+            if let Some(bytes) = self.resources.vehicles().get(&entry.name) {
+                writer.start_file(crate::rom_path(&entry.src), opts)?;
+                writer.write_all(bytes)?;
+            }
+        }
 
         Ok(writer.finish()?.into_inner())
     }

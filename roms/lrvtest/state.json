@@ -1,0 +1,85 @@
+{
+    "entities": {
+        "camController": {
+            "components": []
+        },
+        "tilemap": {
+            "components": [
+                {
+                    "type": "Tilemap",
+                    "position": [
+                        0,
+                        0,
+                        0
+                    ],
+                    "scale": [
+                        45,
+                        45,
+                        1
+                    ],
+                    "size_x": 48,
+                    "size_y": 48,
+                    "tile_set": "tileSet",
+                    "tile_pixel_size": [
+                        32,
+                        32
+                    ],
+                    "max_tile": 32,
+                    "tiles_grid": "lrvtest.tiles",
+                    "heights_grid": "lrvtest.heights"
+                },
+                {
+                    "type": "Role",
+                    "value": "tilemap"
+                }
+            ]
+        },
+        "cursor": {
+            "components": [
+                {
+                    "type": "Sprite",
+                    "position": [
+                        0,
+                        0,
+                        -10000
+                    ],
+                    "scale": [
+                        2,
+                        2,
+                        1
+                    ],
+                    "texture": "cursor",
+                    "ignore_cam": true,
+                    "frame": 0,
+                    "tile_set_size": [
+                        1,
+                        1
+                    ],
+                    "anchor": [
+                        0,
+                        0
+                    ]
+                },
+                {
+                    "type": "Role",
+                    "value": "cursor"
+                }
+            ]
+        },
+        "tilemapNavigation": {
+            "components": [
+                {
+                    "type": "IsometricNavMesh",
+                    "map_entity": "tilemap",
+                    "size_x": 48,
+                    "size_y": 48,
+                    "data_grid": "lrvtest.nav"
+                },
+                {
+                    "type": "Role",
+                    "value": "nav_mesh"
+                }
+            ]
+        }
+    }
+}

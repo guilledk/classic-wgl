@@ -119,6 +119,10 @@ const OP_COMMIT_TERRAIN: i32 = 68;
 const OP_ISO_TO_SCREEN: i32 = 69;
 const OP_SET_GRID: i32 = 70;
 const OP_START_ANIM: i32 = 71;
+const OP_VEHICLE_TELEPORT: i32 = 72;
+const OP_VEHICLE_GOTO: i32 = 73;
+const OP_VEHICLE_STOP: i32 = 74;
+const OP_VEHICLE_SPAWN: i32 = 75;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -275,6 +279,10 @@ impl WorkerWasmRuntime {
                     (cells.len() as f64, Some(bytes))
                 }
             }
+            OP_VEHICLE_TELEPORT => (host.vehicle_teleport(&strs[0], nf(0), nf(1)) as f64, None),
+            OP_VEHICLE_GOTO => (host.vehicle_goto(&strs[0], ni(0), ni(1)) as f64, None),
+            OP_VEHICLE_STOP => (host.vehicle_stop(&strs[0]) as f64, None),
+            OP_VEHICLE_SPAWN => (host.vehicle_spawn(&strs[0], &strs[1], nf(0), nf(1)) as f64, None),
             OP_GET_CAMERA => {
                 let (x, y, s) = host.get_camera();
                 (1.0, Some(enc_f64s(&[x, y, s])))

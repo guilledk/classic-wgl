@@ -176,6 +176,31 @@ fn guest_find_path_import_is_wired() {
 }
 
 #[test]
+fn guest_vehicle_imports_are_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_teleport" (func $t (param i32 i32 f64 f64) (result i32)))
+            (import "env" "vehicle_goto" (func $g (param i32 i32 i32 i32) (result i32)))
+            (import "env" "vehicle_stop" (func $s (param i32 i32) (result i32)))
+            (import "env" "vehicle_spawn" (func $sp (param i32 i32 i32 i32 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "lrv")
+            (data (i32.const 16) "rover")
+            (func (export "update") (param f64)
+                (drop (call $sp (i32.const 0) (i32.const 3) (i32.const 16) (i32.const 5)
+                    (f64.const 1.0) (f64.const 1.0)))
+                (drop (call $t (i32.const 16) (i32.const 5) (f64.const 1.0) (f64.const 1.0)))
+                (drop (call $g (i32.const 16) (i32.const 5) (i32.const 2) (i32.const 0)))
+                (drop (call $s (i32.const 16) (i32.const 5)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
+}
+
+#[test]
 fn guest_was_key_pressed_triggers_action() {
     with_each_runtime(
         r#"(module

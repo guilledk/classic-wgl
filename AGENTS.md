@@ -56,7 +56,7 @@ crates/
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
-                          golden.rs (traces), env_config.rs
+                          golden.rs (traces), env_config.rs, vehicle.rs (IsoVehicle sim + spawn API)
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
   classic-guest/          WASM guest runtime: GuestRuntime trait, WasmiRuntime + WasmtimeRuntime
@@ -94,8 +94,9 @@ plans/
   There is no system scheduler; update logic lives in `Engine::on_update(FnMut(&mut Engine))`
   closures registered by `init_*` prefabs.
 - **The `Engine` struct** (`crates/classic-engine/src/lib.rs`) is the generic engine core:
-  `World`, `PhysicsProvider`, `Camera`, `Time`, `InputState`, `Gfx`, `UIManager`, and
-  tilemap/nav plumbing.  It holds **no demo state** — editor/widget handles and light
+  `World`, `PhysicsProvider`, `Camera`, `Time`, `InputState`, `Gfx`, `UIManager`, a
+  `vehicles: HashMap<String, VehicleDef>` registry, and tilemap/nav plumbing.  It holds
+  **no demo state** — editor/widget handles and light
   presets live in `classic-demo`'s `DemoState`.  `Engine::frame(input, vw, vh, delta)` runs
   once per render frame: physics → pre-update hooks → update closures → test runner →
   build render list → draw sorted items → overlay hooks.
@@ -126,6 +127,14 @@ plans/
 - **Isometric/pathfinding**: `classic-core/src/tilemap.rs` builds the 3D tilemap mesh;
   `classic-core/src/pathfinder.rs` implements A* (single-threaded, no worker — the TS
   Web Worker pattern was dropped).  See `classic-iso` skill.
+- **Wheeled vehicles**: `classic-engine/src/vehicle.rs` implements the `IsoVehicle`
+  system — `spawn_vehicle` assembles a body + 4 wheel `IsoSprite`s from a
+  `VehicleDef` sidecar (per-direction ground-origin anchors emitted by the Blender
+  exporter), and `update_vehicles` runs a point-mass moon-gravity jump, per-wheel
+  suspension, and an underdamped pitch/roll spring each frame.  Guests drive vehicles
+  through the `vehicle_spawn`/`vehicle_teleport`/`vehicle_goto`/`vehicle_stop` host
+  API.  See `classic-ecs` (`IsoVehicle` component) and `classic-iso` (pitch/roll
+  frame layout).
 - **Procedural terrain**: `classic-terrain` is the *open* noise toolkit; the
   `lunar` map algorithm (a 400x400 surface of layered simplex noise plus an
   age-ordered meteorite crater field, slope relaxation and stamped landing
@@ -171,7 +180,10 @@ plans/
   guarantees — bounded slopes, flat landing pads, buildable area, and mutual
   reachability of every spawn pair (checked with the engine's own A*) across
   several seeds — rather than pixel output.
-- **classic-engine** and **classic-gfx** have no unit tests (no mock GL — deferred).
+- **classic-engine** unit tests live in the `vehicle.rs` `#[cfg(test)]` module
+  (spawn/teleport/goto/stop, pitch/roll quantization + spring, wheel offset
+  derivation) using `Engine::new_for_test()` — no GL needed.  **classic-gfx**
+  still has no unit tests (no mock GL — deferred).
 - **CLASSIC_TEST e2e**: `CLASSIC_TEST=1 CLASSIC_FRAMES=60 cargo run -p classic-desktop`.
   One scenario (12 assertions) testing height blend/set, tile painting, zero-delta,
   menu text centering, and text demo visibility.  `build_test_scenario(name)` is defined
