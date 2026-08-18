@@ -33,23 +33,26 @@ impl Ord for Key {
 /// A single cell coordinate on the nav grid.
 pub type GridCell = (i32, i32);
 
-/// Run 8-directional A* from `from` to `to` on a grid of `size_x × size_y`
-/// cells.  `nav_data[i]` must be 1 (walkable) or 0 (blocked).
+/// Core 8-directional A* over a `size_x × size_y` grid.  `step_cost(current,
+/// neighbor)` returns `Some(cost)` when the move is allowed and `None` when
+/// blocked.  Neighbours are the 8 surrounding cells (bounds-checked here).
 ///
-/// Returns the full path (including `from` and `to`) as vec of integer
-/// cell coordinates, or `None` if no path exists.
-pub fn find_path(
-    nav_data: &[i32],
+/// Returns the full path (including `from` and `to`) or `None` when no route
+/// exists.  The heuristic is admissible for 8-directional grids with cardinal
+/// cost 1.0 and diagonal cost √2; callers that add a cost multiplier (e.g. a
+/// jump penalty) must keep it ≥ 1.0 so the heuristic stays admissible.
+fn a_star<F>(
     size_x: i32,
     size_y: i32,
-    mut from: GridCell,
-    mut to: GridCell,
-) -> Option<Vec<GridCell>> {
-    // Clamp targets to valid range.
-    from.0 = from.0.clamp(0, size_x - 1);
-    from.1 = from.1.clamp(0, size_y - 1);
-    to.0 = to.0.clamp(0, size_x - 1);
-    to.1 = to.1.clamp(0, size_y - 1);
+    from: GridCell,
+    to: GridCell,
+    mut step_cost: F,
+) -> Option<Vec<GridCell>>
+where
+    F: FnMut(GridCell, GridCell) -> Option<f32>,
+{
+    let from = (from.0.clamp(0, size_x - 1), from.1.clamp(0, size_y - 1));
+    let to = (to.0.clamp(0, size_x - 1), to.1.clamp(0, size_y - 1));
 
     let flatten = |x: i32, y: i32| -> usize { (x + y * size_x) as usize };
 
@@ -93,11 +96,8 @@ pub fn find_path(
                 continue;
             }
             let n_idx = flatten(nx, ny);
-            if nav_data[n_idx] == 0 {
-                continue;
-            }
+            let Some(step_cost) = step_cost(current, (nx, ny)) else { continue };
 
-            let step_cost = if dx != 0 && dy != 0 { (2.0_f32).sqrt() } else { 1.0 };
             let tentative_g = g_cost[cur_idx].min(inf) + step_cost;
 
             if tentative_g < g_cost[n_idx] {
@@ -114,6 +114,240 @@ pub fn find_path(
     }
 
     None
+}
+
+/// Run 8-directional A* from `from` to `to` on a grid of `size_x × size_y`
+/// cells.  `nav_data[i]` must be 1 (walkable) or 0 (blocked).
+///
+/// Returns the full path (including `from` and `to`) as vec of integer
+/// cell coordinates, or `None` if no path exists.
+pub fn find_path(
+    nav_data: &[i32],
+    size_x: i32,
+    size_y: i32,
+    from: GridCell,
+    to: GridCell,
+) -> Option<Vec<GridCell>> {
+    a_star(size_x, size_y, from, to, |current, neighbour| {
+        let idx = (neighbour.0 + neighbour.1 * size_x) as usize;
+        if nav_data[idx] == 0 {
+            return None;
+        }
+        Some(if neighbour.0 != current.0 && neighbour.1 != current.1 {
+            (2.0_f32).sqrt()
+        } else {
+            1.0
+        })
+    })
+}
+
+/// Erode a walkability grid by a footprint of integer tile offsets: a cell is
+/// passable in the output only when every footprint offset, relative to that
+/// cell, is walkable in the input.
+///
+/// This is the standard "obstacle inflation" pass for multi-tile agents — the
+/// agent is treated as a point on the eroded grid, so the existing 1×1 A* runs
+/// unchanged.  `footprint` is a slice of `(dx, dy)` offsets from the anchor
+/// cell; a 1×1 agent uses `&[(0, 0)]`, a 3×3 vehicle uses all 9 offsets in
+/// `-1..=1 × -1..=1`.
+pub fn erode_for_footprint(
+    nav_data: &[i32],
+    size_x: i32,
+    size_y: i32,
+    footprint: &[GridCell],
+) -> Vec<i32> {
+    let total = (size_x * size_y) as usize;
+    let mut eroded = vec![1_i32; total];
+
+    for y in 0..size_y {
+        for x in 0..size_x {
+            let mut passable = true;
+            for &(ox, oy) in footprint {
+                let cx = x + ox;
+                let cy = y + oy;
+                if cx < 0 || cx >= size_x || cy < 0 || cy >= size_y {
+                    passable = false;
+                    break;
+                }
+                let idx = (cx + cy * size_x) as usize;
+                if nav_data[idx] == 0 {
+                    passable = false;
+                    break;
+                }
+            }
+            eroded[(x + y * size_x) as usize] = if passable { 1 } else { 0 };
+        }
+    }
+
+    eroded
+}
+
+/// Run footprint-aware A*: erode `nav_data` by `footprint` (see
+/// [`erode_for_footprint`]) then run the standard 1×1 search on the result.
+///
+/// The `from` cell is exempted from the erosion check so an already-placed
+/// vehicle can path *out* of a spot whose footprint barely overlaps an
+/// obstacle; the goal must still be reachable with the full footprint.
+pub fn find_path_for_footprint(
+    nav_data: &[i32],
+    size_x: i32,
+    size_y: i32,
+    from: GridCell,
+    to: GridCell,
+    footprint: &[GridCell],
+) -> Option<Vec<GridCell>> {
+    let mut eroded = erode_for_footprint(nav_data, size_x, size_y, footprint);
+    // Relax the start: the agent is already there, so only neighbour cells are
+    // held to the footprint rule during expansion.
+    let from_idx = (from.0.clamp(0, size_x - 1) + from.1.clamp(0, size_y - 1) * size_x) as usize;
+    if let Some(cell) = eroded.get_mut(from_idx) {
+        *cell = 1;
+    }
+    find_path(&eroded, size_x, size_y, from, to)
+}
+
+/// Derive a vehicle-specific slope-feasibility walkability grid from a vertex
+/// height grid: `1` where the vehicle can stand (i.e. *some* heading keeps its
+/// pitch/roll within limits), `0` otherwise.
+///
+/// Unlike a per-tile gradient (which flags a flat tile sitting next to a cliff
+/// because one corner is on the cliff top), this samples the terrain at the
+/// vehicle's wheel positions — `±wheelbase/2` front-rear and `±track/2`
+/// left-right — in each of the 8 headings, using the same bilinear surface the
+/// simulation drives on.  A tile is walkable when at least one heading keeps
+/// `|pitch| ≤ max_pitch` and `|roll| ≤ max_roll`.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_vehicle_slope_nav(
+    heights: &[f32],
+    size_x: i32,
+    size_y: i32,
+    height_scale: f32,
+    tile_scale: f32,
+    wheelbase_px: f32,
+    track_px: f32,
+    max_pitch: f32,
+    max_roll: f32,
+) -> Vec<i32> {
+    let mut out = vec![0i32; (size_x * size_y) as usize];
+    if wheelbase_px <= 0.0 || track_px <= 0.0 {
+        return out;
+    }
+    let half_wb = (wheelbase_px / tile_scale.max(1e-6)) * 0.5;
+    let half_tr = (track_px / tile_scale.max(1e-6)) * 0.5;
+    let max_pitch_tan = max_pitch.tan();
+    let max_roll_tan = max_roll.tan();
+
+    for y in 0..size_y {
+        for x in 0..size_x {
+            let cx = x as f32 + 0.5;
+            let cy = y as f32 + 0.5;
+            let mut walkable = false;
+            for d in 0..8 {
+                let angle = d as f32 * std::f32::consts::FRAC_PI_4;
+                let (hx, hy) = (angle.cos(), angle.sin());
+                let (lx, ly) = (-hy, hx);
+                let front = crate::tilemap::bilinear_height(
+                    heights,
+                    size_x,
+                    size_y,
+                    cx + hx * half_wb,
+                    cy + hy * half_wb,
+                );
+                let rear = crate::tilemap::bilinear_height(
+                    heights,
+                    size_x,
+                    size_y,
+                    cx - hx * half_wb,
+                    cy - hy * half_wb,
+                );
+                let left = crate::tilemap::bilinear_height(
+                    heights,
+                    size_x,
+                    size_y,
+                    cx + lx * half_tr,
+                    cy + ly * half_tr,
+                );
+                let right = crate::tilemap::bilinear_height(
+                    heights,
+                    size_x,
+                    size_y,
+                    cx - lx * half_tr,
+                    cy - ly * half_tr,
+                );
+                let pitch = (front - rear).abs() * height_scale / wheelbase_px;
+                let roll = (left - right).abs() * height_scale / track_px;
+                if pitch <= max_pitch_tan && roll <= max_roll_tan {
+                    walkable = true;
+                    break;
+                }
+            }
+            out[(y * size_x + x) as usize] = walkable as i32;
+        }
+    }
+    out
+}
+
+/// Footprint-, slope- and jump-aware A* for a wheeled vehicle.
+///
+/// `walkable` is the combined grid (`structural` AND slope-feasible): `1` = a
+/// normal walk.  `structural` is obstacle-free walkability, used only to check
+/// that a jump's landing zone is not inside an obstacle.  `heights` is the
+/// vertex grid `(size_x+1) × (size_y+1)`.  A *downward* step whose drop (in
+/// pixels, `drop_units · height_scale`) is within `safe_fall_px` is allowed as
+/// a jump even when `walkable` marks the target blocked (a small cliff the
+/// suspension can absorb), provided the target is lower and obstacle-free; its
+/// cost is scaled by `jump_cost` (≥ 1.0 discourages jumps).  `safe_fall_px ≤ 0`
+/// disables jumps.
+#[allow(clippy::too_many_arguments)]
+pub fn find_path_for_footprint_with_jumps(
+    walkable: &[i32],
+    structural: &[i32],
+    heights: &[f32],
+    size_x: i32,
+    size_y: i32,
+    from: GridCell,
+    to: GridCell,
+    footprint: &[GridCell],
+    height_scale: f32,
+    safe_fall_px: f32,
+    jump_cost: f32,
+) -> Option<Vec<GridCell>> {
+    let mut walk_eroded = erode_for_footprint(walkable, size_x, size_y, footprint);
+    let struct_eroded = if safe_fall_px > 0.0 {
+        erode_for_footprint(structural, size_x, size_y, footprint)
+    } else {
+        Vec::new()
+    };
+    // Relax the start: the agent is already there, so only neighbour cells are
+    // held to the footprint rule during expansion.
+    let from_idx = (from.0.clamp(0, size_x - 1) + from.1.clamp(0, size_y - 1) * size_x) as usize;
+    if let Some(cell) = walk_eroded.get_mut(from_idx) {
+        *cell = 1;
+    }
+
+    let vw = size_x as usize + 1;
+    let cell_height = |x: i32, y: i32| -> f32 {
+        let i = y as usize * vw + x as usize;
+        (heights[i] + heights[i + 1] + heights[i + vw] + heights[i + vw + 1]) * 0.25
+    };
+
+    a_star(size_x, size_y, from, to, |current, neighbour| {
+        let idx = (neighbour.0 + neighbour.1 * size_x) as usize;
+        let diagonal = neighbour.0 != current.0 && neighbour.1 != current.1;
+        let base = if diagonal { (2.0_f32).sqrt() } else { 1.0 };
+
+        if walk_eroded[idx] == 1 {
+            return Some(base);
+        }
+        if safe_fall_px > 0.0 && struct_eroded[idx] == 1 {
+            let drop = (cell_height(current.0, current.1) - cell_height(neighbour.0, neighbour.1))
+                * height_scale;
+            if drop > 0.0 && drop <= safe_fall_px {
+                return Some(base * jump_cost);
+            }
+        }
+        None
+    })
 }
 
 /// Chebyshev-approximation heuristic (admissible for 8-directional grid).
@@ -255,5 +489,244 @@ mod tests {
         let grid = simple_grid();
         let path = find_path(&grid, 5, 5, (2, 2), (2, 2)).expect("path");
         assert_eq!(path, vec![(2, 2), (2, 2)]);
+    }
+
+    fn footprint_3x3() -> Vec<GridCell> {
+        let mut fp = Vec::new();
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                fp.push((dx, dy));
+            }
+        }
+        fp
+    }
+
+    #[test]
+    fn footprint_point_equals_plain_a_star() {
+        let mut grid = simple_grid();
+        grid[6] = 0; // (1,1) blocked
+        let plain = find_path(&grid, 5, 5, (0, 0), (4, 4)).unwrap();
+        let foot = find_path_for_footprint(&grid, 5, 5, (0, 0), (4, 4), &[(0, 0)]).unwrap();
+        assert_eq!(plain, foot);
+    }
+
+    #[test]
+    fn three_wide_corridor_lets_3x3_through() {
+        // 7x7 grid: block everything left of column 1 and right of column 3,
+        // leaving an exactly-3-wide vertical corridor (columns 1..=3) that a
+        // 3x3 vehicle fits through along x=2.
+        let w = 7;
+        let h = 7;
+        let mut grid = vec![1_i32; (w * h) as usize];
+        for y in 0..h {
+            grid[(y * w) as usize] = 0;
+            grid[(4 + y * w) as usize] = 0;
+            grid[(5 + y * w) as usize] = 0;
+            grid[(6 + y * w) as usize] = 0;
+        }
+        let fp = footprint_3x3();
+        let path = find_path_for_footprint(&grid, w, h, (2, 1), (2, 5), &fp);
+        assert!(path.is_some(), "3x3 should path a 3-wide corridor");
+    }
+
+    #[test]
+    fn two_wide_corridor_blocks_3x3() {
+        // Same wall layout but a 2-wide corridor (columns 2..=3) — a 3x3
+        // vehicle cannot fit, so no path exists.
+        let w = 7;
+        let h = 7;
+        let mut grid = vec![1_i32; (w * h) as usize];
+        for y in 0..h {
+            grid[(y * w) as usize] = 0;
+            grid[(1 + y * w) as usize] = 0;
+            grid[(4 + y * w) as usize] = 0;
+            grid[(5 + y * w) as usize] = 0;
+            grid[(6 + y * w) as usize] = 0;
+        }
+        let fp = footprint_3x3();
+        let path = find_path_for_footprint(&grid, w, h, (2, 0), (3, 6), &fp);
+        assert!(path.is_none(), "3x3 must not path a 2-wide corridor");
+    }
+
+    #[test]
+    fn footprint_blocks_diagonal_corner_cut() {
+        // A 1x1 agent can cut the diagonal gap between two blocked cells; a 3x3
+        // footprint cannot (it would overlap a blocked cell).
+        let w: i32 = 5;
+        let h: i32 = 5;
+        let mut grid = vec![1_i32; (w * h) as usize];
+        grid[w as usize] = 0; // (0,1) blocked
+        grid[1] = 0; // (1,0) blocked
+
+        // 1x1 can squeeze diagonally from (0,0) to (2,2).
+        assert!(find_path(&grid, w, h, (0, 0), (2, 2)).is_some());
+        // 3x3 anchored at (0,0) overlaps blocked cells and cannot.
+        let fp = footprint_3x3();
+        assert!(find_path_for_footprint(&grid, w, h, (0, 0), (2, 2), &fp).is_none());
+    }
+
+    /// A vertex height grid of `(size+1)^2`, `h = slope * x`.
+    fn ramp_heights(size: i32, slope: f32) -> Vec<f32> {
+        let n = (size + 1) as usize;
+        let mut h = vec![0.0f32; n * n];
+        for y in 0..n {
+            for x in 0..n {
+                h[y * n + x] = slope * x as f32;
+            }
+        }
+        h
+    }
+
+    /// Slope-nav params for a vehicle with ~2-tile wheelbase, 1-tile track,
+    /// 20° pitch/roll limits (matching the LRV tuning).
+    fn slope_params() -> (f32, f32, f32, f32) {
+        (45.0 * 2.0, 45.0 * 1.0, 20.0f32.to_radians(), 20.0f32.to_radians())
+    }
+
+    #[test]
+    fn vehicle_slope_nav_flat_is_all_walkable() {
+        let size = 4;
+        let n = (size + 1) as usize;
+        let heights = vec![1.0f32; n * n];
+        let (wb, tr, pitch, roll) = slope_params();
+        let nav = derive_vehicle_slope_nav(&heights, size, size, 32.0, 45.0, wb, tr, pitch, roll);
+        assert!(nav.iter().all(|&v| v == 1));
+    }
+
+    #[test]
+    fn vehicle_slope_nav_allows_gentle_and_blocks_steep() {
+        let size = 16;
+        // A 0.375 units/tile ramp is within 20° over a 2-tile wheelbase.
+        let gentle = ramp_heights(size, 0.375);
+        let (wb, tr, pitch, roll) = slope_params();
+        let nav = derive_vehicle_slope_nav(&gentle, size, size, 32.0, 45.0, wb, tr, pitch, roll);
+        assert!(nav.iter().all(|&v| v == 1), "0.375/tile should be drivable");
+
+        // A 1.0 units/tile ramp exceeds 20° (pitch = atan(1·32/45) ≈ 35°).
+        let steep = ramp_heights(size, 1.0);
+        let nav = derive_vehicle_slope_nav(&steep, size, size, 32.0, 45.0, wb, tr, pitch, roll);
+        assert!(nav.iter().all(|&v| v == 0), "1.0/tile should exceed the pitch limit");
+    }
+
+    #[test]
+    fn vehicle_slope_nav_keeps_cliff_adjacent_flat_walkable() {
+        // A 2-unit cliff at x=2: high plateau (x<2) drops to low (x>=2).  The
+        // flat tile at x=2 (beside the cliff) must stay walkable — the vehicle
+        // stands on flat ground even though one tile away is a cliff.
+        let w = 8;
+        let h = 8;
+        let n = (w + 1) as usize;
+        let mut heights = vec![0.0f32; n * n];
+        for y in 0..n {
+            for x in 0..n {
+                heights[y * n + x] = if x < 2 { 2.0 } else { 0.0 };
+            }
+        }
+        let (wb, tr, pitch, roll) = slope_params();
+        let nav = derive_vehicle_slope_nav(&heights, w, h, 32.0, 45.0, wb, tr, pitch, roll);
+        // The flat tile just past the cliff (x=2) is walkable.
+        assert_eq!(nav[(2 + 4 * w) as usize], 1, "flat tile beside the cliff should be walkable");
+        // The high plateau (x=0) is also flat and walkable.
+        assert_eq!(nav[(4 * w) as usize], 1);
+    }
+
+    /// A 5x5 scene with a 2-unit cliff between a high plateau (x<2) and a low
+    /// plateau (x>=2).  `walkable` marks the cliff-face column (x=1) blocked;
+    /// `structural` is all-walkable.
+    fn cliff_grids() -> (Vec<i32>, Vec<i32>, Vec<f32>) {
+        let w = 5;
+        let h = 5;
+        let structural = vec![1_i32; (w * h) as usize];
+        let mut walkable = structural.clone();
+        for y in 0..h {
+            walkable[(1 + y * w) as usize] = 0; // cliff face
+        }
+        let n = (w + 1) as usize;
+        let mut heights = vec![0.0f32; n * n];
+        for y in 0..n {
+            for x in 0..n {
+                heights[y * n + x] = if x < 2 { 2.0 } else { 0.0 };
+            }
+        }
+        (walkable, structural, heights)
+    }
+
+    #[test]
+    fn jump_crosses_a_small_cliff() {
+        let (walkable, structural, heights) = cliff_grids();
+        // 1-unit drop at height_scale 32 = 32 px; safe_fall 64 px allows it.
+        let path = find_path_for_footprint_with_jumps(
+            &walkable,
+            &structural,
+            &heights,
+            5,
+            5,
+            (0, 2),
+            (4, 2),
+            &[(0, 0)],
+            32.0,
+            64.0,
+            1.3,
+        );
+        assert!(path.is_some(), "should jump down the small cliff");
+    }
+
+    #[test]
+    fn no_jump_when_safe_fall_disabled() {
+        let (walkable, structural, heights) = cliff_grids();
+        let path = find_path_for_footprint_with_jumps(
+            &walkable,
+            &structural,
+            &heights,
+            5,
+            5,
+            (0, 2),
+            (4, 2),
+            &[(0, 0)],
+            32.0,
+            0.0,
+            1.3,
+        );
+        assert!(path.is_none(), "safe_fall 0 disables jumps");
+    }
+
+    #[test]
+    fn no_jump_when_drop_too_large() {
+        let (walkable, structural, heights) = cliff_grids();
+        // 1-unit drop = 32 px exceeds a 16 px safe fall.
+        let path = find_path_for_footprint_with_jumps(
+            &walkable,
+            &structural,
+            &heights,
+            5,
+            5,
+            (0, 2),
+            (4, 2),
+            &[(0, 0)],
+            32.0,
+            16.0,
+            1.3,
+        );
+        assert!(path.is_none(), "drop larger than safe_fall must not jump");
+    }
+
+    #[test]
+    fn no_jump_upward() {
+        let (walkable, structural, heights) = cliff_grids();
+        // Climbing the cliff is a negative drop — never a jump.
+        let path = find_path_for_footprint_with_jumps(
+            &walkable,
+            &structural,
+            &heights,
+            5,
+            5,
+            (4, 2),
+            (0, 2),
+            &[(0, 0)],
+            32.0,
+            64.0,
+            1.3,
+        );
+        assert!(path.is_none(), "cannot jump uphill");
     }
 }

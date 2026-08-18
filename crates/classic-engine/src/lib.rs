@@ -161,6 +161,10 @@ pub struct Engine {
     sdf_text_gpu: HashMap<hecs::Entity, SdfTextGpu>,
     last_vw: f32,
     last_vh: f32,
+    /// Cached slope-feasibility grid, keyed by `(nav_version, slope params)`.
+    /// Recomputed lazily on terrain rebuild / a different vehicle geometry.
+    /// Single-slot (the demo has one vehicle); extend to a map for many.
+    slope_nav_cache: Option<(u64, [u32; 4], Vec<i32>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -259,6 +263,7 @@ impl Engine {
             sdf_text_gpu: HashMap::new(),
             last_vw: 0.0,
             last_vh: 0.0,
+            slope_nav_cache: None,
         }
     }
 
@@ -1017,6 +1022,137 @@ impl Engine {
         let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
         let nav_i32: Vec<i32> = nav.data.iter().map(|&v| v as i32).collect();
         pathfinder::find_path(&nav_i32, nav.size_x, nav.size_y, from, to)
+    }
+
+    /// Footprint-aware A* over the nav mesh: treat the moving agent as a
+    /// multi-tile object by eroding the walkability grid by `footprint` (a set
+    /// of integer tile offsets from the anchor cell) before searching.  Used by
+    /// `vehicle_goto`; the humanoid `IsoAgent` keeps the plain [`find_path`].
+    pub fn find_path_for_footprint(
+        &self,
+        from: (i32, i32),
+        to: (i32, i32),
+        footprint: &[(i32, i32)],
+    ) -> Option<Vec<(i32, i32)>> {
+        let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
+        let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
+        let nav_i32: Vec<i32> = nav.data.iter().map(|&v| v as i32).collect();
+        pathfinder::find_path_for_footprint(&nav_i32, nav.size_x, nav.size_y, from, to, footprint)
+    }
+
+    /// Footprint-, slope- and jump-aware A* for a wheeled vehicle.
+    ///
+    /// Combines the structural nav (`NavMesh.data`) with a slope-feasibility
+    /// grid derived from the tilemap heights sampled at the vehicle's wheel
+    /// positions (`pitch_max`/`roll_max` limits over `wheelbase_px`/`track_px`),
+    /// then runs A* with downward jump edges: a drop within `safe_fall_px`
+    /// (suspension absorbs it) is routable even where the slope grid blocks, at
+    /// `jump_cost`× the normal cost.  `safe_fall_px <= 0` disables jumps.
+    #[allow(clippy::too_many_arguments)]
+    pub fn find_vehicle_path(
+        &mut self,
+        from: (i32, i32),
+        to: (i32, i32),
+        footprint: &[(i32, i32)],
+        pitch_max: f32,
+        roll_max: f32,
+        wheelbase_px: f32,
+        track_px: f32,
+        safe_fall_px: f32,
+        jump_cost: f32,
+    ) -> Option<Vec<(i32, i32)>> {
+        // Extract everything out of the world up front so the slope cache can
+        // be mutated without holding a `World` borrow.
+        let (nav_data, nav_size_x, nav_size_y) = {
+            let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
+            let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
+            (nav.data.clone(), nav.size_x, nav.size_y)
+        };
+        let (heights, height_scale, tile_scale, size_x, size_y) = {
+            let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+            let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+            (tm.height_data.clone(), tm.height_scale, tm.scale.x, tm.size_x, tm.size_y)
+        };
+
+        let structural: Vec<i32> = nav_data.iter().map(|&v| v as i32).collect();
+        let slope = self.cached_slope_nav(
+            &heights,
+            size_x,
+            size_y,
+            height_scale,
+            tile_scale,
+            wheelbase_px,
+            track_px,
+            pitch_max,
+            roll_max,
+        );
+        let walkable: Vec<i32> =
+            structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
+
+        let result = pathfinder::find_path_for_footprint_with_jumps(
+            &walkable,
+            &structural,
+            &heights,
+            nav_size_x,
+            nav_size_y,
+            from,
+            to,
+            footprint,
+            height_scale,
+            safe_fall_px,
+            jump_cost,
+        );
+        classic_core::cl_info!(
+            classic_core::instrument::Chan::Path,
+            "find_vehicle_path {} -> {}: walkable={}/{}, footprint={} tiles, pitch={:.3}rad fall={}px, found={}",
+            format!("{from:?}"),
+            format!("{to:?}"),
+            walkable.iter().filter(|&&v| v == 1).count(),
+            walkable.len(),
+            footprint.len(),
+            pitch_max.min(roll_max),
+            safe_fall_px,
+            result.is_some(),
+        );
+        result
+    }
+
+    /// The slope-feasibility grid for a vehicle, cached per `nav_version` and
+    /// slope params (recomputed only when the terrain or the vehicle geometry
+    /// changes).
+    #[allow(clippy::too_many_arguments)]
+    fn cached_slope_nav(
+        &mut self,
+        heights: &[f32],
+        size_x: i32,
+        size_y: i32,
+        height_scale: f32,
+        tile_scale: f32,
+        wheelbase_px: f32,
+        track_px: f32,
+        pitch_max: f32,
+        roll_max: f32,
+    ) -> Vec<i32> {
+        let key =
+            [pitch_max.to_bits(), roll_max.to_bits(), wheelbase_px.to_bits(), track_px.to_bits()];
+        if let Some((ver, k, grid)) = &self.slope_nav_cache {
+            if *ver == self.nav_version && *k == key {
+                return grid.clone();
+            }
+        }
+        let grid = pathfinder::derive_vehicle_slope_nav(
+            heights,
+            size_x,
+            size_y,
+            height_scale,
+            tile_scale,
+            wheelbase_px,
+            track_px,
+            pitch_max,
+            roll_max,
+        );
+        self.slope_nav_cache = Some((self.nav_version, key, grid.clone()));
+        grid
     }
 
     /// Rebuild the shared nav snapshot from the live `NavMesh` component and
