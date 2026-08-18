@@ -15,10 +15,6 @@ members = [
     "apps/web",
     "xtask",
 ]
-# ROM guest crates are standalone #![no_std] cdylibs built only for
-# wasm32-unknown-unknown (see the `xtask` guests subcommand); they are not host
-# code and must not be compiled by the default workspace build.
-exclude = ["guest"]
 
 [workspace.package]
 version = "0.1.0-alpha.0"
@@ -84,6 +80,7 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Element",
     "HtmlCanvasElement",
+    "HtmlDivElement",
     "WebGl2RenderingContext",
     "WebGlProgram",
     "WebGlShader",
@@ -100,6 +97,9 @@ web-sys = { version = "0.3", features = [
     "XmlHttpRequest",
     "XmlHttpRequestEventTarget",
     "XmlHttpRequestResponseType",
+    "Response",
+    "Cache",
+    "CacheStorage",
 ] }
 js-sys = "0.3"
 gloo-net = "0.6"

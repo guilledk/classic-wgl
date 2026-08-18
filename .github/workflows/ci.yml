@@ -19,13 +19,7 @@ jobs:
               with:
                   components: rustfmt, clippy
             - run: cargo fmt --all -- --check
-            - run: cargo fmt --manifest-path guest/demo-guest/Cargo.toml -- --check
-            - run: cargo fmt --manifest-path guest/lunar-guest/Cargo.toml -- --check
-            - run: cargo fmt --manifest-path guest/lrv-guest/Cargo.toml -- --check
             - run: cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-guest -p classic-demo --all-targets -- -D warnings
-            - run: cargo clippy --manifest-path guest/demo-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-            - run: cargo clippy --manifest-path guest/lunar-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-            - run: cargo clippy --manifest-path guest/lrv-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
     test:
         name: test
@@ -48,13 +42,11 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
-              with:
-                  submodules: recursive
-                  token: ${{ secrets.GH_PAT }}
-            # rust-toolchain precedes `cargo xtask all`: it compiles the ROM
-            # guest crates to wasm32 and generates the SDF atlas.
+            # ROMs are built by the classic-roms repo and published to an R2
+            # bucket (classic-roms.com); fetch the current set instead of
+            # building assets/guests from the private submodule.
             - uses: dtolnay/rust-toolchain@stable
-            - run: cargo xtask all
+            - run: cargo xtask fetch-roms
             - run: sudo apt-get update -qq && sudo apt-get install -y -qq libegl1-mesa-dev libgl1-mesa-dri libgbm-dev libx11-dev
             - run: cargo build -p classic-desktop
             - name: demo scene (e2e assertions + golden trace)

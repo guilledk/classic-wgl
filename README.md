@@ -16,8 +16,8 @@ TypeScript parity notes.
 ```bash
 nix develop                 # dev shell (Rust toolchain, wasm target, GL/EGL deps)
 
-# build the scene ROMs (assets + SDF font atlas + guest wasm -> roms/out/*.rom)
-cargo xtask all
+# fetch the published scene ROMs (demo/lunar) into roms/out/
+cargo xtask fetch-roms
 
 cargo run -p classic-desktop          # native, interactive
 trunk serve apps/web/index.html       # web dev server
