@@ -51,6 +51,16 @@ mod host {
         pub fn set_camera(x: f64, y: f64, scale: f64) -> i32;
         pub fn set_light(a0: f64, a1: f64, a2: f64, d0: f64, d1: f64, d2: f64, c0: f64, c1: f64, c2: f64) -> i32;
         pub fn set_grid(show: i32) -> i32;
+        pub fn set_pos(name_ptr: i32, name_len: i32, x: f64, y: f64, z: f64) -> i32;
+        pub fn height_at(x: f64, y: f64) -> f64;
+        pub fn set_comp(
+            name_ptr: i32,
+            name_len: i32,
+            comp_ptr: i32,
+            comp_len: i32,
+            json_ptr: i32,
+            json_len: i32,
+        ) -> i32;
     }
 }
 
@@ -60,6 +70,19 @@ const HEIGHT_SCALE: f64 = 14.0;
 
 #[cfg(target_arch = "wasm32")]
 static KEY_R: &[u8] = b"KeyR";
+
+#[cfg(target_arch = "wasm32")]
+static ROCKET: &[u8] = b"rocket";
+
+/// Component name + one-shot animation state used to (re)start the landing
+/// rocket.  `set_comp` re-deserialises the `Animator`, which zeroes the
+/// transient `counter`/`frame`/`offset` fields and replays from frame 0.
+#[cfg(target_arch = "wasm32")]
+static ANIMATOR: &[u8] = b"Animator";
+
+#[cfg(target_arch = "wasm32")]
+static ROCKET_ANIM_RESET: &[u8] =
+    br#"{"target":"rocket.IsoSprite","speed":1,"animation":"rocketLanding","repeat":false,"playing":true}"#;
 
 #[cfg(target_arch = "wasm32")]
 static mut SEED_N: u32 = 0;
@@ -155,12 +178,32 @@ fn setup_view(spawn: (i32, i32)) {
     }
 }
 
+/// Place the landing rocket at the first landing-zone spawn point and (re)start
+/// its one-shot landing animation.  Called on the initial generation and again
+/// whenever the map is re-rolled, so the rocket replays its landing from frame
+/// zero on the fresh surface.
+#[cfg(target_arch = "wasm32")]
+fn reset_rocket(spawn: (i32, i32)) {
+    let (sx, sy) = spawn;
+    // SAFETY: single-threaded guest.
+    let h = unsafe { host::height_at(sx as f64, sy as f64) };
+    let (rp, rl) = (ROCKET.as_ptr() as i32, ROCKET.len() as i32);
+    // SAFETY: single-threaded guest.
+    unsafe {
+        host::set_pos(rp, rl, sx as f64 + 0.5, sy as f64 + 0.5, h);
+        let (ap, al) = (ANIMATOR.as_ptr() as i32, ANIMATOR.len() as i32);
+        let (jp, jl) = (ROCKET_ANIM_RESET.as_ptr() as i32, ROCKET_ANIM_RESET.len() as i32);
+        host::set_comp(rp, rl, ap, al, jp, jl);
+    }
+}
+
 /// Called once, before the first frame, to generate the initial map.
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn init() {
     let spawn = generate(&seed_for(0));
     setup_view(spawn);
+    reset_rocket(spawn);
 }
 
 /// Called once per frame.  `R` re-rolls the terrain with a fresh seed.
@@ -178,5 +221,6 @@ pub extern "C" fn update(_dt: f64) {
         SEED_N += 1;
         SEED_N
     };
-    generate(&seed_for(n));
+    let spawn = generate(&seed_for(n));
+    reset_rocket(spawn);
 }

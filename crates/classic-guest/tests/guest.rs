@@ -452,6 +452,7 @@ fn get_anim_reads_animation() {
                 animation: Some("walkEast".into()),
                 counter: 0.0,
                 frame: 5.0,
+                offset: Vec3::ZERO,
                 repeat: true,
                 playing: true,
             },
@@ -661,7 +662,14 @@ fn install_test_resources(engine: &mut Engine) {
     engine.rom_resources = Some(resources);
     engine.animations.insert(
         "anim".into(),
-        AnimationData { name: "anim".into(), src: String::new(), rate: 1.0, sequence: vec![] },
+        AnimationData {
+            name: "anim".into(),
+            src: String::new(),
+            rate: 1.0,
+            sequence: vec![],
+            offsets: vec![],
+            metadata: None,
+        },
     );
 }
 

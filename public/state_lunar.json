@@ -79,6 +79,43 @@
                     "value": "NavMesh"
                 }
             ]
+        },
+        "rocket": {
+            "components": [
+                {
+                    "type": "Animator",
+                    "target": "rocket.IsoSprite",
+                    "speed": 1,
+                    "animation": "rocketLanding",
+                    "repeat": false,
+                    "playing": true
+                },
+                {
+                    "type": "IsoSprite",
+                    "position": [
+                        100.5,
+                        100.5,
+                        0
+                    ],
+                    "scale": [
+                        1,
+                        1,
+                        1
+                    ],
+                    "texture": "rocketLanding",
+                    "tilemap": "tilemap",
+                    "frame": 0,
+                    "tileSetSize": [
+                        34,
+                        9
+                    ],
+                    "anchor": [
+                        0.5,
+                        0.814
+                    ],
+                    "footprint": []
+                }
+            ]
         }
     }
 }

@@ -92,6 +92,7 @@ pub fn register_all_components() {
                 frame: a.frame,
                 tile_set_size: a.tile_set_size,
                 anchor: a.anchor,
+                frame_offset: a.frame_offset,
                 footprint: a.footprint.clone(),
             });
             b.add(a);

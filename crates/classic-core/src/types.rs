@@ -68,6 +68,13 @@ pub struct AnimationData {
     pub src: String,
     pub rate: f32,
     pub sequence: Vec<u32>,
+    /// Per-sequence-entry visual offsets in iso units. Missing entries are zero.
+    #[serde(default)]
+    pub offsets: Vec<[f32; 3]>,
+    /// Optional path to a ROM resource with per-frame renderer metadata (e.g.
+    /// Blender `rig_location` offsets), loaded into [`Self::offsets`] at boot.
+    #[serde(default)]
+    pub metadata: Option<String>,
 }
 
 /// The resource manifest (matches `public/manifest.json`).

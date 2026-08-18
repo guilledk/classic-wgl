@@ -37,6 +37,7 @@ use classic_gfx::{Gfx, GlBuffer};
 use classic_platform::InputState;
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use glow::HasContext;
+use serde::Deserialize;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
 
@@ -47,6 +48,12 @@ pub struct GuestEvent {
     pub kind: u32,
     /// The subscribed entity's name.
     pub name: String,
+}
+
+/// Default `pixels_per_meter` for animation offsets emitted by older renderers
+/// that did not record it.
+fn default_ppm() -> f32 {
+    8.0
 }
 
 /// Per-entity GPU resources for a tilemap.
@@ -265,6 +272,16 @@ impl Engine {
         for anim in &manifest.manifest.animations {
             self.animations.insert(anim.name.clone(), anim.clone());
         }
+
+        // Per-animation renderer metadata (frame offsets) declared in the
+        // manifest is loaded from the ROM's `animations/` resources and folded
+        // into the registered `AnimationData`.
+        for (name, metadata_bytes) in resources.animations() {
+            let Ok(metadata_json) = std::str::from_utf8(metadata_bytes) else {
+                continue;
+            };
+            self.load_animation_offsets_json(name, metadata_json);
+        }
     }
 
     /// Hydrate the engine from a ROM: compile shaders, upload resources, and
@@ -287,6 +304,43 @@ impl Engine {
             resources: self.rom_resources.clone()?,
             state: self.dump_state(),
         })
+    }
+
+    /// Load per-frame visual offsets emitted by the animation renderer.
+    ///
+    /// `rig_location` is Blender world `(x = drift, y = drift, z = altitude)`
+    /// in metres.  It is converted here to a cartesian screen-space offset:
+    /// the altitude maps onto the vertical (screen-Y, negative = up), and the
+    /// drift maps onto screen X/Y, all scaled by `pixels_per_meter` so the
+    /// rocket's motion matches the sprite's render resolution.
+    pub fn load_animation_offsets_json(&mut self, animation_name: &str, metadata_json: &str) {
+        #[derive(Deserialize)]
+        struct FramePosition {
+            rig_location: [f32; 3],
+        }
+        #[derive(Deserialize)]
+        struct AnimationMetadata {
+            #[serde(default = "default_ppm")]
+            pixels_per_meter: f32,
+            positions: Vec<FramePosition>,
+        }
+
+        let metadata: AnimationMetadata =
+            serde_json::from_str(metadata_json).expect("parse animation metadata JSON");
+        let ppm = metadata.pixels_per_meter;
+        let offsets = metadata
+            .positions
+            .into_iter()
+            .map(|frame| {
+                let [x, y, z] = frame.rig_location;
+                // Altitude (z) lifts the rocket up = smaller cart_pos.y.
+                Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array()
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(animation) = self.animations.get_mut(animation_name) {
+            animation.offsets = offsets;
+        }
     }
 
     /// Upload a PNG texture from raw bytes.
@@ -2576,6 +2630,7 @@ impl Engine {
         let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
 
         let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
+        cart_pos += iso_sprite.frame_offset;
         cart_pos += tilemap_tf.position;
 
         let h = bilinear_height(
@@ -2599,6 +2654,13 @@ impl Engine {
     /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`).
     fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2]) -> [f32; 4] {
         let base_depth = (pos.x - pos.y) / 400.0 + 0.5 - pos.z / 14500.0 - 0.005;
+        let default_footprint = [
+            glam::Vec2::new(0.5, -0.5),
+            glam::Vec2::new(0.5, 0.5),
+            glam::Vec2::new(-0.5, 0.5),
+            glam::Vec2::new(-0.5, -0.5),
+        ];
+        let footprint = if footprint.len() >= 4 { &footprint[..4] } else { &default_footprint };
 
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
@@ -2618,5 +2680,47 @@ impl Engine {
 impl Default for Engine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animation_offsets_map_altitude_to_screen_y() {
+        classic_core::register_all_components();
+        let mut engine = Engine::new();
+        engine.animations.insert(
+            "rocketLanding".to_string(),
+            AnimationData {
+                name: "rocketLanding".to_string(),
+                src: "rocketLanding".to_string(),
+                rate: 24.0,
+                sequence: vec![0, 1],
+                offsets: vec![],
+                metadata: None,
+            },
+        );
+
+        let metadata = r#"{
+            "pixels_per_meter": 8,
+            "positions": [
+                { "rig_location": [0.0, 0.0, 50.0] },
+                { "rig_location": [-1.0, 0.5, 10.0] },
+                { "rig_location": [0.0, 0.0, 0.0] }
+            ]
+        }"#;
+        engine.load_animation_offsets_json("rocketLanding", metadata);
+
+        let offsets = &engine.animations["rocketLanding"].offsets;
+        assert_eq!(offsets.len(), 3);
+
+        // Frame 0: 50 m altitude → 400 units up (negative screen Y).
+        assert!((offsets[0][1] - (-400.0)).abs() < 0.001, "got {:?}", offsets[0]);
+        // Drift x maps directly (scaled by ppm).
+        assert!((offsets[1][0] - (-8.0)).abs() < 0.001, "got {:?}", offsets[1]);
+        // Altitude 0 → zero vertical offset.
+        assert!((offsets[2][1]).abs() < 0.001, "got {:?}", offsets[2]);
     }
 }

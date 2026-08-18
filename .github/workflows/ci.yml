@@ -62,6 +62,9 @@ jobs:
               env:
                   LIBGL_ALWAYS_SOFTWARE: 1
                   EGL_PLATFORM: surfaceless
+                  # llvmpipe's multithreaded rasterizer races on the sprite
+                  # ghost-pass depth rendering; pin to a single thread.
+                  LP_NUM_THREADS: 0
               run: CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check RUST_LOG=info ./target/debug/classic-desktop
             # The procedural scene needs a fixed timestep: without one the idle
             # animator lands on a different frame each run and the trace differs.
@@ -69,6 +72,9 @@ jobs:
               env:
                   LIBGL_ALWAYS_SOFTWARE: 1
                   EGL_PLATFORM: surfaceless
+                  # llvmpipe's multithreaded rasterizer races on the sprite
+                  # ghost-pass depth rendering; pin to a single thread.
+                  LP_NUM_THREADS: 0
               run: >-
                   CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60
                   CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
