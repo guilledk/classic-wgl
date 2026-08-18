@@ -32,6 +32,20 @@ const WHEEL_DROOP: f32 = 20.0;
 /// vehicle-definition part order emitted by the exporter).
 const WHEEL_SUFFIXES: [&str; 4] = ["Fl", "Fr", "Rl", "Rr"];
 
+/// Sprite-sheet direction count (matches the `[[f32; 2]; 8]` anchor arrays and
+/// `dir_index`).
+const DIRECTIONS: u32 = 8;
+
+/// Body pitch/roll spring stiffness (rad/s² per rad of error).  Kept
+/// underdamped (with `SPRING_DAMPING`) so the body bobs with momentum rather
+/// than snapping to the terrain.
+const SPRING_STIFFNESS: f32 = 40.0;
+/// Body pitch/roll spring damping (1/s).
+const SPRING_DAMPING: f32 = 8.0;
+/// Nose-down pitch target (radians) while the body is airborne (e.g. falling
+/// off a cliff).
+const AIRBORNE_PITCH: f32 = -0.26;
+
 /// A terrain-height sampler snapshot, cloned once per frame so the mutation
 /// pass can sample heights without re-borrowing the world.
 struct TerrainSnapshot {
@@ -61,6 +75,29 @@ pub fn dir_index(dx: i32, dy: i32) -> usize {
         (1, -1) => 7,
         _ => 0,
     }
+}
+
+/// Quantize a signed pitch angle (radians) to a pitch frame index in
+/// `0..pitch_levels`, mapping `[-pitch_max, +pitch_max]` onto the frame range:
+/// `0` = nose-down, `(pitch_levels - 1) / 2` = level (odd counts),
+/// `pitch_levels - 1` = nose-up.
+fn pitch_index(angle: f32, pitch_max: f32, pitch_levels: u32) -> u32 {
+    let levels = pitch_levels.max(1);
+    if levels <= 1 {
+        return 0;
+    }
+    let max = pitch_max.abs().max(1e-4);
+    let t = (angle / max).clamp(-1.0, 1.0);
+    let idx = ((t + 1.0) * 0.5 * (levels - 1) as f32).round() as u32;
+    idx.min(levels - 1)
+}
+
+/// Advance a body pitch/roll spring one step (semi-implicit Euler), returning
+/// the new `(angle, vel)`.  Underdamped, so the body bobs with momentum.
+fn step_spring(angle: f32, vel: f32, target: f32, dt: f32) -> (f32, f32) {
+    let accel = SPRING_STIFFNESS * (target - angle) - SPRING_DAMPING * vel;
+    let new_vel = vel + accel * dt;
+    (angle + new_vel * dt, new_vel)
 }
 
 /// A part's anchors as a fixed 8-slot array (padded/truncated to 8 directions).
@@ -103,6 +140,7 @@ struct VehicleWrite {
     body_offset_y: f32,
     body_anchor: [f32; 2],
     direction: u32,
+    body_frame: f32,
     wheel_xy: [[f32; 2]; 4],
     wheel_off_y: [f32; 4],
     wheel_z: [f32; 4],
@@ -156,9 +194,39 @@ impl Engine {
             *anchors = anchors8(&def.parts[i + 1].anchors);
         }
         let tile_set_size = Vec2::new(def.columns as f32, def.rows as f32);
+        let body_tile_set_size = Vec2::new(
+            def.columns as f32,
+            def.rows as f32 * def.pitch_levels.max(1) as f32 * def.roll_levels.max(1) as f32,
+        );
         let cell = if def.cell[0] > 0.0 && def.cell[1] > 0.0 { def.cell } else { [1.0, 1.0] };
         let wheel_tile_offsets =
             derive_wheel_offsets(&body_anchors, &wheel_anchors, cell, tile_scale);
+
+        // Front-rear axle distance in screen pixels, from the derived wheel
+        // offsets (front = fl/fr, rear = rl/rr) scaled by the tile scale.
+        let wheelbase_px = {
+            let front = Vec2::new(
+                (wheel_tile_offsets[0][0][0] + wheel_tile_offsets[1][0][0]) * 0.5,
+                (wheel_tile_offsets[0][0][1] + wheel_tile_offsets[1][0][1]) * 0.5,
+            );
+            let rear = Vec2::new(
+                (wheel_tile_offsets[2][0][0] + wheel_tile_offsets[3][0][0]) * 0.5,
+                (wheel_tile_offsets[2][0][1] + wheel_tile_offsets[3][0][1]) * 0.5,
+            );
+            (front - rear).length() * tile_scale
+        };
+        // Left-right axle distance in screen pixels (left = fl/rl, right = fr/rr).
+        let track_px = {
+            let left = Vec2::new(
+                (wheel_tile_offsets[0][0][0] + wheel_tile_offsets[2][0][0]) * 0.5,
+                (wheel_tile_offsets[0][0][1] + wheel_tile_offsets[2][0][1]) * 0.5,
+            );
+            let right = Vec2::new(
+                (wheel_tile_offsets[1][0][0] + wheel_tile_offsets[3][0][0]) * 0.5,
+                (wheel_tile_offsets[1][0][1] + wheel_tile_offsets[3][0][1]) * 0.5,
+            );
+            (left - right).length() * tile_scale
+        };
 
         let wheel_names: [String; 4] = WHEEL_SUFFIXES.map(|s| format!("{entity_name}Wheel{s}"));
         let tilemap_name = "tilemap".to_string();
@@ -189,7 +257,7 @@ impl Engine {
             texture: body_part.texture.clone(),
             tilemap: tilemap_name.clone(),
             frame: 0.0,
-            tile_set_size,
+            tile_set_size: body_tile_set_size,
             anchor: Vec2::from(body_anchors[0]),
             frame_offset: Vec3::ZERO,
             footprint: vec![],
@@ -207,6 +275,12 @@ impl Engine {
             speed: 2.6,
             direction: 0,
             wheel_tile_offsets,
+            pitch_levels: def.pitch_levels,
+            pitch_max: def.pitch_max_deg.to_radians(),
+            wheelbase_px,
+            roll_levels: def.roll_levels,
+            roll_max: def.roll_max_deg.to_radians(),
+            track_px,
             ..Default::default()
         };
         let be = self.world.spawn((
@@ -325,11 +399,45 @@ impl Engine {
                 *a = v.wheel_anchors[i][direction];
             }
 
+            // -- body pitch (angular spring-damper) --------------------------
+            // Target = the terrain surface slope along the heading, from the
+            // *instantaneous* wheel ground heights (the spring owns smoothing
+            // and bob).  Airborne, the body noses down instead of tracking.
+            let pitch_target = if airborne {
+                AIRBORNE_PITCH
+            } else {
+                let front = (wheel_ground[0] + wheel_ground[1]) * 0.5;
+                let rear = (wheel_ground[2] + wheel_ground[3]) * 0.5;
+                ((front - rear) / v.wheelbase_px.max(1e-4)).atan()
+            };
+            let (pitch, pitch_vel) = step_spring(v.pitch, v.pitch_vel, pitch_target, delta);
+            v.pitch = pitch;
+            v.pitch_vel = pitch_vel;
+            v.pitch_index = pitch_index(v.pitch, v.pitch_max, v.pitch_levels);
+
+            // -- body roll (side slope, left-up positive) --------------------
+            // Target = terrain slope across the vehicle; level when airborne.
+            let roll_target = if airborne {
+                0.0
+            } else {
+                let left = (wheel_ground[0] + wheel_ground[2]) * 0.5;
+                let right = (wheel_ground[1] + wheel_ground[3]) * 0.5;
+                ((left - right) / v.track_px.max(1e-4)).atan()
+            };
+            let (roll, roll_vel) = step_spring(v.roll, v.roll_vel, roll_target, delta);
+            v.roll = roll;
+            v.roll_vel = roll_vel;
+            v.roll_index = pitch_index(v.roll, v.roll_max, v.roll_levels);
+
+            let body_frame =
+                ((v.pitch_index * v.roll_levels + v.roll_index) * DIRECTIONS + v.direction) as f32;
+
             VehicleWrite {
                 body: [x, y, v.altitude],
                 body_offset_y,
                 body_anchor: v.body_anchors[direction],
                 direction: v.direction,
+                body_frame,
                 wheel_xy,
                 wheel_off_y,
                 wheel_z,
@@ -353,7 +461,7 @@ impl Engine {
             tf.position.z = write.body[2];
         }
         if let Ok(mut s) = self.world.get::<&mut IsoSprite>(ve) {
-            s.frame = write.direction as f32;
+            s.frame = write.body_frame;
             s.frame_offset.y = write.body_offset_y;
             s.anchor = Vec2::from(write.body_anchor);
         }
@@ -401,16 +509,31 @@ impl Engine {
                 v.wheel_v[i] = 0.0;
                 wheel_z[i] = gh;
             }
+            // Settle the body pitch/roll from the freshly-sampled wheel heights
+            // so a teleport onto a slope doesn't flicker through the level frame.
+            let front = (v.wheel_h[0] + v.wheel_h[1]) * 0.5;
+            let rear = (v.wheel_h[2] + v.wheel_h[3]) * 0.5;
+            v.pitch = ((front - rear) / v.wheelbase_px.max(1e-4)).atan();
+            v.pitch_vel = 0.0;
+            v.pitch_index = pitch_index(v.pitch, v.pitch_max, v.pitch_levels);
+            let left = (v.wheel_h[0] + v.wheel_h[2]) * 0.5;
+            let right = (v.wheel_h[1] + v.wheel_h[3]) * 0.5;
+            v.roll = ((left - right) / v.track_px.max(1e-4)).atan();
+            v.roll_vel = 0.0;
+            v.roll_index = pitch_index(v.roll, v.roll_max, v.roll_levels);
             let mut wheel_anchors = [[0.0f32; 2]; 4];
             for (i, a) in wheel_anchors.iter_mut().enumerate() {
                 *a = v.wheel_anchors[i][direction];
             }
+            let body_frame =
+                ((v.pitch_index * v.roll_levels + v.roll_index) * DIRECTIONS + v.direction) as f32;
 
             VehicleWrite {
                 body: [x, y, v.altitude],
                 body_offset_y: 0.0,
                 body_anchor: v.body_anchors[direction],
                 direction: v.direction,
+                body_frame,
                 wheel_xy,
                 wheel_off_y: [0.0; 4],
                 wheel_z,
@@ -492,6 +615,69 @@ mod tests {
     }
 
     #[test]
+    fn pitch_index_quantizes_five_levels() {
+        let max = 20.0f32.to_radians();
+
+        // Single level (flat) always maps to 0.
+        assert_eq!(pitch_index(0.0, max, 1), 0);
+        assert_eq!(pitch_index(max, max, 1), 0);
+
+        // Five levels: 0 = nose-down, 2 = level, 4 = nose-up.
+        assert_eq!(pitch_index(-max, max, 5), 0);
+        assert_eq!(pitch_index(-10.0f32.to_radians(), max, 5), 1);
+        assert_eq!(pitch_index(0.0, max, 5), 2);
+        assert_eq!(pitch_index(10.0f32.to_radians(), max, 5), 3);
+        assert_eq!(pitch_index(max, max, 5), 4);
+        // Clamps outside the range.
+        assert_eq!(pitch_index(-1.5, max, 5), 0);
+        assert_eq!(pitch_index(1.5, max, 5), 4);
+    }
+
+    #[test]
+    fn pitch_spring_overshoots_and_bobs() {
+        let dt = 1.0 / 60.0;
+        let target = 0.1;
+        let (mut pitch, mut vel) = (0.0f32, 0.0f32);
+        let mut max_pitch = 0.0f32;
+        for _ in 0..600 {
+            let (p, v) = step_spring(pitch, vel, target, dt);
+            pitch = p;
+            vel = v;
+            max_pitch = max_pitch.max(pitch);
+        }
+        // Underdamped: the body overshoots the target before settling near it.
+        assert!(max_pitch > target, "expected overshoot, max {max_pitch} vs target {target}");
+        assert!((pitch - target).abs() < 0.01, "did not settle: {pitch}");
+
+        // An airborne target (nose-down) drives the angle negative.
+        let (mut pitch, mut vel) = (0.0f32, 0.0f32);
+        for _ in 0..600 {
+            let (p, v) = step_spring(pitch, vel, AIRBORNE_PITCH, dt);
+            pitch = p;
+            vel = v;
+        }
+        assert!(pitch < 0.0, "airborne should pitch nose-down, got {pitch}");
+
+        // A zero (level) roll target settles to ~0.
+        let (mut roll, mut vel) = (0.5f32, 0.0f32);
+        for _ in 0..600 {
+            let (r, v) = step_spring(roll, vel, 0.0, dt);
+            roll = r;
+            vel = v;
+        }
+        assert!(roll.abs() < 0.01, "roll should settle to level, got {roll}");
+    }
+
+    #[test]
+    fn pitch_index_quantizes_three_roll_levels() {
+        let max = 20.0f32.to_radians();
+        // Three roll levels: 0 = right-up (left-down), 1 = level, 2 = left-up.
+        assert_eq!(pitch_index(-max, max, 3), 0);
+        assert_eq!(pitch_index(0.0, max, 3), 1);
+        assert_eq!(pitch_index(max, max, 3), 2);
+    }
+
+    #[test]
     fn derived_offsets_round_trip_through_iso() {
         let cell = [247.0, 247.0];
         let tile_scale = 45.0;
@@ -534,6 +720,10 @@ mod tests {
             columns: 4,
             rows: 2,
             cell: [247.0, 247.0],
+            pitch_levels: 1,
+            pitch_max_deg: 20.0,
+            roll_levels: 1,
+            roll_max_deg: 20.0,
             parts: vec![
                 serde_json::from_value(serde_json::json!({
                     "name": "body", "texture": "lrvBody",
@@ -604,5 +794,72 @@ mod tests {
         assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
         assert!(engine.vehicle_stop("lrv"));
         assert!(engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
+    }
+
+    #[test]
+    fn spawn_vehicle_sizes_body_sheet_by_pitch_levels() {
+        let mut engine = Engine::new_for_test();
+        let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
+        engine.names.insert("tilemap".into(), tm);
+
+        // Front wheels anchor to the +X side of the frame, rear wheels to -X,
+        // and left/right wheels to distinct +Y/-Y, so both the front-rear
+        // wheelbase and the left-right track are non-zero.
+        let body = [[0.5, 0.5]];
+        let fl = [[0.7, 0.4]];
+        let fr = [[0.7, 0.6]];
+        let rl = [[0.3, 0.4]];
+        let rr = [[0.3, 0.6]];
+        let def = VehicleDef {
+            name: "lrv".into(),
+            directions: 8,
+            columns: 4,
+            rows: 2,
+            cell: [247.0, 247.0],
+            pitch_levels: 3,
+            pitch_max_deg: 20.0,
+            roll_levels: 3,
+            roll_max_deg: 20.0,
+            parts: vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "body", "texture": "lrvBody", "anchors": body
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_fl", "texture": "lrvWheelFl", "anchors": fl
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_fr", "texture": "lrvWheelFr", "anchors": fr
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_rl", "texture": "lrvWheelRl", "anchors": rl
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "name": "wheel_rr", "texture": "lrvWheelRr", "anchors": rr
+                }))
+                .unwrap(),
+            ],
+        };
+        engine.vehicles.insert("lrv".into(), def);
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
+        let body_entity = *engine.names.get("lrv").unwrap();
+        let wheel = *engine.names.get("lrvWheelFl").unwrap();
+
+        let body_sprite = engine.world.get::<&IsoSprite>(body_entity).unwrap();
+        let wheel_sprite = engine.world.get::<&IsoSprite>(wheel).unwrap();
+        assert_eq!(body_sprite.tile_set_size, Vec2::new(4.0, 18.0));
+        assert_eq!(wheel_sprite.tile_set_size, Vec2::new(4.0, 2.0));
+
+        let veh = engine.world.get::<&IsoVehicle>(body_entity).unwrap();
+        assert_eq!(veh.pitch_levels, 3);
+        assert!((veh.pitch_max - 20.0f32.to_radians()).abs() < 1e-6);
+        assert!(veh.wheelbase_px > 0.0);
+        assert_eq!(veh.roll_levels, 3);
+        assert!((veh.roll_max - 20.0f32.to_radians()).abs() < 1e-6);
+        assert!(veh.track_px > 0.0);
     }
 }
