@@ -16,7 +16,7 @@ pub mod quadtree;
 pub mod simplex_noise;
 
 use components::{
-    Animator, IsoAgent, IsoSprite, LightState, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
+    Animator, IsoAgent, IsoSprite, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
 };
 
 pub use camera::Camera;
@@ -152,18 +152,6 @@ pub fn register_all_components() {
     });
 
     registry::register(ComponentReg {
-        name: "LightState",
-        spawn: |b, v| {
-            let l: LightState = serde_json::from_value(v)?;
-            b.add(l);
-            Ok(())
-        },
-        dump: Some(dumper_lightstate),
-        order: 47,
-        subsumes: &[],
-    });
-
-    registry::register(ComponentReg {
         name: "Camera",
         spawn: |b, v| {
             let c: Camera = serde_json::from_value(v)?;
@@ -245,11 +233,6 @@ fn dumper_rect(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::
 fn dumper_sdftext(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let t = world.get::<&SdfTextRender>(entity).ok()?;
     serde_json::to_value(&*t).ok().map(|v| component_value("SdfText", v))
-}
-
-fn dumper_lightstate(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let l = world.get::<&LightState>(entity).ok()?;
-    serde_json::to_value(&*l).ok().map(|v| component_value("LightState", v))
 }
 
 fn dumper_camera(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {

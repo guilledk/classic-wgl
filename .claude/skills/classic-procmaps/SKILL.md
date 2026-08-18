@@ -12,7 +12,7 @@ description: >
     reuse at another size.
     Trigger phrases: "procedural map", "new biome", "new generator",
     "add a scene", "map size", "scale the map", "terrain module",
-    "generate_lunar", "LunarParams", "scene wiring", "CLASSIC_SCENE",
+    "generate_lunar", "LunarParams", "scene wiring", "CLASSIC_ROM",
     "state_lunar.json", "scale-free", "GL_MAX_TEXTURE_SIZE".
 ---
 
@@ -27,30 +27,33 @@ generator.
 
 ---
 
-## 1. The `terrain/` module contract
+## 1. The noise/terrain module contract
 
-`classic-core/src/terrain/` is deliberately split so the reusable machinery is
-not entangled with one specific biome:
+The open noise primitives live in `crates/classic-terrain`; the lunar-specific
+material/tileset/generator live in `guest/lunar-guest`:
 
 | Module | Owns | Generic? |
 |---|---|---|
-| `fractal.rs` | fBm / ridged / billow, domain warp, periodic (tiling) noise | Yes |
-| `material.rs` | The material table — `MATERIALS`, `tile_id`, `spec_for` | Yes |
-| `tileset.rs` | Paints an RGBA tile sheet from `MATERIALS` | Yes |
-| `lunar.rs` | The lunar generator (`generate_lunar`) | No |
+| `crates/classic-terrain/src/simplex_noise.rs` | seedable simplex + deterministic `Random` | Yes |
+| `crates/classic-terrain/src/fractal.rs` | fBm / ridged / billow, domain warp, periodic (tiling) noise | Yes |
+| `crates/classic-terrain/src/noise_fields.rs` | bulk noise fields | Yes |
+| `guest/lunar-guest/src/material.rs` | `LunarMaterial` table — `MATERIALS`, `tile_id`, `spec_for` | No |
+| `guest/lunar-guest/src/tileset.rs` | Paints an RGBA tile sheet from `MATERIALS` | No |
+| `guest/lunar-guest/src/lunar.rs` | The lunar generator (`generate_lunar`) | No |
 
 **The one invariant that makes this work:** the generator *classifies* tiles
 into materials and the tileset *paints* those materials, and both read the
 same `material.rs` table.  That shared table is what stops the two from
-drifting apart.  A new generator must define its materials in `material.rs`
-(not as a local enum) so its tileset is derived, not hand-matched.
+drifting apart.  A new generator must define its materials in its guest's
+`material.rs` (not as a local enum) so its tileset is derived, not hand-matched.
 
 Every function is pure (`&SimplexNoise`, `&params`) → deterministic from a seed
-string, GL-free, unit-testable, and safe on `wasm32`.  Never call
-`Random::from_entropy` — it reads the system clock, which breaks golden traces
-and web builds.  (`Random::next_f64` was once silently returning `[0, 2)`
-instead of the documented `[0, 1)` — see `docs/TS-PARITY.md` — so a seed that
-"looks fine" can still hide a broken RNG if you copy the old bug.)
+string, GL-free, unit-testable, and safe on `wasm32`.  `Random` only exposes
+`from_seed` / `from_seed_str` — there is no entropy source, so nothing can
+accidentally read the system clock and break golden traces.  (`Random::next_f64`
+was once silently returning `[0, 2)` instead of the documented `[0, 1)` — see
+`docs/TS-PARITY.md` — so a seed that "looks fine" can still hide a broken RNG
+if you copy the old bug.)
 
 ---
 
@@ -58,14 +61,15 @@ instead of the documented `[0, 1)` — see `docs/TS-PARITY.md` — so a seed tha
 
 The `lunar` scene is the worked example.  To add another (`<name>`):
 
-1. **Generator** — `classic-core/src/terrain/<name>.rs`, exporting
+1. **Generator** — `guest/<name>-guest/src/<name>.rs`, exporting
    `<Name>Params` (with `Default`) and `generate_<name>(&Params) -> Terrain`.
    The output struct must carry `heights` (vertex grid, `(sx+1)*(sy+1)`),
    `tiles` (tile grid, `sx*sy`, ids >= 1), and `nav` (tile grid, 1=walkable).
    Watch the grid-layout mismatch — it is the #1 latent bug (`build_mesh`
    asserts both lengths).
 2. **Materials** — add `<Name>Material` variants + `MaterialSpec`s to
-   `material.rs`, keeping `tile_count() < cols*rows` (id 0 is reserved).
+   `guest/<name>-guest/src/material.rs`, keeping `tile_count() < cols*rows`
+   (id 0 is reserved).
 3. **Tileset** — the shared `build_lunar_tileset` (or a new
    `build_<name>_tileset`) already paints `MATERIALS`; if you reuse it, this
    step is automatic.
@@ -73,18 +77,18 @@ The `lunar` scene is the worked example.  To add another (`<name>`):
    names (`tilemap`, `tilemapNavigation`, `cursor`; the agent `navAgent` is
    demo-only — generated scenes have no agent).  See §4 for why.
 5. **ROM + entrypoint** — add a `pack(...)` call in `scripts/build-roms.mjs`
-   (injects `format_version`/`entrypoint`/`host_features`/`trusted`/`code`) so
-   the scene ships as `<name>.rom`; the apps resolve `CLASSIC_SCENE`/`?scene=`
-   to the embedded ROM.
-6. **Scene assembler** — `classic-demo/src/scenes/<name>.rs` with
-   `init_<name>_terrain`, `regenerate_<name>_terrain`, `focus_camera_on_spawn`,
-   `hydrate_nav` (via `init_navigation_data`, NOT `init_navigation`, which
-   would re-derive walkability from heights and clobber the generator's own),
-   and `setup_view`.  `init_engine` dispatches on the ROM's `entrypoint`
-   (`is_lunar` → `scenes::lunar`, else demo).
+   (injects `format_version`/`entrypoint`/`state`/`host_features`/`trusted`/
+   `code`) so the scene ships as `<name>.rom`; the apps resolve
+   `CLASSIC_ROM`/`?rom=` (a `rom:<name>` selector, file path, or URL) to the
+   embedded ROM.
+6. **Guest** — `guest/<name>-guest/src/lib.rs`: `init()` generates the map,
+   bulk-uploads the grids via `set_tiles`/`set_heights`/`set_nav`/`set_tileset`,
+   `commit_terrain(height_scale)`, then owns its own view setup
+   (`iso_to_screen` → `set_camera` + `set_light` + `set_grid`).  The host is a
+   generic terrain store; the map algorithm lives in the ROM guest.
 7. **Golden** — `tests/golden/<name>/` + a CI job (the lunar job needs
    `CLASSIC_FIXED_DT` so the idle animator lands on a deterministic frame).
-8. **Tests** — a `classic-core/tests/terrain_<name>.rs` asserting the
+8. **Tests** — a `guest/<name>-guest/tests/terrain_<name>.rs` asserting the
    *gameplay guarantees* (lengths, slope bound, flat pads, buildable fraction,
    mutual spawn reachability via `pathfinder::find_path`), not pixels.
 
@@ -109,10 +113,11 @@ and only these: `size_x`/`size_y`, `auto_landing_zones`, `ray_crater_count`
 relative footprint on a 4x map).
 
 **Guard:** `terrain_character_is_stable_across_map_sizes` (in
-`classic-core/tests/terrain_lunar.rs`) generates at 200/400/600 and asserts
-crater density, walkable/buildable fractions, relief, and slope bound all stay
-in band.  Add the same test for a new generator.  It is the difference between
-"a parameter changed the map" and "a parameter broke the map at a new size."
+`guest/lunar-guest/tests/terrain_lunar.rs`) generates at 200/400/600 and
+asserts crater density, walkable/buildable fractions, relief, and slope bound
+all stay in band.  Add the same test for a new generator.  It is the
+difference between "a parameter changed the map" and "a parameter broke the map
+at a new size."
 
 ---
 
@@ -124,16 +129,17 @@ in band.  Add the same test for a new generator.  It is the difference between
   editor toolchain (height brush, tile palette, nav editor) works on a
   generated map with zero extra code.  A new scene with fresh names loses all
   of it.
-- **Init order:** `load_state` → `init_<name>_terrain` → shared texture/UI init
-  → `init_navigation_data` → `init_nav_mesh_render`.  The terrain step must
-  precede navigation because the nav installer reads the generated `nav`.
-- **Generated tilesets skip the PNG pipeline.**  `init_tilemap_generated`
-  registers the in-memory tileset via `Gfx::add_texture_rgba8`, so no commit to
-  the private `assets/` submodule and no new `include_bytes!`.
-- **Scene selection:** `CLASSIC_SCENE=<name>` (native) / `?scene=<name>` (web)
-  selects the embedded ROM (`demo.rom` / `lunar.rom`); `Rom::load` → the
-  `entrypoint` drives `is_lunar` in `init_engine`.  Unknown values fall back to
-  `demo.rom`.
+- **Init order:** `load_state` → the guest's `init()` (generates + uploads +
+  `commit_terrain`) → shared texture/UI init → `init_nav_mesh_render`.  The
+  guest's `set_nav` upload is the authoritative nav grid.
+- **Generated tilesets skip the PNG pipeline.**  `set_tileset` uploads the
+  in-memory tileset via `Gfx::add_texture_rgba8`, so no commit to the private
+  `assets/` submodule and no new `include_bytes!`.
+- **Scene selection:** `CLASSIC_ROM=rom:<name>` (native) / `?rom=rom:<name>` (web)
+  selects the embedded ROM (`demo.rom` / `lunar.rom`); `resolve_rom` →
+  `Rom::load` → `init_engine`.  The selector is a URI-scheme grammar: `rom:<name>`
+  for embedded ROMs, `http(s)://` to fetch, and a bare value is a file path
+  (native) / relative URL (web).  Empty selects `rom:demo`.
 
 ---
 
@@ -176,18 +182,19 @@ Details worth internalising:
 
 ## 6. Verification workflow
 
-1. **Structure/stats first:** `cargo run --release -p classic-core --example
-   dbg_lunar -- <seed> <size>` prints stats plus ASCII height/material/nav
-   maps — far faster than rendering for iterating on parameters.
+1. **Structure/stats first:** `cargo run --manifest-path
+   guest/lunar-guest/Cargo.toml --release --example dbg_lunar -- <seed> <size>`
+   prints stats plus ASCII height/material/nav maps — far faster than rendering
+   for iterating on parameters.
 2. **Appearance:** render a frame (pixel capture fires only on
    `golden_capture_frame`, default 55, so `CLASSIC_FRAMES` must exceed it):
    ```
-   CLASSIC_SCENE=lunar CLASSIC_HEADLESS=1 CLASSIC_OFFSCREEN=1 CLASSIC_FRAMES=60 \
+   CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_OFFSCREEN=1 CLASSIC_FRAMES=60 \
    CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=update \
    CLASSIC_GOLDEN_DIR=/tmp/shot cargo run -p classic-desktop
    ```
-3. **Guarantees:** `cargo test -p classic-core --test terrain_<name> --
-   --test-threads=1`.
+3. **Guarantees:** `cargo test --manifest-path guest/lunar-guest/Cargo.toml
+   --test terrain_lunar`.
 4. **Determinism/regression:** regenerate the scene's golden trace with
    `CLASSIC_FIXED_DT=0.016666668` and `CLASSIC_GOLDEN=update`, then `check`.
 5. **Telemetry:** `CLASSIC_LOG=terrain=info` logs a one-line summary per

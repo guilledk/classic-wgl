@@ -198,7 +198,6 @@ honoured).
 | **Transform** | `position`, `scale` |
 | **Rect** | `color`, `ignore_cam` |
 | **SdfText** | `atlas_name`, `color`, `bgcolor`, `outline_color`, `outline_width`, `shadow_offset`, `shadow_color`, `shadow_blur`, `ignore_cam`, `text`, `justify`, `weight`, `gamma` |
-| **LightState** | `ambient`, `direction`, `color` |
 | **Camera** | `position`, `scale` (`size` is runtime-only) |
 
 ---
@@ -241,15 +240,15 @@ Both representations produce the same flat heights (all 1.0) for the demo.
 
 ## Rust-only: procedural terrain
 
-`crates/classic-core/src/terrain/` has no TypeScript ancestor.  It exists to
-generate the `lunar` demo scene (`CLASSIC_SCENE=lunar`) and is documented in
-full by the `classic-terrain` skill.  Notes relevant to parity:
+`guest/lunar-guest/` has no TypeScript ancestor.  It exists to generate the
+`lunar` demo scene (`CLASSIC_ROM=rom:lunar`) and is documented in full by the
+`classic-terrain` skill.  Notes relevant to parity:
 
 - The TS `Tilemap.data` comment "null = auto-generate noise" described a
   feature that was never implemented on either side.  The Rust `lunar` scene
   supersedes it: `data` is `null` in `state_lunar.json`, and terrain, tiles and
-  nav data are all installed by `classic_demo::scenes::lunar::init_lunar_terrain` after
-  `load_state`.
+  nav data are all generated + bulk-uploaded by the `guest/lunar-guest` ROM
+  guest (then `commit_terrain`) after `load_state`.
 - `SimplexNoise` was a faithful TS port but had no callers.  It now underpins
   the generator; `Random::next_f64` was fixed to honour its documented `[0, 1)`
   range (it divided the top 16 bits of the LCG state by 32768 instead of

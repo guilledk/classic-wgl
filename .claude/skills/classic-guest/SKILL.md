@@ -37,7 +37,7 @@ crates/classic-guest/
                           import macro + memory helpers
   src/runtime_web.rs      WebWasmRuntime (wasm only, trusted): browser-native
                           `WebAssembly`, host imports as `Closure`s (+ a dispatcher
-                          for the 8 imports with >8 args)
+                          for the 13 imports with >8 args)
   src/runtime_worker.rs   WorkerWasmRuntime (wasm only, untrusted): `Worker` +
                           SAB/Atomics synchronous host-import bridge + terminate watchdog
   src/worker.js           the Worker script (SAB host-import stubs + update loop)
@@ -77,6 +77,7 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `get_pos` | `(name_ptr, name_len, out_ptr) -> i32` | writes `[x, y, z]` as three f64 |
 | `mouse` | `(out_ptr) -> i32` | screen mouse pos `[x, y]` |
 | `mouse_iso` | `(out_ptr) -> i32` | iso tile coords under cursor `[x, y]` |
+| `iso_to_screen` | `(x: f64, y: f64, out_ptr) -> i32` | project an iso tile coord to screen space `[sx, sy]` (two f64; `0` if no Tilemap) |
 | `height_at` | `(x: f64, y: f64) -> f64` | terrain height (world z) at an iso tile |
 | `set_anim` | `(name_ptr, name_len, anim_ptr, anim_len) -> i32` | set the entity's `Animator` to play a looping animation |
 | `agent_selected` | `() -> i32` | editor agent-tool flag |
@@ -94,6 +95,7 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `rebuild_terrain` | `() -> i32` | rebuild the tilemap mesh + re-derive nav walkability after in-place edits |
 | `get_camera` | `(out_ptr) -> i32` | writes `[x, y, scale]` (three f64) |
 | `set_camera` | `(x: f64, y: f64, scale: f64) -> i32` | set camera position + uniform scale |
+| `set_grid` | `(show: i32) -> i32` | show/hide the tilemap editor grid overlay |
 | `pick_at` | `(x: f64, y: f64, out_ptr, out_cap) -> i32` | name of the top gameplay entity under a screen point (bytes written, `0` if none) |
 | `get_light` | `(out_ptr) -> i32` | writes 9 f64 (ambient, direction, color) |
 | `set_light` | `(a0..a2, d0..d2, c0..c2: f64) -> i32` | set light uniforms |
@@ -142,7 +144,6 @@ Bulk upload (guest writes grids into its memory, host reads them):
 | `set_heights` | `(ptr, len) -> i32` | bulk `f32` LE vertex heights → `Tilemap.height_data` |
 | `set_nav` | `(ptr, len) -> i32` | bulk `u32` LE walkability → `NavMesh.data` |
 | `set_tileset` | `(ptr, len, w, h) -> i32` | raw RGBA → upload the tilemap's tileset texture |
-| `set_spawn_points` | `(ptr, len) -> i32` | `i32` LE `[x, y]` pairs → `Engine.spawn_points` |
 | `commit_terrain` | `(height_scale: f64) -> i32` | install (first call) or rebuild the tilemap mesh + nav overlay (no slope re-derivation) |
 
 The bulk fields are `f32` little-endian; the bulk grids are `u32`/`i32`/`f32`

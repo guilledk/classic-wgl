@@ -41,10 +41,11 @@ struct UiColliderEntry {
 }
 ```
 
-The `Engine` calls `ui.refresh_layout()` and `ui.sync_colliders()` inside its
-`frame()` method, after the render list is built but before draw calls. The
-layout pipeline is not a continuous system — it runs only when `dirty` is true
-and is explicitly triggered by factory methods and `resize()`.
+The `Engine` calls `ui.refresh_layout()` and `ui.sync_colliders()` at the
+**top** of its `frame()` method, before physics (`begin_frame`/`perform_calls`)
+and before the render list is built. The layout pipeline is not a continuous
+system — it runs only when `dirty` is true and is explicitly triggered by
+factory methods and `resize()`.
 
 ## 2. UiNode Component
 
@@ -182,9 +183,10 @@ child is anchored `MidCenter → MidCenter` within the container.
 Sets `dirty = true`.
 
 ### refresh_layout(world)
-Calls `measure_and_position(root, world)` if dirty, then sets `dirty = false`.
-Only the root tree is refreshed — standalone containers must use
-`layout_standalone()`.
+Calls `measure_and_position(root, world)` unconditionally, then sets
+`dirty = false`.  (The `if dirty` guard lives in the caller, `Engine::frame`,
+not inside `refresh_layout`.)  Only the root tree is refreshed — standalone
+containers must use `layout_standalone()`.
 
 ### layout_standalone(entity, world)
 Runs `measure_and_position()` on an entity NOT in the root tree. Used after
@@ -218,7 +220,8 @@ offset, then writes the child's `Transform.position`.
 After a container's position has been manually set, repositions all children
 according to their stored anchor pairs. Also applies the parent's `scroll_y`
 offset (subtracted from Y) and propagates `clip_rect` when `clip_children` is
-true. Called by `Engine::frame()` for the root container after resize.
+true.  `Engine::frame()` never calls it — its callers are demo prefab
+`on_update` closures (the light widget, tool buttons, editor panels).
 
 ## 7. Collider Integration
 

@@ -86,6 +86,10 @@ pub struct SpriteRender {
     pub anchor: Vec2,
 }
 
+/// The default SDF font atlas name used when a text element doesn't specify
+/// one explicitly.
+pub const DEFAULT_SDF_FONT: &str = "dejavusans";
+
 /// Port of `SdfText` from `sdfText.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SdfTextRender {
@@ -163,6 +167,13 @@ impl Tilemap {
 }
 
 /// Navigation mesh (layered on top of a Tilemap).
+/// The default nav-overlay tileset name.
+pub const DEFAULT_NAV_TILESET: &str = "navTileset";
+
+fn default_nav_tileset() -> String {
+    DEFAULT_NAV_TILESET.to_string()
+}
+
 /// Port of `IsometricNavMesh` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -174,8 +185,8 @@ pub struct NavMesh {
     /// Entity name of the source Tilemap.
     #[serde(rename = "map")]
     pub map_entity: String,
-    /// Texture name for the nav tileset (hardcoded `navTileset` in TS).
-    #[serde(default)]
+    /// Texture name for the nav tileset.
+    #[serde(default = "default_nav_tileset")]
     pub tile_set: String,
     /// Walkability grid (row-major, `1` = walkable), inlined as base64.
     #[serde(default, with = "crate::serde_base64::vec_u32")]
@@ -299,25 +310,6 @@ impl ColliderData {
             pid: 0,
             consumes_click: false,
             click_priority: 0,
-        }
-    }
-}
-
-/// Scene lighting state (ambient / direction / colour).  Held on a dedicated
-/// `lighting` entity so it round-trips through `state.json`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LightState {
-    pub ambient: [f32; 3],
-    pub direction: [f32; 3],
-    pub color: [f32; 3],
-}
-
-impl Default for LightState {
-    fn default() -> Self {
-        Self {
-            ambient: [0.15, 0.15, 0.2],
-            direction: [0.45, -0.35, 0.82],
-            color: [1.0, 0.95, 0.85],
         }
     }
 }

@@ -49,6 +49,7 @@ function pack(entrypoint, stateFile, outName, guestWasm) {
     const manifest = parseManifest();
     manifest.format_version = 1;
     manifest.entrypoint = entrypoint;
+    manifest.state = 'state.json';
     manifest.host_features = true;
     manifest.trusted = true;
     manifest.code = [{ name: 'main', src: `/code/${guestWasm}` }];

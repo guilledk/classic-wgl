@@ -33,18 +33,21 @@ takes ownership and drives the event loop — `run_loop` is the terminal call
 that blocks until the window closes. Three backends implement this trait:
 `NativePlatform`, `WebPlatform`, `HeadlessPlatform`.
 
-The trait also exposes `window()` and `gl_context()` accessors, but only
-`WebPlatform` implements them for real. `NativePlatform` and `HeadlessPlatform`
-return `unimplemented!()`. In practice, the engine only interacts through
-`run_loop`. These accessors exist for potential headless FBO capture or toolkit
-integration but are dead code in the current main loop path.
+The trait also exposes `window()` and `gl_context()` accessors.  Only
+`WebPlatform` and `HeadlessPlatform` implement `gl_context()` for real (headless
+returns `&self.gl`); `NativePlatform` returns `unimplemented!()` for both, and
+`HeadlessPlatform::window()` is `unimplemented!()`. In practice, the engine only
+interacts through `run_loop`. These accessors exist for potential headless FBO
+capture or toolkit integration but are mostly dead code in the current main
+loop path.
 
 ## 2. Native Backend (NativePlatform)
 
 File: `crates/classic-platform/src/native.rs`
 
-Gated behind `#[cfg(feature = "native")]` and `#[cfg(not(target_arch =
-"wasm32"))]`. Uses `winit` for windowing and `glutin` for GL context creation.
+Gated behind `#[cfg(feature = "native")]` (the wasm exclusion is implicit via
+the feature not being enabled on wasm). Uses `winit` for windowing and `glutin`
+for GL context creation.
 
 ### GL window creation (`create_gl_window`)
 1. Extracts `RawWindowHandle` from the winit `Window`
@@ -62,8 +65,8 @@ The native backend uses `winit::event_loop::EventLoop::run_app()` with an
 `ApplicationHandler` impl. Key event handling:
 
 - **RedrawRequested**: Computes `real_delta = (now - prev_time).as_secs_f32()`
-  clamped to 0.1s max. Calls `on_frame`. Then `input.end_frame()`, `swap_buffers()`,
-  `request_redraw()` (continuous rendering).
+  clamped to 0.1s max. Calls `on_frame`. Then `input.end_frame()`,
+  `request_redraw()`, `swap_buffers()` (continuous rendering).
 
 - **CursorMoved**: Clamps `mouse_pos` to viewport bounds, computes
   `mouse_axis` as normalized device coordinates `[-1, 1]`.
@@ -109,12 +112,15 @@ All event closures use `Rc<RefCell<InputState>>` for shared mutable state. Each
 closure is created with `Closure::wrap`, registered with
 `add_event_listener_with_callback`, and `.forget()`-ted to prevent GC.
 
-- **mousedown**: Sets `mouse_down` and `mouse_pressed`. On left-click while not
-  focused, calls `request_pointer_lock()` and sets `frame_had_click = true`.
+- **mousedown**: Sets `mouse_down` and `mouse_pressed`. On left-click sets
+  `frame_had_click = true` (focused or not); the *not-focused* branch also
+  calls `request_pointer_lock()`.
 
 - **mouseup**: Sets `mouse_down = false`, `mouse_released = true`.
 
-- **mousemove**: Updates `mouse_pos` clamped to canvas dimensions, computes
+- **mousemove**: When `focused` (pointer-locked), accumulates
+  `e.movement_x()/movement_y()` deltas onto `mouse_pos`; otherwise updates
+  `mouse_pos` from `client_x/y` clamped to canvas dimensions. Computes
   `mouse_axis` in `[-1, 1]`. NOTE: The `cw`/`ch` values are captured from
   `canvas.width/height` at the time the closure is created. The resize handler
   updates the canvas element but does NOT update the closures' captured
@@ -205,6 +211,7 @@ web backend subtracts (which flips the web convention to match native).
 After each frame's callbacks run, the engine applies wheel decay:
 ```rust
 mw = (mw.abs() - 1.4 * delta).max(0.0) * mw.signum();
+if mw.abs() < 0.01 { mw = 0.0; }   // deadzone
 mw = mw.clamp(-1.0, 1.0);
 ```
 
@@ -264,20 +271,26 @@ X11 library paths and outputs `cargo:rustc-link-search` and
 fails.
 
 ### Asset loading
-The `AssetLoader` trait abstracts filesystem vs embedded loading. On native,
-assets are loaded from the filesystem (or `include_bytes!` at the desktop app
-level). On web, assets are pre-loaded and stored in the wasm binary via
-`include_bytes!` in the web crate. The trait provides `load_bytes(path) →
-AssetBytes` and `load_string(path) → String`. `AssetBytes` is an enum that can
-hold either owned `Vec<u8>` or borrowed `&'static [u8]`.
+The `AssetLoader` trait (and `AssetBytes` / `EmbeddedAssetLoader` /
+`FsAssetLoader`) lives in **`classic-rom`** and is re-exported by
+`classic-platform`. It abstracts filesystem vs embedded loading: on native,
+assets are read from disk (or embedded); on web, assets come from the bundled
+ROM archive. The trait provides `load_bytes(path) → AssetBytes` and
+`load_string(path) → String`. `AssetBytes` is an enum that can hold either
+owned `Vec<u8>` or borrowed `&'static [u8]`. Note: the apps no longer embed
+individual loose assets — both desktop and web embed whole `.rom` archives via
+`include_bytes!` and boot through `resolve_rom` → `RomArchive::from_bytes` →
+`Rom::load`.
 
 ## 9. Known-divergent / non-functional
 
 - **`NativePlatform::window()` and `gl_context()`** — Both return
-  `unimplemented!()`. These `Platform` trait methods are never called because
-  `run_loop` takes ownership of the platform and captures everything needed
-  before the frame callback. They exist to satisfy the trait contract but
-  would panic if invoked.
+  `unimplemented!()`.  `HeadlessPlatform::window()` is also
+  `unimplemented!()`, but `HeadlessPlatform::gl_context()` returns `&self.gl`
+  for real.  These `Platform` trait methods are never called because `run_loop`
+  takes ownership of the platform and captures everything needed before the
+  frame callback. They exist to satisfy the trait contract but the native
+  accessors would panic if invoked.
 
 - **Web resize and mouse position** — The `mousemove` closure captures
   `cw`/`ch` from the canvas dimensions at construction time. The `resize`

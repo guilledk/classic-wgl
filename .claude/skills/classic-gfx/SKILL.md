@@ -136,10 +136,10 @@ uses edge-detection blended with `gridColor` when `show_grid` is true and not se
 ### Nav mesh variant
 
 The same `draw_tilemap` function draws the nav mesh overlay. Only the parameters
-differ: a different tileset texture (`"navTileset"`), `show_grid: false`,
-`selection_mode: -1`, and a nav-specific tile data texture built from `NavMesh.data`.
-The nav entity must have a `Transform` component matching the parent tilemap
-for correct depth ordering.
+differ: the `NavMesh.tile_set` texture (default `"navTileset"`), `show_grid:
+false`, `selection_mode: -1`, and a nav-specific tile data texture built from
+`NavMesh.data`.  The nav entity must have a `Transform` component matching the
+parent tilemap for correct depth ordering.
 
 ---
 
@@ -311,9 +311,10 @@ Uniform setters (`uniform_mat4`, `uniform_vec4`, `uniform_1f`, `uniform_1i`,
 via `s.attr(name)` panic on missing attributes.
 
 All shader sources are embedded at compile time (GLSL 300 es, ported from the
-TS GLSL 100 `attribute`/`varying` syntax).  `Gfx::resolve_vertex_source` and
-`resolve_fragment_source` map manifest URL strings to embedded sources by
-substring match on the filename.
+TS GLSL 100 `attribute`/`varying` syntax).  A standalone `ShaderSourceRegistry`
+(`resolve_vertex` / `resolve_fragment`) maps manifest URL strings to embedded
+sources by the filename's last `/`-segment (via `shader_filename`), not a
+substring match.
 
 ### Shader → draw-function mapping
 
@@ -324,7 +325,7 @@ substring match on the filename.
 | `sdf` | draw_sdf | `sdf.vert` | `sdf.frag` |
 | `isoTilemap` | draw_tilemap | `iso_tilemap.vert` | `iso_tilemap.frag` |
 
-`image` and `image_colorized` are compiled but have no public `draw_*` functions.
+`image` and `imageColorize` are compiled but have no public `draw_*` functions.
 
 ---
 
@@ -371,8 +372,9 @@ pub struct GlTexture {
 `TEXTURE0 + unit`.  Stored in `Gfx.textures` by name; `gfx.texture(name)` panics
 if missing.
 
-Tile ID data is uploaded as raw `glow::Texture` (not `GlTexture`) — each pixel
-encodes `tile_id / 256.0`, decoded as `floor(R * 256.0)` in the fragment shader.
+Tile ID data is uploaded as a raw `glow::Texture` (not `GlTexture`) — each pixel
+encodes the raw tile-id byte (clamped to 255).  In the fragment shader the
+GPU-normalised `R` channel (`v/255`) is decoded as `floor(R * 256.0)`.
 
 **The data texture is one pixel per tile** (`size_x × size_y`), with no
 power-of-two padding.  `build_tile_texture` and `upload_data_texture` never
@@ -404,9 +406,10 @@ is not an equivalent substitute (it lacks the depth-corner interpolation).
   entries with distinct `SdfTextRender` components.  The `softEdge` uniform is
   hardcoded to 0.08 in the Rust `draw_sdf` (the TS version let callers set it).
 
-- **Missing `draw_image_colorized`**: The `image_colorized` shader is compiled
-  but there is no public `draw_*` function for it.  The grayscale+colorize
-  fragment shader path has no current caller in the render loop.
+- **Missing `draw_image_colorized`**: The `imageColorize` program (from the
+  `image_colorized.frag` file) is compiled but there is no public `draw_*`
+  function for it.  The grayscale+colorize fragment shader path has no current
+  caller in the render loop.
 
 - **Missing `draw_image`**: The `image` shader is compiled but has no public
   `draw_*` function.  Full-texture (non-spritesheet) draws are not used in the

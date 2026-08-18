@@ -707,6 +707,23 @@ impl WebWasmRuntime {
             );
         }
 
+        // iso_to_screen
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "iso_to_screen",
+                Box::new(move |x: f64, y: f64, out_ptr: i32| -> i32 {
+                    let Some((sx, sy)) = host.borrow_mut().iso_to_screen(x, y) else {
+                        return 0;
+                    };
+                    let mem = mem.borrow();
+                    write_f64_pair(mem.as_ref().unwrap(), out_ptr, sx, sy);
+                    1
+                }) as Box<dyn FnMut(f64, f64, i32) -> i32>
+            );
+        }
+
         // height_at
         {
             let host = host.clone();
@@ -894,6 +911,16 @@ impl WebWasmRuntime {
                 Box::new(move |x: f64, y: f64, scale: f64| -> i32 {
                     host.borrow_mut().set_camera(x, y, scale)
                 }) as Box<dyn FnMut(f64, f64, f64) -> i32>
+            );
+        }
+
+        // set_grid
+        {
+            let host = host.clone();
+            set_import!(
+                "set_grid",
+                Box::new(move |show: i32| -> i32 { host.borrow_mut().set_grid(show) })
+                    as Box<dyn FnMut(i32) -> i32>
             );
         }
 
@@ -1363,21 +1390,6 @@ impl WebWasmRuntime {
                     };
                     host.borrow_mut().set_tileset(&rgba, w.max(0) as u32, h.max(0) as u32)
                 }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
-            );
-        }
-
-        {
-            let host = host.clone();
-            let mem = mem.clone();
-            set_import!(
-                "set_spawn_points",
-                Box::new(move |ptr: i32, len: i32| -> i32 {
-                    let pairs = abi::bytes_to_i32(&{
-                        let mem = mem.borrow();
-                        read_bytes(mem.as_ref().unwrap(), ptr, len)
-                    });
-                    host.borrow_mut().set_spawn_points(&pairs)
-                }) as Box<dyn FnMut(i32, i32) -> i32>
             );
         }
 

@@ -33,16 +33,19 @@ Key lifecycle properties:
 - **Frame counter**: `Engine::frame_number()` increments every `frame()` call,
   starting from 0.  Test steps fire when `frame_number()` equals `step.frame`.
 - **Completion**: once all steps are processed and any active drag has
-  finished, `test_should_close` is set.  On assertion failure, it is
-  also set immediately.  On headless, this terminates the `run_loop`.
+  finished, `test_should_close` is set.  On assertion failure only
+  `test_failed` is set (and `test_should_close` immediately **only** when
+  `CLASSIC_TEST_FAILFAST` is set).  On headless, `test_should_close`
+  terminates the `run_loop`.
 - **CLASSIC_TEST_FILE**: if set, the scenario is loaded from that JSON file
   instead of the hardcoded default.  Takes precedence.
-- **Editor-state persistence**: `test_editor_state` holds the most recent
+- **Editor-state persistence**: `editor_state` holds the most recent
   `SetEditor` action so it can be re-applied every frame, compensating for
   `tool_buttons` `on_update` closures that reset `editor_target` via `Rc` sync.
-- **CLASSIC_TEST_FAILFAST**: when set, the first assertion failure causes an
-  immediate `panic!` instead of just setting `test_failed=true`.  This is
-  useful for debugging with a backtrace.
+- **CLASSIC_TEST_FAILFAST**: when set, the first assertion failure sets
+  `test_should_close` (early exit) instead of just setting `test_failed=true`.
+  There is no `panic!` on assertion failure; the desktop main loop turns
+  `test_failed` into `process::exit(1)`.
 
 ## 2. Test Actions
 
@@ -57,7 +60,7 @@ Each `TestStep` carries a `Vec<TestAction>`.  All nine actions are mapped in
 | `EnableTextDemo` | `enableTextDemo` | Activates the text showcase panel. Sets `editor_target="textDemo"` and enables the `text_showcase_e` entity. |
 | `MouseMove` | `mouseMove` | Sets `input.mouse_pos` and `input.mouse_axis` (normalized to `[-1,1]` using the last viewport dimensions). |
 | `MouseClick` | `mouseClick` | Sets `input.mouse_pos`, `mouse_down[button]`, `mouse_pressed[button]`, and `frame_had_click` (for button 0). |
-| `KeyPress` | `keyPress` | Inserts into `input.keys_down` and `input.keys_pressed` maps. Key strings follow winit `VirtualKeyCode` naming (`"F9"`, `"Space"`, etc.). |
+| `KeyPress` | `keyPress` | Inserts into `input.keys_down` and `input.keys_pressed` maps. Key strings follow winit 0.30 `PhysicalKey::Code` debug naming (`"F9"`, `"Space"`, `"KeyW"`, etc.). |
 | `Wheel` | `wheel` | Sets `input.mouse_wheel`. The engine's wheel-decay logic runs after the test frame, so wheel values may need to be set immediately before assertions that depend on them. |
 | `Wait` | `wait` | No-op; only useful as a sentinel in the JSON. Frame-based waiting is achieved by scheduling a step on a later frame. |
 
@@ -65,9 +68,9 @@ Drag simulation detail: the drag is processed by `run_test_frame`'s drag state
 machine.  On frame `start+0` it sets `selection_iso_begin=mouse_iso_pos=from`
 and `selection_mode=1`.  On interim frames (`rel > 0 && rel < hold`) it
 interpolates `mouse_iso_pos` by `from.lerp(to, rel/hold)`.  On frame
-`start+hold` it sets `selection_iso_end=to`, `selection_mode=-1`, and calls
-`apply_editor_selection()`.  The drag state is then cleared along with
-`test_editor_state`.
+`start+hold` it sets `selection_iso_end=to`, `selection_mode=-1`, and lets the
+`on_selection_end` hook (demo `apply_editor_selection`) run.  The drag state is
+then cleared along with `editor_state`.
 
 ## 3. Assertions
 
@@ -86,8 +89,9 @@ tile coordinates for spatial assertions; its meaning varies by assertion kind.
 | `EntityPos` | `entityPos` | Uses `log` as the entity name.  `region = (ex, ey, ...)`.  Checks `Transform::position.x/y` within tolerance (default 1.0) of `(ex, ey)`.  `expected` overrides tolerance if > 0. |
 
 On failure, each assertion logs a diagnostic line via the `Test` instrument
-channel.  The test result string is pushed to `test_results` for the
-completion summary (`"=== CLASSIC_TEST COMPLETE: X/Y assertions passed ==="`).
+channel.  The test result string is pushed to the runner's `results` vector
+for the completion summary (`"=== CLASSIC_TEST COMPLETE: X/Y assertions
+passed ==="`).
 
 ## 4. Writing a Test Scenario
 
@@ -182,11 +186,11 @@ When adding a new end-to-end test scenario, follow this workflow:
 
 ### Interactive debugging
 
-Set `CLASSIC_TEST_FAILFAST=1` to panic on the first assertion failure,
-which gives a backtrace for the failing assertion.  Combine with
-`CLASSIC_UI_DEBUG=1` to dump UI entity positions for the first 120 frames.
-Use `CLASSIC_LOG=Test,golden` for per-frame test output and golden comparison
-details.
+Set `CLASSIC_TEST_FAILFAST=1` to exit on the first assertion failure (there is
+no `panic!` — the desktop main loop turns `test_failed` into a non-zero exit
+code).  Combine with `CLASSIC_UI_DEBUG=1` to dump UI entity positions for the
+first 120 frames.  Use `CLASSIC_LOG=Test,golden` for per-frame test output and
+golden comparison details.
 
 ## 6. Golden Trace Harness
 
@@ -201,8 +205,9 @@ header object containing `tag`, `frame`, `viewport`, `camera` (position,
 scale, matrix), and `counts` (per-kind draw call count).  Each subsequent
 line is a `TraceItem`: `order` (z-sort depth), `kind` (e.g. `Tilemap`,
 `IsoSprite`, `SdfText`, `UiRect`, `UiSprite`, `Sprite`), `name` (debug
-name), `model` (16-element row-major matrix), `camera_ignored` (bool),
-and optional `texture`, `frame`, `color`.
+name), `model` (16-element matrix via `glam::Mat4::to_cols_array()`, i.e.
+column-major), `camera_ignored` (bool), and optional `texture`, `frame`,
+`color`.
 
 ### Operation
 
@@ -211,13 +216,15 @@ and optional `texture`, `frame`, `color`.
   `TraceItem` with its model matrix, texture, and metadata.
 - **CLASSIC_GOLDEN=check**: after rendering the capture frame, the trace is
   serialized and compared line-by-line against
-  `tests/golden/<scenario>/<tag>.trace.jsonl`.  On mismatch, the actual
-  trace is written to `target/classic-test/<scenario>/<tag>.actual.trace.jsonl`
-  for CI artifact upload.
+  `{CLASSIC_GOLDEN_DIR}/baseline.trace.jsonl` (default
+  `tests/golden/baseline`; the lunar scene sets
+  `CLASSIC_GOLDEN_DIR=tests/golden/lunar`).  On mismatch, the actual trace is
+  written to `target/classic-test/baseline.actual.trace.jsonl` for CI artifact
+  upload.
 - **CLASSIC_GOLDEN=update**: overwrites the reference file with the current
   output.
 - **Baseline location**: `tests/golden/baseline/baseline.trace.jsonl`
-  (70 lines, covering 6 `IsoSprite`, 54 `SdfText`, 1 `Sprite`, 1
+  (70 lines, covering 5 `IsoSprite`, 54 `SdfText`, 1 `Sprite`, 1
   `Tilemap`, 7 `UiRect`, 1 `UiSprite`).
 
 ### Pixel golden (CLASSIC_GOLDEN_PNG)
@@ -264,7 +271,8 @@ The CI golden job runs in a headless environment with no window system:
   - `EGL_PLATFORM=surfaceless` — enables surfaceless EGL contexts, no
     display server required.
   - `CLASSIC_HEADLESS=1` — selects the `HeadlessPlatform`, which dynamically
-    loads `libEGL.so.1` and creates a pbuffer surface + GLES 3.0 context.
+    loads `libEGL.so.1` and creates a pbuffer surface + desktop OpenGL 3.x
+    context (`EGL_RENDERABLE_TYPE = EGL_OPENGL_BIT`, not GLES).
   - `CLASSIC_FRAMES=60` — limits the headless run loop to 60 frames.
     The headless `run_loop` ignores `should_close` from test completion
     and waits for this limit, giving golden capture time to occur after
@@ -351,10 +359,10 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
   line-by-line diff capped at 40 lines.  For large diffs, the full actual
   trace in `target/classic-test/` must be examined manually.
 
-- **test_editor_state is cleared after drag completion**: after
-  `apply_editor_selection()`, both `test_drag_state` and `test_editor_state`
-  are set to `None`.  A subsequent `SetEditor` action is required before
-  another drag.
+- **`editor_state` is cleared after drag completion**: after the selection
+  end (which runs the demo's `apply_editor_selection` hook), the runner's
+  `drag_state` and `editor_state` are set to `None`.  A subsequent `SetEditor`
+  action is required before another drag.
 
 - **No multi-scenario support**: at most one scenario runs per invocation.
   The runner processes `STEPS` as a `LazyLock`, computed once per process

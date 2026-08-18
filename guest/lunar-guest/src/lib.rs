@@ -25,7 +25,7 @@ pub use material::LunarMaterial;
 pub use tileset::{build_default_lunar_tileset, build_lunar_tileset};
 
 #[cfg(target_arch = "wasm32")]
-use alloc::{format, string::String, vec::Vec};
+use alloc::{format, string::String};
 
 #[cfg(target_arch = "wasm32")]
 #[panic_handler]
@@ -46,8 +46,11 @@ mod host {
         pub fn set_heights(ptr: i32, len: i32) -> i32;
         pub fn set_nav(ptr: i32, len: i32) -> i32;
         pub fn set_tileset(ptr: i32, len: i32, w: i32, h: i32) -> i32;
-        pub fn set_spawn_points(ptr: i32, len: i32) -> i32;
         pub fn commit_terrain(height_scale: f64) -> i32;
+        pub fn iso_to_screen(x: f64, y: f64, out_ptr: i32) -> i32;
+        pub fn set_camera(x: f64, y: f64, scale: f64) -> i32;
+        pub fn set_light(a0: f64, a1: f64, a2: f64, d0: f64, d1: f64, d2: f64, c0: f64, c1: f64, c2: f64) -> i32;
+        pub fn set_grid(show: i32) -> i32;
     }
 }
 
@@ -69,8 +72,9 @@ fn seed_for(n: u32) -> String {
 
 /// Generate the lunar map for a seed and bulk-upload every grid to the host,
 /// then commit the terrain (install on first call, rebuild afterwards).
+/// Returns the first landing-zone spawn point (tile coords), for camera framing.
 #[cfg(target_arch = "wasm32")]
-fn generate(seed: &str) {
+fn generate(seed: &str) -> (i32, i32) {
     let params = LunarParams { seed: String::from(seed), ..LunarParams::default() };
     let terrain = generate_lunar(&params);
     let (rgba, tw, th) = build_lunar_tileset(&format!("{seed}:tileset"), 32, 8, 8);
@@ -89,15 +93,65 @@ fn generate(seed: &str) {
         host::set_tileset(rgba.as_ptr() as i32, rgba.len() as i32, tw as i32, th as i32);
     }
 
-    let mut spawns: Vec<i32> = Vec::with_capacity(terrain.spawn_points.len() * 2);
-    for (x, y) in &terrain.spawn_points {
-        spawns.push(*x);
-        spawns.push(*y);
-    }
     // SAFETY: single-threaded guest.
     unsafe {
-        host::set_spawn_points(spawns.as_ptr() as i32, (spawns.len() * 4) as i32);
         host::commit_terrain(HEIGHT_SCALE);
+    }
+
+    terrain.spawn_points.first().copied().unwrap_or((0, 0))
+}
+
+/// Read one little-endian `f64` from a guest buffer.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn read_f64(buf: &[u8]) -> f64 {
+    f64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]])
+}
+
+/// The lunar light preset (airless: near-zero ambient, hard low sun).  Direction
+/// is stored un-normalised and normalised here to match the host's former
+/// `apply_light_preset("lunar")`.
+#[cfg(target_arch = "wasm32")]
+const LUNAR_AMBIENT: [f64; 3] = [0.20, 0.20, 0.25];
+#[cfg(target_arch = "wasm32")]
+const LUNAR_DIR: [f64; 3] = [0.42, 0.30, 0.60];
+#[cfg(target_arch = "wasm32")]
+const LUNAR_COLOR: [f64; 3] = [0.88, 0.86, 0.83];
+
+/// The lunar scene owns its own look: zoom out to show the terrain, centre on
+/// the first landing zone, apply the airless light preset, and hide the grid.
+#[cfg(target_arch = "wasm32")]
+fn setup_view(spawn: (i32, i32)) {
+    // Normalise the light direction (f32, matching glam's `Vec3::normalize`).
+    let dx = LUNAR_DIR[0] as f32;
+    let dy = LUNAR_DIR[1] as f32;
+    let dz = LUNAR_DIR[2] as f32;
+    let len = libm::sqrtf(dx * dx + dy * dy + dz * dz);
+    let recip = 1.0 / len;
+    let ndx = dx * recip;
+    let ndy = dy * recip;
+    let ndz = dz * recip;
+
+    // SAFETY: single-threaded guest.
+    unsafe {
+        let mut screen = [0u8; 16];
+        if host::iso_to_screen(spawn.0 as f64, spawn.1 as f64, screen.as_mut_ptr() as i32) == 1 {
+            let sx = read_f64(&screen[0..8]);
+            let sy = read_f64(&screen[8..16]);
+            host::set_camera(sx, sy, 0.32);
+        }
+        host::set_light(
+            LUNAR_AMBIENT[0],
+            LUNAR_AMBIENT[1],
+            LUNAR_AMBIENT[2],
+            ndx as f64,
+            ndy as f64,
+            ndz as f64,
+            LUNAR_COLOR[0],
+            LUNAR_COLOR[1],
+            LUNAR_COLOR[2],
+        );
+        host::set_grid(0);
     }
 }
 
@@ -105,7 +159,8 @@ fn generate(seed: &str) {
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn init() {
-    generate(&seed_for(0));
+    let spawn = generate(&seed_for(0));
+    setup_view(spawn);
 }
 
 /// Called once per frame.  `R` re-rolls the terrain with a fresh seed.

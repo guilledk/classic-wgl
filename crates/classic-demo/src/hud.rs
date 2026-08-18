@@ -400,6 +400,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
         // Resolve roles before mutably borrowing gfx (entity_by_role borrows &Engine).
         let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap);
         let agent_entity = engine.entity_by_role(classic_core::RoleKind::Agent);
+        let agent_selected = engine.guest_flag("agent_selected");
         let Some(gfx) = engine.gfx.as_mut() else { return };
         let cam = engine.camera.matrix();
         let x_cross: [f32; 12] = [-8.0, -8.0, 0.0, 8.0, 8.0, 0.0, -8.0, 8.0, 0.0, 8.0, -8.0, 0.0];
@@ -458,7 +459,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
             }
 
             // Selection ring around selected agent (yellow diamond).
-            if engine.agent_selected {
+            if agent_selected {
                 if let Some(agent_e) = agent_entity {
                     if let Ok(agent_tf) = engine.world.get::<&Transform>(agent_e) {
                         let pos = agent_tf.position;

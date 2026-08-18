@@ -14,6 +14,7 @@ pub mod loader;
 pub mod manifest;
 pub mod resource;
 pub mod rom;
+pub mod source;
 
 pub use archive::RomArchive;
 pub use format::{detect_format, RomFormat};
@@ -23,6 +24,7 @@ pub use loader::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 pub use manifest::{CodeEntry, RomManifest};
 pub use resource::{ResourceKind, ResourceSet};
 pub use rom::Rom;
+pub use source::{parse_rom_spec, RomSource, DEFAULT_ROM};
 
 /// Canonicalise a manifest resource path (`/res/foo.png`) to a ROM archive
 /// entry path (`res/foo.png`) — no leading slash.

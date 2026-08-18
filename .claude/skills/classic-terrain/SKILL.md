@@ -11,7 +11,7 @@ description: >
     Trigger phrases: "generate_lunar", "LunarParams", "LunarTerrain",
     "crater", "mare", "regolith", "landing zone", "slope relaxation",
     "angle of repose", "Fbm", "tiling_noise_2d", "build_lunar_tileset",
-    "LunarMaterial", "CLASSIC_SCENE", "lunar scene", "terrain".
+    "LunarMaterial", "CLASSIC_ROM", "lunar scene", "terrain".
 ---
 
 # Procedural Terrain in classic-wgl
@@ -22,13 +22,12 @@ reproducible for golden traces, and safe on `wasm32`.
 
 | Where | What |
 |---|---|
-| `classic-core/src/terrain/fractal.rs` | fBm / ridged / billow, domain warp, periodic noise |
-| `classic-core/src/terrain/material.rs` | Material table shared by generator and tileset |
-| `classic-core/src/terrain/lunar.rs` | The lunar surface generator |
-| `classic-core/src/terrain/tileset.rs` | Procedurally painted tile sheet |
-| `classic-demo/src/scenes/lunar.rs` | Installs the result on ECS + GPU; dev widget |
-| `classic-demo/src/lib.rs` | `Scene::{Demo, Lunar}` dispatch |
-| `classic-core/tests/terrain_lunar.rs` | The regression net (24 tests) |
+| `crates/classic-terrain/src/{simplex_noise,fractal,noise_fields}.rs` | open noise primitives (simplex, fBm/ridged/billow, domain warp, bulk fields) |
+| `guest/lunar-guest/src/lunar.rs` | The lunar surface generator (`generate_lunar`) |
+| `guest/lunar-guest/src/material.rs` | `LunarMaterial` table shared by generator and tileset |
+| `guest/lunar-guest/src/tileset.rs` | Procedurally painted tile sheet |
+| `guest/lunar-guest/src/lib.rs` | wasm entrypoint: bulk-uploads grids + `commit_terrain` + view setup |
+| `guest/lunar-guest/tests/terrain_lunar.rs` | The regression net (25 tests) |
 
 ---
 
@@ -215,49 +214,55 @@ noise gradient amplifies into a faint but real seam.
 
 ```rust
 e.load_state(state_lunar_json)?;      // must come first
-scenes::lunar::init_lunar_terrain(&mut e, &state, LunarParams::default());
 // ... shared init ...
-e.init_navigation_data(nav);          // NOT init_navigation
+// the lunar guest uploads nav + tiles + heights, then commit_terrain(height_scale)
 ```
 
 - The lunar scene **reuses the demo entity names** (`tilemap`,
   `tilemapNavigation`, `cursor`).  `apply_editor_selection` and
   `sync_nav_heights` look those names up by role, so reuse means the whole
   editor toolchain works on a generated map for free.
-- `LUNAR_HEIGHT_SCALE = 14.0` overrides the default `tile_pixel_size[0]` (32).
+- `HEIGHT_SCALE = 14.0` (guest `guest/lunar-guest/src/lib.rs`, passed to
+  `commit_terrain`) overrides the default `tile_pixel_size[0]` (32).
   Generated terrain spans ~7 height units; at 32 the relief is overblown and
   the 3-pass mouse-picking parallax solve is stretched to ~7 tiles of
   correction, where it converges poorly.
 - `Engine::base_height_scale` records what the mesh was built with, so the
   height widget's multiplier scales relative to it rather than assuming
   `tile_pixel_size[0]`.
-- `nav_slope_threshold` is set from `nav_max_slope` so a height edit does not
-  reclassify the whole map on the next `sync_nav_heights`.
+- `Engine::nav_slope_threshold` is a configurable field (default `2.0`) used by
+  `sync_nav_heights`; it is **not** automatically set from the generator's
+  `nav_max_slope`, so a height edit on a generated map classifies slopes with a
+  different (coarser) rule than the generator used.
 
 ### Scene selection
 
-`CLASSIC_SCENE=lunar` (native) / `?scene=lunar` (web) selects the embedded
-`lunar.rom` (anything else → `demo.rom`); the ROM's `entrypoint` drives the
-`is_lunar` branch in `init_engine`.
+`CLASSIC_ROM=rom:lunar` (native) / `?rom=rom:lunar` (web) selects the embedded
+`lunar.rom` (empty selector → `rom:demo`).  The selector is a URI-scheme
+grammar: `rom:<name>` for embedded ROMs, `http(s)://` to fetch, and a bare
+value is a file path (native) / relative URL (web).
 
 ---
 
 ## 10. Tuning workflow
 
-1. `cargo run --release -p classic-core --example dbg_lunar -- <seed> <size>`
-   prints stats plus ASCII height / material / navigation maps.  Use this for
-   structure and statistics — it is far faster than rendering.
+1. `cargo run --manifest-path guest/lunar-guest/Cargo.toml --release --example
+   dbg_lunar -- <seed> <size>` prints stats plus ASCII height / material /
+   navigation maps.  Use this for structure and statistics — it is far faster
+   than rendering.
 2. Render a frame for anything about *appearance*:
    ```
-   CLASSIC_SCENE=lunar CLASSIC_HEADLESS=1 CLASSIC_OFFSCREEN=1 CLASSIC_FRAMES=60 \
+   CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_OFFSCREEN=1 CLASSIC_FRAMES=60 \
    CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=update \
    CLASSIC_GOLDEN_DIR=/tmp/shot cargo run -p classic-desktop
    ```
    (Pixel capture only fires on `golden_capture_frame`, default 55 — so
    `CLASSIC_FRAMES` must exceed it.)
 3. In-app: dev menu → **Lunar Gen** → seed / craters / mare + Regenerate.
-4. `cargo test -p classic-core --test terrain_lunar -- --test-threads=1`.
-5. `CLASSIC_LOG=terrain=info` logs a one-line summary per generation.
+4. `cargo test --manifest-path guest/lunar-guest/Cargo.toml --test terrain_lunar`.
+5. `CLASSIC_LOG=terrain=info` — note the `terrain` channel exists but the guest
+   generator emits no host logs through it (the generator runs inside wasm and
+   has no `log` import).
 
 ### Health check
 
@@ -285,9 +290,9 @@ running away — check the deposit and excavation limits first.
 
 ## 11. Known limitations
 
-- **One generator.**  `terrain/` is structured for more (fractal and material
-  are generic), but only `lunar` exists.  See `classic-procmaps` §2 for the
-  recipe to add a second generator/scene.
+- **One generator.**  The noise primitives (`classic-terrain`) are generic, but
+  the only map algorithm is `lunar` (in `guest/lunar-guest`).  See
+  `classic-procmaps` §2 for the recipe to add a second generator/scene.
 - **No erosion by water/wind** — deliberately: there is none on the Moon.
 - **Rays are approximate.**  Angular noise thresholded on direction; real ray
   systems are discontinuous and clumpy.
@@ -306,8 +311,9 @@ running away — check the deposit and excavation limits first.
 
 The shipping size is **400x400** (160K tiles), set in three places that must
 agree — `LunarParams::default()` and both the `Tilemap` and
-`IsometricNavMesh` entries in `public/state_lunar.json`.
-`init_tilemap_generated` asserts they match.
+`IsometricNavMesh` entries in `public/state_lunar.json`.  `commit_terrain`
+builds the mesh from the uploaded grids, so the state-file dimensions must
+agree with `LunarParams::default()`.
 
 Almost every parameter is in scale-free units (cycles per tile, craters per
 1000 tiles, height units) and needs no adjustment.  Only genuinely absolute

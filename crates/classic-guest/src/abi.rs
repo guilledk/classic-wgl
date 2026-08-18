@@ -100,8 +100,3 @@ pub fn bytes_to_u32(bytes: &[u8]) -> Vec<u32> {
 pub fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
-
-/// Decode little-endian `i32` values from a byte slice.
-pub fn bytes_to_i32(bytes: &[u8]) -> Vec<i32> {
-    bytes.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
-}

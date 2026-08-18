@@ -166,7 +166,7 @@ impl UIManager {
                 glam::Vec3::new(scale, scale, 1.0),
             ),
             SdfTextRender {
-                atlas_name: "dejavusans".into(),
+                atlas_name: classic_core::components::DEFAULT_SDF_FONT.into(),
                 color,
                 bgcolor: [0.0, 0.0, 0.0, 0.0],
                 outline_color: [0.0, 0.0, 0.0, 0.0],
