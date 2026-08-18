@@ -52,6 +52,16 @@ pub struct ShaderInfo {
 pub struct TextureManifestEntry {
     pub name: String,
     pub src: String,
+    /// Optional per-pixel depth map (a grayscale texture with the same tile
+    /// layout as this texture; 0.5 = anchor plane, 1.0 = closest, 0.0 =
+    /// farthest).  When present, the sprite writes `gl_FragDepth` and is
+    /// occluded per-pixel instead of by draw order.
+    #[serde(default)]
+    pub depth: Option<String>,
+    /// Depth range (isoDepth units) that the depth map's grayscale [0, 1]
+    /// spans, emitted by the exporter.
+    #[serde(default)]
+    pub depth_range: f32,
 }
 
 /// A manifest entry for an SDF font.
@@ -82,6 +92,26 @@ pub struct VehicleDef {
     /// Pixel size of one frame cell (the sprite's drawn size at scale 1).
     #[serde(default)]
     pub cell: [f32; 2],
+    /// Number of body pitch frames per direction (1 = flat/level only).  The
+    /// body sheet stacks `pitch_levels` direction blocks vertically, so the
+    /// body `tile_set_size` is `[columns, rows * pitch_levels]`.
+    #[serde(default = "default_vehicle_pitch_levels")]
+    pub pitch_levels: u32,
+    /// Max body pitch angle (degrees, symmetric ±) the frames span, emitted by
+    /// the exporter.  The engine quantizes the simulated pitch angle against
+    /// this ceiling.
+    #[serde(default = "default_vehicle_pitch_max_deg")]
+    pub pitch_max_deg: f32,
+    /// Number of body roll frames per (pitch, direction) (1 = no roll).  The
+    /// body sheet stacks `pitch_levels · roll_levels` direction blocks
+    /// vertically, so the body `tile_set_size` is
+    /// `[columns, rows · pitch_levels · roll_levels]`.
+    #[serde(default = "default_vehicle_roll_levels")]
+    pub roll_levels: u32,
+    /// Max body roll angle (degrees, symmetric ±) the frames span, emitted by
+    /// the exporter.
+    #[serde(default = "default_vehicle_roll_max_deg")]
+    pub roll_max_deg: f32,
     pub parts: Vec<VehiclePartDef>,
 }
 
@@ -91,6 +121,22 @@ fn default_vehicle_columns() -> u32 {
 
 fn default_vehicle_rows() -> u32 {
     2
+}
+
+fn default_vehicle_pitch_levels() -> u32 {
+    1
+}
+
+fn default_vehicle_pitch_max_deg() -> f32 {
+    20.0
+}
+
+fn default_vehicle_roll_levels() -> u32 {
+    1
+}
+
+fn default_vehicle_roll_max_deg() -> f32 {
+    20.0
 }
 
 /// One part (body or wheel) of a [`VehicleDef`].

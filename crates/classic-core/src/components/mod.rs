@@ -328,6 +328,52 @@ pub struct IsoVehicle {
     /// Current sprite-sheet direction frame (0..7).
     #[serde(default)]
     pub direction: u32,
+    /// Continuous body pitch angle (radians), signed nose-up positive.  Driven
+    /// by a spring-damper so the body bobs with momentum instead of snapping.
+    #[serde(skip)]
+    pub pitch: f32,
+    /// Body pitch angular velocity (radians/second).
+    #[serde(skip)]
+    pub pitch_vel: f32,
+    /// Quantized pitch frame (0..`pitch_levels`), written into the body
+    /// sprite's frame index each update.
+    #[serde(skip)]
+    pub pitch_index: u32,
+    /// Number of body pitch frames per direction (copied from the vehicle def
+    /// at spawn).
+    #[serde(skip)]
+    pub pitch_levels: u32,
+    /// Max body pitch angle (radians) the frames span (copied from the vehicle
+    /// def at spawn).
+    #[serde(skip)]
+    pub pitch_max: f32,
+    /// Front-rear axle distance in screen pixels (derived from the wheel
+    /// offsets and tile scale at spawn).
+    #[serde(skip)]
+    pub wheelbase_px: f32,
+    /// Continuous body roll angle (radians), signed left-up positive.  Driven
+    /// by the same spring-damper as pitch.
+    #[serde(skip)]
+    pub roll: f32,
+    /// Body roll angular velocity (radians/second).
+    #[serde(skip)]
+    pub roll_vel: f32,
+    /// Quantized roll frame (0..`roll_levels`), combined with pitch and
+    /// direction into the body sprite's frame index.
+    #[serde(skip)]
+    pub roll_index: u32,
+    /// Number of body roll frames per (pitch, direction) (copied from the
+    /// vehicle def at spawn).
+    #[serde(skip)]
+    pub roll_levels: u32,
+    /// Max body roll angle (radians) the frames span (copied from the vehicle
+    /// def at spawn).
+    #[serde(skip)]
+    pub roll_max: f32,
+    /// Left-right axle distance in screen pixels (derived from the wheel
+    /// offsets and tile scale at spawn).
+    #[serde(skip)]
+    pub track_px: f32,
 
     // -- transient simulation state (not serialized) ----------------------
     /// Per-wheel, per-direction tile-space offset from the body, derived from
@@ -369,6 +415,18 @@ impl Default for IsoVehicle {
             wheel_anchors: [[[0.5, 0.5]; 8]; 4],
             speed: 2.6,
             direction: 0,
+            pitch: 0.0,
+            pitch_vel: 0.0,
+            pitch_index: 0,
+            pitch_levels: 1,
+            pitch_max: 20.0f32.to_radians(),
+            wheelbase_px: 0.0,
+            roll: 0.0,
+            roll_vel: 0.0,
+            roll_index: 0,
+            roll_levels: 1,
+            roll_max: 20.0f32.to_radians(),
+            track_px: 0.0,
             wheel_tile_offsets: [[[0.0, 0.0]; 8]; 4],
             altitude: 0.0,
             vel_z: 0.0,
