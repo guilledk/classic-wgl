@@ -23,7 +23,6 @@ type EGLContext = *mut c_void;
 type EGLSurface = *mut c_void;
 
 const EGL_DEFAULT_DISPLAY: EGLDisplay = 0 as EGLDisplay;
-#[allow(dead_code)]
 const EGL_NO_SURFACE: EGLSurface = 0 as EGLSurface;
 const EGL_NO_CONTEXT: EGLContext = 0 as EGLContext;
 
@@ -51,6 +50,16 @@ macro_rules! load_fn {
             .get::<VoidFn>($name)
             .map_err(|e| format!("{}: {e}", std::str::from_utf8($name).unwrap_or("?")))?;
         std::mem::transmute::<VoidFn, unsafe extern "C" fn($($arg),*) -> $ret>(*sym)
+    }};
+}
+
+/// [`load_fn!`] but returning `Option` instead of `Result`, for teardown paths
+/// (e.g. `Drop`) that cannot propagate errors.
+macro_rules! load_fn_opt {
+    ($lib:expr, $name:expr, $ret:ty, $($arg:ty),*) => {{
+        $lib.get::<VoidFn>($name).ok().map(|sym| {
+            std::mem::transmute::<VoidFn, unsafe extern "C" fn($($arg),*) -> $ret>(*sym)
+        })
     }};
 }
 
@@ -227,6 +236,46 @@ impl HeadlessPlatform {
                 _context: context,
                 _surface: surface,
             })
+        }
+    }
+}
+
+impl Drop for HeadlessPlatform {
+    fn drop(&mut self) {
+        // Tear down the EGL context, surface, and display while libEGL is still
+        // loaded.  Without this the context stays current at process exit, and
+        // its thread-local destructor runs against the already-dlclose'd library,
+        // segfaulting at shutdown (issue #47).  The engine's glow context is
+        // dropped first (it lives in the run_loop closure), so no GL call runs
+        // after this teardown.
+        unsafe {
+            let make_current = load_fn_opt!(
+                self._egl_lib,
+                b"eglMakeCurrent\x00",
+                i32,
+                EGLDisplay,
+                EGLSurface,
+                EGLSurface,
+                EGLContext
+            );
+            let destroy_context =
+                load_fn_opt!(self._egl_lib, b"eglDestroyContext\x00", i32, EGLDisplay, EGLContext);
+            let destroy_surface =
+                load_fn_opt!(self._egl_lib, b"eglDestroySurface\x00", i32, EGLDisplay, EGLSurface);
+            let terminate = load_fn_opt!(self._egl_lib, b"eglTerminate\x00", i32, EGLDisplay);
+
+            if let (
+                Some(make_current),
+                Some(destroy_context),
+                Some(destroy_surface),
+                Some(terminate),
+            ) = (make_current, destroy_context, destroy_surface, terminate)
+            {
+                make_current(self._display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+                destroy_context(self._display, self._context);
+                destroy_surface(self._display, self._surface);
+                terminate(self._display);
+            }
         }
     }
 }
