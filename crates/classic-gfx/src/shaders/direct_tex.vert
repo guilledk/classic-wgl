@@ -17,7 +17,8 @@ void main(void ) {
         float bottomDepth = mix(iso_depth_corners.x, iso_depth_corners.y, vertex_pos.x);
         float topDepth = mix(iso_depth_corners.z, iso_depth_corners.w, vertex_pos.x);
         float cornerDepth = mix(topDepth, bottomDepth, vertex_pos.y);
-        gl_Position.z = clamp(cornerDepth, 0.0, 1.0);
+        // `cornerDepth` is window-space `[0, 1]`; map to clip z.
+        gl_Position.z = cornerDepth * 2.0 - 1.0;
     }
     vTexCoord = tex_coord;
 }

@@ -10,7 +10,7 @@
 
 use classic_core::components::{DebugName, IsoSprite, IsoVehicle, RoleKind, Tilemap, Transform};
 use classic_core::math::cartesian_to_iso_4;
-use classic_core::tilemap::bilinear_height;
+use classic_core::tilemap::sample_height_mesh;
 use glam::{Vec2, Vec3};
 
 use crate::Engine;
@@ -66,7 +66,7 @@ struct TerrainSnapshot {
 
 impl TerrainSnapshot {
     fn height(&self, x: f32, y: f32) -> f32 {
-        bilinear_height(&self.heights, self.size_x, self.size_y, x, y) * self.height_scale
+        sample_height_mesh(&self.heights, self.size_x, self.size_y, x, y) * self.height_scale
     }
 }
 

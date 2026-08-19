@@ -116,6 +116,7 @@ fn draw_tilemap(
     tileset_name: &str,                 // key into Gfx.textures
     tile_set_size: &[f32; 2],           // tiles per row/col in tileset PNG
     tile_pixel_size: &[f32; 2],         // pixel size of one tile in tileset
+    depth_scale: &[f32; 2],             // [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX]
     map_size: &[f32; 2],
     selected_tile: &[f32; 2], selection_begin: &[f32; 2],
     selection_mode: i32, selection_color: &[f32; 4],
@@ -134,8 +135,16 @@ Interleaved vertex attribs (36 bytes/vertex): `vertexPos`(3f, offset 0),
 `mapCoord`(2f, offset 12), `tileId`(1f, offset 20, >0.5 = wall), `normal`(3f, offset 24).
 
 Vertex shader: `projectionMatrix * cameraMatrix * modelMatrix * isoMatrix * vertexPos`,
-then `worldPos.y -= vertexPos.z` for height correction, custom iso-depth formula
-sets `gl_Position.z`.
+then `worldPos.y -= vertexPos.z` for height correction, then the canonical
+iso-depth formula sets `gl_Position.z` in window space:
+
+```glsl
+highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + vertex_pos.z / depth_scale.y;
+clipPos.z = isoDepth * 2.0 - 1.0;
+```
+
+`depth_scale` is set from the `classic-core::tilemap` constants
+(`HORIZONTAL_DEPTH_SCALE`, `HEIGHT_DEPTH_SCALE_PX`) so there are no GLSL literals.
 
 `selection_mode` (0=invert, 1=colorize, -1=none) highlights tiles between
 `selectionBegin` and `selectedTile`.  Lighting is diffuse:
@@ -172,12 +181,12 @@ per-fragment `gl_Position.z`; when the sprite has a depth map the fragment
 shader (`sheet.frag`) instead writes `gl_FragDepth` from the grayscale map:
 
 ```glsl
-gl_FragDepth = clamp((depth_base + (0.5 - gray) * depth_range + 1.0) * 0.5, 0.0, 1.0);
+gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
 ```
 
-The `+1.0)*0.5` term is the clip→window depth remap (the tilemap's
-`gl_Position.z` undergoes the same mapping), so the depth map and terrain share
-one consistent depth space.
+`depth_base` and `depth_range` are window-space iso depths (like the tilemap's
+`gl_Position.z`), so no clip→window remap is needed — the depth map and terrain
+share one consistent depth space.
 
 Two **separate** passes (driven by two engine loops, all normals then all
 ghosts):

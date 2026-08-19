@@ -439,6 +439,11 @@ impl Gfx {
             }
             gl.bind_vertex_array(Some(self.vao));
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            // `glClear` respects the stencil write mask, and the ghost pass
+            // leaves it at 0x00 — reset it so the stencil buffer actually
+            // clears every frame (stale ghost-group ids otherwise suppress the
+            // ghost pass as the camera pans).
+            gl.stencil_mask(0xFF);
             gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
@@ -841,6 +846,7 @@ impl Gfx {
             );
 
             gl.disable(glow::STENCIL_TEST);
+            gl.stencil_mask(0xFF);
             gl.depth_mask(true);
             gl.depth_func(glow::LEQUAL);
             gl.disable(glow::DEPTH_TEST);
@@ -996,6 +1002,7 @@ impl Gfx {
         tileset_name: &str,
         tile_set_size: &[f32; 2],
         tile_pixel_size: &[f32; 2],
+        depth_scale: &[f32; 2],
         map_size: &[f32; 2],
         selected_tile: &[f32; 2],
         selection_begin: &[f32; 2],
@@ -1038,6 +1045,7 @@ impl Gfx {
         s.uniform_mat4(gl, "iso_matrix", iso_matrix);
         s.uniform_vec2(gl, "tile_set_size", tile_set_size);
         s.uniform_vec2(gl, "tile_pixel_size", tile_pixel_size);
+        s.uniform_vec2(gl, "depth_scale", depth_scale);
         s.uniform_vec2(gl, "map_size", map_size);
         s.uniform_vec2(gl, "selected_tile", selected_tile);
         s.uniform_vec2(gl, "selection_begin", selection_begin);

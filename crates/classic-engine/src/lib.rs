@@ -33,7 +33,10 @@ use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
-use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
+use classic_core::tilemap::{
+    bilinear_height, build_mesh, build_tile_texture, sample_height_mesh, HEIGHT_DEPTH_SCALE_PX,
+    HORIZONTAL_DEPTH_SCALE,
+};
 use classic_core::types::AnimationData;
 use classic_core::types::FrameTable;
 use classic_core::types::SdfFontMetrics;
@@ -71,25 +74,6 @@ struct TextureDepth {
     depth_tex: String,
     depth_range: f32,
 }
-
-/// Height divisor in the iso depth formula `(tx - ty) / 400 + 0.5 - z / D`.
-///
-/// Derived from the exporter's view-axis projection (see `classic-assets` /
-/// `make_lrv_spritesheet.py`): at 30° elevation the camera basis is
-/// `back = right × up = (−√(3/8), −√(3/8), +1/2)`, so a height `z` (in
-/// exporter metres) contributes `−z/2` of view depth, while one tile of
-/// `tx − ty` contributes `√(3/8) · (TILE_PX / PPM_TARGET)` of view depth.
-/// The engine's `z` is in **pixels** (height_data · height_scale), so the
-/// metre-space divisor is scaled by `PPM_TARGET`:
-///
-/// `D = (2 · iso_depth_factor) · PPM_TARGET`
-///   `= 2 · √(3/8) · (45 / 64) · 400 · 64`
-///   `= 2 · √(3/8) · 45 · 400 ≈ 22045.4`.
-///
-/// (`iso_depth_factor / back.z = 344.46` is the same divisor for `z` in
-/// metres; the pre-export `14500` was ~1.5× off in the opposite direction.)
-/// Keep this in sync with `iso_tilemap.vert`.
-const ISO_HEIGHT_DEPTH_DIVISOR: f32 = 22045.4;
 
 /// Precomputed per-sprite draw parameters for the isometric normal + ghost
 /// passes, so both passes share one model/depth computation per frame.
@@ -930,7 +914,7 @@ impl Engine {
     pub fn height_at(&self, x: f32, y: f32) -> f32 {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
         let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return 0.0 };
-        bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
+        sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
     }
 
     /// Write one tile index at tile coordinate `(x, y)` (bounds-checked).
@@ -2328,6 +2312,7 @@ impl Engine {
                             &nav.tile_set,
                             &nav_ts,
                             &[8.0, 8.0],
+                            &[HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
                             &[nav.size_x as f32, nav.size_y as f32],
                             &[0.0, 0.0],
                             &[-1.0, -1.0],
@@ -2392,6 +2377,7 @@ impl Engine {
                     &tm.tile_set,
                     &tile_set_size,
                     &tile_pixel_size,
+                    &[HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
                     &[tm.size_x as f32, tm.size_y as f32],
                     &[tm.mouse_iso_pos.x, tm.mouse_iso_pos.y],
                     &[tm.selection_iso_begin.x, tm.selection_iso_begin.y],
@@ -3347,7 +3333,7 @@ impl Engine {
         cart_pos += iso_sprite.frame_offset;
         cart_pos += tilemap_tf.position;
 
-        let h = bilinear_height(
+        let h = sample_height_mesh(
             &tilemap.height_data,
             tilemap.size_x,
             tilemap.size_y,
@@ -3365,14 +3351,14 @@ impl Engine {
     }
 
     /// Compute the anchor-plane iso depth for a sprite position (the depth a
-    /// depth map's 0.5 grayscale corresponds to).  Matches the `base_depth`
-    /// term in [`Self::compute_iso_depth_corners`], including the `-0.005`
-    /// terrain-interpolation bias.
+    /// depth map's 0.5 grayscale corresponds to), in **window space** `[0, 1]`.
+    /// Matches the `base_depth` term in [`Self::compute_iso_depth_corners`].
     fn compute_iso_base_depth(pos: Vec3) -> f32 {
-        (pos.x - pos.y) / 400.0 + 0.5 - pos.z / ISO_HEIGHT_DEPTH_DIVISOR - 0.005
+        (pos.x - pos.y) / HORIZONTAL_DEPTH_SCALE + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX
     }
 
-    /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`).
+    /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`),
+    /// in **window space** `[0, 1]`.
     fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2]) -> [f32; 4] {
         let base_depth = Self::compute_iso_base_depth(pos);
         let default_footprint = [
@@ -3386,9 +3372,9 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / 400.0 + 0.5
-                - pos.z / ISO_HEIGHT_DEPTH_DIVISOR
-                - 0.005;
+            let d = (pos.x + pt.x - pos.y - pt.y) / HORIZONTAL_DEPTH_SCALE
+                + 0.5
+                + pos.z / HEIGHT_DEPTH_SCALE_PX;
             raw_depths[i] = d.min(base_depth);
         }
 
@@ -3534,7 +3520,7 @@ mod tests {
     #[test]
     fn compute_iso_base_depth_matches_anchor_plane_formula() {
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
-        let expected = (100.0 - 20.0) / 400.0 + 0.5 - 64.0 / ISO_HEIGHT_DEPTH_DIVISOR - 0.005;
+        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE + 0.5 + 64.0 / HEIGHT_DEPTH_SCALE_PX;
         assert!((Engine::compute_iso_base_depth(pos) - expected).abs() < 1e-9);
     }
 }

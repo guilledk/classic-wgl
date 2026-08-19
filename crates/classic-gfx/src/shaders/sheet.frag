@@ -59,10 +59,9 @@ void main(void ) {
     if (color.a < 0.01) discard;
     if (use_depth_map > 0.5) {
         highp float gray = texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r;
-        // `depth_base` (and the map's `depth_range`) are clip-space iso depths;
-        // gl_FragDepth is window-space, so convert via `(z + 1.0) * 0.5` (the
-        // same clip→window mapping the tilemap's `gl_Position.z` undergoes).
-        gl_FragDepth = clamp((depth_base + (0.5 - gray) * depth_range + 1.0) * 0.5, 0.0, 1.0);
+        // `depth_base` and `depth_range` are both window-space iso depths, so
+        // `gl_FragDepth` (also window-space) needs no clip→window remap.
+        gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
     }
     if (ghost_alpha > 0.0) {
         color.a = ghost_alpha;
