@@ -51,6 +51,8 @@ pub enum TestAction {
     Wheel { amount: f32 },
     #[serde(rename = "wait")]
     Wait { frames: u64 },
+    #[serde(rename = "setCameraIso")]
+    SetCameraIso { tx: f32, ty: f32, scale: f32 },
 }
 
 /// Kinds of assertions the test runner supports.
@@ -70,6 +72,8 @@ pub enum AssertKind {
     EntityVisible,
     #[serde(rename = "entityPos")]
     EntityPos,
+    #[serde(rename = "pixelAtEntity")]
+    PixelAtEntity,
 }
 
 /// A single assertion against a region of tile/height data or a UI property.
@@ -79,6 +83,9 @@ pub struct TileAssertion {
     pub region: (i32, i32, i32, i32),
     pub expected: f32,
     pub log: String,
+    /// Expected RGBA (normalized `[0, 1]`) for `PixelAtEntity`.
+    #[serde(default)]
+    pub color: Option<[f32; 4]>,
 }
 
 /// A scheduled test step: at the given frame, execute actions then run assertions.
@@ -230,6 +237,11 @@ fn run_frame(
                     engine.input.mouse_wheel = *amount;
                 }
                 TestAction::Wait { frames: _wait_frames } => {}
+                TestAction::SetCameraIso { tx, ty, scale } => {
+                    if let Some((cx, cy)) = engine.iso_to_screen(*tx, *ty) {
+                        engine.set_camera(cx, cy, *scale);
+                    }
+                }
             }
         }
 
@@ -329,6 +341,11 @@ fn run_frame(
                         }
                     }
                     passes
+                }
+                AssertKind::PixelAtEntity => {
+                    let name = if a.log.is_empty() { "entity" } else { &a.log };
+                    let tol = if a.expected <= 0.0 { 0.02 } else { a.expected };
+                    crate::render_order::assert_pixel_at_entity(engine, name, a.color, tol)
                 }
             };
             let result = format!(

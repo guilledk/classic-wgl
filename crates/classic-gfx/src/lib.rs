@@ -451,6 +451,46 @@ impl Gfx {
 
     // -- draw calls --------------------------------------------------------
 
+    /// Read a single RGBA pixel (normalized `[0, 1]`) from the current render
+    /// target (offscreen FBO, or the default framebuffer when none is set).
+    /// Screen coordinates are top-left origin, matching the engine's screen
+    /// space; the GL bottom-left origin is flipped internally.
+    pub fn read_pixel_rgba(&self, sx: i32, sy: i32) -> Option<[f32; 4]> {
+        let gl = &self.gl;
+        let (w, h) = match &self.render_target {
+            Some(rt) => {
+                rt.bind(gl);
+                (rt.width as i32, rt.height as i32)
+            }
+            None => {
+                unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, None) };
+                (self.viewport_w as i32, self.viewport_h as i32)
+            }
+        };
+        if sx < 0 || sy < 0 || sx >= w || sy >= h {
+            return None;
+        }
+        let mut px = [0u8; 4];
+        unsafe {
+            gl.finish();
+            gl.read_pixels(
+                sx,
+                h - 1 - sy,
+                1,
+                1,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut px)),
+            );
+        }
+        Some([
+            px[0] as f32 / 255.0,
+            px[1] as f32 / 255.0,
+            px[2] as f32 / 255.0,
+            px[3] as f32 / 255.0,
+        ])
+    }
+
     /// Draw a solid-colour rectangle.
     pub fn draw_rect(&self, model: &Mat4, camera: &Mat4, color: &[f32; 4], ignore_cam: bool) {
         let gl = &self.gl;

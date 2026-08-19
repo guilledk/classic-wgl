@@ -22,6 +22,7 @@ pub mod editor;
 pub mod hud;
 pub mod lighting;
 pub mod prefabs;
+pub mod render_order;
 pub mod state;
 pub mod testing;
 
