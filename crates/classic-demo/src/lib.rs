@@ -117,6 +117,14 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
             ..GuestLimits::default()
         };
         init_guest(&mut e, &state, wasm, &limits);
+    } else {
+        // Static scene (no guest): commit the ROM-authored grids so the
+        // tilemap renders without a guest driving `commit_terrain`.
+        let height_scale = e
+            .entity_by_role(classic_core::RoleKind::Tilemap)
+            .and_then(|te| e.world.get::<&classic_core::components::Tilemap>(te).ok())
+            .map_or(32.0, |tm| tm.tile_pixel_size[0] as f32);
+        e.commit_terrain(height_scale);
     }
 
     // Footprint colliders sample the terrain heights, so they run after the
