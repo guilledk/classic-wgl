@@ -72,6 +72,23 @@ struct TextureDepth {
     depth_range: f32,
 }
 
+/// Height divisor in the iso depth formula `(tx - ty) / 400 + 0.5 - z / D`.
+///
+/// Derived from the exporter's view-axis projection (see `classic-assets` /
+/// `make_lrv_spritesheet.py`): at 30° elevation the camera basis is
+/// `back = right × up = (−√(3/8), −√(3/8), +1/2)`, so a height `z` (in
+/// exporter metres) contributes `−z/2` of view depth, while one tile of
+/// `tx − ty` contributes `√(3/8) · (TILE_PX / PPM_TARGET)` of view depth.
+/// Matching the horizontal `/400` scale therefore requires
+///
+/// `D = 400 · (√(3/8) · TILE_PX / PPM_TARGET) / (1/2)`
+///   `= 2 · iso_depth_factor`
+///   `= 2 · √(3/8) · (45 / 64) · 400 ≈ 344.46`.
+///
+/// The pre-export `14500` was ~42× off (tuned against a dev-env bug, not the
+/// exporter).  Keep this in sync with `iso_tilemap.vert`.
+const ISO_HEIGHT_DEPTH_DIVISOR: f32 = 344.46;
+
 /// Precomputed per-sprite draw parameters for the isometric normal + ghost
 /// passes, so both passes share one model/depth computation per frame.
 struct IsoDraw {
@@ -3350,7 +3367,7 @@ impl Engine {
     /// term in [`Self::compute_iso_depth_corners`], including the `-0.005`
     /// terrain-interpolation bias.
     fn compute_iso_base_depth(pos: Vec3) -> f32 {
-        (pos.x - pos.y) / 400.0 + 0.5 - pos.z / 14500.0 - 0.005
+        (pos.x - pos.y) / 400.0 + 0.5 - pos.z / ISO_HEIGHT_DEPTH_DIVISOR - 0.005
     }
 
     /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`).
@@ -3367,7 +3384,9 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / 400.0 + 0.5 - pos.z / 14500.0 - 0.005;
+            let d = (pos.x + pt.x - pos.y - pt.y) / 400.0 + 0.5
+                - pos.z / ISO_HEIGHT_DEPTH_DIVISOR
+                - 0.005;
             raw_depths[i] = d.min(base_depth);
         }
 
@@ -3513,7 +3532,7 @@ mod tests {
     #[test]
     fn compute_iso_base_depth_matches_anchor_plane_formula() {
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
-        let expected = (100.0 - 20.0) / 400.0 + 0.5 - 64.0 / 14500.0 - 0.005;
+        let expected = (100.0 - 20.0) / 400.0 + 0.5 - 64.0 / ISO_HEIGHT_DEPTH_DIVISOR - 0.005;
         assert!((Engine::compute_iso_base_depth(pos) - expected).abs() < 1e-9);
     }
 }
