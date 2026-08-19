@@ -439,12 +439,13 @@ impl Gfx {
             }
             gl.bind_vertex_array(Some(self.vao));
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+            gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(true);
             gl.disable(glow::SCISSOR_TEST);
+            gl.disable(glow::STENCIL_TEST);
         }
     }
 
@@ -621,9 +622,16 @@ impl Gfx {
         }
     }
 
-    /// Draw an isometric sprite with two-pass depth rendering (ghost + normal).
+    /// Bind the `imageSheet` shader, sprite texture and uniforms shared by the
+    /// normal and ghost passes of the isometric sprite draw.
+    ///
+    /// When `depth_map` is `Some((name, range))`, the sprite writes a per-pixel
+    /// `gl_FragDepth` sampled from the grayscale depth-map texture (so
+    /// overlapping sprites occlude each other per-pixel rather than purely by
+    /// draw order); `depth_base` is the anchor-plane isoDepth the map's 0.5
+    /// grayscale maps to.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_iso_sprite(
+    fn bind_iso_sprite(
         &self,
         model: &Mat4,
         camera: &Mat4,
@@ -631,6 +639,10 @@ impl Gfx {
         frame: f32,
         tile_set_size: &[f32; 2],
         iso_depth_corners: &[f32; 4],
+        depth_map: Option<(&str, f32)>,
+        depth_base: f32,
+        ghost_alpha: f32,
+        uv: Option<(&[f32; 4], &[f32; 2], &[f32; 2], &[f32; 2])>,
     ) {
         let gl = &self.gl;
         let s = self.shader("imageSheet");
@@ -644,38 +656,83 @@ impl Gfx {
         s.uniform_mat4(gl, "projection_matrix", &proj);
         s.uniform_mat4(gl, "camera_matrix", camera);
         s.uniform_mat4(gl, "model_matrix", model);
-        s.uniform_1f(gl, "tile_id_flat", frame);
-        s.uniform_vec2(gl, "tile_set_size", tile_set_size);
-        s.uniform_1f(gl, "use_uv_rect", 0.0);
-        s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
+        if let Some((uv_rect, trim_offset, source_size, content_size)) = uv {
+            s.uniform_1f(gl, "tile_id_flat", 0.0);
+            s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
+            s.uniform_1f(gl, "use_uv_rect", 1.0);
+            s.uniform_vec4(gl, "uv_rect", uv_rect);
+            s.uniform_vec2(gl, "trim_offset", trim_offset);
+            s.uniform_vec2(gl, "source_size", source_size);
+            s.uniform_vec2(gl, "content_size", content_size);
+        } else {
+            s.uniform_1f(gl, "tile_id_flat", frame);
+            s.uniform_vec2(gl, "tile_set_size", tile_set_size);
+            s.uniform_1f(gl, "use_uv_rect", 0.0);
+            s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
+        }
         s.uniform_1f(gl, "use_iso_depth", 1.0);
         s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
+        s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
+
+        if let Some((depth_tex, depth_range)) = depth_map {
+            if let Some(dt) = self.textures.get(depth_tex) {
+                dt.bind(gl, 1);
+                s.uniform_1i(gl, "depth_sampler", 1);
+            }
+            s.uniform_1f(gl, "use_depth_map", 1.0);
+            s.uniform_1f(gl, "depth_base", depth_base);
+            s.uniform_1f(gl, "depth_range", depth_range);
+        } else {
+            s.uniform_1f(gl, "use_depth_map", 0.0);
+        }
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
         self.quad.indices.bind(gl);
+    }
+
+    /// Normal pass of an isometric sprite: draws the sprite on top of terrain
+    /// (LEQUAL), writing depth for depth-mapped sprites and recording its
+    /// `ghost_group` id into the stencil buffer (REPLACE where the depth test
+    /// passes) so the later ghost pass skips pixels the group already occludes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_iso_sprite_normal(
+        &self,
+        model: &Mat4,
+        camera: &Mat4,
+        texture_name: &str,
+        frame: f32,
+        tile_set_size: &[f32; 2],
+        iso_depth_corners: &[f32; 4],
+        depth_map: Option<(&str, f32)>,
+        depth_base: f32,
+        ghost_group: u32,
+        uv: Option<(&[f32; 4], &[f32; 2], &[f32; 2], &[f32; 2])>,
+    ) {
+        let gl = &self.gl;
+        self.bind_iso_sprite(
+            model,
+            camera,
+            texture_name,
+            frame,
+            tile_set_size,
+            iso_depth_corners,
+            depth_map,
+            depth_base,
+            0.0,
+            uv,
+        );
 
         unsafe {
             gl.enable(glow::DEPTH_TEST);
-
-            // Two-pass ghost rendering: PASS 1 draws sprites behind terrain (ALWAYS,
-            // depth_mask=off), PASS 2 draws normally (LEQUAL, depth_mask=on).
-            // Must restore depth_mask(true) + depth_func(LEQUAL) after both passes.
-            // Ghost pass: visible through occluding terrain
-            s.uniform_1f(gl, "ghost_alpha", 0.4);
-            gl.depth_func(glow::ALWAYS);
-            gl.depth_mask(false);
-            gl.draw_elements(
-                glow::TRIANGLES,
-                self.quad.index_count as i32,
-                glow::UNSIGNED_SHORT,
-                0,
-            );
-
-            // Normal pass: on top of terrain
-            s.uniform_1f(gl, "ghost_alpha", 0.0);
             gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(false);
+            gl.depth_mask(depth_map.is_some());
+
+            gl.enable(glow::STENCIL_TEST);
+            gl.stencil_func(glow::ALWAYS, ghost_group as i32, 0xFF);
+            gl.stencil_op(glow::KEEP, glow::KEEP, glow::REPLACE);
+            gl.stencil_mask(0xFF);
+
             gl.draw_elements(
                 glow::TRIANGLES,
                 self.quad.index_count as i32,
@@ -683,6 +740,67 @@ impl Gfx {
                 0,
             );
 
+            gl.disable(glow::STENCIL_TEST);
+            gl.depth_mask(true);
+            gl.depth_func(glow::LEQUAL);
+            gl.disable(glow::DEPTH_TEST);
+        }
+    }
+
+    /// Ghost pass of an isometric sprite: renders the sprite at 40% alpha where
+    /// it sits behind the depth buffer (terrain or other sprites), but skips
+    /// pixels already occupied by its own `ghost_group` so a vehicle's parts
+    /// don't ghost through each other.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_iso_sprite_ghost(
+        &self,
+        model: &Mat4,
+        camera: &Mat4,
+        texture_name: &str,
+        frame: f32,
+        tile_set_size: &[f32; 2],
+        iso_depth_corners: &[f32; 4],
+        depth_map: Option<(&str, f32)>,
+        depth_base: f32,
+        ghost_group: u32,
+        uv: Option<(&[f32; 4], &[f32; 2], &[f32; 2], &[f32; 2])>,
+    ) {
+        let gl = &self.gl;
+        self.bind_iso_sprite(
+            model,
+            camera,
+            texture_name,
+            frame,
+            tile_set_size,
+            iso_depth_corners,
+            depth_map,
+            depth_base,
+            0.4,
+            uv,
+        );
+
+        unsafe {
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::GREATER);
+            gl.depth_mask(false);
+
+            gl.enable(glow::STENCIL_TEST);
+            if ghost_group != 0 {
+                gl.stencil_func(glow::NOTEQUAL, ghost_group as i32, 0xFF);
+            } else {
+                gl.stencil_func(glow::ALWAYS, 0, 0xFF);
+            }
+            gl.stencil_op(glow::KEEP, glow::KEEP, glow::KEEP);
+            gl.stencil_mask(0x00);
+
+            gl.draw_elements(
+                glow::TRIANGLES,
+                self.quad.index_count as i32,
+                glow::UNSIGNED_SHORT,
+                0,
+            );
+
+            gl.disable(glow::STENCIL_TEST);
             gl.depth_mask(true);
             gl.depth_func(glow::LEQUAL);
             gl.disable(glow::DEPTH_TEST);
@@ -1033,7 +1151,7 @@ impl GlFrameBuffer {
                 gl.bind_renderbuffer(glow::RENDERBUFFER, Some(rb));
                 gl.renderbuffer_storage(
                     glow::RENDERBUFFER,
-                    glow::DEPTH_COMPONENT16,
+                    glow::DEPTH24_STENCIL8,
                     width as i32,
                     height as i32,
                 );
@@ -1081,7 +1199,7 @@ impl GlFrameBuffer {
             if let Some(rb) = depth_rb {
                 gl.framebuffer_renderbuffer(
                     glow::FRAMEBUFFER,
-                    glow::DEPTH_ATTACHMENT,
+                    glow::DEPTH_STENCIL_ATTACHMENT,
                     glow::RENDERBUFFER,
                     Some(rb),
                 );
@@ -1140,7 +1258,7 @@ impl GlFrameBuffer {
                 gl.bind_renderbuffer(glow::RENDERBUFFER, Some(rb));
                 gl.renderbuffer_storage(
                     glow::RENDERBUFFER,
-                    glow::DEPTH_COMPONENT16,
+                    glow::DEPTH24_STENCIL8,
                     width as i32,
                     height as i32,
                 );

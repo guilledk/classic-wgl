@@ -14,10 +14,13 @@ use crate::archive::RomArchive;
 use crate::loader::AssetLoader;
 use crate::manifest::RomManifest;
 
-/// The six categories of bundleable resource.
+/// The seven categories of bundleable resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Texture,
+    /// Per-texture depth map (grayscale `gl_FragDepth` mask), keyed by the
+    /// *texture* name it belongs to.
+    Depth,
     Font,
     Code,
     /// Per-animation renderer metadata (e.g. per-frame visual offsets).
@@ -34,6 +37,7 @@ pub enum ResourceKind {
 #[derive(Clone, Debug, Default)]
 pub struct ResourceSet {
     textures: BTreeMap<String, Vec<u8>>,
+    depths: BTreeMap<String, Vec<u8>>,
     fonts: BTreeMap<String, Vec<u8>>,
     code: BTreeMap<String, Vec<u8>>,
     animations: BTreeMap<String, Vec<u8>>,
@@ -57,6 +61,7 @@ impl ResourceSet {
     /// The total number of resources across all categories.
     pub fn len(&self) -> usize {
         self.textures.len()
+            + self.depths.len()
             + self.fonts.len()
             + self.code.len()
             + self.animations.len()
@@ -71,6 +76,10 @@ impl ResourceSet {
 
     pub fn textures(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.textures
+    }
+
+    pub fn depths(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.depths
     }
 
     pub fn fonts(&self) -> &BTreeMap<String, Vec<u8>> {
@@ -122,6 +131,9 @@ impl ResourceSet {
         let mut set = Self::default();
         for entry in &manifest.manifest.textures {
             set.textures.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
+            if let Some(depth) = &entry.depth {
+                set.depths.insert(entry.name.clone(), load(crate::rom_path(depth))?);
+            }
         }
         for entry in &manifest.manifest.sdf_fonts {
             set.fonts.insert(entry.name.clone(), load(crate::rom_path(&entry.metrics))?);
@@ -151,6 +163,7 @@ impl ResourceSet {
     fn map(&self, kind: ResourceKind) -> &BTreeMap<String, Vec<u8>> {
         match kind {
             ResourceKind::Texture => &self.textures,
+            ResourceKind::Depth => &self.depths,
             ResourceKind::Font => &self.fonts,
             ResourceKind::Code => &self.code,
             ResourceKind::Animation => &self.animations,
@@ -163,6 +176,7 @@ impl ResourceSet {
     fn map_mut(&mut self, kind: ResourceKind) -> &mut BTreeMap<String, Vec<u8>> {
         match kind {
             ResourceKind::Texture => &mut self.textures,
+            ResourceKind::Depth => &mut self.depths,
             ResourceKind::Font => &mut self.fonts,
             ResourceKind::Code => &mut self.code,
             ResourceKind::Animation => &mut self.animations,
@@ -329,5 +343,38 @@ mod tests {
             set.get(ResourceKind::Frames, "humanoid"),
             Some(b"{\"version\":1,\"sheets\":[],\"frames\":{}}".as_slice())
         );
+    }
+
+    #[test]
+    fn from_archive_populates_depth_maps() {
+        let manifest: RomManifest = serde_json::from_str(
+            r#"{
+                "shaders": [],
+                "textures": [
+                    {"name": "lrvBody", "src": "res/lrv_body.png", "depth": "res/lrv_body_depth.png", "depth_range": 0.05},
+                    {"name": "tree", "src": "res/tree.png"}
+                ],
+                "animations": []
+            }"#,
+        )
+        .unwrap();
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in [
+            ("res/lrv_body.png", b"body".as_slice()),
+            ("res/lrv_body_depth.png", b"depth".as_slice()),
+            ("res/tree.png", b"tree".as_slice()),
+        ] {
+            writer.start_file(name, opts).unwrap();
+            writer.write_all(data).unwrap();
+        }
+        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+
+        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        assert_eq!(set.get(ResourceKind::Depth, "lrvBody"), Some(b"depth".as_slice()));
+        // Textures without a depth map get no entry.
+        assert_eq!(set.get(ResourceKind::Depth, "tree"), None);
     }
 }

@@ -235,6 +235,16 @@ pub struct IsoSprite {
     /// Footprint vertices in iso tile coords: `[NE, SE, SW, NW]`.
     #[serde(default = "default_footprint")]
     pub footprint: Vec<Vec2>,
+    /// Stencil ghost group id (0 = ungrouped).  Sprites sharing a non-zero id
+    /// (e.g. a vehicle's body + wheels) never ghost through each other, while
+    /// still ghosting through terrain and other entities.  Assignable
+    /// declaratively in `state.json`; `spawn_vehicle` assigns it imperatively.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ghost_group: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 fn default_footprint() -> Vec<Vec2> {
