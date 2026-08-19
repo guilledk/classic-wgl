@@ -24,11 +24,12 @@ void main(void ) {
     vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
     worldPos.y -= vertex_pos.z;
     vec4 clipPos = projection_matrix * camera_matrix * worldPos;
-    // Height divisor 344.46 derived from the exporter's 30°-elevation view axis
-    // (back = right × up = (−√(3/8), −√(3/8), +1/2)): D = 2 · √(3/8) · (45/64) · 400.
+    // Height divisor 22045.4 derived from the exporter's 30°-elevation view axis
+    // (back = right × up = (−√(3/8), −√(3/8), +1/2)), scaled by PPM_TARGET for
+    // `z` in pixels: D = 2 · √(3/8) · (45/64) · 400 · 64.
     // Keep in sync with `ISO_HEIGHT_DEPTH_DIVISOR` in classic-engine.
     float isoDepth = clamp(
-        (vertex_pos.x - vertex_pos.y) / 400.0 + 0.5 - vertex_pos.z / 344.46,
+        (vertex_pos.x - vertex_pos.y) / 400.0 + 0.5 - vertex_pos.z / 22045.4,
         0.0,
         1.0
     );

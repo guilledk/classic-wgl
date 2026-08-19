@@ -79,15 +79,17 @@ struct TextureDepth {
 /// `back = right × up = (−√(3/8), −√(3/8), +1/2)`, so a height `z` (in
 /// exporter metres) contributes `−z/2` of view depth, while one tile of
 /// `tx − ty` contributes `√(3/8) · (TILE_PX / PPM_TARGET)` of view depth.
-/// Matching the horizontal `/400` scale therefore requires
+/// The engine's `z` is in **pixels** (height_data · height_scale), so the
+/// metre-space divisor is scaled by `PPM_TARGET`:
 ///
-/// `D = 400 · (√(3/8) · TILE_PX / PPM_TARGET) / (1/2)`
-///   `= 2 · iso_depth_factor`
-///   `= 2 · √(3/8) · (45 / 64) · 400 ≈ 344.46`.
+/// `D = (2 · iso_depth_factor) · PPM_TARGET`
+///   `= 2 · √(3/8) · (45 / 64) · 400 · 64`
+///   `= 2 · √(3/8) · 45 · 400 ≈ 22045.4`.
 ///
-/// The pre-export `14500` was ~42× off (tuned against a dev-env bug, not the
-/// exporter).  Keep this in sync with `iso_tilemap.vert`.
-const ISO_HEIGHT_DEPTH_DIVISOR: f32 = 344.46;
+/// (`iso_depth_factor / back.z = 344.46` is the same divisor for `z` in
+/// metres; the pre-export `14500` was ~1.5× off in the opposite direction.)
+/// Keep this in sync with `iso_tilemap.vert`.
+const ISO_HEIGHT_DEPTH_DIVISOR: f32 = 22045.4;
 
 /// Precomputed per-sprite draw parameters for the isometric normal + ghost
 /// passes, so both passes share one model/depth computation per frame.
