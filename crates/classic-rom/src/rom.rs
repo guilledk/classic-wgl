@@ -89,6 +89,14 @@ impl Rom {
                 writer.write_all(bytes)?;
             }
         }
+        for entry in &self.manifest.manifest.textures {
+            if let (Some(path), Some(bytes)) =
+                (&entry.frames, self.resources.frames().get(&entry.name))
+            {
+                writer.start_file(crate::rom_path(path), opts)?;
+                writer.write_all(bytes)?;
+            }
+        }
 
         Ok(writer.finish()?.into_inner())
     }
