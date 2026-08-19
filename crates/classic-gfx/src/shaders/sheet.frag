@@ -2,7 +2,7 @@
 
 precision mediump float;
 
-in mediump vec2 vTexCoord;
+in highp vec2 vTexCoord;
 
 uniform sampler2D tex_sampler;
 
@@ -10,14 +10,14 @@ uniform vec2 tile_set_size;
 uniform float tile_id_flat;
 uniform float ghost_alpha;
 uniform float use_uv_rect;
-uniform vec4 uv_rect;
+uniform highp vec4 uv_rect;
 uniform highp vec2 trim_offset;
 uniform highp vec2 source_size;
 uniform highp vec2 content_size;
 
 out vec4 fragColor;
 
-vec4 getTilePixel(float tile_id_flat, vec2 tex_coord) {
+vec4 getTilePixel(float tile_id_flat, highp vec2 tex_coord) {
     if (use_uv_rect > 0.5) {
         // The quad is drawn at `source_size`; the trimmed content sits at
         // `trim_offset` within it (both in source pixels), so map tex_coord

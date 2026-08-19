@@ -2,7 +2,7 @@
 
 precision mediump float;
 
-in mediump vec2 vTexCoord;
+in highp vec2 vTexCoord;
 
 uniform sampler2D tex_sampler;
 
