@@ -16,5 +16,11 @@ tar.workspace = true
 flate2.workspace = true
 ruzstd.workspace = true
 
+# zstd *encoding* for `Rom::pack` (the reader already decodes tar.zst via
+# `ruzstd`).  Native-only: `zstd-sys` links C libzstd, which the wasm target
+# can't build.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zstd = "0.13"
+
 [dev-dependencies]
 base64.workspace = true
