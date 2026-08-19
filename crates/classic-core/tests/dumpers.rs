@@ -11,6 +11,7 @@ fn sprite_dumper_round_trip_keys() {
         texture: "cursor".into(),
         ignore_cam: true,
         frame: 0.0,
+        frame_name: None,
         tile_set_size: [1.0, 1.0].into(),
         anchor: [0.5, 0.5].into(),
     };
@@ -87,6 +88,7 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
         texture: "humanoid".into(),
         tilemap: "tilemap".into(),
         frame: 333.0,
+        frame_name: None,
         tile_set_size: [32.0, 16.0].into(),
         anchor: [0.5, 0.98].into(),
         frame_offset: glam::Vec3::ZERO,
@@ -105,6 +107,7 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
             texture: agent.texture.clone(),
             tilemap: agent.tilemap.clone(),
             frame: agent.frame,
+            frame_name: agent.frame_name.clone(),
             tile_set_size: agent.tile_set_size,
             anchor: agent.anchor,
             frame_offset: glam::Vec3::ZERO,

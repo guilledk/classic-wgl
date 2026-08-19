@@ -277,6 +277,7 @@ impl UIManager {
                 texture: texture.to_string(),
                 ignore_cam: true,
                 frame,
+                frame_name: None,
                 tile_set_size: glam::Vec2::new(tile_set_size[0], tile_set_size[1]),
                 anchor: glam::Vec2::ZERO,
             },
