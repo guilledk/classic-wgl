@@ -75,6 +75,9 @@ struct TextureDepth {
     depth_range: f32,
 }
 
+/// Packed-atlas UV draw params: `(uv_rect, trim_offset, source_size, content_size)`.
+type IsoUv = ([f32; 4], [f32; 2], [f32; 2], [f32; 2]);
+
 /// Precomputed per-sprite draw parameters for the isometric normal + ghost
 /// passes, so both passes share one model/depth computation per frame.
 struct IsoDraw {
@@ -84,9 +87,8 @@ struct IsoDraw {
     texture: String,
     frame: f32,
     tile_set_size: [f32; 2],
-    /// Packed-atlas UV params `(uv_rect, trim_offset, source_size, content_size)`,
-    /// or `None` for the uniform-grid path.
-    uv: Option<([f32; 4], [f32; 2], [f32; 2], [f32; 2])>,
+    /// Packed-atlas UV params, or `None` for the uniform-grid path.
+    uv: Option<IsoUv>,
     depth_corners: [f32; 4],
     depth_map: Option<(String, f32)>,
     depth_base: f32,
@@ -2202,16 +2204,10 @@ impl Engine {
             // the uniform-grid path uses the cell size directly.
             let (tex_dim, anchor_px, sheet_name, uv) = match &frame_ref {
                 Some(fr) => {
-                    let sw = if fr.source_size[0] > 0 {
-                        fr.source_size[0] as f32
-                    } else {
-                        fr.size[0]
-                    };
-                    let sh = if fr.source_size[1] > 0 {
-                        fr.source_size[1] as f32
-                    } else {
-                        fr.size[1]
-                    };
+                    let sw =
+                        if fr.source_size[0] > 0 { fr.source_size[0] as f32 } else { fr.size[0] };
+                    let sh =
+                        if fr.source_size[1] > 0 { fr.source_size[1] as f32 } else { fr.size[1] };
                     let (cw, ch) = (fr.size[0], fr.size[1]);
                     let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
                     let a_trim = Self::effective_anchor(iso_sprite.anchor, fr);

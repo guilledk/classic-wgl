@@ -343,6 +343,10 @@ fn vertex_attrib_ptr_f32(
 // Gfx state
 // ---------------------------------------------------------------------------
 
+/// Packed-atlas UV draw parameters: normalized `uv_rect`, the trim offset, the
+/// untrimmed source size, and the trimmed content size (all pixels).
+type IsoUv<'a> = (&'a [f32; 4], &'a [f32; 2], &'a [f32; 2], &'a [f32; 2]);
+
 pub struct Gfx {
     pub gl: Rc<glow::Context>,
     pub shaders: HashMap<String, Shader>,
@@ -687,7 +691,7 @@ impl Gfx {
         depth_map: Option<(&str, f32)>,
         depth_base: f32,
         ghost_alpha: f32,
-        uv: Option<(&[f32; 4], &[f32; 2], &[f32; 2], &[f32; 2])>,
+        uv: Option<IsoUv<'_>>,
     ) {
         let gl = &self.gl;
         let s = self.shader("imageSheet");
@@ -752,7 +756,7 @@ impl Gfx {
         depth_map: Option<(&str, f32)>,
         depth_base: f32,
         ghost_group: u32,
-        uv: Option<(&[f32; 4], &[f32; 2], &[f32; 2], &[f32; 2])>,
+        uv: Option<IsoUv<'_>>,
     ) {
         let gl = &self.gl;
         self.bind_iso_sprite(
@@ -808,7 +812,7 @@ impl Gfx {
         depth_map: Option<(&str, f32)>,
         depth_base: f32,
         ghost_group: u32,
-        uv: Option<(&[f32; 4], &[f32; 2], &[f32; 2], &[f32; 2])>,
+        uv: Option<IsoUv<'_>>,
     ) {
         let gl = &self.gl;
         self.bind_iso_sprite(
