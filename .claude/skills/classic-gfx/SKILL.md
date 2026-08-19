@@ -77,17 +77,26 @@ active texture unit, active shader program, SCISSOR_TEST.
 
 ## 3. DEPTH_TEST Contract
 
-The depth test is scoped per draw call. Only two draw functions enable it:
-`draw_tilemap` and `draw_iso_sprite`. The entire UI/SDF phase runs without
-depth test — layering is purely draw-order (z-sort on the render list).
+The depth test is scoped per draw call. Only `draw_tilemap` and the two
+isometric sprite passes enable it. The entire UI/SDF phase runs without depth
+test — layering is purely draw-order (z-sort on the render list).
 
 ```
-draw_tilemap()    → ENABLE; draw; DISABLE
-draw_iso_sprite() → ENABLE; ghost(ALWAYS); normal(LEQUAL); DISABLE
-draw_line_loop()  → depthFunc(ALWAYS); depthMask(false); draw;
-                    depthMask(true); depthFunc(LEQUAL)
-draw_line_strip() → same as line_loop
+draw_tilemap()          → ENABLE; draw; DISABLE
+draw_iso_sprite_normal() → ENABLE; LEQUAL; depthMask(depth_map.is_some());
+                           stencil ALWAYS/REPLACE group; draw; DISABLE
+draw_iso_sprite_ghost() → ENABLE; GREATER; depthMask(false);
+                           stencil NOTEQUAL group / ALWAYS; draw; DISABLE
+draw_line_loop()        → depthFunc(ALWAYS); depthMask(false); draw;
+                           depthMask(true); depthFunc(LEQUAL)
+draw_line_strip()       → same as line_loop
 ```
+
+The engine drives isometric sprites in **two phases** (all normals, then all
+ghosts, before the UI overlay) so sprite-vs-sprite occlusion is resolved by
+the depth buffer, not draw order.  The stencil buffer records a per-instance
+`ghost_group` id during the normal pass (`REPLACE`) so a ghost pass can skip
+pixels its own group already occludes (`NOTEQUAL`).
 
 **Gotcha**: If DEPTH_TEST is accidentally left enabled (e.g. a draw function
 doesn't disable it), the next 2D draw call renders nothing. Symptom: black
@@ -143,24 +152,44 @@ parent tilemap for correct depth ordering.
 
 ---
 
-## 5. draw_iso_sprite
+## 5. draw_iso_sprite_normal / draw_iso_sprite_ghost
 
 ```rust
-fn draw_iso_sprite(
+fn draw_iso_sprite_normal(
     &self, model: &Mat4, camera: &Mat4, texture_name: &str,
     frame: f32, tile_set_size: &[f32; 2],
-    iso_depth_corners: &[f32; 4],  // [bl, br, tl, tr]
+    iso_depth_corners: &[f32; 4],       // [sw, se, nw, ne]
+    depth_map: Option<(&str, f32)>,     // (depth texture name, depth_range)
+    depth_base: f32,                    // anchor-plane iso depth (0.5 gray)
+    ghost_group: u32,
 );
+// draw_iso_sprite_ghost has the same signature (ghost alpha fixed at 0.4).
 ```
 
 Uses `imageSheet` shader with `useIsoDepth = 1.0`.  The vertex shader
 (`direct_tex.vert`) interpolates `iso_depth_corners` across the quad to set
-per-fragment `gl_Position.z` for terrain depth placement.
+per-fragment `gl_Position.z`; when the sprite has a depth map the fragment
+shader (`sheet.frag`) instead writes `gl_FragDepth` from the grayscale map:
 
-**Two-pass within a single call**: ghost pass (ALWAYS, mask=false, alpha=0.4)
-shows sprite through occluding terrain; normal pass (LEQUAL, mask=false,
-alpha=from texture) draws on top.  Both passes set `depth_mask(false)`.
-After both, restores `depth_mask(true)`, `depth_func(LEQUAL)`, `disable(DEPTH_TEST)`.
+```glsl
+gl_FragDepth = clamp((depth_base + (0.5 - gray) * depth_range + 1.0) * 0.5, 0.0, 1.0);
+```
+
+The `+1.0)*0.5` term is the clip→window depth remap (the tilemap's
+`gl_Position.z` undergoes the same mapping), so the depth map and terrain share
+one consistent depth space.
+
+Two **separate** passes (driven by two engine loops, all normals then all
+ghosts):
+
+- **normal** — `LEQUAL`, `depth_mask(depth_map.is_some())` (depth-mapped
+  sprites write depth), stencil `ALWAYS`/`REPLACE ghost_group`,
+  `stencil_mask(0xFF)`, `ghost_alpha=0`.
+- **ghost** — `GREATER`, `depth_mask(false)`, `ghost_alpha=0.4`, stencil
+  `NOTEQUAL ghost_group` (`ALWAYS` when group 0), `stencil_mask(0x00)`.
+
+Both restore `depth_mask(true)`, `depth_func(LEQUAL)`, `disable(DEPTH_TEST)`,
+`disable(STENCIL_TEST)`.
 
 ---
 
@@ -387,10 +416,11 @@ garbage texture and corrupts every tile lookup — no GL error is raised.  See
 
 ## 14. draw_iso_sprite Ghost Pass Numeric Constraint
 
-The ghost-pass `ghostAlpha` is hardcoded to 0.4 inside `draw_iso_sprite`.
+The ghost-pass `ghostAlpha` is hardcoded to 0.4 inside `draw_iso_sprite_ghost`.
 This value is NOT a parameter — callers cannot override it.  A ghost pass only
-runs if `draw_iso_sprite` is the draw function; `draw_sprite` with `ghost_alpha: 0.4`
-is not an equivalent substitute (it lacks the depth-corner interpolation).
+runs for `draw_iso_sprite_ghost`; `draw_sprite` with `ghost_alpha: 0.4` is not
+an equivalent substitute (it lacks the depth-corner interpolation and the
+`GREATER`/stencil ghost-group test).
 
 ---
 

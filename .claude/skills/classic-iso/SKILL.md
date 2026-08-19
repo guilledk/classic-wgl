@@ -113,7 +113,7 @@ vec4 worldPos = modelMatrix * isoMatrix * vec4(vertexPos, 1.0);
 worldPos.y -= vertexPos.z;
 
 float isoDepth = clamp(
-    (vertexPos.x - vertexPos.y) / 400.0 + 0.5 - vertexPos.z / 14500.0,
+    (vertexPos.x - vertexPos.y) / 400.0 + 0.5 - vertexPos.z / 344.46,
     0.0,
     1.0
 );
@@ -129,18 +129,21 @@ Key aspects:
    `(1, -1)` diagonal in iso space.  Tiles with larger `tx - ty` are farther
    from the camera.
 3. **Constants:**  `400.0` controls the depth granularity per iso unit;
-   `14500.0` controls the depth compression per height unit.  `+0.5` centres
-   the range.
+   `344.46` controls the depth compression per height unit (derived from the
+   exporter's 30°-elevation view axis: `2 · √(3/8) · (45/64) · 400`; the old
+   `14500.0` was ~42× off).  `+0.5` centres the range.  `344.46` must stay in
+   sync with `ISO_HEIGHT_DEPTH_DIVISOR` in `classic-engine`.
 4. **Clamp to `[0, 1]`:**  The result is written to `clipPos.z`, overriding
    the standard orthographic projection Z.
 
 ### CPU-side equivalent (`compute_iso_depth_corners`)
 
 The IsoSprite renderer needs depth values for each of the 4 footprint corners
-(see Section 8).  The CPU-side formula mirrors the shader:
+(see Section 8).  The CPU-side formula mirrors the shader (via
+`compute_iso_base_depth`):
 
 ```rust
-let d = (pos.x + pt.x - pos.y - pt.y) / 400.0 + 0.5 - pos.z / 14500.0 - 0.005;
+let d = (pos.x + pt.x - pos.y - pt.y) / 400.0 + 0.5 - pos.z / 344.46 - 0.005;
 ```
 
 The `-0.005` bias ensures sprites sit slightly behind the terrain at their
@@ -701,8 +704,19 @@ This corrects normals for the non-uniform 2:1 scale of the isometric transform.
 ### IsoSprite ghost alpha not configurable
 
 The ghost pass uses a hardcoded `ghostAlpha = 0.4`.  The TS engine exposed
-this as a per-sprite parameter.  In Rust it is fixed.  Adjust `draw_iso_sprite`
-in `classic-gfx` if needed.
+this as a per-sprite parameter.  In Rust it is fixed.  Adjust
+`draw_iso_sprite_ghost` in `classic-gfx` if needed.
+
+### Per-pixel depth maps (per-texture)
+
+A texture may declare a grayscale depth map (`depth` + `depth_range` in the
+manifest).  When present, the sprite writes `gl_FragDepth` from the map in
+`sheet.frag` (clip→window remapped), so overlapping sprites occlude each other
+per-pixel rather than by draw order, and the ghost pass becomes `GREATER`
+against the depth buffer.  Sprites sharing a non-zero `ghost_group` (a
+vehicle's body + wheels) never ghost through each other (stencil
+`NOTEQUAL`).  Depth maps are emitted by the Blender exporter
+(`classic-assets`) and packed by the ROM `xtask`.
 
 ### SDF shadow/glow not rendered
 

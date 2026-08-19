@@ -63,6 +63,7 @@ Each `TestStep` carries a `Vec<TestAction>`.  All nine actions are mapped in
 | `KeyPress` | `keyPress` | Inserts into `input.keys_down` and `input.keys_pressed` maps. Key strings follow winit 0.30 `PhysicalKey::Code` debug naming (`"F9"`, `"Space"`, `"KeyW"`, etc.). |
 | `Wheel` | `wheel` | Sets `input.mouse_wheel`. The engine's wheel-decay logic runs after the test frame, so wheel values may need to be set immediately before assertions that depend on them. |
 | `Wait` | `wait` | No-op; only useful as a sentinel in the JSON. Frame-based waiting is achieved by scheduling a step on a later frame. |
+| `SetCameraIso` | `setCameraIso` | Centers the camera on iso tile `(tx, ty)` at the given `scale` (via `Engine::iso_to_screen` + `set_camera`). Useful for framing a sprite for pixel assertions. |
 
 Drag simulation detail: the drag is processed by `run_test_frame`'s drag state
 machine.  On frame `start+0` it sets `selection_iso_begin=mouse_iso_pos=from`
@@ -87,6 +88,13 @@ tile coordinates for spatial assertions; its meaning varies by assertion kind.
 | `CameraAt` | `cameraAt` | `region = (ex, ey, ez, expected_scale)`.  Checks `camera.position` against `(ex, ey, ez)` with default tolerance 1.0 in position and 0.01 in scale.  `expected` overrides the tolerance if > 0.  If `region.3 == 0`, scale defaults to 1.0. |
 | `EntityVisible` | `entityVisible` | Uses `log` as the entity name lookup key in `Engine::names`.  Checks `is_disabled` matches `expected != 0.0`. |
 | `EntityPos` | `entityPos` | Uses `log` as the entity name.  `region = (ex, ey, ...)`.  Checks `Transform::position.x/y` within tolerance (default 1.0) of `(ex, ey)`.  `expected` overrides tolerance if > 0. |
+| `PixelAtEntity` | `pixelAtEntity` | **GPU-only.** Uses `log` as the entity name; projects its iso position to screen pixels (`render_order::iso_to_screen_px`) and reads the framebuffer pixel (`Gfx::read_pixel_rgba`). With `color` set, checks all 4 channels within `expected` tolerance; with `color` absent/null, checks alpha `>= expected`. |
+
+`PixelAtEntity` is the render-order / depth-occlusion assertion (per-texture
+depth maps, ghost pass).  It reads the previous frame's framebuffer (the test
+runner runs before `begin_frame`), so schedule it after the scene settles.
+It needs a real GL depth-test driver — under Mesa llvmpipe the depth test is
+broken, so ghost/occlusion assertions cannot be validated headless.
 
 On failure, each assertion logs a diagnostic line via the `Test` instrument
 channel.  The test result string is pushed to the runner's `results` vector
