@@ -72,12 +72,12 @@ pub fn f32_array_bytes(data: &[f32]) -> Vec<u8> {
 
 /// Decode little-endian `u32` values from a byte slice.
 pub fn bytes_to_u32(bytes: &[u8]) -> Vec<u32> {
-    bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
 }
 
 /// Decode little-endian `f32` values from a byte slice.
 pub fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 /// Serialize a path (a sequence of `(i32, i32)` cell coordinates) to

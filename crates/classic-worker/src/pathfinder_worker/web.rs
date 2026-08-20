@@ -60,7 +60,7 @@ impl PathfinderWorker {
                 let poll = match path {
                     Some(p) if !p.is_null() && !p.is_undefined() => {
                         let flat = js_sys::Int32Array::new(&p).to_vec();
-                        let cells = flat.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                        let cells = flat.as_chunks::<2>().0.iter().map(|c| (c[0], c[1])).collect();
                         PathPoll::Path(cells)
                     }
                     _ => PathPoll::NoPath,
