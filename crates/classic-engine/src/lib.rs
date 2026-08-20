@@ -35,11 +35,12 @@ use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
 use classic_core::types::AnimationData;
+use classic_core::types::FrameTable;
 use classic_core::types::SdfFontMetrics;
 use classic_core::{Camera, RoleKind, SpriteRender, Transform};
 use classic_gfx::{Gfx, GlBuffer};
 use classic_platform::InputState;
-use glam::{Mat3, Mat4, Vec3, Vec4};
+use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
@@ -67,6 +68,20 @@ struct SdfTextGpu {
     text_height: f32,
     last_text: String,
     last_scale: f32,
+}
+
+/// A frame resolved through a packed-atlas frame table.
+struct ResolvedFrame {
+    sheet_name: String,
+    uv_rect: [f32; 4],
+    /// Content pixel size (frame rect w/h).
+    size: [f32; 2],
+    /// Untrimmed source cell size (0 = unknown).
+    source_size: [u32; 2],
+    /// Offset of the trimmed content within the source cell.
+    trim_offset: [i32; 2],
+    /// Optional packer-provided anchor, already in trimmed-frame `[0..1]`.
+    anchor: Option<[f32; 2]>,
 }
 
 pub struct Engine {
@@ -102,6 +117,10 @@ pub struct Engine {
     pub light_dir: [f32; 3],
     pub light_color: [f32; 3],
     pub animations: HashMap<String, AnimationData>,
+    /// Packed-atlas frame tables keyed by texture name, loaded from the ROM's
+    /// `frames` resources at boot (issue #45).  A sprite with `frame_name` set
+    /// resolves its frame through the table for the owning texture.
+    pub frame_tables: HashMap<String, FrameTable>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
     /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
     /// `vehicles` resources at boot.
@@ -230,6 +249,7 @@ impl Engine {
             light_color: [1.0, 0.95, 0.85],
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
+            frame_tables: HashMap::new(),
             vehicles: HashMap::new(),
             rom_manifest_json: None,
             rom_manifest: None,
@@ -312,6 +332,21 @@ impl Engine {
 
         for anim in &manifest.manifest.animations {
             self.animations.insert(anim.name.clone(), anim.clone());
+        }
+
+        // Packed-atlas frame tables (`frames.json`) keyed by texture name,
+        // loaded from the ROM's `frames` resources.  Companion sheets are
+        // uploaded as ordinary textures (declared in the manifest) and are
+        // referenced by name from each frame's `sheet` index.
+        for (name, bytes) in resources.frames() {
+            match serde_json::from_slice::<FrameTable>(bytes) {
+                Ok(table) => {
+                    self.frame_tables.insert(name.clone(), table);
+                }
+                Err(e) => {
+                    classic_core::cl_error!(Chan::Guest, "frame table '{name}' parse failed: {e}");
+                }
+            }
         }
 
         // Per-animation renderer metadata (frame offsets) declared in the
@@ -2082,15 +2117,49 @@ impl Engine {
                         continue;
                     };
                     let ts = [sprite.tile_set_size.x, sprite.tile_set_size.y];
-                    let tex_size = gfx
-                        .textures
-                        .get(&sprite.texture)
-                        .map(|t| (t.size.0 as f32, t.size.1 as f32))
-                        .unwrap_or((1.0, 1.0));
+                    let frame_ref = sprite
+                        .frame_name
+                        .as_deref()
+                        .and_then(|n| Self::resolve_frame(&self.frame_tables, &sprite.texture, n));
+                    let (sprite_size, sheet_name, uv_rect, uv_params) = match &frame_ref {
+                        Some(fr) => {
+                            let sw = if fr.source_size[0] > 0 {
+                                fr.source_size[0] as f32
+                            } else {
+                                fr.size[0]
+                            };
+                            let sh = if fr.source_size[1] > 0 {
+                                fr.source_size[1] as f32
+                            } else {
+                                fr.size[1]
+                            };
+                            let (cw, ch) = (fr.size[0], fr.size[1]);
+                            let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
+                            (
+                                (sw, sh),
+                                fr.sheet_name.clone(),
+                                Some(fr.uv_rect),
+                                Some(([bx, by], [sw, sh], [cw, ch])),
+                            )
+                        }
+                        None => {
+                            let tex_size = gfx
+                                .textures
+                                .get(&sprite.texture)
+                                .map(|t| (t.size.0 as f32, t.size.1 as f32))
+                                .unwrap_or((1.0, 1.0));
+                            (
+                                (tex_size.0 / ts[0], tex_size.1 / ts[1]),
+                                sprite.texture.clone(),
+                                None,
+                                None,
+                            )
+                        }
+                    };
                     let sprite_model = Mat4::from_translation(tf.position)
                         * Mat4::from_scale(Vec3::new(
-                            tf.scale.x * tex_size.0 / ts[0],
-                            tf.scale.y * tex_size.1 / ts[1],
+                            tf.scale.x * sprite_size.0,
+                            tf.scale.y * sprite_size.1,
                             1.0,
                         ));
                     if let Some(ref mut t) = self.trace {
@@ -2101,20 +2170,33 @@ impl Engine {
                             name,
                             model: &sprite_model,
                             camera_ignored: sprite.ignore_cam,
-                            texture: Some(&sprite.texture),
+                            texture: Some(&sheet_name),
                             frame: Some(sprite.frame),
                             color: None,
                         });
                     }
-                    gfx.draw_sprite(
-                        &sprite_model,
-                        &cam,
-                        &sprite.texture,
-                        sprite.frame,
-                        &ts,
-                        sprite.ignore_cam,
-                        1.0,
-                    );
+                    match (uv_rect, uv_params) {
+                        (Some(uv), Some((trim, src, csz))) => gfx.draw_sprite_uv(
+                            &sprite_model,
+                            &cam,
+                            &sheet_name,
+                            &uv,
+                            &trim,
+                            &src,
+                            &csz,
+                            sprite.ignore_cam,
+                            1.0,
+                        ),
+                        _ => gfx.draw_sprite(
+                            &sprite_model,
+                            &cam,
+                            &sprite.texture,
+                            sprite.frame,
+                            &ts,
+                            sprite.ignore_cam,
+                            1.0,
+                        ),
+                    }
                 }
                 DrawKind::Tilemap => {
                     let is_nav = self
@@ -2245,13 +2327,52 @@ impl Engine {
                         continue;
                     };
 
-                    let tex_dim = if let Some(tex) = gfx.textures.get(&iso_sprite.texture) {
-                        (
-                            tex.size.0 as f32 / iso_sprite.tile_set_size.x.max(0.001),
-                            tex.size.1 as f32 / iso_sprite.tile_set_size.y.max(0.001),
-                        )
-                    } else {
-                        continue;
+                    // Resolve a packed-atlas frame (issue #45); falls back to
+                    // the uniform-grid path when no frame_name / table match.
+                    let frame_ref = iso_sprite.frame_name.as_deref().and_then(|n| {
+                        Self::resolve_frame(&self.frame_tables, &iso_sprite.texture, n)
+                    });
+
+                    // (quad size, anchor px, sheet name, uv rect, uv params).
+                    // Packed frames are drawn at their source cell size with the
+                    // trimmed content offset, so animated sprites keep a constant
+                    // size; the uniform-grid path uses the cell size directly.
+                    let (tex_dim, anchor_px, sheet_name, uv_rect, uv_params) = match &frame_ref {
+                        Some(fr) => {
+                            let sw = if fr.source_size[0] > 0 {
+                                fr.source_size[0] as f32
+                            } else {
+                                fr.size[0]
+                            };
+                            let sh = if fr.source_size[1] > 0 {
+                                fr.source_size[1] as f32
+                            } else {
+                                fr.size[1]
+                            };
+                            let (cw, ch) = (fr.size[0], fr.size[1]);
+                            let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
+                            let a_trim = Self::effective_anchor(iso_sprite.anchor, fr);
+                            let anchor_px = Vec2::new(a_trim.x * cw + bx, a_trim.y * ch + by);
+                            (
+                                (sw, sh),
+                                anchor_px,
+                                fr.sheet_name.clone(),
+                                Some(fr.uv_rect),
+                                Some(([bx, by], [sw, sh], [cw, ch])),
+                            )
+                        }
+                        None => {
+                            let Some(tex) = gfx.textures.get(&iso_sprite.texture) else {
+                                continue;
+                            };
+                            let td = (
+                                tex.size.0 as f32 / iso_sprite.tile_set_size.x.max(0.001),
+                                tex.size.1 as f32 / iso_sprite.tile_set_size.y.max(0.001),
+                            );
+                            let anchor_px =
+                                Vec2::new(td.0 * iso_sprite.anchor.x, td.1 * iso_sprite.anchor.y);
+                            (td, anchor_px, iso_sprite.texture.clone(), None, None)
+                        }
                     };
 
                     let model = Self::compute_iso_sprite_model(
@@ -2260,6 +2381,7 @@ impl Engine {
                         &tilemap_tf,
                         &tilemap,
                         tex_dim,
+                        anchor_px,
                     );
                     let depth_corners =
                         Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
@@ -2272,19 +2394,31 @@ impl Engine {
                             name,
                             model: &model,
                             camera_ignored: false,
-                            texture: Some(&iso_sprite.texture),
+                            texture: Some(&sheet_name),
                             frame: Some(iso_sprite.frame),
                             color: None,
                         });
                     }
-                    gfx.draw_iso_sprite(
-                        &model,
-                        &cam,
-                        &iso_sprite.texture,
-                        iso_sprite.frame,
-                        &[iso_sprite.tile_set_size.x, iso_sprite.tile_set_size.y],
-                        &depth_corners,
-                    );
+                    match (uv_rect, uv_params) {
+                        (Some(uv), Some((trim, src, csz))) => gfx.draw_iso_sprite_uv(
+                            &model,
+                            &cam,
+                            &sheet_name,
+                            &uv,
+                            &trim,
+                            &src,
+                            &csz,
+                            &depth_corners,
+                        ),
+                        _ => gfx.draw_iso_sprite(
+                            &model,
+                            &cam,
+                            &iso_sprite.texture,
+                            iso_sprite.frame,
+                            &[iso_sprite.tile_set_size.x, iso_sprite.tile_set_size.y],
+                            &depth_corners,
+                        ),
+                    }
                 }
                 DrawKind::UiRect => {
                     let Ok(rect) = self.world.get::<&RectRender>(*entity) else {
@@ -3011,13 +3145,61 @@ impl Engine {
         false
     }
 
+    /// Resolve a `frame_name` for a texture through its packed-atlas frame
+    /// table, returning the bound sheet texture name, the normalized UV rect,
+    /// the frame's content pixel size, and its trim/anchor metadata.  Returns
+    /// `None` if the texture has no frame table or the name is unknown.
+    fn resolve_frame(
+        tables: &HashMap<String, FrameTable>,
+        texture: &str,
+        frame_name: &str,
+    ) -> Option<ResolvedFrame> {
+        let table = tables.get(texture)?;
+        let frame = table.frames.get(frame_name)?;
+        let sheet = table.sheets.get(frame.sheet as usize)?;
+        let uv = table.uv_rect(frame)?;
+        Some(ResolvedFrame {
+            sheet_name: sheet.name.clone(),
+            uv_rect: uv,
+            size: [frame.rect[2] as f32, frame.rect[3] as f32],
+            source_size: frame.source_size,
+            trim_offset: frame.trim_offset,
+            anchor: frame.anchor,
+        })
+    }
+
+    /// Compute the anchor to use when drawing a (possibly trimmed) packed
+    /// frame.  A packer-provided anchor wins; otherwise the component's anchor
+    /// (a `[0..1]` ratio of the original source cell) is translated into
+    /// trimmed-frame space using `source_size` + `trim_offset`, so the
+    /// ground-contact point stays put when empty space is trimmed away.
+    fn effective_anchor(component_anchor: Vec2, frame: &ResolvedFrame) -> Vec2 {
+        if let Some(a) = frame.anchor {
+            return Vec2::new(a[0], a[1]);
+        }
+        if frame.source_size[0] == 0 || frame.source_size[1] == 0 {
+            return component_anchor;
+        }
+        let cw = frame.source_size[0] as f32;
+        let ch = frame.source_size[1] as f32;
+        let bx0 = frame.trim_offset[0] as f32;
+        let by0 = frame.trim_offset[1] as f32;
+        let fw = frame.size[0].max(1.0);
+        let fh = frame.size[1].max(1.0);
+        Vec2::new((component_anchor.x * cw - bx0) / fw, (component_anchor.y * ch - by0) / fh)
+    }
+
     /// Compute the model matrix for an IsoSprite (matches TS `IsoSprite.modelMatrix()`).
+    /// `tex_dim` is the quad size in pixels; `anchor_px` is the ground-contact
+    /// point in that same pixel space (the quad is shifted so it lands on the
+    /// sprite's position).
     fn compute_iso_sprite_model(
         iso_sprite: &IsoSprite,
         sprite_tf: &Transform,
         tilemap_tf: &Transform,
         tilemap: &Tilemap,
         tex_dim: (f32, f32),
+        anchor_px: Vec2,
     ) -> Mat4 {
         let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
 
@@ -3034,8 +3216,7 @@ impl Engine {
         );
         cart_pos.y -= h * tilemap.height_scale;
 
-        let anchor_delta =
-            Vec3::new(-tex_dim.0 * iso_sprite.anchor.x, -tex_dim.1 * iso_sprite.anchor.y, 0.0);
+        let anchor_delta = Vec3::new(-anchor_px.x, -anchor_px.y, 0.0);
 
         Mat4::from_translation(cart_pos)
             * Mat4::from_scale(sprite_tf.scale)
@@ -3145,5 +3326,58 @@ mod tests {
         assert!((offsets[1][0] - (-8.0)).abs() < 0.001, "got {:?}", offsets[1]);
         // Altitude 0 → zero vertical offset.
         assert!((offsets[2][1]).abs() < 0.001, "got {:?}", offsets[2]);
+    }
+
+    #[test]
+    fn effective_anchor_translates_trim() {
+        // Untrimmed frame: source == content, no offset → anchor unchanged.
+        let full = ResolvedFrame {
+            sheet_name: "a".into(),
+            uv_rect: [0.0; 4],
+            size: [64.0, 64.0],
+            source_size: [64, 64],
+            trim_offset: [0, 0],
+            anchor: None,
+        };
+        let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &full);
+        assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
+
+        // Trimmed frame: anchor is a [0..1] ratio of the source cell, so it
+        // shifts within the trimmed content.
+        let trimmed = ResolvedFrame {
+            sheet_name: "a".into(),
+            uv_rect: [0.0; 4],
+            size: [466.0, 772.0],
+            source_size: [512, 928],
+            trim_offset: [8, 62],
+            anchor: None,
+        };
+        let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &trimmed);
+        assert!((a.x - (0.5 * 512.0 - 8.0) / 466.0).abs() < 1e-6, "got {a:?}");
+        assert!((a.y - (0.5 * 928.0 - 62.0) / 772.0).abs() < 1e-6, "got {a:?}");
+
+        // Packer-provided anchor (already in trimmed space) wins.
+        let packed = ResolvedFrame {
+            sheet_name: "a".into(),
+            uv_rect: [0.0; 4],
+            size: [466.0, 772.0],
+            source_size: [512, 928],
+            trim_offset: [8, 62],
+            anchor: Some([0.25, 0.75]),
+        };
+        let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &packed);
+        assert!((a.x - 0.25).abs() < 1e-6 && (a.y - 0.75).abs() < 1e-6, "got {a:?}");
+
+        // Unknown source size → no translation.
+        let unknown = ResolvedFrame {
+            sheet_name: "a".into(),
+            uv_rect: [0.0; 4],
+            size: [466.0, 772.0],
+            source_size: [0, 0],
+            trim_offset: [0, 0],
+            anchor: None,
+        };
+        let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &unknown);
+        assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
     }
 }

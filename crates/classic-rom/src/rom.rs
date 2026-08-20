@@ -2,8 +2,8 @@
 //!
 //! A [`Rom`] binds a manifest, a resource set, and a serialized entity state
 //! into one object that the engine can hydrate.  [`Rom::load`] reads it from a
-//! [`RomArchive`]; [`Rom::pack`] serializes it back to a zip archive (the
-//! canonical ROM container).
+//! [`RomArchive`]; [`Rom::pack`] serializes it back to a zstd-compressed tar
+//! (the canonical container, falling back to deflate zip on wasm).
 
 use std::io::Write;
 
@@ -40,57 +40,91 @@ impl Rom {
         Ok(Self { manifest, manifest_json, resources, state })
     }
 
-    /// Serialize the ROM to a zip archive.
+    /// Serialize the ROM to its canonical container: a zstd-compressed tar
+    /// (`tar.zst`) on native targets, falling back to a deflate zip on wasm32
+    /// (which has no zstd encoder).  [`RomArchive`] reads either.
     pub fn pack(&self) -> anyhow::Result<Vec<u8>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.pack_tar_zst()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pack_zip()
+        }
+    }
+
+    /// Serialize the ROM to a deflate zip archive (wasm-compatible fallback and
+    /// the historical container format).
+    pub fn pack_zip(&self) -> anyhow::Result<Vec<u8>> {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
+        for (path, bytes) in self.entries() {
+            writer.start_file(path, opts)?;
+            writer.write_all(&bytes)?;
+        }
+        Ok(writer.finish()?.into_inner())
+    }
 
-        writer.start_file(MANIFEST_ENTRY, opts)?;
-        writer.write_all(self.manifest_json.as_bytes())?;
-        writer.start_file(&self.manifest.state, opts)?;
-        writer.write_all(self.state.as_bytes())?;
+    /// Serialize the ROM to a zstd-compressed tar archive.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn pack_tar_zst(&self) -> anyhow::Result<Vec<u8>> {
+        let mut tar = tar::Builder::new(Vec::new());
+        for (path, bytes) in self.entries() {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(bytes.len() as u64);
+            tar.append_data(&mut header, &path, bytes.as_slice())?;
+        }
+        let tar_bytes = tar.into_inner()?;
+        Ok(zstd::bulk::compress(&tar_bytes, 19)?)
+    }
+
+    /// The flat list of `(path, bytes)` archive entries, in manifest-first order.
+    fn entries(&self) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        out.push((MANIFEST_ENTRY.to_string(), self.manifest_json.as_bytes().to_vec()));
+        out.push((self.manifest.state.clone(), self.state.as_bytes().to_vec()));
 
         for entry in &self.manifest.manifest.textures {
             if let Some(bytes) = self.resources.textures().get(&entry.name) {
-                writer.start_file(crate::rom_path(&entry.src), opts)?;
-                writer.write_all(bytes)?;
+                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
+            }
+            if let (Some(path), Some(bytes)) =
+                (&entry.frames, self.resources.frames().get(&entry.name))
+            {
+                out.push((crate::rom_path(path).to_string(), bytes.clone()));
             }
         }
         for entry in &self.manifest.manifest.sdf_fonts {
             if let Some(metrics) = self.resources.fonts().get(&entry.name) {
-                writer.start_file(crate::rom_path(&entry.metrics), opts)?;
-                writer.write_all(metrics)?;
+                out.push((crate::rom_path(&entry.metrics).to_string(), metrics.clone()));
             }
         }
         for entry in &self.manifest.code {
             if let Some(src) = self.resources.code().get(&entry.name) {
-                writer.start_file(crate::rom_path(&entry.src), opts)?;
-                writer.write_all(src)?;
+                out.push((crate::rom_path(&entry.src).to_string(), src.clone()));
             }
         }
         for entry in &self.manifest.manifest.animations {
             if let Some(metadata) = self.resources.animations().get(&entry.name) {
                 if let Some(path) = &entry.metadata {
-                    writer.start_file(crate::rom_path(path), opts)?;
-                    writer.write_all(metadata)?;
+                    out.push((crate::rom_path(path).to_string(), metadata.clone()));
                 }
             }
         }
         for entry in &self.manifest.grids {
             if let Some(bytes) = self.resources.grids().get(&entry.name) {
-                writer.start_file(crate::rom_path(&entry.src), opts)?;
-                writer.write_all(bytes)?;
+                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
             }
         }
         for entry in &self.manifest.manifest.vehicles {
             if let Some(bytes) = self.resources.vehicles().get(&entry.name) {
-                writer.start_file(crate::rom_path(&entry.src), opts)?;
-                writer.write_all(bytes)?;
+                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
             }
         }
-
-        Ok(writer.finish()?.into_inner())
+        out
     }
 }
 
@@ -146,6 +180,27 @@ mod tests {
         let bytes = rom.pack().unwrap();
         let archive = RomArchive::from_bytes(&bytes).unwrap();
         assert_eq!(archive.read_string("manifest.json").unwrap(), rom.manifest_json);
+    }
+
+    #[test]
+    fn pack_emits_zstd_magic() {
+        let rom = test_rom();
+        let bytes = rom.pack().unwrap();
+        // zstd frames begin `28 b5 2f fd`.
+        assert_eq!(&bytes[0..4], &[0x28, 0xB5, 0x2F, 0xFD]);
+    }
+
+    #[test]
+    fn pack_zip_round_trips() {
+        let rom = test_rom();
+        let bytes = rom.pack_zip().unwrap();
+        let archive = RomArchive::from_bytes(&bytes).unwrap();
+        let loaded = Rom::load(&archive).unwrap();
+        assert_eq!(loaded.state, rom.state);
+        assert_eq!(
+            loaded.resources.get(ResourceKind::Texture, "humanoid"),
+            Some(b"png-bytes".as_slice())
+        );
     }
 
     #[test]

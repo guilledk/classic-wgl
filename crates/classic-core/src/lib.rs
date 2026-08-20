@@ -89,6 +89,7 @@ pub fn register_all_components() {
                     texture: a.texture.clone(),
                     tilemap: a.tilemap.clone(),
                     frame: a.frame,
+                    frame_name: a.frame_name.clone(),
                     tile_set_size: a.tile_set_size,
                     anchor: a.anchor,
                     frame_offset: a.frame_offset,

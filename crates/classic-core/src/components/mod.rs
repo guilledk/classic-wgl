@@ -82,6 +82,11 @@ pub struct SpriteRender {
     pub texture: String,
     pub ignore_cam: bool,
     pub frame: f32,
+    /// Optional frame name resolved through the texture's `frames.json` table
+    /// (issue #45).  When set, `frame`/`tile_set_size` are ignored in favour of
+    /// the frame's packed UV rect + size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_name: Option<String>,
     pub tile_set_size: Vec2,
     pub anchor: Vec2,
 }
@@ -216,6 +221,11 @@ pub struct IsoSprite {
     /// Entity name of the tilemap this sprite lives on.
     pub tilemap: String,
     pub frame: f32,
+    /// Optional frame name resolved through the texture's `frames.json` table
+    /// (issue #45).  When set, `frame`/`tile_set_size` are ignored in favour of
+    /// the frame's packed UV rect + size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_name: Option<String>,
     pub tile_set_size: Vec2,
     /// Anchor point in [0..1] range (e.g. `[0.5, 0.98]` = centre-bottom / feet).
     pub anchor: Vec2,
@@ -240,6 +250,11 @@ pub struct IsoAgent {
     pub texture: String,
     pub tilemap: String,
     pub frame: f32,
+    /// Optional frame name resolved through the texture's `frames.json` table
+    /// (issue #45).  When set, `frame`/`tile_set_size` are ignored in favour of
+    /// the frame's packed UV rect + size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_name: Option<String>,
     pub tile_set_size: Vec2,
     pub anchor: Vec2,
     /// Visual offset selected by the current animation frame, in iso units.
@@ -261,6 +276,7 @@ impl Default for IsoAgent {
             texture: String::new(),
             tilemap: String::new(),
             frame: 0.0,
+            frame_name: None,
             tile_set_size: Vec2::ONE,
             anchor: Vec2::new(0.5, 0.98),
             frame_offset: Vec3::ZERO,

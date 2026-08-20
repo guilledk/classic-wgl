@@ -62,6 +62,74 @@ pub struct TextureManifestEntry {
     /// spans, emitted by the exporter.
     #[serde(default)]
     pub depth_range: f32,
+    /// Optional `frames.json` sidecar describing a packed atlas over this
+    /// texture (and any companion sheets).  When present, frames are
+    /// referenced by name through the [`FrameTable`] instead of the flat
+    /// uniform-grid `tile_set_size` index.
+    #[serde(default)]
+    pub frames: Option<String>,
+}
+
+/// One sheet (texture) referenced by a [`FrameTable`].
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct SpriteSheetEntry {
+    /// Texture name (resolved to an asset handle at load time).
+    pub name: String,
+    /// Archive/loader path of the sheet PNG.
+    pub src: String,
+    /// Pixel dimensions of the sheet, used to normalize frame rects.
+    pub size: [u32; 2],
+}
+
+/// A single frame inside a packed sprite atlas.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct AtlasFrame {
+    /// Index into [`FrameTable::sheets`] (0 = the owning texture).
+    pub sheet: u32,
+    /// Pixel rectangle `[x, y, width, height]` within the sheet.
+    pub rect: [u32; 4],
+    /// Untrimmed source size of the frame, in pixels (0 = unknown).
+    #[serde(default)]
+    pub source_size: [u32; 2],
+    /// Offset of `rect` within `source_size` (trim margin), in pixels.
+    #[serde(default)]
+    pub trim_offset: [i32; 2],
+    /// Optional anchor point in `[0..1]` range (x from left, y from top).
+    #[serde(default)]
+    pub anchor: Option<[f32; 2]>,
+}
+
+/// A packed-atlas frame table: the `frames.json` sidecar for a texture.
+///
+/// Frames are keyed by name and may span several sheets, so one table can
+/// describe a multi-sheet sprite (issue #45).  Sheet 0 is the owning texture;
+/// companion sheets are bundled as additional textures by the ROM loader.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct FrameTable {
+    #[serde(default = "default_frame_table_version")]
+    pub version: u32,
+    /// Sheets referenced by frames, in index order.
+    pub sheets: Vec<SpriteSheetEntry>,
+    /// Name-keyed frames.
+    pub frames: std::collections::BTreeMap<String, AtlasFrame>,
+}
+
+fn default_frame_table_version() -> u32 {
+    1
+}
+
+impl FrameTable {
+    /// Normalize a frame's pixel rect to a UV rect `[u0, v0, u1, v1]` in the
+    /// sheet's `[0..1]²` space.  Returns `None` if the frame's sheet index is
+    /// out of range.
+    pub fn uv_rect(&self, frame: &AtlasFrame) -> Option<[f32; 4]> {
+        let sheet = self.sheets.get(frame.sheet as usize)?;
+        let w = sheet.size[0].max(1) as f32;
+        let h = sheet.size[1].max(1) as f32;
+        let [x, y, fw, fh] = frame.rect;
+        let (x, y, fw, fh) = (x as f32, y as f32, fw as f32, fh as f32);
+        Some([x / w, y / h, (x + fw) / w, (y + fh) / h])
+    }
 }
 
 /// A manifest entry for an SDF font.
@@ -335,5 +403,68 @@ mod tests {
         });
         let def: VehicleDef = serde_json::from_value(json).expect("footprint override");
         assert_eq!(def.path_footprint, Some(vec![(0, 0), (-1, -1)]));
+    }
+
+    /// A texture manifest entry without `frames` leaves it `None` (backward
+    /// compatible with the flat uniform-grid referencing).
+    #[test]
+    fn texture_entry_frames_defaults_none() {
+        let entry: TextureManifestEntry = serde_json::from_value(serde_json::json!({
+            "name": "humanoid",
+            "src": "res/humanoid.png"
+        }))
+        .unwrap();
+        assert!(entry.frames.is_none());
+        assert!(entry.depth.is_none());
+    }
+
+    /// A `frames.json` sidecar deserializes into a [`FrameTable`] and resolves
+    /// frame pixel rects to normalized UV rects.
+    #[test]
+    fn frame_table_deserializes_and_normalizes_uv() {
+        let table: FrameTable = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "sheets": [
+                { "name": "humanoid", "src": "res/humanoid.png", "size": [512, 512] },
+                { "name": "humanoid_2", "src": "res/humanoid_2.png", "size": [256, 256] }
+            ],
+            "frames": {
+                "idle_0": { "sheet": 0, "rect": [0, 0, 64, 128], "source_size": [64, 128],
+                            "trim_offset": [0, 0], "anchor": [0.5, 0.98] },
+                "walk_3": { "sheet": 1, "rect": [128, 0, 64, 64] }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(table.version, 1);
+        assert_eq!(table.sheets.len(), 2);
+        assert_eq!(table.frames.len(), 2);
+
+        let idle = &table.frames["idle_0"];
+        assert_eq!(idle.sheet, 0);
+        assert_eq!(idle.source_size, [64, 128]);
+        assert_eq!(idle.trim_offset, [0, 0]);
+        assert_eq!(idle.anchor, Some([0.5, 0.98]));
+
+        // Defaults applied when omitted.
+        let walk = &table.frames["walk_3"];
+        assert_eq!(walk.source_size, [0, 0]);
+        assert_eq!(walk.trim_offset, [0, 0]);
+        assert_eq!(walk.anchor, None);
+
+        // UV normalization: sheet 0 is 512x512.
+        assert_eq!(table.uv_rect(idle), Some([0.0, 0.0, 64.0 / 512.0, 128.0 / 512.0]));
+        // Sheet 1 is 256x256.
+        assert_eq!(table.uv_rect(walk), Some([128.0 / 256.0, 0.0, 192.0 / 256.0, 64.0 / 256.0]));
+
+        // Out-of-range sheet index yields None.
+        let bad = AtlasFrame {
+            sheet: 9,
+            rect: [0, 0, 1, 1],
+            source_size: [0, 0],
+            trim_offset: [0, 0],
+            anchor: None,
+        };
+        assert_eq!(table.uv_rect(&bad), None);
     }
 }

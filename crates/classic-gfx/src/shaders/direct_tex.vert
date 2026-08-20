@@ -9,7 +9,7 @@ uniform mat4 projection_matrix;
 uniform float use_iso_depth;
 uniform vec4 iso_depth_corners;
 
-out mediump vec2 vTexCoord;
+out highp vec2 vTexCoord;
 
 void main(void ) {
     gl_Position = projection_matrix * camera_matrix * model_matrix * vertex_pos;

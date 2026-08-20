@@ -253,6 +253,18 @@ struct VehicleWrite {
 }
 
 impl Engine {
+    /// Resolve a vehicle sprite's packed-atlas frame name from its texture and
+    /// flat frame index, mirroring the animator's `{texture}_{frame}` naming.
+    /// Returns `None` when the texture has no frame table, so the uniform-grid
+    /// `frame`/`tile_set_size` path takes over.
+    fn frame_name(
+        tables: &std::collections::HashMap<String, classic_core::types::FrameTable>,
+        texture: &str,
+        frame: f32,
+    ) -> Option<String> {
+        tables.contains_key(texture).then(|| format!("{texture}_{}", frame as u32))
+    }
+
     /// Snapshot the tilemap's terrain data (cloned once per frame).
     fn vehicle_terrain(&self) -> Option<TerrainSnapshot> {
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
@@ -365,6 +377,7 @@ impl Engine {
                 texture: def.parts[i + 1].texture.clone(),
                 tilemap: tilemap_name.clone(),
                 frame: 0.0,
+                frame_name: None,
                 tile_set_size,
                 anchor: Vec2::from(wheel_anchors[i][0]),
                 frame_offset: Vec3::ZERO,
@@ -383,6 +396,7 @@ impl Engine {
             texture: body_part.texture.clone(),
             tilemap: tilemap_name.clone(),
             frame: 0.0,
+            frame_name: None,
             tile_set_size: body_tile_set_size,
             anchor: Vec2::from(body_anchors[0]),
             frame_offset: Vec3::ZERO,
@@ -608,6 +622,7 @@ impl Engine {
         }
         if let Ok(mut s) = self.world.get::<&mut IsoSprite>(ve) {
             s.frame = write.body_frame;
+            s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, write.body_frame);
             s.frame_offset.y = write.body_offset_y;
             s.anchor = Vec2::from(write.body_anchor);
         }
@@ -621,6 +636,7 @@ impl Engine {
             }
             if let Ok(mut s) = self.world.get::<&mut IsoSprite>(*we) {
                 s.frame = write.direction as f32;
+                s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, s.frame);
                 s.frame_offset.y = write.wheel_off_y[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
             }
@@ -766,7 +782,7 @@ mod tests {
     use super::*;
     use classic_core::components::{NavMesh, Role};
     use classic_core::math::iso_to_cartesian_4;
-    use classic_core::types::{VehicleDef, VehiclePartDef};
+    use classic_core::types::{FrameTable, VehicleDef, VehiclePartDef};
 
     fn test_tilemap() -> Tilemap {
         flat_tilemap(3, 3)
@@ -991,6 +1007,40 @@ mod tests {
         assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
         assert!(engine.vehicle_stop("lrv"));
         assert!(engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
+    }
+
+    #[test]
+    fn spawn_vehicle_sets_frame_name_when_table_exists() {
+        let mut engine = Engine::new_for_test();
+        let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
+        engine.names.insert("tilemap".into(), tm);
+        engine.vehicles.insert("lrv".into(), lrv_def(720.0));
+
+        // An empty frame table is enough: `frame_name` only keys off the
+        // texture name, so the frame resolves to `{texture}_{frame}`.
+        let empty = FrameTable { version: 1, sheets: vec![], frames: Default::default() };
+        for texture in ["lrvBody", "lrvWheelFl", "lrvWheelFr", "lrvWheelRl", "lrvWheelRr"] {
+            engine.frame_tables.insert(texture.into(), empty.clone());
+        }
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
+        let body = *engine.names.get("lrv").unwrap();
+        let wheel = *engine.names.get("lrvWheelFl").unwrap();
+
+        // Initial pose (direction 0): body frame 0, wheel frame 0.
+        let body_sprite = engine.world.get::<&IsoSprite>(body).unwrap();
+        assert_eq!(body_sprite.frame_name.as_deref(), Some("lrvBody_0"));
+        let wheel_sprite = engine.world.get::<&IsoSprite>(wheel).unwrap();
+        assert_eq!(wheel_sprite.frame_name.as_deref(), Some("lrvWheelFl_0"));
+
+        // Without a table, `frame_name` stays `None` (grid path takes over).
+        let mut bare = Engine::new_for_test();
+        let tm = bare.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
+        bare.names.insert("tilemap".into(), tm);
+        bare.vehicles.insert("lrv".into(), lrv_def(720.0));
+        assert!(bare.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
+        let bare_body = *bare.names.get("lrv").unwrap();
+        assert_eq!(bare.world.get::<&IsoSprite>(bare_body).unwrap().frame_name, None);
     }
 
     #[test]

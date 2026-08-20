@@ -123,16 +123,28 @@ pub fn init_animator_system(engine: &mut Engine) {
                     if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(*target_e) {
                         a.frame = *frame;
                         a.frame_offset = *offset;
+                        a.frame_name = engine
+                            .frame_tables
+                            .contains_key(&a.texture)
+                            .then(|| format!("{}_{}", a.texture, *frame as u32));
                     }
                     if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
                         s.frame = *frame;
                         s.frame_offset = *offset;
+                        s.frame_name = engine
+                            .frame_tables
+                            .contains_key(&s.texture)
+                            .then(|| format!("{}_{}", s.texture, *frame as u32));
                     }
                 }
                 "IsoSprite" => {
                     if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
                         s.frame = *frame;
                         s.frame_offset = *offset;
+                        s.frame_name = engine
+                            .frame_tables
+                            .contains_key(&s.texture)
+                            .then(|| format!("{}_{}", s.texture, *frame as u32));
                     }
                 }
                 _ => {}

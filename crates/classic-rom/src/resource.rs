@@ -26,6 +26,8 @@ pub enum ResourceKind {
     Grid,
     /// Wheeled-vehicle definition sidecar (`vehicle.json`).
     Vehicle,
+    /// Packed-atlas frame table (`frames.json`) sidecar for a texture.
+    Frames,
 }
 
 /// Name-keyed byte blobs, grouped by kind.
@@ -37,6 +39,7 @@ pub struct ResourceSet {
     animations: BTreeMap<String, Vec<u8>>,
     grids: BTreeMap<String, Vec<u8>>,
     vehicles: BTreeMap<String, Vec<u8>>,
+    frames: BTreeMap<String, Vec<u8>>,
 }
 
 impl ResourceSet {
@@ -59,6 +62,7 @@ impl ResourceSet {
             + self.animations.len()
             + self.grids.len()
             + self.vehicles.len()
+            + self.frames.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -87,6 +91,10 @@ impl ResourceSet {
 
     pub fn vehicles(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.vehicles
+    }
+
+    pub fn frames(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.frames
     }
 
     /// Build a resource set by reading manifest-declared resources out of a
@@ -132,6 +140,11 @@ impl ResourceSet {
         for entry in &manifest.manifest.vehicles {
             set.vehicles.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
+        for entry in &manifest.manifest.textures {
+            if let Some(path) = &entry.frames {
+                set.frames.insert(entry.name.clone(), load(crate::rom_path(path))?);
+            }
+        }
         Ok(set)
     }
 
@@ -143,6 +156,7 @@ impl ResourceSet {
             ResourceKind::Animation => &self.animations,
             ResourceKind::Grid => &self.grids,
             ResourceKind::Vehicle => &self.vehicles,
+            ResourceKind::Frames => &self.frames,
         }
     }
 
@@ -154,6 +168,7 @@ impl ResourceSet {
             ResourceKind::Animation => &mut self.animations,
             ResourceKind::Grid => &mut self.grids,
             ResourceKind::Vehicle => &mut self.vehicles,
+            ResourceKind::Frames => &mut self.frames,
         }
     }
 }
@@ -285,5 +300,34 @@ mod tests {
 
         let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
         assert_eq!(set.get(ResourceKind::Grid, "demo.tiles"), Some(&[1, 0, 0, 0, 2, 0, 0, 0][..]));
+    }
+
+    #[test]
+    fn from_archive_populates_frames() {
+        let manifest: RomManifest = serde_json::from_str(
+            r#"{
+                "shaders": [],
+                "textures": [
+                    { "name": "humanoid", "src": "res/humanoid.png", "frames": "res/humanoid.frames.json" }
+                ],
+                "animations": []
+            }"#,
+        )
+        .unwrap();
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file("res/humanoid.png", opts).unwrap();
+        writer.write_all(b"png").unwrap();
+        writer.start_file("res/humanoid.frames.json", opts).unwrap();
+        writer.write_all(b"{\"version\":1,\"sheets\":[],\"frames\":{}}").unwrap();
+        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+
+        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        assert_eq!(
+            set.get(ResourceKind::Frames, "humanoid"),
+            Some(b"{\"version\":1,\"sheets\":[],\"frames\":{}}".as_slice())
+        );
     }
 }

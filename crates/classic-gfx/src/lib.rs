@@ -11,6 +11,7 @@ mod shaders;
 
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -21,7 +22,7 @@ use std::rc::Rc;
 pub struct Shader {
     program: glow::Program,
     attr: HashMap<String, u32>,
-    unif: HashMap<String, glow::UniformLocation>,
+    unif: RefCell<HashMap<String, glow::UniformLocation>>,
 }
 
 impl Shader {
@@ -80,7 +81,7 @@ impl Shader {
             }
         }
 
-        Ok(Self { program, attr, unif })
+        Ok(Self { program, attr, unif: RefCell::new(unif) })
     }
 
     pub fn bind(&self, gl: &glow::Context) {
@@ -91,61 +92,73 @@ impl Shader {
         *self.attr.get(name).unwrap_or_else(|| panic!("attribute '{name}' not found"))
     }
 
-    fn unif(&self, name: &str) -> Option<&glow::UniformLocation> {
-        self.unif.get(name)
+    /// Resolve a uniform location, consulting the compile-time cache first and
+    /// lazily querying the linked program on a miss.  Lazy resolution lets a
+    /// shader declare uniforms beyond those listed in the manifest's `unif`
+    /// array (e.g. the packed-atlas `uv_rect`) without a manifest bump.
+    // `UniformLocation` is `Copy` on native GL but `Clone`-only on WebGL, so we
+    // clone defensively (cheap either way).
+    #[allow(clippy::clone_on_copy)]
+    fn unif(&self, gl: &glow::Context, name: &str) -> Option<glow::UniformLocation> {
+        if let Some(loc) = self.unif.borrow().get(name) {
+            return Some(loc.clone());
+        }
+        let loc = unsafe { gl.get_uniform_location(self.program, name) }?;
+        self.unif.borrow_mut().insert(name.to_string(), loc.clone());
+        Some(loc)
     }
 
     // -- uniform setters ---------------------------------------------------
 
     pub fn uniform_mat4(&self, gl: &glow::Context, name: &str, m: &Mat4) {
-        if let Some(loc) = self.unif(name) {
+        if let Some(loc) = self.unif(gl, name) {
             unsafe {
-                gl.uniform_matrix_4_f32_slice(Some(loc), false, m.as_ref());
+                gl.uniform_matrix_4_f32_slice(Some(&loc), false, m.as_ref());
             }
         }
     }
 
     pub fn uniform_mat3(&self, gl: &glow::Context, name: &str, m: &Mat3) {
-        if let Some(loc) = self.unif(name) {
+        if let Some(loc) = self.unif(gl, name) {
             unsafe {
-                gl.uniform_matrix_3_f32_slice(Some(loc), false, m.as_ref());
+                gl.uniform_matrix_3_f32_slice(Some(&loc), false, m.as_ref());
             }
         }
     }
 
     pub fn uniform_vec4(&self, gl: &glow::Context, name: &str, v: &[f32; 4]) {
-        if let Some(loc) = self.unif(name) {
-            unsafe { gl.uniform_4_f32(Some(loc), v[0], v[1], v[2], v[3]) }
+        if let Some(loc) = self.unif(gl, name) {
+            unsafe { gl.uniform_4_f32(Some(&loc), v[0], v[1], v[2], v[3]) }
         }
     }
 
     pub fn uniform_vec3(&self, gl: &glow::Context, name: &str, v: Vec3) {
-        if let Some(loc) = self.unif(name) {
-            unsafe { gl.uniform_3_f32(Some(loc), v[0], v[1], v[2]) }
+        if let Some(loc) = self.unif(gl, name) {
+            unsafe { gl.uniform_3_f32(Some(&loc), v[0], v[1], v[2]) }
         }
     }
 
     pub fn uniform_vec2(&self, gl: &glow::Context, name: &str, v: &[f32; 2]) {
-        if let Some(loc) = self.unif(name) {
-            unsafe { gl.uniform_2_f32(Some(loc), v[0], v[1]) }
+        if let Some(loc) = self.unif(gl, name) {
+            unsafe { gl.uniform_2_f32(Some(&loc), v[0], v[1]) }
         }
     }
 
     pub fn uniform_1f(&self, gl: &glow::Context, name: &str, v: f32) {
-        if let Some(loc) = self.unif(name) {
-            unsafe { gl.uniform_1_f32(Some(loc), v) }
+        if let Some(loc) = self.unif(gl, name) {
+            unsafe { gl.uniform_1_f32(Some(&loc), v) }
         }
     }
 
     pub fn uniform_1i(&self, gl: &glow::Context, name: &str, v: i32) {
-        if let Some(loc) = self.unif(name) {
-            unsafe { gl.uniform_1_i32(Some(loc), v) }
+        if let Some(loc) = self.unif(gl, name) {
+            unsafe { gl.uniform_1_i32(Some(&loc), v) }
         }
     }
 
     pub fn uniform_bool(&self, gl: &glow::Context, name: &str, v: bool) {
-        if let Some(loc) = self.unif(name) {
-            unsafe { gl.uniform_1_i32(Some(loc), v as i32) }
+        if let Some(loc) = self.unif(gl, name) {
+            unsafe { gl.uniform_1_i32(Some(&loc), v as i32) }
         }
     }
 }
@@ -488,6 +501,61 @@ impl Gfx {
         s.uniform_mat4(gl, "model_matrix", model);
         s.uniform_1f(gl, "tile_id_flat", frame);
         s.uniform_vec2(gl, "tile_set_size", tile_set_size);
+        s.uniform_1f(gl, "use_uv_rect", 0.0);
+        s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
+        s.uniform_1f(gl, "use_iso_depth", 0.0);
+        s.uniform_vec4(gl, "iso_depth_corners", &[0.0, 0.0, 0.0, 0.0]);
+        s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
+
+        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
+        self.quad.indices.bind(gl);
+
+        unsafe {
+            gl.draw_elements(
+                glow::TRIANGLES,
+                self.quad.index_count as i32,
+                glow::UNSIGNED_SHORT,
+                0,
+            );
+        }
+    }
+
+    /// Draw a sprite from a packed-atlas UV rect `[u0, v0, u1, v1]`, sized to
+    /// `source_size` with the trimmed content (`content_size`) offset by
+    /// `trim_offset` within it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_sprite_uv(
+        &self,
+        model: &Mat4,
+        camera: &Mat4,
+        texture_name: &str,
+        uv_rect: &[f32; 4],
+        trim_offset: &[f32; 2],
+        source_size: &[f32; 2],
+        content_size: &[f32; 2],
+        ignore_cam: bool,
+        ghost_alpha: f32,
+    ) {
+        let gl = &self.gl;
+        let s = self.shader("imageSheet");
+        let t = self.texture(texture_name);
+        let proj = self.projection();
+
+        s.bind(gl);
+        t.bind(gl, 0);
+
+        s.uniform_1i(gl, "tex_sampler", 0);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
+        s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_1f(gl, "tile_id_flat", 0.0);
+        s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
+        s.uniform_1f(gl, "use_uv_rect", 1.0);
+        s.uniform_vec4(gl, "uv_rect", uv_rect);
+        s.uniform_vec2(gl, "trim_offset", trim_offset);
+        s.uniform_vec2(gl, "source_size", source_size);
+        s.uniform_vec2(gl, "content_size", content_size);
         s.uniform_1f(gl, "use_iso_depth", 0.0);
         s.uniform_vec4(gl, "iso_depth_corners", &[0.0, 0.0, 0.0, 0.0]);
         s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
@@ -578,6 +646,8 @@ impl Gfx {
         s.uniform_mat4(gl, "model_matrix", model);
         s.uniform_1f(gl, "tile_id_flat", frame);
         s.uniform_vec2(gl, "tile_set_size", tile_set_size);
+        s.uniform_1f(gl, "use_uv_rect", 0.0);
+        s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
         s.uniform_1f(gl, "use_iso_depth", 1.0);
         s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
 
@@ -603,6 +673,77 @@ impl Gfx {
             );
 
             // Normal pass: on top of terrain
+            s.uniform_1f(gl, "ghost_alpha", 0.0);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(false);
+            gl.draw_elements(
+                glow::TRIANGLES,
+                self.quad.index_count as i32,
+                glow::UNSIGNED_SHORT,
+                0,
+            );
+
+            gl.depth_mask(true);
+            gl.depth_func(glow::LEQUAL);
+            gl.disable(glow::DEPTH_TEST);
+        }
+    }
+
+    /// Draw an isometric sprite from a packed-atlas UV rect `[u0, v0, u1, v1]`,
+    /// sized to `source_size` with the trimmed content (`content_size`) offset
+    /// by `trim_offset` within it, with two-pass depth rendering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_iso_sprite_uv(
+        &self,
+        model: &Mat4,
+        camera: &Mat4,
+        texture_name: &str,
+        uv_rect: &[f32; 4],
+        trim_offset: &[f32; 2],
+        source_size: &[f32; 2],
+        content_size: &[f32; 2],
+        iso_depth_corners: &[f32; 4],
+    ) {
+        let gl = &self.gl;
+        let s = self.shader("imageSheet");
+        let t = self.texture(texture_name);
+        let proj = self.projection();
+
+        s.bind(gl);
+        t.bind(gl, 0);
+
+        s.uniform_1i(gl, "tex_sampler", 0);
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", camera);
+        s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_1f(gl, "tile_id_flat", 0.0);
+        s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
+        s.uniform_1f(gl, "use_uv_rect", 1.0);
+        s.uniform_vec4(gl, "uv_rect", uv_rect);
+        s.uniform_vec2(gl, "trim_offset", trim_offset);
+        s.uniform_vec2(gl, "source_size", source_size);
+        s.uniform_vec2(gl, "content_size", content_size);
+        s.uniform_1f(gl, "use_iso_depth", 1.0);
+        s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
+
+        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
+        self.quad.indices.bind(gl);
+
+        unsafe {
+            gl.enable(glow::DEPTH_TEST);
+
+            // Two-pass ghost rendering (see draw_iso_sprite for rationale).
+            s.uniform_1f(gl, "ghost_alpha", 0.4);
+            gl.depth_func(glow::ALWAYS);
+            gl.depth_mask(false);
+            gl.draw_elements(
+                glow::TRIANGLES,
+                self.quad.index_count as i32,
+                glow::UNSIGNED_SHORT,
+                0,
+            );
+
             s.uniform_1f(gl, "ghost_alpha", 0.0);
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(false);
