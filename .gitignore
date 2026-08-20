@@ -48,6 +48,7 @@ result/
 apps/web/dist/
 
 # Worktree workspace (open-wkt)
+/wkts/
 .claude/wkts/
 claude_wkts
 
