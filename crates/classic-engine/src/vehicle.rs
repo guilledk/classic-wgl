@@ -10,7 +10,7 @@
 
 use classic_core::components::{DebugName, IsoSprite, IsoVehicle, RoleKind, Tilemap, Transform};
 use classic_core::math::cartesian_to_iso_4;
-use classic_core::tilemap::bilinear_height;
+use classic_core::tilemap::sample_height_mesh;
 use glam::{Vec2, Vec3};
 
 use crate::Engine;
@@ -66,7 +66,7 @@ struct TerrainSnapshot {
 
 impl TerrainSnapshot {
     fn height(&self, x: f32, y: f32) -> f32 {
-        bilinear_height(&self.heights, self.size_x, self.size_y, x, y) * self.height_scale
+        sample_height_mesh(&self.heights, self.size_x, self.size_y, x, y) * self.height_scale
     }
 }
 
@@ -368,6 +368,12 @@ impl Engine {
 
         let wheel_names: [String; 4] = WHEEL_SUFFIXES.map(|s| format!("{entity_name}Wheel{s}"));
         let tilemap_name = "tilemap".to_string();
+        // Assign a unique per-instance stencil ghost-group id to the body + all
+        // four wheels, so the parts never ghost through each other (but still
+        // ghost through terrain and other entities).  Ids live in 1..=255; 0 is
+        // reserved for ungrouped sprites.
+        let ghost_group = self.next_ghost_group;
+        self.next_ghost_group = (self.next_ghost_group % 255) + 1;
 
         // Spawn the four wheel sprites.
         for i in 0..4 {
@@ -382,6 +388,7 @@ impl Engine {
                 anchor: Vec2::from(wheel_anchors[i][0]),
                 frame_offset: Vec3::ZERO,
                 footprint: vec![],
+                ghost_group,
             };
             let we = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
             let _ = self.world.insert_one(we, DebugName(wheel_names[i].clone()));
@@ -401,6 +408,7 @@ impl Engine {
             anchor: Vec2::from(body_anchors[0]),
             frame_offset: Vec3::ZERO,
             footprint: vec![],
+            ghost_group,
         };
         let vehicle = IsoVehicle {
             tilemap: tilemap_name,

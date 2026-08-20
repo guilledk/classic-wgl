@@ -276,6 +276,64 @@ pub fn bilinear_height(heights: &[f32], size_x: i32, size_y: i32, px: f32, py: f
     h_nw + (h_ne - h_nw) * fx + (h_sw - h_nw) * fy + (h_nw - h_ne - h_sw + h_se) * fx * fy
 }
 
+/// Horizontal depth divisor in the canonical iso-depth formula
+/// `iso_depth(tx, ty, z) = (tx - ty) / HORIZONTAL_DEPTH_SCALE + 0.5 + z / D`.
+/// One unit of `tx - ty` spans this many iso-depth steps.
+pub const HORIZONTAL_DEPTH_SCALE: f32 = 400.0;
+
+/// Height depth divisor in the canonical iso-depth formula, for `z` in
+/// **tileset pixels** (`height_data · height_scale`).
+///
+/// Derived from the exporter's 30°-elevation view axis (see
+/// `classic-assets` / `make_lrv_spritesheet.py`): the camera basis is
+/// `back = right × up = (−√(3/8), −√(3/8), +1/2)`, so one metre of height
+/// contributes `back.z = 0.5` of view depth while one tile of `tx - ty`
+/// contributes `√(3/8) · (TILE_PX / PPM_TARGET)`.  The height term is
+/// **positive** (`+ z / D`): `back.z = +0.5` means taller terrain is farther,
+/// i.e. larger depth.  The metre-space divisor is `344.46`; scaling by
+/// `PPM_TARGET = 64` px/m gives the pixel-space form:
+///
+/// `D_px = 344.46 · 64 ≈ 22045.4`
+pub const HEIGHT_DEPTH_SCALE_PX: f32 = 22045.4;
+
+/// Sample terrain height at iso-space position `(px, py)` using the same
+/// triangle-linear interpolation as [`build_mesh`] (top faces split into
+/// `NW→NE→SW` and `NE→SE→SW`), so sprite positioning and per-pixel depth
+/// match the terrain mesh exactly rather than via [`bilinear_height`].
+///
+/// `heights` has shape `(size_x + 1) × (size_y + 1)` (one sample per vertex).
+/// Barycentric weights:
+///   - lower triangle (`fx + fy ≤ 1`): `h_nw·(1-fx-fy) + h_ne·fx + h_sw·fy`
+///   - upper triangle (otherwise):   `h_ne·(1-fy) + h_se·(fx+fy-1) + h_sw·(1-fx)`
+pub fn sample_height_mesh(heights: &[f32], size_x: i32, size_y: i32, px: f32, py: f32) -> f32 {
+    // Same empty/not-yet-committed grid tolerance as `bilinear_height`.
+    if heights.len() != (size_x as usize + 1) * (size_y as usize + 1) {
+        return 0.0;
+    }
+
+    let ftx = px.floor() as i32;
+    let fty = py.floor() as i32;
+    let fx = px - ftx as f32;
+    let fy = py - fty as f32;
+
+    let at = |tx: i32, ty: i32| -> f32 {
+        let tx = tx.clamp(0, size_x) as usize;
+        let ty = ty.clamp(0, size_y) as usize;
+        heights[ty * (size_x as usize + 1) + tx]
+    };
+
+    let h_nw = at(ftx, fty);
+    let h_ne = at(ftx + 1, fty);
+    let h_sw = at(ftx, fty + 1);
+    let h_se = at(ftx + 1, fty + 1);
+
+    if fx + fy <= 1.0 {
+        h_nw * (1.0 - fx - fy) + h_ne * fx + h_sw * fy
+    } else {
+        h_ne * (1.0 - fy) + h_se * (fx + fy - 1.0) + h_sw * (1.0 - fx)
+    }
+}
+
 /// Build the tile-data texture as RGBA `u8` pixels.
 ///
 /// Each tile's value (0..255) is stored in R, G, B channels with A=255.

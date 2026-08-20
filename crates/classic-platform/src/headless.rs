@@ -33,6 +33,7 @@ const EGL_GREEN_SIZE: i32 = 0x3023;
 const EGL_BLUE_SIZE: i32 = 0x3022;
 const EGL_ALPHA_SIZE: i32 = 0x3021;
 const EGL_DEPTH_SIZE: i32 = 0x3025;
+const EGL_STENCIL_SIZE: i32 = 0x3026;
 const EGL_NONE: i32 = 0x3038;
 const EGL_CONTEXT_MAJOR_VERSION: i32 = 0x3098;
 const EGL_SURFACE_TYPE: i32 = 0x3033;
@@ -179,6 +180,8 @@ impl HeadlessPlatform {
                 8,
                 EGL_DEPTH_SIZE,
                 16,
+                EGL_STENCIL_SIZE,
+                8,
                 EGL_NONE,
             ];
             let mut config: EGLConfig = std::ptr::null_mut();

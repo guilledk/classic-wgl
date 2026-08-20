@@ -1,12 +1,12 @@
 {"tag":"baseline","frame":55,"viewport":[1280.0,720.0],"camera":{"position":[18900.96484375,636.39599609375,0.0],"scale":[0.3199999928474426,0.3199999928474426,1.0],"matrix":[0.3199999928474426,0.0,0.0,0.0,0.0,0.3199999928474426,0.0,0.0,0.0,0.0,1.0,0.0,-5408.30859375,156.35328674316406,0.0,1.0]},"counts":{"IsoSprite":6,"SdfText":18,"Sprite":1,"Tilemap":1,"UiRect":6,"UiSprite":1}}
 {"order":20000.0,"kind":"Tilemap","name":"tilemap","model":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"camera_ignored":false,"texture":"lunarTileset"}
-{"order":0.0,"kind":"UiRect","name":"e#10","model":[1280.0,0.0,0.0,0.0,0.0,720.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"camera_ignored":true,"color":[0.0,0.0,0.0,0.0]}
 {"order":-37.187347,"kind":"IsoSprite","name":"lrvWheelFl","model":[331.0,0.0,0.0,0.0,0.0,331.0,0.0,0.0,0.0,0.0,1.0,0.0,18958.205,349.07455,52.355633,1.0],"camera_ignored":false,"texture":"lrvWheelFl","frame":0.0}
-{"order":-38.48712,"kind":"IsoSprite","name":"lrvWheelFr","model":[331.0,0.0,0.0,0.0,0.0,331.0,0.0,0.0,0.0,0.0,1.0,0.0,18958.205,349.07452,52.355633,1.0],"camera_ignored":false,"texture":"lrvWheelFr","frame":0.0}
+{"order":-38.48712,"kind":"IsoSprite","name":"lrvWheelFr","model":[331.0,0.0,0.0,0.0,0.0,331.0,0.0,0.0,0.0,0.0,1.0,0.0,18958.205,349.07452,52.35563,1.0],"camera_ignored":false,"texture":"lrvWheelFr","frame":0.0}
 {"order":-39.0,"kind":"IsoSprite","name":"lrv","model":[331.0,0.0,0.0,0.0,0.0,331.0,0.0,0.0,0.0,0.0,1.0,0.0,18958.203,349.0744,52.355633,1.0],"camera_ignored":false,"texture":"lrvBody","frame":56.0}
 {"order":-39.943695,"kind":"IsoSprite","name":"lrvWheelRl","model":[331.0,0.0,0.0,0.0,0.0,331.0,0.0,0.0,0.0,0.0,1.0,0.0,18958.203,349.0744,52.355633,1.0],"camera_ignored":false,"texture":"lrvWheelRl","frame":0.0}
 {"order":-40.0,"kind":"IsoSprite","name":"rocket","model":[123.0,0.0,0.0,0.0,0.0,474.0,0.0,0.0,0.0,0.0,1.0,0.0,18869.533,-128.99515,52.355633,1.0],"camera_ignored":false,"texture":"rocketLanding","frame":21.0}
-{"order":-41.243866,"kind":"IsoSprite","name":"lrvWheelRr","model":[331.0,0.0,0.0,0.0,0.0,331.0,0.0,0.0,0.0,0.0,1.0,0.0,18958.205,349.07443,52.355633,1.0],"camera_ignored":false,"texture":"lrvWheelRr","frame":0.0}
+{"order":-41.243866,"kind":"IsoSprite","name":"lrvWheelRr","model":[331.0,0.0,0.0,0.0,0.0,331.0,0.0,0.0,0.0,0.0,1.0,0.0,18958.205,349.07443,52.35563,1.0],"camera_ignored":false,"texture":"lrvWheelRr","frame":0.0}
+{"order":0.0,"kind":"UiRect","name":"e#10","model":[1280.0,0.0,0.0,0.0,0.0,720.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"camera_ignored":true,"color":[0.0,0.0,0.0,0.0]}
 {"order":-1000.0,"kind":"UiSprite","name":"e#19","model":[128.0,0.0,0.0,0.0,0.0,128.0,0.0,0.0,0.0,0.0,1.0,0.0,64.0,528.0,-1000.0,1.0],"camera_ignored":true,"texture":"editorIcons","frame":0.0}
 {"order":-1000.0,"kind":"UiRect","name":"e#11","model":[1280.0,0.0,0.0,0.0,0.0,68.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,-1000.0,1.0],"camera_ignored":true,"color":[0.0,0.0,0.0,0.5]}
 {"order":-1000.0,"kind":"UiRect","name":"e#15","model":[128.0,0.0,0.0,0.0,0.0,200.0,0.0,0.0,0.0,0.0,1.0,0.0,64.0,456.0,-1000.0,1.0],"camera_ignored":true,"color":[0.0,0.0,0.0,0.0]}

@@ -244,7 +244,7 @@ fn create_gl_window(window: &Window) -> GlWindow {
     let display =
         unsafe { Display::new(raw_display, DisplayApiPreference::Egl) }.expect("create display");
 
-    let template = glutin::config::ConfigTemplateBuilder::new().build();
+    let template = glutin::config::ConfigTemplateBuilder::new().with_stencil_size(8).build();
     let config = unsafe { display.find_configs(template) }
         .expect("find configs")
         .next()

@@ -33,7 +33,10 @@ use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
-use classic_core::tilemap::{bilinear_height, build_mesh, build_tile_texture};
+use classic_core::tilemap::{
+    bilinear_height, build_mesh, build_tile_texture, sample_height_mesh, HEIGHT_DEPTH_SCALE_PX,
+    HORIZONTAL_DEPTH_SCALE,
+};
 use classic_core::types::AnimationData;
 use classic_core::types::FrameTable;
 use classic_core::types::SdfFontMetrics;
@@ -59,6 +62,37 @@ struct TilemapGpu {
     mesh_buf: GlBuffer,
     vertex_count: usize,
     tile_tex: glow::Texture,
+}
+
+/// Per-texture depth-mask metadata, keyed by the color texture name.  When a
+/// manifest texture declares a `depth` map, the engine uploads the grayscale
+/// PNG under `depth_tex` and records the `depth_range` (isoDepth units spanned
+/// by the map's `[0, 1]` grayscale) so the render loop can write per-pixel
+/// `gl_FragDepth` for that sprite.
+#[derive(Clone, Debug)]
+struct TextureDepth {
+    depth_tex: String,
+    depth_range: f32,
+}
+
+/// Packed-atlas UV draw params: `(uv_rect, trim_offset, source_size, content_size)`.
+type IsoUv = ([f32; 4], [f32; 2], [f32; 2], [f32; 2]);
+
+/// Precomputed per-sprite draw parameters for the isometric normal + ghost
+/// passes, so both passes share one model/depth computation per frame.
+struct IsoDraw {
+    order: f32,
+    name: String,
+    model: Mat4,
+    texture: String,
+    frame: f32,
+    tile_set_size: [f32; 2],
+    /// Packed-atlas UV params, or `None` for the uniform-grid path.
+    uv: Option<IsoUv>,
+    depth_corners: [f32; 4],
+    depth_map: Option<(String, f32)>,
+    depth_base: f32,
+    ghost_group: u32,
 }
 
 struct SdfTextGpu {
@@ -122,9 +156,15 @@ pub struct Engine {
     /// resolves its frame through the table for the owning texture.
     pub frame_tables: HashMap<String, FrameTable>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
+    /// Per-texture depth-mask metadata keyed by color texture name (loaded
+    /// from the manifest's `depth` / `depth_range` fields).
+    texture_depths: HashMap<String, TextureDepth>,
     /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
     /// `vehicles` resources at boot.
     pub vehicles: HashMap<String, classic_core::types::VehicleDef>,
+    /// Next per-instance stencil ghost-group id handed out by `spawn_vehicle`
+    /// (1..=255; 0 is reserved for ungrouped sprites).
+    next_ghost_group: u32,
     /// ROM manifest (raw + parsed) and resources, captured by `load_rom` so
     /// `dump_rom` can reconstruct a [`classic_rom::Rom`] with the current state.
     pub rom_manifest_json: Option<String>,
@@ -250,7 +290,9 @@ impl Engine {
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
             frame_tables: HashMap::new(),
+            texture_depths: HashMap::new(),
             vehicles: HashMap::new(),
+            next_ghost_group: 1,
             rom_manifest_json: None,
             rom_manifest: None,
             rom_resources: None,
@@ -319,6 +361,22 @@ impl Engine {
                 continue;
             }
             self.load_texture_png(name, bytes);
+        }
+
+        // Per-texture depth maps (grayscale `gl_FragDepth` masks).  Uploaded as
+        // sibling textures named `"{name}-depth"` and recorded against the
+        // color texture name so `draw_iso_sprite` can look them up.
+        for entry in &manifest.manifest.textures {
+            if entry.depth.is_some() {
+                if let Some(bytes) = resources.depths().get(&entry.name) {
+                    let depth_tex = format!("{}-depth", entry.name);
+                    self.load_texture_png(&depth_tex, bytes);
+                    self.texture_depths.insert(
+                        entry.name.clone(),
+                        TextureDepth { depth_tex, depth_range: entry.depth_range },
+                    );
+                }
+            }
         }
 
         // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf").
@@ -858,7 +916,7 @@ impl Engine {
     pub fn height_at(&self, x: f32, y: f32) -> f32 {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
         let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return 0.0 };
-        bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
+        sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
     }
 
     /// Write one tile index at tile coordinate `(x, y)` (bounds-checked).
@@ -2067,6 +2125,14 @@ impl Engine {
         // Uses sort_by (not sort_unstable_by) for deterministic golden traces.
         items.sort_by(|a, b| b.0.total_cmp(&a.0));
 
+        // The isometric sprites, in the same (sorted) order they appear in
+        // `items`, drawn in two explicit passes (normals then ghosts).
+        let iso_items: Vec<(f32, hecs::Entity)> = items
+            .iter()
+            .filter(|(_, _, k)| matches!(k, DrawKind::IsoSprite))
+            .map(|(o, e, _)| (*o, *e))
+            .collect();
+
         classic_core::cl_debug!(
             classic_core::instrument::Chan::Render,
             "render: {} draw items",
@@ -2107,7 +2173,276 @@ impl Engine {
         // Model matrix z MUST stay inside [-10000, 10000] — the orthographic
         // projection clips everything outside. The sort key can differ from
         // the model z. Cursor uses sort_z=-20000 but model_z=-10000.
+        // Precompute isometric-sprite draw params once, shared by the normal
+        // and ghost passes below.
+        let mut iso_draws: Vec<IsoDraw> = Vec::new();
+        for (order, entity) in &iso_items {
+            let Ok(tf) = self.world.get::<&Transform>(*entity) else {
+                continue;
+            };
+            let Ok(iso_sprite) = self.world.get::<&IsoSprite>(*entity) else {
+                continue;
+            };
+            let Some(&tm_entity) = self.names.get(&iso_sprite.tilemap) else {
+                continue;
+            };
+            let Ok(tilemap_tf) = self.world.get::<&Transform>(tm_entity) else {
+                continue;
+            };
+            let Ok(tilemap) = self.world.get::<&Tilemap>(tm_entity) else {
+                continue;
+            };
+            // Resolve a packed-atlas frame (issue #45); falls back to the
+            // uniform-grid path when no `frame_name` / table match.
+            let frame_ref = iso_sprite
+                .frame_name
+                .as_deref()
+                .and_then(|n| Self::resolve_frame(&self.frame_tables, &iso_sprite.texture, n));
+
+            // (quad size, anchor px, sheet name, uv params).  Packed frames are
+            // drawn at their source cell size with the trimmed content offset;
+            // the uniform-grid path uses the cell size directly.
+            let (tex_dim, anchor_px, sheet_name, uv) = match &frame_ref {
+                Some(fr) => {
+                    let sw =
+                        if fr.source_size[0] > 0 { fr.source_size[0] as f32 } else { fr.size[0] };
+                    let sh =
+                        if fr.source_size[1] > 0 { fr.source_size[1] as f32 } else { fr.size[1] };
+                    let (cw, ch) = (fr.size[0], fr.size[1]);
+                    let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
+                    let a_trim = Self::effective_anchor(iso_sprite.anchor, fr);
+                    let anchor_px = Vec2::new(a_trim.x * cw + bx, a_trim.y * ch + by);
+                    (
+                        (sw, sh),
+                        anchor_px,
+                        fr.sheet_name.clone(),
+                        Some((fr.uv_rect, [bx, by], [sw, sh], [cw, ch])),
+                    )
+                }
+                None => {
+                    let Some(tex) = gfx.textures.get(&iso_sprite.texture) else {
+                        continue;
+                    };
+                    let td = (
+                        tex.size.0 as f32 / iso_sprite.tile_set_size.x.max(0.001),
+                        tex.size.1 as f32 / iso_sprite.tile_set_size.y.max(0.001),
+                    );
+                    let anchor_px =
+                        Vec2::new(td.0 * iso_sprite.anchor.x, td.1 * iso_sprite.anchor.y);
+                    (td, anchor_px, iso_sprite.texture.clone(), None)
+                }
+            };
+
+            let model = Self::compute_iso_sprite_model(
+                &iso_sprite,
+                &tf,
+                &tilemap_tf,
+                &tilemap,
+                tex_dim,
+                anchor_px,
+            );
+            let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
+            let depth_map = self
+                .texture_depths
+                .get(&iso_sprite.texture)
+                .map(|d| (d.depth_tex.clone(), d.depth_range));
+            iso_draws.push(IsoDraw {
+                order: *order,
+                name: name_by_entity.get(entity).copied().unwrap_or("").to_string(),
+                model,
+                texture: sheet_name,
+                frame: iso_sprite.frame,
+                tile_set_size: [iso_sprite.tile_set_size.x, iso_sprite.tile_set_size.y],
+                uv,
+                depth_corners,
+                depth_map,
+                depth_base: Self::compute_iso_base_depth(tf.position),
+                ghost_group: iso_sprite.ghost_group,
+            });
+        }
+
+        // Phase 1: terrain (tilemap + nav mesh) — writes the depth buffer.
         for (order, entity, kind) in &items {
+            if !matches!(kind, DrawKind::Tilemap) {
+                continue;
+            }
+            let Ok(tf) = self.world.get::<&Transform>(*entity) else {
+                continue;
+            };
+            if let DrawKind::Tilemap = kind {
+                let is_nav =
+                    self.world.get::<&Role>(*entity).is_ok_and(|r| r.value == RoleKind::NavMesh);
+
+                if is_nav {
+                    let Some(ref gpu) = self.nav_gpu else { continue };
+                    if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
+                        let iso = cartesian_to_iso_4().inverse();
+                        let iso_matrix = Mat4::from_scale(tf.scale) * iso;
+                        let iso3 = Mat3::from_mat4(iso);
+                        let normal_matrix = iso3.inverse().transpose();
+                        let nav_ts = gfx
+                            .textures
+                            .get(&nav.tile_set)
+                            .map(|t| [t.size.0 as f32 / 8.0, t.size.1 as f32 / 8.0])
+                            .unwrap_or([2.0, 1.0]);
+                        if let Some(ref mut t) = self.trace {
+                            let name = name_by_entity.get(entity).copied().unwrap_or("");
+                            t.push(golden::TraceItemParams {
+                                order: *order,
+                                kind: "Tilemap",
+                                name,
+                                model: &Mat4::from_translation(tf.position),
+                                camera_ignored: false,
+                                texture: Some(&nav.tile_set),
+                                frame: None,
+                                color: None,
+                                depth: None,
+                                depth_range: None,
+                            });
+                        }
+                        gfx.draw_tilemap(
+                            &Mat4::from_translation(tf.position),
+                            &cam,
+                            &iso_matrix,
+                            &gpu.tile_tex,
+                            &nav.tile_set,
+                            &nav_ts,
+                            &[8.0, 8.0],
+                            &[HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+                            &[nav.size_x as f32, nav.size_y as f32],
+                            &[0.0, 0.0],
+                            &[-1.0, -1.0],
+                            -1,
+                            &[0.0, 0.0, 1.0, 0.3],
+                            &normal_matrix,
+                            &self.light_ambient,
+                            &self.light_dir,
+                            &self.light_color,
+                            false,
+                            gpu.vertex_count as i32,
+                            &gpu.mesh_buf,
+                        );
+                    }
+                    continue;
+                }
+
+                let Ok(tm) = self.world.get::<&Tilemap>(*entity) else {
+                    continue;
+                };
+                // Look up GPU data by entity name (avoid borrow conflict with gfx).
+                let entity_name = name_by_entity.get(entity).copied().unwrap_or("");
+                let Some(gpu) = self.tilemap_gpu.get(entity_name) else {
+                    continue;
+                };
+                // Build iso matrix: same as TS constructor
+                let iso = cartesian_to_iso_4().inverse();
+                let iso_matrix = Mat4::from_scale(tf.scale) * iso;
+
+                // Normal matrix: transpose(inverse(mat3(iso)))
+                let iso3 = Mat3::from_mat4(iso);
+                let normal_matrix = iso3.inverse().transpose();
+
+                let tps = tm.tile_pixel_size;
+                let tile_pixel_size = [tps[0] as f32, tps[1] as f32];
+                let tile_set_size = [
+                    tm.tile_set_pixel_size[0] as f32 / tile_pixel_size[0],
+                    tm.tile_set_pixel_size[1] as f32 / tile_pixel_size[1],
+                ];
+
+                if let Some(ref mut t) = self.trace {
+                    let name = name_by_entity.get(entity).copied().unwrap_or("");
+                    t.push(golden::TraceItemParams {
+                        order: *order,
+                        kind: "Tilemap",
+                        name,
+                        model: &Mat4::from_translation(tf.position),
+                        camera_ignored: false,
+                        texture: Some(&tm.tile_set),
+                        frame: None,
+                        color: None,
+                        depth: None,
+                        depth_range: None,
+                    });
+                }
+
+                gfx.draw_tilemap(
+                    &Mat4::from_translation(tf.position),
+                    &cam,
+                    &iso_matrix,
+                    &gpu.tile_tex,
+                    &tm.tile_set,
+                    &tile_set_size,
+                    &tile_pixel_size,
+                    &[HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+                    &[tm.size_x as f32, tm.size_y as f32],
+                    &[tm.mouse_iso_pos.x, tm.mouse_iso_pos.y],
+                    &[tm.selection_iso_begin.x, tm.selection_iso_begin.y],
+                    self.selection_mode,
+                    &[0.0, 1.0, 1.0, 1.0],
+                    &normal_matrix,
+                    &self.light_ambient,
+                    &self.light_dir,
+                    &self.light_color,
+                    self.show_grid,
+                    gpu.vertex_count as i32,
+                    &gpu.mesh_buf,
+                );
+            }
+        }
+
+        // Phase 2: isometric normal passes — draw on top of terrain, writing
+        // depth (depth-mapped sprites) and stencil ghost-group ids.
+        for draw in &iso_draws {
+            if let Some(ref mut t) = self.trace {
+                t.push(golden::TraceItemParams {
+                    order: draw.order,
+                    kind: "IsoSprite",
+                    name: &draw.name,
+                    model: &draw.model,
+                    camera_ignored: false,
+                    texture: Some(&draw.texture),
+                    frame: Some(draw.frame),
+                    color: None,
+                    depth: draw.depth_map.as_ref().map(|(t, _)| t.as_str()),
+                    depth_range: draw.depth_map.as_ref().map(|(_, r)| *r),
+                });
+            }
+            gfx.draw_iso_sprite_normal(
+                &draw.model,
+                &cam,
+                &draw.texture,
+                draw.frame,
+                &draw.tile_set_size,
+                &draw.depth_corners,
+                draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
+                draw.depth_base,
+                draw.ghost_group,
+                draw.uv.as_ref().map(|(u, t, s, c)| (u, t, s, c)),
+            );
+        }
+
+        // Phase 3: isometric ghost passes — 40% alpha where behind the depth
+        // buffer, skipping pixels the sprite's own ghost group already occludes.
+        for draw in &iso_draws {
+            gfx.draw_iso_sprite_ghost(
+                &draw.model,
+                &cam,
+                &draw.texture,
+                draw.frame,
+                &draw.tile_set_size,
+                &draw.depth_corners,
+                draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
+                draw.depth_base,
+                draw.ghost_group,
+                draw.uv.as_ref().map(|(u, t, s, c)| (u, t, s, c)),
+            );
+        }
+
+        // Phase 4: UI + sprites + text (no depth test — draw-order layering).
+        for (order, entity, kind) in &items {
+            if matches!(kind, DrawKind::Tilemap | DrawKind::IsoSprite) {
+                continue;
+            }
             let Ok(tf) = self.world.get::<&Transform>(*entity) else {
                 continue;
             };
@@ -2173,6 +2508,8 @@ impl Engine {
                             texture: Some(&sheet_name),
                             frame: Some(sprite.frame),
                             color: None,
+                            depth: None,
+                            depth_range: None,
                         });
                     }
                     match (uv_rect, uv_params) {
@@ -2198,228 +2535,6 @@ impl Engine {
                         ),
                     }
                 }
-                DrawKind::Tilemap => {
-                    let is_nav = self
-                        .world
-                        .get::<&Role>(*entity)
-                        .is_ok_and(|r| r.value == RoleKind::NavMesh);
-
-                    if is_nav {
-                        let Some(ref gpu) = self.nav_gpu else { continue };
-                        if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
-                            let iso = cartesian_to_iso_4().inverse();
-                            let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-                            let iso3 = Mat3::from_mat4(iso);
-                            let normal_matrix = iso3.inverse().transpose();
-                            let nav_ts = gfx
-                                .textures
-                                .get(&nav.tile_set)
-                                .map(|t| [t.size.0 as f32 / 8.0, t.size.1 as f32 / 8.0])
-                                .unwrap_or([2.0, 1.0]);
-                            if let Some(ref mut t) = self.trace {
-                                let name = name_by_entity.get(entity).copied().unwrap_or("");
-                                t.push(golden::TraceItemParams {
-                                    order: *order,
-                                    kind: "Tilemap",
-                                    name,
-                                    model: &Mat4::from_translation(tf.position),
-                                    camera_ignored: false,
-                                    texture: Some(&nav.tile_set),
-                                    frame: None,
-                                    color: None,
-                                });
-                            }
-                            gfx.draw_tilemap(
-                                &Mat4::from_translation(tf.position),
-                                &cam,
-                                &iso_matrix,
-                                &gpu.tile_tex,
-                                &nav.tile_set,
-                                &nav_ts,
-                                &[8.0, 8.0],
-                                &[nav.size_x as f32, nav.size_y as f32],
-                                &[0.0, 0.0],
-                                &[-1.0, -1.0],
-                                -1,
-                                &[0.0, 0.0, 1.0, 0.3],
-                                &normal_matrix,
-                                &self.light_ambient,
-                                &self.light_dir,
-                                &self.light_color,
-                                false,
-                                gpu.vertex_count as i32,
-                                &gpu.mesh_buf,
-                            );
-                        }
-                        continue;
-                    }
-
-                    let Ok(tm) = self.world.get::<&Tilemap>(*entity) else {
-                        continue;
-                    };
-                    // Look up GPU data by entity name (avoid borrow conflict with gfx).
-                    let entity_name = name_by_entity.get(entity).copied().unwrap_or("");
-                    let Some(gpu) = self.tilemap_gpu.get(entity_name) else {
-                        continue;
-                    };
-                    // Build iso matrix: same as TS constructor
-                    let iso = cartesian_to_iso_4().inverse();
-                    let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-
-                    // Normal matrix: transpose(inverse(mat3(iso)))
-                    let iso3 = Mat3::from_mat4(iso);
-                    let normal_matrix = iso3.inverse().transpose();
-
-                    let tps = tm.tile_pixel_size;
-                    let tile_pixel_size = [tps[0] as f32, tps[1] as f32];
-                    let tile_set_size = [
-                        tm.tile_set_pixel_size[0] as f32 / tile_pixel_size[0],
-                        tm.tile_set_pixel_size[1] as f32 / tile_pixel_size[1],
-                    ];
-
-                    if let Some(ref mut t) = self.trace {
-                        let name = name_by_entity.get(entity).copied().unwrap_or("");
-                        t.push(golden::TraceItemParams {
-                            order: *order,
-                            kind: "Tilemap",
-                            name,
-                            model: &Mat4::from_translation(tf.position),
-                            camera_ignored: false,
-                            texture: Some(&tm.tile_set),
-                            frame: None,
-                            color: None,
-                        });
-                    }
-
-                    gfx.draw_tilemap(
-                        &Mat4::from_translation(tf.position),
-                        &cam,
-                        &iso_matrix,
-                        &gpu.tile_tex,
-                        &tm.tile_set,
-                        &tile_set_size,
-                        &tile_pixel_size,
-                        &[tm.size_x as f32, tm.size_y as f32],
-                        &[tm.mouse_iso_pos.x, tm.mouse_iso_pos.y],
-                        &[tm.selection_iso_begin.x, tm.selection_iso_begin.y],
-                        self.selection_mode,
-                        &[0.0, 1.0, 1.0, 1.0],
-                        &normal_matrix,
-                        &self.light_ambient,
-                        &self.light_dir,
-                        &self.light_color,
-                        self.show_grid,
-                        gpu.vertex_count as i32,
-                        &gpu.mesh_buf,
-                    );
-                }
-                DrawKind::IsoSprite => {
-                    let Ok(iso_sprite) = self.world.get::<&IsoSprite>(*entity) else {
-                        continue;
-                    };
-                    let Some(&tm_entity) = self.names.get(&iso_sprite.tilemap) else {
-                        continue;
-                    };
-                    let Ok(tilemap_tf) = self.world.get::<&Transform>(tm_entity) else {
-                        continue;
-                    };
-                    let Ok(tilemap) = self.world.get::<&Tilemap>(tm_entity) else {
-                        continue;
-                    };
-
-                    // Resolve a packed-atlas frame (issue #45); falls back to
-                    // the uniform-grid path when no frame_name / table match.
-                    let frame_ref = iso_sprite.frame_name.as_deref().and_then(|n| {
-                        Self::resolve_frame(&self.frame_tables, &iso_sprite.texture, n)
-                    });
-
-                    // (quad size, anchor px, sheet name, uv rect, uv params).
-                    // Packed frames are drawn at their source cell size with the
-                    // trimmed content offset, so animated sprites keep a constant
-                    // size; the uniform-grid path uses the cell size directly.
-                    let (tex_dim, anchor_px, sheet_name, uv_rect, uv_params) = match &frame_ref {
-                        Some(fr) => {
-                            let sw = if fr.source_size[0] > 0 {
-                                fr.source_size[0] as f32
-                            } else {
-                                fr.size[0]
-                            };
-                            let sh = if fr.source_size[1] > 0 {
-                                fr.source_size[1] as f32
-                            } else {
-                                fr.size[1]
-                            };
-                            let (cw, ch) = (fr.size[0], fr.size[1]);
-                            let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
-                            let a_trim = Self::effective_anchor(iso_sprite.anchor, fr);
-                            let anchor_px = Vec2::new(a_trim.x * cw + bx, a_trim.y * ch + by);
-                            (
-                                (sw, sh),
-                                anchor_px,
-                                fr.sheet_name.clone(),
-                                Some(fr.uv_rect),
-                                Some(([bx, by], [sw, sh], [cw, ch])),
-                            )
-                        }
-                        None => {
-                            let Some(tex) = gfx.textures.get(&iso_sprite.texture) else {
-                                continue;
-                            };
-                            let td = (
-                                tex.size.0 as f32 / iso_sprite.tile_set_size.x.max(0.001),
-                                tex.size.1 as f32 / iso_sprite.tile_set_size.y.max(0.001),
-                            );
-                            let anchor_px =
-                                Vec2::new(td.0 * iso_sprite.anchor.x, td.1 * iso_sprite.anchor.y);
-                            (td, anchor_px, iso_sprite.texture.clone(), None, None)
-                        }
-                    };
-
-                    let model = Self::compute_iso_sprite_model(
-                        &iso_sprite,
-                        &tf,
-                        &tilemap_tf,
-                        &tilemap,
-                        tex_dim,
-                        anchor_px,
-                    );
-                    let depth_corners =
-                        Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
-
-                    if let Some(ref mut t) = self.trace {
-                        let name = name_by_entity.get(entity).copied().unwrap_or("");
-                        t.push(golden::TraceItemParams {
-                            order: *order,
-                            kind: "IsoSprite",
-                            name,
-                            model: &model,
-                            camera_ignored: false,
-                            texture: Some(&sheet_name),
-                            frame: Some(iso_sprite.frame),
-                            color: None,
-                        });
-                    }
-                    match (uv_rect, uv_params) {
-                        (Some(uv), Some((trim, src, csz))) => gfx.draw_iso_sprite_uv(
-                            &model,
-                            &cam,
-                            &sheet_name,
-                            &uv,
-                            &trim,
-                            &src,
-                            &csz,
-                            &depth_corners,
-                        ),
-                        _ => gfx.draw_iso_sprite(
-                            &model,
-                            &cam,
-                            &iso_sprite.texture,
-                            iso_sprite.frame,
-                            &[iso_sprite.tile_set_size.x, iso_sprite.tile_set_size.y],
-                            &depth_corners,
-                        ),
-                    }
-                }
                 DrawKind::UiRect => {
                     let Ok(rect) = self.world.get::<&RectRender>(*entity) else {
                         continue;
@@ -2442,6 +2557,8 @@ impl Engine {
                             texture: None,
                             frame: None,
                             color: Some(rect.color),
+                            depth: None,
+                            depth_range: None,
                         });
                     }
                     let cam_mat = if rect.ignore_cam { Mat4::IDENTITY } else { cam };
@@ -2469,6 +2586,8 @@ impl Engine {
                             texture: Some(&sprite.texture),
                             frame: Some(sprite.frame),
                             color: None,
+                            depth: None,
+                            depth_range: None,
                         });
                     }
                     let ts = [sprite.tile_set_size.x, sprite.tile_set_size.y];
@@ -2591,6 +2710,8 @@ impl Engine {
                             texture: Some(&atlas_name),
                             frame: None,
                             color: Some(sdf.color),
+                            depth: None,
+                            depth_range: None,
                         });
                     }
                     let sdf_cam = if sdf.ignore_cam { Mat4::IDENTITY } else { cam };
@@ -2616,6 +2737,7 @@ impl Engine {
                         }
                     }
                 }
+                _ => {}
             }
         }
 
@@ -3207,7 +3329,7 @@ impl Engine {
         cart_pos += iso_sprite.frame_offset;
         cart_pos += tilemap_tf.position;
 
-        let h = bilinear_height(
+        let h = sample_height_mesh(
             &tilemap.height_data,
             tilemap.size_x,
             tilemap.size_y,
@@ -3224,9 +3346,17 @@ impl Engine {
             * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0))
     }
 
-    /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`).
+    /// Compute the anchor-plane iso depth for a sprite position (the depth a
+    /// depth map's 0.5 grayscale corresponds to), in **window space** `[0, 1]`.
+    /// Matches the `base_depth` term in [`Self::compute_iso_depth_corners`].
+    fn compute_iso_base_depth(pos: Vec3) -> f32 {
+        (pos.x - pos.y) / HORIZONTAL_DEPTH_SCALE + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX
+    }
+
+    /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`),
+    /// in **window space** `[0, 1]`.
     fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2]) -> [f32; 4] {
-        let base_depth = (pos.x - pos.y) / 400.0 + 0.5 - pos.z / 14500.0 - 0.005;
+        let base_depth = Self::compute_iso_base_depth(pos);
         let default_footprint = [
             glam::Vec2::new(0.5, -0.5),
             glam::Vec2::new(0.5, 0.5),
@@ -3238,7 +3368,9 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / 400.0 + 0.5 - pos.z / 14500.0 - 0.005;
+            let d = (pos.x + pt.x - pos.y - pt.y) / HORIZONTAL_DEPTH_SCALE
+                + 0.5
+                + pos.z / HEIGHT_DEPTH_SCALE_PX;
             raw_depths[i] = d.min(base_depth);
         }
 
@@ -3379,5 +3511,12 @@ mod tests {
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &unknown);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
+    }
+
+    #[test]
+    fn compute_iso_base_depth_matches_anchor_plane_formula() {
+        let pos = glam::Vec3::new(100.0, 20.0, 64.0);
+        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE + 0.5 + 64.0 / HEIGHT_DEPTH_SCALE_PX;
+        assert!((Engine::compute_iso_base_depth(pos) - expected).abs() < 1e-9);
     }
 }

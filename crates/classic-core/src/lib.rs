@@ -94,6 +94,7 @@ pub fn register_all_components() {
                     anchor: a.anchor,
                     frame_offset: a.frame_offset,
                     footprint: a.footprint.clone(),
+                    ghost_group: 0,
                 });
                 b.add(a);
                 Ok(())

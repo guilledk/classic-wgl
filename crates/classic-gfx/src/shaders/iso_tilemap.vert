@@ -15,6 +15,7 @@ uniform mat3 normal_matrix;
 
 uniform vec2 map_size;
 uniform vec2 tile_pixel_size;
+uniform vec2 depth_scale;
 
 out mediump vec2 vMapCoord;
 out mediump float vTileId;
@@ -24,12 +25,14 @@ void main(void ) {
     vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
     worldPos.y -= vertex_pos.z;
     vec4 clipPos = projection_matrix * camera_matrix * worldPos;
-    float isoDepth = clamp(
-        (vertex_pos.x - vertex_pos.y) / 400.0 + 0.5 - vertex_pos.z / 14500.0,
-        0.0,
-        1.0
-    );
-    clipPos.z = isoDepth;
+    // Canonical iso depth in window space `[0, 1]`:
+    //   iso_depth = (tx - ty) / depth_scale.x + 0.5 + z / depth_scale.y
+    // with depth_scale = (HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX) from
+    // classic-core.  The `+ z` term reflects that taller terrain is farther
+    // (the camera basis `back.z = +0.5`).  Window depth maps to clip z via
+    // `d * 2.0 - 1.0`.  Computed in highp to match the sprite/depth-map path.
+    highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + vertex_pos.z / depth_scale.y;
+    clipPos.z = isoDepth * 2.0 - 1.0;
     gl_Position = clipPos;
     vMapCoord = map_coord;
     vTileId = tile_id;

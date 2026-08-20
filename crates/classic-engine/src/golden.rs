@@ -43,6 +43,12 @@ pub struct TraceItem {
     /// Color if applicable (RGBA, 0-1 range).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<[f32; 4]>,
+    /// Depth-map texture name if the sprite renders with per-pixel depth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<String>,
+    /// Depth range (isoDepth units) the depth map's grayscale spans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth_range: Option<f32>,
 }
 
 /// A complete render trace for one capture point (tag + frame).
@@ -89,6 +95,8 @@ pub struct TraceItemParams<'a> {
     pub texture: Option<&'a str>,
     pub frame: Option<f32>,
     pub color: Option<[f32; 4]>,
+    pub depth: Option<&'a str>,
+    pub depth_range: Option<f32>,
 }
 
 impl TraceCollector {
@@ -120,6 +128,8 @@ impl TraceCollector {
             texture: p.texture.map(|s| s.to_string()),
             frame: p.frame,
             color: p.color,
+            depth: p.depth.map(|s| s.to_string()),
+            depth_range: p.depth_range,
         });
     }
 

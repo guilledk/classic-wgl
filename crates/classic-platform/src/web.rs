@@ -29,8 +29,11 @@ impl WebPlatform {
         let canvas: HtmlCanvasElement =
             canvas.dyn_into().map_err(|_| JsValue::from_str("element is not a canvas"))?;
 
+        let gl_opts = js_sys::Object::new();
+        js_sys::Reflect::set(&gl_opts, &JsValue::from_str("stencil"), &JsValue::from_bool(true))
+            .map_err(|_| JsValue::from_str("failed to set stencil context option"))?;
         let gl_ctx = canvas
-            .get_context("webgl2")
+            .get_context_with_context_options("webgl2", &gl_opts)
             .map_err(|_| JsValue::from_str("getContext failed"))?
             .ok_or_else(|| JsValue::from_str("webgl2 not available"))?;
         let gl_ctx: WebGl2RenderingContext =

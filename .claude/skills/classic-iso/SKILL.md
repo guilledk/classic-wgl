@@ -104,47 +104,65 @@ let cart_to_iso = cartesian_to_iso_4() * Mat4::from_scale(inv_scale);
 Depth in the classic-wgl iso renderer is **not** the standard GL depth-buffer
 value.  Instead, `gl_Position.z` is overridden in both the tilemap vertex
 shader and the IsoSprite image-sheet vertex shader with a synthetic iso-depth
-value clamped to `[0, 1]`.
+value.  The depth is computed in **window space** `[0, 1]`, then mapped to
+clip z via `d * 2.0 - 1.0` so the fixed-function clip→window mapping round-trips.
+
+The canonical formula (one definition, in `classic-core::tilemap`):
+
+```
+iso_depth(tx, ty, z) = (tx - ty) / HORIZONTAL_DEPTH_SCALE + 0.5 + z / HEIGHT_DEPTH_SCALE_PX
+  HORIZONTAL_DEPTH_SCALE  = 400.0    (tiles per 1.0 iso-depth)
+  HEIGHT_DEPTH_SCALE_PX   = 22045.4  (z in tileset px, = 344.46 · PPM_TARGET)
+```
+
+The height term is **`+ z / D`**: the camera basis `back.z = +0.5` means taller
+terrain is *farther* (larger depth).  An earlier sign error (`- z / D`) made
+taller terrain appear *closer*, breaking ghosting at slope corners in a
+camera-position-dependent way.
+
+The constants are shared with the shaders via a `depth_scale` uniform
+(`vec2(HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX)`), so there are no GLSL
+literals to keep in sync.
 
 ### Tilemap vertex shader (`iso_tilemap.vert`)
 
 ```glsl
-vec4 worldPos = modelMatrix * isoMatrix * vec4(vertexPos, 1.0);
-worldPos.y -= vertexPos.z;
+vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
+worldPos.y -= vertex_pos.z;
 
-float isoDepth = clamp(
-    (vertexPos.x - vertexPos.y) / 400.0 + 0.5 - vertexPos.z / 14500.0,
-    0.0,
-    1.0
-);
-clipPos.z = isoDepth;
+highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + vertex_pos.z / depth_scale.y;
+clipPos.z = isoDepth * 2.0 - 1.0;
 ```
 
 Key aspects:
 
-1. **Height offset on Y:** `worldPos.y -= vertexPos.z` — height (Z) is subtracted
+1. **Height offset on Y:** `worldPos.y -= vertex_pos.z` — height (Z) is subtracted
    from the screen-space Y coordinate.  This produces the correct vertical
    displacement for elevated tiles.
 2. **Depth axis is `tx - ty`:**  The map's depth direction runs along the
    `(1, -1)` diagonal in iso space.  Tiles with larger `tx - ty` are farther
    from the camera.
-3. **Constants:**  `400.0` controls the depth granularity per iso unit;
-   `14500.0` controls the depth compression per height unit.  `+0.5` centres
-   the range.
-4. **Clamp to `[0, 1]`:**  The result is written to `clipPos.z`, overriding
-   the standard orthographic projection Z.
+3. **Window space, no clamp:**  the value is `depth_scale`-derived window depth;
+   geometry beyond `[0, 1]` is clipped by the fixed function (`z_clip ∉ [-1, 1]`).
+   `+0.5` centres the range.
+4. The height divisor is `HEIGHT_DEPTH_SCALE_PX = 344.46 · 64` (`344.46` is the
+   metre-space divisor `iso_depth_factor / back.z`; `64` is `PPM_TARGET` px/m).
+5. `isoDepth` is computed in `highp` (not the shader's `mediump float` default)
+   to match the highp sprite/depth-map path and the 24-bit depth buffer.
 
 ### CPU-side equivalent (`compute_iso_depth_corners`)
 
 The IsoSprite renderer needs depth values for each of the 4 footprint corners
-(see Section 8).  The CPU-side formula mirrors the shader:
+(see Section 8).  The CPU-side formula mirrors the shader (via
+`compute_iso_base_depth`), in **window space**, with **no** `-0.005` bias:
 
 ```rust
-let d = (pos.x + pt.x - pos.y - pt.y) / 400.0 + 0.5 - pos.z / 14500.0 - 0.005;
+let d = (pos.x + pt.x - pos.y - pt.y) / HORIZONTAL_DEPTH_SCALE + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX;
 ```
 
-The `-0.005` bias ensures sprites sit slightly behind the terrain at their
-feet, avoiding z-fighting.
+The old `-0.005` sprite-only bias was removed during depth-scale unification
+(it placed sprites ~2 tiles behind their feet and broke ghosting at slope
+corners).
 
 ### `DrawKind::IsoSprite` sort order uses `tx - ty`
 
@@ -187,6 +205,26 @@ pub fn bilinear_height(heights: &[f32], size_x: i32, size_y: i32, px: f32, py: f
 
 The `at` closure clamps coordinates to the valid range `[0, size_x]` and
 `[0, size_y]`, so out-of-bounds accesses return the nearest edge vertex.
+
+### Mesh-matched sampler (`sample_height_mesh`)
+
+`classic-core::tilemap::sample_height_mesh` samples the **same** triangle-linear
+interpolation the terrain mesh (`build_mesh`) uses — the top face is split into
+`NW→NE→SW` and `NE→SE→SW`, so it is linear within each triangle, not bilinear:
+
+```rust
+if fx + fy <= 1.0 {
+    h_nw * (1.0 - fx - fy) + h_ne * fx + h_sw * fy
+} else {
+    h_ne * (1.0 - fy) + h_se * (fx + fy - 1.0) + h_sw * (1.0 - fx)
+}
+```
+
+`bilinear_height` bows on a non-planar quad (e.g. a saddle across the shared
+diagonal), so depth-relevant paths — `Engine::height_at`, the vehicle
+`TerrainSnapshot::height`, and `compute_iso_sprite_model` — use
+`sample_height_mesh` to match the rendered mesh exactly and avoid ghosting at
+slope corners.  (The mouse-to-iso solve and pathfinder still use `bilinear_height`.)
 
 ### Uses
 
@@ -375,7 +413,7 @@ fn compute_iso_sprite_model(...) -> Mat4 {
     let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
     cart_pos += tilemap_tf.position;
 
-    let h = bilinear_height(...);
+    let h = sample_height_mesh(...);
     cart_pos.y -= h * tilemap.height_scale;
 
     let anchor_delta = Vec3::new(
@@ -425,7 +463,7 @@ The shader interpolates depth across the quad:
 float bottomDepth = mix(isoDepthCorners.x, isoDepthCorners.y, vertexPos.x);
 float topDepth    = mix(isoDepthCorners.z, isoDepthCorners.w, vertexPos.x);
 float cornerDepth = mix(topDepth, bottomDepth, vertexPos.y);
-gl_Position.z = clamp(cornerDepth, 0.0, 1.0);
+gl_Position.z = cornerDepth * 2.0 - 1.0;
 ```
 
 ### Ghost pass (`draw_iso_sprite`)
@@ -701,8 +739,19 @@ This corrects normals for the non-uniform 2:1 scale of the isometric transform.
 ### IsoSprite ghost alpha not configurable
 
 The ghost pass uses a hardcoded `ghostAlpha = 0.4`.  The TS engine exposed
-this as a per-sprite parameter.  In Rust it is fixed.  Adjust `draw_iso_sprite`
-in `classic-gfx` if needed.
+this as a per-sprite parameter.  In Rust it is fixed.  Adjust
+`draw_iso_sprite_ghost` in `classic-gfx` if needed.
+
+### Per-pixel depth maps (per-texture)
+
+A texture may declare a grayscale depth map (`depth` + `depth_range` in the
+manifest).  When present, the sprite writes `gl_FragDepth` from the map in
+`sheet.frag` (clip→window remapped), so overlapping sprites occlude each other
+per-pixel rather than by draw order, and the ghost pass becomes `GREATER`
+against the depth buffer.  Sprites sharing a non-zero `ghost_group` (a
+vehicle's body + wheels) never ghost through each other (stencil
+`NOTEQUAL`).  Depth maps are emitted by the Blender exporter
+(`classic-assets`) and packed by the ROM `xtask`.
 
 ### SDF shadow/glow not rendered
 

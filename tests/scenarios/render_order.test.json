@@ -1,0 +1,33 @@
+[
+  {
+    "frame": 2,
+    "actions": [
+      {
+        "setCameraIso": { "tx": 5.0, "ty": 5.0, "scale": 1.0 }
+      }
+    ],
+    "assertions": [],
+    "log": "frame the camera on the LRV spawn and let the scene settle"
+  },
+  {
+    "frame": 40,
+    "actions": [],
+    "assertions": [
+      {
+        "kind": "pixelAtEntity",
+        "region": [0, 0, 0, 0],
+        "expected": 0.9,
+        "log": "lrv",
+        "color": null
+      },
+      {
+        "kind": "pixelAtEntity",
+        "region": [0, 0, 0, 0],
+        "expected": 0.9,
+        "log": "lrvWheelFl",
+        "color": null
+      }
+    ],
+    "log": "LRV body + front-left wheel render fully opaque at their ground origins"
+  }
+]

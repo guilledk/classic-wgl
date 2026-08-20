@@ -112,6 +112,7 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
             anchor: agent.anchor,
             frame_offset: glam::Vec3::ZERO,
             footprint: agent.footprint.clone(),
+            ghost_group: 0,
         },
         agent.clone(),
     ));
