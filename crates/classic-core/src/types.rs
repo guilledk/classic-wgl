@@ -62,6 +62,12 @@ pub struct TextureManifestEntry {
     /// spans, emitted by the exporter.
     #[serde(default)]
     pub depth_range: f32,
+    /// Optional per-pixel normal map (RGB = world-space normal remapped
+    /// `[-1,1] → [0,1]`, same tile layout as this texture).  When present,
+    /// the sprite shades with a runtime Lambertian term (`ambient_color +
+    /// max(dot(n, light_dir), 0) * light_color`) instead of baked lighting.
+    #[serde(default)]
+    pub normal: Option<String>,
     /// Optional `frames.json` sidecar describing a packed atlas over this
     /// texture (and any companion sheets).  When present, frames are
     /// referenced by name through the [`FrameTable`] instead of the flat
@@ -79,6 +85,18 @@ pub struct SpriteSheetEntry {
     pub src: String,
     /// Pixel dimensions of the sheet, used to normalize frame rects.
     pub size: [u32; 2],
+    /// Optional per-sheet normal-map PNG packed in the same rect layout as
+    /// this sheet (RGB world-space normals `[-1,1] → [0,1]`).  When present,
+    /// frames on this sheet shade with the runtime Lambertian term.
+    #[serde(default)]
+    pub normal: Option<String>,
+    /// Optional per-sheet depth-map PNG packed in the same rect layout as this
+    /// sheet (grayscale `gl_FragDepth` mask; 0.5 = anchor plane).
+    #[serde(default)]
+    pub depth: Option<String>,
+    /// Depth range (isoDepth units) the sheet's depth-map grayscale spans.
+    #[serde(default)]
+    pub depth_range: f32,
 }
 
 /// A single frame inside a packed sprite atlas.
@@ -257,6 +275,10 @@ pub struct AnimationData {
 /// The resource manifest (matches `public/manifest.json`).
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct Manifest {
+    /// Shader declarations.  The engine owns the built-in catalog: the ROM may
+    /// omit this (or send `[]`) and the engine compiles its builtins; a
+    /// non-empty list overrides builtins by name.
+    #[serde(default)]
     pub shaders: Vec<ShaderInfo>,
     pub textures: Vec<TextureManifestEntry>,
     #[serde(default)]

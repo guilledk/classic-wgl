@@ -103,6 +103,11 @@ impl Rom {
                     out.push((crate::rom_path(path).to_string(), bytes.clone()));
                 }
             }
+            if let Some(path) = &entry.normal {
+                if let Some(bytes) = self.resources.normals().get(&entry.name) {
+                    out.push((crate::rom_path(path).to_string(), bytes.clone()));
+                }
+            }
         }
         for entry in &self.manifest.manifest.sdf_fonts {
             if let Some(metrics) = self.resources.fonts().get(&entry.name) {
@@ -254,5 +259,40 @@ mod tests {
         assert_eq!(loaded.resources.get(ResourceKind::Depth, "lrvBody"), Some(b"depth".as_slice()));
         assert_eq!(loaded.manifest.manifest.textures[0].depth_range, 0.05);
         assert_eq!(loaded.resources.get(ResourceKind::Depth, "tree"), None);
+    }
+
+    #[test]
+    fn pack_and_load_round_trips_normal_maps() {
+        let manifest_json = r#"{
+            "format_version": 1,
+            "entrypoint": "demo",
+            "shaders": [],
+            "textures": [
+                {"name": "lrvBody", "src": "/res/lrv_body.png", "normal": "/res/lrv_body_normal.png"},
+                {"name": "tree", "src": "/res/tree.png"}
+            ],
+            "animations": []
+        }"#;
+        let manifest: RomManifest = serde_json::from_str(manifest_json).unwrap();
+        let mut resources = ResourceSet::default();
+        resources.insert(ResourceKind::Texture, "lrvBody", b"body".to_vec());
+        resources.insert(ResourceKind::Normal, "lrvBody", b"normal".to_vec());
+        resources.insert(ResourceKind::Texture, "tree", b"tree".to_vec());
+        let rom = Rom {
+            manifest,
+            manifest_json: manifest_json.into(),
+            resources,
+            state: "{\"entities\":{}}".into(),
+        };
+
+        let bytes = rom.pack().unwrap();
+        let archive = RomArchive::from_bytes(&bytes).unwrap();
+        let loaded = Rom::load(&archive).unwrap();
+
+        assert_eq!(
+            loaded.resources.get(ResourceKind::Normal, "lrvBody"),
+            Some(b"normal".as_slice())
+        );
+        assert_eq!(loaded.resources.get(ResourceKind::Normal, "tree"), None);
     }
 }

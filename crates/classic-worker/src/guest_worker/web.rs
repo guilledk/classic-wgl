@@ -2,7 +2,7 @@
 //! pure guest entry points, backed by wasmi.
 //!
 //! The browser has no `std::thread`, and a real async `Worker`-bridged wasm
-//! runtime is deferred (see the plan's "Deferred" list).  For now the web
+//! runtime is not yet implemented.  For now the web
 //! backend runs entries **synchronously** on the render thread, so `spawn_task`
 //! runs the entry inline and `poll_task` returns the result immediately.  The
 //! reduced import surface (mutating imports trap) is identical to native.
@@ -52,7 +52,7 @@ impl GuestWorker {
     /// Compile and instantiate the worker guest.  The `synchronous` flag is
     /// accepted for API parity with the native backend but ignored — the web
     /// backend always runs entries inline (a real async web `Worker` is
-    /// deferred; see the plan's "Deferred" list).
+    /// not yet implemented).
     pub fn new(wasm: &[u8], nav: Arc<NavSnapshot>, _synchronous: bool) -> Result<Self, String> {
         let runtime = build_runtime(wasm, nav)?;
         Ok(Self { runtime, results: HashMap::new() })

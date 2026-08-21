@@ -4,7 +4,7 @@
 ///
 /// `tar.xz` is intentionally absent for now: it requires a native `liblzma`
 /// (`xz2`), which is not available on all hosts and adds no value to the
-/// initial checkpoint.  See the ROM plan's "Deferred" section.
+/// initial checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RomFormat {
     /// `PK..` ZIP container, deflate-compressed entries.

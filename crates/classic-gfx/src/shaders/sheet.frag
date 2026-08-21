@@ -6,6 +6,7 @@ in highp vec2 vTexCoord;
 
 uniform sampler2D tex_sampler;
 uniform sampler2D depth_sampler;
+uniform sampler2D normal_sampler;
 
 uniform vec2 tile_set_size;
 uniform float tile_id_flat;
@@ -18,6 +19,10 @@ uniform highp vec2 content_size;
 uniform float use_depth_map;
 uniform highp float depth_base;
 uniform highp float depth_range;
+uniform float use_normal_map;
+uniform vec3 ambient_color;
+uniform vec3 light_direction;
+uniform vec3 light_color;
 
 out vec4 fragColor;
 
@@ -62,6 +67,17 @@ void main(void ) {
         // `depth_base` and `depth_range` are both window-space iso depths, so
         // `gl_FragDepth` (also window-space) needs no clip→window remap.
         gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
+    }
+    if (use_normal_map > 0.5) {
+        vec3 n = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).rgb * 2.0 - 1.0;
+        // Unlit sentinel: a (0.5,0.5,0.5) texel decodes to (0,0,0) and skips the
+        // Lambertian term, so emissive sprite regions (e.g. the rocket flame)
+        // stay flat albedo instead of being shaded.
+        if (dot(n, n) > 0.001) {
+            n = normalize(n);
+            float diff = max(dot(n, light_direction), 0.0);
+            color.rgb *= ambient_color + diff * light_color;
+        }
     }
     if (ghost_alpha > 0.0) {
         color.a = ghost_alpha;

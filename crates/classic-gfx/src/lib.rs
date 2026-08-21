@@ -34,8 +34,8 @@ impl Shader {
         gl: &glow::Context,
         vs_src: &str,
         fs_src: &str,
-        attr_names: &[String],
-        unif_names: &[String],
+        attr_names: &[&str],
+        unif_names: &[&str],
     ) -> Result<Self, String> {
         let vs = compile_single(gl, glow::VERTEX_SHADER, vs_src)?;
         let fs = compile_single(gl, glow::FRAGMENT_SHADER, fs_src)?;
@@ -68,16 +68,16 @@ impl Shader {
         };
 
         let mut attr = HashMap::new();
-        for name in attr_names {
+        for &name in attr_names {
             if let Some(loc) = unsafe { gl.get_attrib_location(program, name) } {
-                attr.insert(name.clone(), loc);
+                attr.insert(name.to_string(), loc);
             }
         }
 
         let mut unif = HashMap::new();
-        for name in unif_names {
+        for &name in unif_names {
             if let Some(loc) = unsafe { gl.get_uniform_location(program, name) } {
-                unif.insert(name.clone(), loc);
+                unif.insert(name.to_string(), loc);
             }
         }
 
@@ -182,6 +182,7 @@ fn compile_single(gl: &glow::Context, ty: u32, src: &str) -> Result<glow::Shader
 // Texture
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct GlTexture {
     texture: glow::Texture,
     /// Image pixel dimensions.
@@ -343,9 +344,41 @@ fn vertex_attrib_ptr_f32(
 // Gfx state
 // ---------------------------------------------------------------------------
 
-/// Packed-atlas UV draw parameters: normalized `uv_rect`, the trim offset, the
-/// untrimmed source size, and the trimmed content size (all pixels).
-type IsoUv<'a> = (&'a [f32; 4], &'a [f32; 2], &'a [f32; 2], &'a [f32; 2]);
+/// How a sprite's texture region is addressed: a uniform-grid frame index, or
+/// a packed-atlas UV rect with trim/anchor metadata.  The packed (UV) form is
+/// canonical; the grid form is the non-packed fallback.
+pub enum SpriteRegion<'a> {
+    /// Uniform-grid frame index + grid dimensions (non-packed fallback).
+    Grid { frame: f32, tile_set_size: [f32; 2] },
+    /// Packed-atlas UV rect `[u0, v0, u1, v1]` with trim/anchor metadata.
+    Uv {
+        uv_rect: &'a [f32; 4],
+        trim_offset: &'a [f32; 2],
+        source_size: &'a [f32; 2],
+        content_size: &'a [f32; 2],
+    },
+}
+
+/// Which pass of the two-phase isometric sprite draw to run.
+///
+/// The engine draws all [`IsoSpritePass::Normal`] sprites (terrain-occluded,
+/// depth-writing) before all [`IsoSpritePass::Ghost`] sprites (40% alpha where
+/// behind the depth buffer), so sprite-vs-sprite occlusion resolves via the
+/// depth buffer rather than draw order.
+pub enum IsoSpritePass {
+    Normal,
+    Ghost,
+}
+
+/// Shared lighting/projection settings passed to the lit draw calls (tilemap
+/// and the lit sprite draws).
+pub struct RenderSettings {
+    pub ambient: [f32; 3],
+    pub light_dir: [f32; 3],
+    pub light_color: [f32; 3],
+    pub depth_scale: [f32; 2],
+    pub normal_matrix: Mat3,
+}
 
 pub struct Gfx {
     pub gl: Rc<glow::Context>,
@@ -399,14 +432,14 @@ impl Gfx {
 
     // -- resource management -----------------------------------------------
 
-    /// Compile and store a shader from a manifest entry.
+    /// Compile and store a shader from a declaration (builtin or override).
     pub fn add_shader(
         &mut self,
         name: &str,
         vs_src: &str,
         fs_src: &str,
-        attr: &[String],
-        unif: &[String],
+        attr: &[&str],
+        unif: &[&str],
     ) -> Result<(), String> {
         let s = Shader::compile(&self.gl, vs_src, fs_src, attr, unif)?;
         self.shaders.insert(name.to_string(), s);
@@ -500,16 +533,23 @@ impl Gfx {
         ])
     }
 
+    /// Bind the projection/camera/model uniforms shared by every draw call.
+    /// `ignore_cam` swaps the camera matrix for identity (screen-space UI).
+    fn bind_view(&self, s: &Shader, camera: &Mat4, model: &Mat4, ignore_cam: bool) {
+        let gl = &self.gl;
+        let proj = self.projection();
+        s.uniform_mat4(gl, "projection_matrix", &proj);
+        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
+        s.uniform_mat4(gl, "model_matrix", model);
+    }
+
     /// Draw a solid-colour rectangle.
     pub fn draw_rect(&self, model: &Mat4, camera: &Mat4, color: &[f32; 4], ignore_cam: bool) {
         let gl = &self.gl;
         let s = self.shader("solid");
-        let proj = self.projection();
 
         s.bind(gl);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
-        s.uniform_mat4(gl, "model_matrix", model);
+        self.bind_view(s, camera, model, ignore_cam);
         s.uniform_vec4(gl, "color", color);
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
@@ -525,90 +565,56 @@ impl Gfx {
         }
     }
 
-    /// Draw a sprite from a sprite sheet.
+    /// Draw a sprite from a sprite sheet, addressed by either a uniform-grid
+    /// frame or a packed-atlas UV rect (see [`SpriteRegion`]).
+    ///
+    /// `settings` carries the shared lighting bundle; `sheet.frag` only applies
+    /// it when a normal map is bound (`use_normal_map`), so the unlit path is
+    /// byte-identical.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_sprite(
         &self,
         model: &Mat4,
         camera: &Mat4,
         texture_name: &str,
-        frame: f32,
-        tile_set_size: &[f32; 2],
+        region: SpriteRegion<'_>,
         ignore_cam: bool,
         ghost_alpha: f32,
+        settings: &RenderSettings,
     ) {
         let gl = &self.gl;
         let s = self.shader("imageSheet");
         let t = self.texture(texture_name);
-        let proj = self.projection();
 
         s.bind(gl);
         t.bind(gl, 0);
 
         s.uniform_1i(gl, "tex_sampler", 0);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
-        s.uniform_mat4(gl, "model_matrix", model);
-        s.uniform_1f(gl, "tile_id_flat", frame);
-        s.uniform_vec2(gl, "tile_set_size", tile_set_size);
-        s.uniform_1f(gl, "use_uv_rect", 0.0);
-        s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
-        s.uniform_1f(gl, "use_iso_depth", 0.0);
-        s.uniform_vec4(gl, "iso_depth_corners", &[0.0, 0.0, 0.0, 0.0]);
-        s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
-
-        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
-        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
-        self.quad.indices.bind(gl);
-
-        unsafe {
-            gl.draw_elements(
-                glow::TRIANGLES,
-                self.quad.index_count as i32,
-                glow::UNSIGNED_SHORT,
-                0,
-            );
+        self.bind_view(s, camera, model, ignore_cam);
+        match region {
+            SpriteRegion::Grid { frame, tile_set_size } => {
+                s.uniform_1f(gl, "tile_id_flat", frame);
+                s.uniform_vec2(gl, "tile_set_size", &tile_set_size);
+                s.uniform_1f(gl, "use_uv_rect", 0.0);
+                s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
+            }
+            SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size } => {
+                s.uniform_1f(gl, "tile_id_flat", 0.0);
+                s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
+                s.uniform_1f(gl, "use_uv_rect", 1.0);
+                s.uniform_vec4(gl, "uv_rect", uv_rect);
+                s.uniform_vec2(gl, "trim_offset", trim_offset);
+                s.uniform_vec2(gl, "source_size", source_size);
+                s.uniform_vec2(gl, "content_size", content_size);
+            }
         }
-    }
-
-    /// Draw a sprite from a packed-atlas UV rect `[u0, v0, u1, v1]`, sized to
-    /// `source_size` with the trimmed content (`content_size`) offset by
-    /// `trim_offset` within it.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_sprite_uv(
-        &self,
-        model: &Mat4,
-        camera: &Mat4,
-        texture_name: &str,
-        uv_rect: &[f32; 4],
-        trim_offset: &[f32; 2],
-        source_size: &[f32; 2],
-        content_size: &[f32; 2],
-        ignore_cam: bool,
-        ghost_alpha: f32,
-    ) {
-        let gl = &self.gl;
-        let s = self.shader("imageSheet");
-        let t = self.texture(texture_name);
-        let proj = self.projection();
-
-        s.bind(gl);
-        t.bind(gl, 0);
-
-        s.uniform_1i(gl, "tex_sampler", 0);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
-        s.uniform_mat4(gl, "model_matrix", model);
-        s.uniform_1f(gl, "tile_id_flat", 0.0);
-        s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
-        s.uniform_1f(gl, "use_uv_rect", 1.0);
-        s.uniform_vec4(gl, "uv_rect", uv_rect);
-        s.uniform_vec2(gl, "trim_offset", trim_offset);
-        s.uniform_vec2(gl, "source_size", source_size);
-        s.uniform_vec2(gl, "content_size", content_size);
         s.uniform_1f(gl, "use_iso_depth", 0.0);
         s.uniform_vec4(gl, "iso_depth_corners", &[0.0, 0.0, 0.0, 0.0]);
         s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
+        s.uniform_1f(gl, "use_normal_map", 0.0);
+        s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
+        s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
+        s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -645,15 +651,12 @@ impl Gfx {
         let gl = &self.gl;
         let s = self.shader("sdf");
         let t = self.texture(atlas_name);
-        let proj = self.projection();
 
         s.bind(gl);
         t.bind(gl, 0);
 
         s.uniform_1i(gl, "tex_sampler", 0);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
-        s.uniform_mat4(gl, "model_matrix", model);
+        self.bind_view(s, camera, model, ignore_cam);
         s.uniform_vec4(gl, "color", color);
         s.uniform_vec4(gl, "outline_color", outline_color);
         s.uniform_1f(gl, "outline_width", outline_width);
@@ -678,46 +681,47 @@ impl Gfx {
     /// `gl_FragDepth` sampled from the grayscale depth-map texture (so
     /// overlapping sprites occlude each other per-pixel rather than purely by
     /// draw order); `depth_base` is the anchor-plane isoDepth the map's 0.5
-    /// grayscale maps to.
+    /// grayscale maps to.  When `normal_map` is `Some(name)`, the sprite is
+    /// shaded with a runtime Lambertian term from `settings`.
     #[allow(clippy::too_many_arguments)]
     fn bind_iso_sprite(
         &self,
         model: &Mat4,
         camera: &Mat4,
         texture_name: &str,
-        frame: f32,
-        tile_set_size: &[f32; 2],
+        region: SpriteRegion<'_>,
         iso_depth_corners: &[f32; 4],
         depth_map: Option<(&str, f32)>,
         depth_base: f32,
+        normal_map: Option<&str>,
+        settings: &RenderSettings,
         ghost_alpha: f32,
-        uv: Option<IsoUv<'_>>,
     ) {
         let gl = &self.gl;
         let s = self.shader("imageSheet");
         let t = self.texture(texture_name);
-        let proj = self.projection();
 
         s.bind(gl);
         t.bind(gl, 0);
 
         s.uniform_1i(gl, "tex_sampler", 0);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", camera);
-        s.uniform_mat4(gl, "model_matrix", model);
-        if let Some((uv_rect, trim_offset, source_size, content_size)) = uv {
-            s.uniform_1f(gl, "tile_id_flat", 0.0);
-            s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
-            s.uniform_1f(gl, "use_uv_rect", 1.0);
-            s.uniform_vec4(gl, "uv_rect", uv_rect);
-            s.uniform_vec2(gl, "trim_offset", trim_offset);
-            s.uniform_vec2(gl, "source_size", source_size);
-            s.uniform_vec2(gl, "content_size", content_size);
-        } else {
-            s.uniform_1f(gl, "tile_id_flat", frame);
-            s.uniform_vec2(gl, "tile_set_size", tile_set_size);
-            s.uniform_1f(gl, "use_uv_rect", 0.0);
-            s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
+        self.bind_view(s, camera, model, false);
+        match region {
+            SpriteRegion::Grid { frame, tile_set_size } => {
+                s.uniform_1f(gl, "tile_id_flat", frame);
+                s.uniform_vec2(gl, "tile_set_size", &tile_set_size);
+                s.uniform_1f(gl, "use_uv_rect", 0.0);
+                s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
+            }
+            SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size } => {
+                s.uniform_1f(gl, "tile_id_flat", 0.0);
+                s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
+                s.uniform_1f(gl, "use_uv_rect", 1.0);
+                s.uniform_vec4(gl, "uv_rect", uv_rect);
+                s.uniform_vec2(gl, "trim_offset", trim_offset);
+                s.uniform_vec2(gl, "source_size", source_size);
+                s.uniform_vec2(gl, "content_size", content_size);
+            }
         }
         s.uniform_1f(gl, "use_iso_depth", 1.0);
         s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
@@ -735,193 +739,118 @@ impl Gfx {
             s.uniform_1f(gl, "use_depth_map", 0.0);
         }
 
-        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
-        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
-        self.quad.indices.bind(gl);
-    }
-
-    /// Normal pass of an isometric sprite: draws the sprite on top of terrain
-    /// (LEQUAL), writing depth for depth-mapped sprites and recording its
-    /// `ghost_group` id into the stencil buffer (REPLACE where the depth test
-    /// passes) so the later ghost pass skips pixels the group already occludes.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_iso_sprite_normal(
-        &self,
-        model: &Mat4,
-        camera: &Mat4,
-        texture_name: &str,
-        frame: f32,
-        tile_set_size: &[f32; 2],
-        iso_depth_corners: &[f32; 4],
-        depth_map: Option<(&str, f32)>,
-        depth_base: f32,
-        ghost_group: u32,
-        uv: Option<IsoUv<'_>>,
-    ) {
-        let gl = &self.gl;
-        self.bind_iso_sprite(
-            model,
-            camera,
-            texture_name,
-            frame,
-            tile_set_size,
-            iso_depth_corners,
-            depth_map,
-            depth_base,
-            0.0,
-            uv,
-        );
-
-        unsafe {
-            gl.enable(glow::DEPTH_TEST);
-            gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(depth_map.is_some());
-
-            gl.enable(glow::STENCIL_TEST);
-            gl.stencil_func(glow::ALWAYS, ghost_group as i32, 0xFF);
-            gl.stencil_op(glow::KEEP, glow::KEEP, glow::REPLACE);
-            gl.stencil_mask(0xFF);
-
-            gl.draw_elements(
-                glow::TRIANGLES,
-                self.quad.index_count as i32,
-                glow::UNSIGNED_SHORT,
-                0,
-            );
-
-            gl.disable(glow::STENCIL_TEST);
-            gl.depth_mask(true);
-            gl.depth_func(glow::LEQUAL);
-            gl.disable(glow::DEPTH_TEST);
-        }
-    }
-
-    /// Ghost pass of an isometric sprite: renders the sprite at 40% alpha where
-    /// it sits behind the depth buffer (terrain or other sprites), but skips
-    /// pixels already occupied by its own `ghost_group` so a vehicle's parts
-    /// don't ghost through each other.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_iso_sprite_ghost(
-        &self,
-        model: &Mat4,
-        camera: &Mat4,
-        texture_name: &str,
-        frame: f32,
-        tile_set_size: &[f32; 2],
-        iso_depth_corners: &[f32; 4],
-        depth_map: Option<(&str, f32)>,
-        depth_base: f32,
-        ghost_group: u32,
-        uv: Option<IsoUv<'_>>,
-    ) {
-        let gl = &self.gl;
-        self.bind_iso_sprite(
-            model,
-            camera,
-            texture_name,
-            frame,
-            tile_set_size,
-            iso_depth_corners,
-            depth_map,
-            depth_base,
-            0.4,
-            uv,
-        );
-
-        unsafe {
-            gl.enable(glow::DEPTH_TEST);
-            gl.depth_func(glow::GREATER);
-            gl.depth_mask(false);
-
-            gl.enable(glow::STENCIL_TEST);
-            if ghost_group != 0 {
-                gl.stencil_func(glow::NOTEQUAL, ghost_group as i32, 0xFF);
+        if let Some(normal_tex) = normal_map {
+            if let Some(nt) = self.textures.get(normal_tex) {
+                nt.bind(gl, 2);
+                s.uniform_1i(gl, "normal_sampler", 2);
+                s.uniform_1f(gl, "use_normal_map", 1.0);
             } else {
-                gl.stencil_func(glow::ALWAYS, 0, 0xFF);
+                s.uniform_1f(gl, "use_normal_map", 0.0);
             }
-            gl.stencil_op(glow::KEEP, glow::KEEP, glow::KEEP);
-            gl.stencil_mask(0x00);
-
-            gl.draw_elements(
-                glow::TRIANGLES,
-                self.quad.index_count as i32,
-                glow::UNSIGNED_SHORT,
-                0,
-            );
-
-            gl.disable(glow::STENCIL_TEST);
-            gl.stencil_mask(0xFF);
-            gl.depth_mask(true);
-            gl.depth_func(glow::LEQUAL);
-            gl.disable(glow::DEPTH_TEST);
+        } else {
+            s.uniform_1f(gl, "use_normal_map", 0.0);
         }
-    }
-
-    /// Draw an isometric sprite from a packed-atlas UV rect `[u0, v0, u1, v1]`,
-    /// sized to `source_size` with the trimmed content (`content_size`) offset
-    /// by `trim_offset` within it, with two-pass depth rendering.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_iso_sprite_uv(
-        &self,
-        model: &Mat4,
-        camera: &Mat4,
-        texture_name: &str,
-        uv_rect: &[f32; 4],
-        trim_offset: &[f32; 2],
-        source_size: &[f32; 2],
-        content_size: &[f32; 2],
-        iso_depth_corners: &[f32; 4],
-    ) {
-        let gl = &self.gl;
-        let s = self.shader("imageSheet");
-        let t = self.texture(texture_name);
-        let proj = self.projection();
-
-        s.bind(gl);
-        t.bind(gl, 0);
-
-        s.uniform_1i(gl, "tex_sampler", 0);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", camera);
-        s.uniform_mat4(gl, "model_matrix", model);
-        s.uniform_1f(gl, "tile_id_flat", 0.0);
-        s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
-        s.uniform_1f(gl, "use_uv_rect", 1.0);
-        s.uniform_vec4(gl, "uv_rect", uv_rect);
-        s.uniform_vec2(gl, "trim_offset", trim_offset);
-        s.uniform_vec2(gl, "source_size", source_size);
-        s.uniform_vec2(gl, "content_size", content_size);
-        s.uniform_1f(gl, "use_iso_depth", 1.0);
-        s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
+        s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
+        s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
+        s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
         self.quad.indices.bind(gl);
+    }
+
+    /// Draw one pass of an isometric sprite.
+    ///
+    /// The engine drives isometric sprites in two phases (all
+    /// [`IsoSpritePass::Normal`] then all [`IsoSpritePass::Ghost`]) so
+    /// sprite-vs-sprite occlusion is resolved by the depth buffer, not draw
+    /// order.  The stencil buffer records a per-instance `ghost_group` id
+    /// during the normal pass (`REPLACE`) so the ghost pass can skip pixels its
+    /// own group already occludes (`NOTEQUAL`).
+    ///
+    /// - **normal** — `LEQUAL`, `depth_mask(depth_map.is_some())` (depth-mapped
+    ///   sprites write depth), stencil `ALWAYS`/`REPLACE ghost_group`,
+    ///   `stencil_mask(0xFF)`, `ghost_alpha=0`.
+    /// - **ghost** — `GREATER`, `depth_mask(false)`, `ghost_alpha=0.4`, stencil
+    ///   `NOTEQUAL ghost_group` (`ALWAYS` when group 0), `stencil_mask(0x00)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_iso_sprite(
+        &self,
+        model: &Mat4,
+        camera: &Mat4,
+        texture_name: &str,
+        region: SpriteRegion<'_>,
+        iso_depth_corners: &[f32; 4],
+        depth_map: Option<(&str, f32)>,
+        depth_base: f32,
+        normal_map: Option<&str>,
+        settings: &RenderSettings,
+        ghost_group: u32,
+        pass: IsoSpritePass,
+    ) {
+        let gl = &self.gl;
+        let ghost_alpha = match pass {
+            IsoSpritePass::Normal => 0.0,
+            IsoSpritePass::Ghost => 0.4,
+        };
+        self.bind_iso_sprite(
+            model,
+            camera,
+            texture_name,
+            region,
+            iso_depth_corners,
+            depth_map,
+            depth_base,
+            normal_map,
+            settings,
+            ghost_alpha,
+        );
 
         unsafe {
             gl.enable(glow::DEPTH_TEST);
+            match pass {
+                IsoSpritePass::Normal => {
+                    gl.depth_func(glow::LEQUAL);
+                    gl.depth_mask(depth_map.is_some());
 
-            // Two-pass ghost rendering (see draw_iso_sprite for rationale).
-            s.uniform_1f(gl, "ghost_alpha", 0.4);
-            gl.depth_func(glow::ALWAYS);
-            gl.depth_mask(false);
-            gl.draw_elements(
-                glow::TRIANGLES,
-                self.quad.index_count as i32,
-                glow::UNSIGNED_SHORT,
-                0,
-            );
+                    gl.enable(glow::STENCIL_TEST);
+                    gl.stencil_func(glow::ALWAYS, ghost_group as i32, 0xFF);
+                    gl.stencil_op(glow::KEEP, glow::KEEP, glow::REPLACE);
+                    gl.stencil_mask(0xFF);
 
-            s.uniform_1f(gl, "ghost_alpha", 0.0);
-            gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(false);
-            gl.draw_elements(
-                glow::TRIANGLES,
-                self.quad.index_count as i32,
-                glow::UNSIGNED_SHORT,
-                0,
-            );
+                    gl.draw_elements(
+                        glow::TRIANGLES,
+                        self.quad.index_count as i32,
+                        glow::UNSIGNED_SHORT,
+                        0,
+                    );
 
+                    gl.disable(glow::STENCIL_TEST);
+                }
+                IsoSpritePass::Ghost => {
+                    gl.depth_func(glow::GREATER);
+                    gl.depth_mask(false);
+
+                    gl.enable(glow::STENCIL_TEST);
+                    if ghost_group != 0 {
+                        gl.stencil_func(glow::NOTEQUAL, ghost_group as i32, 0xFF);
+                    } else {
+                        gl.stencil_func(glow::ALWAYS, 0, 0xFF);
+                    }
+                    gl.stencil_op(glow::KEEP, glow::KEEP, glow::KEEP);
+                    gl.stencil_mask(0x00);
+
+                    gl.draw_elements(
+                        glow::TRIANGLES,
+                        self.quad.index_count as i32,
+                        glow::UNSIGNED_SHORT,
+                        0,
+                    );
+
+                    gl.disable(glow::STENCIL_TEST);
+                    gl.stencil_mask(0xFF);
+                }
+            }
             gl.depth_mask(true);
             gl.depth_func(glow::LEQUAL);
             gl.disable(glow::DEPTH_TEST);
@@ -940,12 +869,9 @@ impl Gfx {
     ) {
         let gl = &self.gl;
         let s = self.shader("solid");
-        let proj = self.projection();
 
         s.bind(gl);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", camera);
-        s.uniform_mat4(gl, "model_matrix", model);
+        self.bind_view(s, camera, model, false);
         s.uniform_vec4(gl, "color", color);
 
         vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertex_pos"), 3, 0, 0);
@@ -971,12 +897,9 @@ impl Gfx {
     ) {
         let gl = &self.gl;
         let s = self.shader("solid");
-        let proj = self.projection();
 
         s.bind(gl);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", camera);
-        s.uniform_mat4(gl, "model_matrix", model);
+        self.bind_view(s, camera, model, false);
         s.uniform_vec4(gl, "color", color);
 
         vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertex_pos"), 3, 0, 0);
@@ -1006,16 +929,12 @@ impl Gfx {
         tileset_name: &str,
         tile_set_size: &[f32; 2],
         tile_pixel_size: &[f32; 2],
-        depth_scale: &[f32; 2],
         map_size: &[f32; 2],
         selected_tile: &[f32; 2],
         selection_begin: &[f32; 2],
         selection_mode: i32,
         selection_color: &[f32; 4],
-        normal_matrix: &Mat3,
-        ambient: &[f32; 3],
-        light_dir: &[f32; 3],
-        light_color: &[f32; 3],
+        settings: &RenderSettings,
         show_grid: bool,
         vertex_count: i32,
         vertex_buffer: &GlBuffer,
@@ -1023,7 +942,6 @@ impl Gfx {
         let gl = &self.gl;
         let s = self.shader("isoTilemap");
         let tset = self.texture(tileset_name);
-        let proj = self.projection();
 
         s.bind(gl);
 
@@ -1043,13 +961,11 @@ impl Gfx {
 
         s.uniform_1i(gl, "map_data", 0);
         s.uniform_1i(gl, "tile_set", 1);
-        s.uniform_mat4(gl, "projection_matrix", &proj);
-        s.uniform_mat4(gl, "camera_matrix", camera);
-        s.uniform_mat4(gl, "model_matrix", model);
+        self.bind_view(s, camera, model, false);
         s.uniform_mat4(gl, "iso_matrix", iso_matrix);
         s.uniform_vec2(gl, "tile_set_size", tile_set_size);
         s.uniform_vec2(gl, "tile_pixel_size", tile_pixel_size);
-        s.uniform_vec2(gl, "depth_scale", depth_scale);
+        s.uniform_vec2(gl, "depth_scale", &settings.depth_scale);
         s.uniform_vec2(gl, "map_size", map_size);
         s.uniform_vec2(gl, "selected_tile", selected_tile);
         s.uniform_vec2(gl, "selection_begin", selection_begin);
@@ -1059,10 +975,10 @@ impl Gfx {
         s.uniform_1f(gl, "grid_radius", 3.0);
         s.uniform_1i(gl, "show_grid", if show_grid { 1 } else { 0 });
         s.uniform_vec3(gl, "grid_color", Vec3::ZERO);
-        s.uniform_mat3(gl, "normal_matrix", normal_matrix);
-        s.uniform_vec3(gl, "ambient_color", Vec3::from_array(*ambient));
-        s.uniform_vec3(gl, "light_direction", Vec3::from_array(*light_dir));
-        s.uniform_vec3(gl, "light_color", Vec3::from_array(*light_color));
+        s.uniform_mat3(gl, "normal_matrix", &settings.normal_matrix);
+        s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
+        s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
+        s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
 
         unsafe {
             gl.enable(glow::DEPTH_TEST);
@@ -1137,6 +1053,130 @@ impl ShaderSourceRegistry {
             .cloned()
             .unwrap_or_else(|| panic!("unknown fragment shader URL: {url}"))
     }
+}
+
+/// A built-in shader declaration: the program name, its vertex/fragment
+/// source filenames (resolved through [`ShaderSourceRegistry`]), and the
+/// attribute/uniform layout.  The engine compiles the full builtin set by
+/// default; a ROM may override any shader by *name* via its manifest
+/// `shaders[]` list.
+pub struct BuiltinShader {
+    pub name: &'static str,
+    pub vertex: &'static str,
+    pub fragment: &'static str,
+    pub attr: &'static [&'static str],
+    pub unif: &'static [&'static str],
+}
+
+/// The engine's built-in shader catalog, in dependency-free declaration form.
+/// Names/filenames/layouts mirror the shared `shaders[]` block the ROM
+/// manifests used to carry (now owned by the engine — see the `classic-gfx`
+/// skill).
+pub fn builtin_shaders() -> Vec<BuiltinShader> {
+    vec![
+        BuiltinShader {
+            name: "solid",
+            vertex: "direct.vert",
+            fragment: "solid.frag",
+            attr: &["vertex_pos"],
+            unif: &["model_matrix", "camera_matrix", "projection_matrix", "color"],
+        },
+        BuiltinShader {
+            name: "image",
+            vertex: "direct_tex.vert",
+            fragment: "image.frag",
+            attr: &["vertex_pos", "tex_coord"],
+            unif: &["model_matrix", "camera_matrix", "projection_matrix", "tex_sampler"],
+        },
+        BuiltinShader {
+            name: "imageColorize",
+            vertex: "direct_tex.vert",
+            fragment: "image_colorized.frag",
+            attr: &["vertex_pos", "tex_coord"],
+            unif: &["model_matrix", "camera_matrix", "projection_matrix", "tex_sampler", "color"],
+        },
+        BuiltinShader {
+            name: "imageSheet",
+            vertex: "direct_tex.vert",
+            fragment: "sheet.frag",
+            attr: &["vertex_pos", "tex_coord"],
+            unif: &[
+                "model_matrix",
+                "camera_matrix",
+                "projection_matrix",
+                "tex_sampler",
+                "tile_id_flat",
+                "tile_set_size",
+                "use_iso_depth",
+                "iso_depth_corners",
+                "ghost_alpha",
+                "use_uv_rect",
+                "uv_rect",
+                "trim_offset",
+                "source_size",
+                "content_size",
+                "depth_sampler",
+                "use_depth_map",
+                "depth_base",
+                "depth_range",
+                "normal_sampler",
+                "use_normal_map",
+                "ambient_color",
+                "light_direction",
+                "light_color",
+            ],
+        },
+        BuiltinShader {
+            name: "sdf",
+            vertex: "sdf.vert",
+            fragment: "sdf.frag",
+            attr: &["vertex_pos", "tex_coord"],
+            unif: &[
+                "model_matrix",
+                "camera_matrix",
+                "projection_matrix",
+                "tex_sampler",
+                "color",
+                "outline_color",
+                "outline_width",
+                "soft_edge",
+                "spread",
+                "atlas_size",
+                "weight",
+                "gamma",
+            ],
+        },
+        BuiltinShader {
+            name: "isoTilemap",
+            vertex: "iso_tilemap.vert",
+            fragment: "iso_tilemap.frag",
+            attr: &["vertex_pos", "map_coord", "tile_id", "normal"],
+            unif: &[
+                "iso_matrix",
+                "model_matrix",
+                "camera_matrix",
+                "projection_matrix",
+                "normal_matrix",
+                "map_data",
+                "map_size",
+                "tile_set",
+                "tile_set_size",
+                "tile_pixel_size",
+                "depth_scale",
+                "selected_tile",
+                "selection_begin",
+                "selection_mode",
+                "selection_color",
+                "wall_color",
+                "grid_radius",
+                "show_grid",
+                "grid_color",
+                "ambient_color",
+                "light_direction",
+                "light_color",
+            ],
+        },
+    ]
 }
 
 // ---------------------------------------------------------------------------
