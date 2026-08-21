@@ -248,33 +248,11 @@ fn tri_normal(d1: (f32, f32, f32), d2: (f32, f32, f32)) -> [f32; 3] {
 /// Bilinear interpolation of height data at an iso-space position (px, py).
 ///
 /// `heights` has shape `(size_x + 1) × (size_y + 1)` (one sample per edge vertex).
-pub fn bilinear_height(heights: &[f32], size_x: i32, size_y: i32, px: f32, py: f32) -> f32 {
-    // A generated map has no height grid until its guest uploads one, so
-    // callers that sample terrain every frame must tolerate an empty (or
-    // not-yet-committed) grid.  Treat it as flat (height 0) rather than
-    // indexing out of bounds.
-    if heights.len() != (size_x as usize + 1) * (size_y as usize + 1) {
-        return 0.0;
-    }
-
-    let ftx = px.floor() as i32;
-    let fty = py.floor() as i32;
-    let fx = px - ftx as f32;
-    let fy = py - fty as f32;
-
-    let at = |tx: i32, ty: i32| -> f32 {
-        let tx = tx.clamp(0, size_x) as usize;
-        let ty = ty.clamp(0, size_y) as usize;
-        heights[ty * (size_x as usize + 1) + tx]
-    };
-
-    let h_nw = at(ftx, fty);
-    let h_ne = at(ftx + 1, fty);
-    let h_sw = at(ftx, fty + 1);
-    let h_se = at(ftx + 1, fty + 1);
-
-    h_nw + (h_ne - h_nw) * fx + (h_sw - h_nw) * fy + (h_nw - h_ne - h_sw + h_se) * fx * fy
-}
+///
+/// Re-exported from `classic-pathfinder` (the single source of truth shared
+/// with the wasm worker module) so callers keep using
+/// `classic_core::tilemap::bilinear_height`.
+pub use classic_pathfinder::bilinear_height;
 
 /// Horizontal depth divisor in the canonical iso-depth formula
 /// `iso_depth(tx, ty, z) = (tx - ty) / HORIZONTAL_DEPTH_SCALE + 0.5 + z / D`.

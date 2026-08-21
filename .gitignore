@@ -47,6 +47,9 @@ result/
 /target/
 apps/web/dist/
 
+# generated pathfinder worker module (`cargo xtask build-pathfinder`)
+/crates/classic-worker/src/pathfinder_worker/pathfinder.wasm
+
 # Worktree workspace (open-wkt)
 /wkts/
 .claude/wkts/
