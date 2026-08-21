@@ -8,6 +8,7 @@
 //! Usage:
 //!   cargo xtask fetch-roms                     # download roms into roms/out/
 //!   cargo xtask fetch-roms --url <rom-base>    # override the ROM base URL
+//!   cargo xtask fetch-roms --skip-verify       # proceed without a roms.json index
 //!   cargo xtask                                # alias for fetch-roms
 
 use std::fs;
@@ -31,6 +32,7 @@ const ROMS: &[(&str, &str)] =
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut url = DEFAULT_ROM_BASE.to_string();
+    let mut skip_verify = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -38,9 +40,10 @@ fn main() -> anyhow::Result<()> {
                 i += 1;
                 url = args.get(i).context("--url needs a value")?.clone();
             }
+            "--skip-verify" => skip_verify = true,
             cmd if cmd == "fetch-roms" || cmd == "all" => {}
             other => {
-                anyhow::bail!("unknown argument `{other}` (expected fetch-roms or --url <base>)")
+                anyhow::bail!("unknown argument `{other}` (expected fetch-roms, --url <base>, or --skip-verify)")
             }
         }
         i += 1;
@@ -49,12 +52,23 @@ fn main() -> anyhow::Result<()> {
     let out_dir = PathBuf::from("roms/out");
     fs::create_dir_all(&out_dir).with_context(|| "create roms/out")?;
 
-    // Fetch the optional checksum index first (roms.json), then the archives.
+    // Fetch the checksum index first (roms.json), then the archives.  A
+    // missing index is a hard error unless `--skip-verify` is passed: booting
+    // a ROM without verifying it against the published checksums is a silent
+    // staleness hazard.
     let index = match fetch(&format!("{url}/roms.json")) {
         Ok(bytes) => Some(bytes),
-        Err(e) => {
-            eprintln!("note: no roms.json index at base ({e:#}); skipping verification");
+        Err(e) if skip_verify => {
+            eprintln!(
+                "note: no roms.json index at base ({e:#}); --skip-verify, proceeding unverified"
+            );
             None
+        }
+        Err(e) => {
+            anyhow::bail!(
+                "no roms.json index at base ({e:#}); refusing to fetch unverified ROMs \
+                 (pass --skip-verify to override)"
+            );
         }
     };
 

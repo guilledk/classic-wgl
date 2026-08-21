@@ -207,12 +207,17 @@ pass via the dirty-text check.
 
 ## 9. Atlas Generator
 
-The `crates/sdf-atlas` Rust crate (invoked by `cargo xtask assets`) produces:
-- `roms/out/res/{name}-sdf.png` — grayscale SDF atlas texture (power-of-two)
-- `roms/out/res/{name}-sdf.json` — glyph metrics JSON (snake_case keys)
+The SDF font atlas is now produced by **classic-assets**
+(`render/make_sdf_font.py`, a Python port of the retired `crates/sdf-atlas`
+Rust crate), wired into `classic-assets/build.sh` and shipped to the engine as
+`dejavusans-sdf` catalog entries (`atlas` PNG + `metrics` JSON). It emits:
+- `dist/fonts/{name}-sdf.png` — grayscale SDF atlas texture (power-of-two)
+- `dist/fonts/{name}-sdf.json` — glyph metrics JSON (snake_case keys)
 
-It ports the former `make-font-atlas.mjs` (fontdue rasterization + Felzenszwalb
-separable EDT + shelf packing).
+It is a Python port of the former `make-font-atlas.mjs` / `sdf-atlas` crate
+(fontdue rasterization + Felzenszwalb separable EDT + shelf packing). The
+metrics schema is unchanged, so the engine's `SdfFontMetrics` deserialization
+is unaffected (glyph cell sizes differ slightly from the old fontdue output).
 
 Key parameters:
 - `GLYPH_SIZE = 64` (cell pixels in the source raster)
@@ -236,8 +241,8 @@ Metrics JSON fields (snake_case):
 - `line_height` — `fontSize * 1.3`
 - `glyphs: { char: { x, y, w, h, x_offset, y_offset, x_advance } }`
 
-The generator also has a content-hash cache (`*-sdf.sig`) to skip regeneration
-when inputs are unchanged.
+The generator is content-hash cached by `classic-assets/build.sh` (the `sdf-font`
+marker in `.build-cache/`) to skip regeneration when inputs are unchanged.
 
 ## 10. Known-divergent / non-functional
 

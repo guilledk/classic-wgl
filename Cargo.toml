@@ -4,7 +4,6 @@ members = [
     "crates/classic-core",
     "crates/classic-worker",
     "crates/classic-terrain",
-    "crates/sdf-atlas",
     "crates/classic-gfx",
     "crates/classic-platform",
     "crates/classic-engine",
@@ -104,3 +103,25 @@ web-sys = { version = "0.3", features = [
 js-sys = "0.3"
 gloo-net = "0.6"
 console_error_panic_hook = "0.1"
+
+# Optimize the rarely-rebuilt decode/compression dependencies even in dev
+# builds: debug-mode PNG decoding of the large shared atlases dominates ROM
+# boot time (~10MB/s unoptimized), so keep these hot dependencies at
+# opt-level 3 while our own crates stay opt-level 0 for fast iteration.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.zstd]
+opt-level = 3
+
+[profile.dev.package.zstd-safe]
+opt-level = 3
+
+[profile.dev.package.ruzstd]
+opt-level = 3
