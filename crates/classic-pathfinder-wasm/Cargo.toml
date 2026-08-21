@@ -1,0 +1,10 @@
+[package]
+name = "classic-pathfinder-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+classic-pathfinder = { path = "../classic-pathfinder" }

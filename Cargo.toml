@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/classic-core",
+    "crates/classic-pathfinder",
+    "crates/classic-pathfinder-wasm",
     "crates/classic-worker",
     "crates/classic-terrain",
     "crates/classic-gfx",

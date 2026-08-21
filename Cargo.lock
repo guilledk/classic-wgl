@@ -334,6 +334,7 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "classic-pathfinder",
  "classic-terrain",
  "glam",
  "hecs",
@@ -434,6 +435,20 @@ dependencies = [
  "wasmtime",
  "wat",
  "web-sys",
+]
+
+[[package]]
+name = "classic-pathfinder"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "classic-pathfinder-wasm"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "classic-pathfinder",
 ]
 
 [[package]]

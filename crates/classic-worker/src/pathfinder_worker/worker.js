@@ -1,173 +1,93 @@
-// classic-worker pathfinder worker (web): runs A* over a shared nav snapshot.
+// classic-worker pathfinder worker (web): instantiates the compiled
+// `pathfinder.wasm` (the same Rust pathfinder the native worker thread runs)
+// and forwards messages.  No pathfinding algorithm lives here.
 //
-// A faithful mirror of `classic_core::pathfinder::find_path` (itself a port of
-// the retired TypeScript `pathfinder.ts`), so native and web agree on routes.
 // Messages (from the main thread):
-//   { type: "snapshot", sizeX, sizeY, data: Int32Array }  — replace the grid
-//   { type: "find", id, from: [x, y], to: [x, y] }         — run a search
+//   { type: "init", wasm: Uint8Array }                        — instantiate wasm
+//   { type: "snapshot", sizeX, sizeY, data: Int32Array }      — replace nav grid
+//   { type: "find", id, from: [x, y], to: [x, y] }            — run a search
+//   { type: "vehicleSnapshot", sizeX, sizeY, structural: Int32Array,
+//     heights: Float32Array, heightScale, tileScale }         — replace vehicle nav
+//   { type: "findVehicle", id, from: [x, y], to: [x, y],
+//     footprint: [[dx, dy], …], pitchMax, rollMax, wheelbasePx, trackPx,
+//     safeFallPx, jumpCost }                                  — run a vehicle search
 // Replies (to the main thread):
-//   { type: "result", id, path: Int32Array | null }        — flat [x0,y0,…]
+//   { type: "result", id, path: Int32Array | null }           — flat [x0,y0,…]
 //      where `path` is null when no route exists.
 
-var nav = null;
-var SQRT2 = Math.SQRT2;
+var exports = null;
+var memory = null;
+var pending = [];
 
-// Max-heap keyed by `before` (higher priority pops first), mirroring the Rust
-// `BinaryHeap<Key>` ordering: lowest f first, then largest (x, then y).
-function before(a, b) {
-    if (a.f !== b.f) return a.f < b.f;
-    if (a.x !== b.x) return a.x > b.x;
-    return a.y > b.y;
+function copyInto(arr) {
+    var ptr = exports.alloc(arr.length * 4);
+    var u8 = new Uint8Array(memory.buffer, ptr, arr.length * 4);
+    u8.set(new Uint8Array(arr.buffer, arr.byteOffset, arr.length * 4));
+    return ptr;
 }
 
-function makeHeap() {
-    var items = [];
-    return {
-        push: function (item) {
-            items.push(item);
-            var i = items.length - 1;
-            while (i > 0) {
-                var p = (i - 1) >> 1;
-                if (before(items[i], items[p])) {
-                    var t = items[i];
-                    items[i] = items[p];
-                    items[p] = t;
-                    i = p;
-                } else {
-                    break;
-                }
-            }
-        },
-        pop: function () {
-            if (items.length === 0) return null;
-            var top = items[0];
-            var last = items.pop();
-            if (items.length > 0) {
-                items[0] = last;
-                var i = 0;
-                for (;;) {
-                    var l = i * 2 + 1;
-                    var r = l + 1;
-                    var best = i;
-                    if (l < items.length && before(items[l], items[best])) best = l;
-                    if (r < items.length && before(items[r], items[best])) best = r;
-                    if (best === i) break;
-                    var t = items[i];
-                    items[i] = items[best];
-                    items[best] = t;
-                    i = best;
-                }
-            }
-            return top;
-        },
-    };
+function readResult(n) {
+    return new Int32Array(memory.buffer, exports.result_ptr(), n * 2);
 }
 
-function heuristic(ax, ay, bx, by) {
-    var dx = Math.abs(ax - bx);
-    var dy = Math.abs(ay - by);
-    return dx + dy + (SQRT2 - 2) * Math.min(dx, dy);
-}
-
-function findPath(sizeX, sizeY, data, fromX, fromY, toX, toY) {
-    fromX = Math.max(0, Math.min(sizeX - 1, fromX));
-    fromY = Math.max(0, Math.min(sizeY - 1, fromY));
-    toX = Math.max(0, Math.min(sizeX - 1, toX));
-    toY = Math.max(0, Math.min(sizeY - 1, toY));
-
-    function flatten(x, y) {
-        return x + y * sizeX;
-    }
-
-    if (fromX === toX && fromY === toY) {
-        return [fromX, fromY, toX, toY];
-    }
-
-    var total = sizeX * sizeY;
-    var INF = Infinity;
-    var gCost = new Float64Array(total).fill(INF);
-    var fCost = new Float64Array(total).fill(INF);
-    var cameFrom = new Int32Array(total).fill(-1);
-    var inOpen = new Uint8Array(total);
-
-    var fromIdx = flatten(fromX, fromY);
-    gCost[fromIdx] = 0;
-    fCost[fromIdx] = heuristic(fromX, fromY, toX, toY);
-
-    var open = makeHeap();
-    open.push({ f: fCost[fromIdx], x: fromX, y: fromY });
-
-    var neighbours = [
-        [-1, -1], [0, -1], [1, -1],
-        [-1, 0], [1, 0],
-        [-1, 1], [0, 1], [1, 1],
-    ];
-
-    var toIdx = flatten(toX, toY);
-
-    for (;;) {
-        var current = open.pop();
-        if (current === null) return null;
-        var cx = current.x;
-        var cy = current.y;
-        var curIdx = flatten(cx, cy);
-
-        if (cx === toX && cy === toY) {
-            var path = [toX, toY];
-            var cur = toIdx;
-            while (cur !== fromIdx) {
-                var prev = cameFrom[cur];
-                if (prev < 0) break;
-                path.push(prev % sizeX, Math.floor(prev / sizeX));
-                cur = prev;
-            }
-            path.reverse();
-            return path;
+function handle(msg) {
+    if (msg.type === "snapshot") {
+        var ptr = copyInto(msg.data);
+        exports.set_snapshot(msg.sizeX, msg.sizeY, ptr, msg.data.length);
+    } else if (msg.type === "find") {
+        var n = exports.find(msg.from[0], msg.from[1], msg.to[0], msg.to[1]);
+        self.postMessage({ type: "result", id: msg.id, path: n < 0 ? null : readResult(n) });
+    } else if (msg.type === "vehicleSnapshot") {
+        var sp = copyInto(msg.structural);
+        var hp = copyInto(msg.heights);
+        exports.set_vehicle_snapshot(
+            msg.sizeX,
+            msg.sizeY,
+            sp,
+            msg.structural.length,
+            hp,
+            msg.heights.length,
+            msg.heightScale,
+            msg.tileScale,
+        );
+    } else if (msg.type === "findVehicle") {
+        var fp = new Int32Array(msg.footprint.length * 2);
+        for (var i = 0; i < msg.footprint.length; i++) {
+            fp[i * 2] = msg.footprint[i][0];
+            fp[i * 2 + 1] = msg.footprint[i][1];
         }
-
-        inOpen[curIdx] = 0;
-
-        for (var n = 0; n < 8; n++) {
-            var nx = cx + neighbours[n][0];
-            var ny = cy + neighbours[n][1];
-            if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY) continue;
-            var nIdx = flatten(nx, ny);
-            if (data[nIdx] === 0) continue;
-
-            var stepCost = neighbours[n][0] !== 0 && neighbours[n][1] !== 0 ? SQRT2 : 1;
-            var tentativeG = gCost[curIdx] + stepCost;
-
-            if (tentativeG < gCost[nIdx]) {
-                cameFrom[nIdx] = curIdx;
-                gCost[nIdx] = tentativeG;
-                fCost[nIdx] = tentativeG + heuristic(nx, ny, toX, toY);
-                if (!inOpen[nIdx]) {
-                    open.push({ f: fCost[nIdx], x: nx, y: ny });
-                    inOpen[nIdx] = 1;
-                }
-            }
-        }
+        var fpp = copyInto(fp);
+        var n = exports.find_vehicle(
+            msg.from[0],
+            msg.from[1],
+            msg.to[0],
+            msg.to[1],
+            fpp,
+            msg.footprint.length,
+            msg.pitchMax,
+            msg.rollMax,
+            msg.wheelbasePx,
+            msg.trackPx,
+            msg.safeFallPx,
+            msg.jumpCost,
+        );
+        self.postMessage({ type: "result", id: msg.id, path: n < 0 ? null : readResult(n) });
     }
 }
 
 self.onmessage = function (e) {
     var msg = e.data;
-    if (msg.type === "snapshot") {
-        nav = { sizeX: msg.sizeX, sizeY: msg.sizeY, data: msg.data };
-    } else if (msg.type === "find") {
-        if (nav === null) {
-            self.postMessage({ type: "result", id: msg.id, path: null });
-            return;
-        }
-        var path = findPath(
-            nav.sizeX,
-            nav.sizeY,
-            nav.data,
-            msg.from[0],
-            msg.from[1],
-            msg.to[0],
-            msg.to[1],
-        );
-        self.postMessage({ type: "result", id: msg.id, path: path });
+    if (msg.type === "init") {
+        WebAssembly.instantiate(msg.wasm, {}).then(function (r) {
+            exports = r.instance.exports;
+            memory = exports.memory;
+            while (pending.length) handle(pending.shift());
+        });
+        return;
     }
+    if (exports === null) {
+        pending.push(msg);
+        return;
+    }
+    handle(msg);
 };

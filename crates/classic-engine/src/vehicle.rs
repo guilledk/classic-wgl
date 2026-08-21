@@ -10,6 +10,7 @@
 
 use classic_core::components::{DebugName, IsoSprite, IsoVehicle, RoleKind, Tilemap, Transform};
 use classic_core::math::cartesian_to_iso_4;
+use classic_core::pathfinder::PathPoll;
 use classic_core::tilemap::sample_height_mesh;
 use glam::{Vec2, Vec3};
 
@@ -54,6 +55,26 @@ const GOAL_TOLERANCE: f32 = 0.5;
 /// penalty makes the vehicle prefer flat routes but take a jump when it
 /// clearly shortens the path.
 const JUMP_COST: f32 = 1.3;
+
+/// The outcome of submitting a vehicle path request via [`Engine::vehicle_goto`].
+pub enum VehicleGotoSubmit {
+    /// Vehicle is airborne; the guest should re-issue next frame.
+    Airborne,
+    /// No entity with that name (drop the request).
+    NoVehicle,
+    /// Request submitted; poll with [`Engine::vehicle_goto_poll`].
+    Submitted(u64),
+}
+
+/// The outcome of polling a vehicle path request via [`Engine::vehicle_goto_poll`].
+pub enum VehicleGotoPoll {
+    /// The search is still running.
+    Pending,
+    /// A route was found; carries the waypoints to install on the vehicle.
+    Accepted(Vec<[i32; 2]>),
+    /// No route exists (drop the request).
+    NoPath,
+}
 
 /// A terrain-height sampler snapshot, cloned once per frame so the mutation
 /// pass can sample heights without re-borrowing the world.
@@ -717,19 +738,22 @@ impl Engine {
         true
     }
 
-    /// Set a vehicle's destination (integer tile coordinates).  The host runs
-    /// footprint-, slope- and jump-aware A* (see `Engine::find_vehicle_path`)
-    /// and stores the waypoints on the vehicle.
-    pub fn vehicle_goto(&mut self, name: &str, tx: i32, ty: i32) -> bool {
+    /// Set a vehicle's destination (integer tile coordinates).  Submits a
+    /// footprint-, slope- and jump-aware A* request off-thread (or computes it
+    /// inline under `synchronous_workers`) and returns a request id to poll
+    /// with [`Engine::vehicle_goto_poll`].
+    pub fn vehicle_goto(&mut self, name: &str, tx: i32, ty: i32) -> VehicleGotoSubmit {
         let Some(&ve) = self.names.get(name) else {
             classic_core::cl_info!(
                 classic_core::instrument::Chan::Path,
                 "vehicle_goto: no entity named {name}"
             );
-            return false;
+            return VehicleGotoSubmit::NoVehicle;
         };
         let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px) = {
-            let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return false };
+            let Ok(v) = self.world.get::<&IsoVehicle>(ve) else {
+                return VehicleGotoSubmit::NoVehicle;
+            };
             // Reject new paths while airborne: the vehicle keeps its current
             // trajectory until its wheels touch down again (issue #40).
             if v.airborne {
@@ -737,7 +761,7 @@ impl Engine {
                     classic_core::instrument::Chan::Path,
                     "vehicle_goto {name}: airborne, rejecting"
                 );
-                return false;
+                return VehicleGotoSubmit::Airborne;
             }
             (
                 v.path_footprint.clone(),
@@ -749,28 +773,92 @@ impl Engine {
             )
         };
         let from = {
-            let Some(tf) = self.world.get::<&Transform>(ve).ok() else { return false };
+            let Ok(tf) = self.world.get::<&Transform>(ve) else {
+                return VehicleGotoSubmit::NoVehicle;
+            };
             (tf.position.x.floor() as i32, tf.position.y.floor() as i32)
         };
-        let Some(path) = self.find_vehicle_path(
-            from,
-            (tx, ty),
-            &footprint,
-            pitch_max,
-            roll_max,
-            wheelbase_px,
-            track_px,
-            safe_fall_px,
-            JUMP_COST,
-        ) else {
-            return false;
-        };
-        let path: Vec<[i32; 2]> = path.into_iter().map(|(x, y)| [x, y]).collect();
-        if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
-            v.path = path;
-            v.path_idx = if v.path.len() > 1 { 1 } else { 0 };
+
+        // Allocate a request id.  Shares the `next_path_id` counter with the
+        // humanoid `request_path` so ids stay unique in the worker's result map.
+        let id = self.next_path_id;
+        self.next_path_id = self.next_path_id.wrapping_add(1);
+
+        if !self.synchronous_workers {
+            self.ensure_pathfinder();
+            if let Some(worker) = self.pathfinder.as_mut() {
+                worker.request_vehicle_path(
+                    id,
+                    from,
+                    (tx, ty),
+                    footprint,
+                    pitch_max,
+                    roll_max,
+                    wheelbase_px,
+                    track_px,
+                    safe_fall_px,
+                    JUMP_COST,
+                );
+            }
+        } else {
+            let poll = match self.find_vehicle_path(
+                from,
+                (tx, ty),
+                &footprint,
+                pitch_max,
+                roll_max,
+                wheelbase_px,
+                track_px,
+                safe_fall_px,
+                JUMP_COST,
+            ) {
+                Some(path) => {
+                    VehicleGotoPoll::Accepted(path.into_iter().map(|(x, y)| [x, y]).collect())
+                }
+                None => VehicleGotoPoll::NoPath,
+            };
+            self.sync_vehicle_paths.insert(id, poll);
         }
-        true
+
+        self.vehicle_path_entities.insert(id, ve);
+        VehicleGotoSubmit::Submitted(id)
+    }
+
+    /// Poll a previously submitted vehicle path request (non-blocking).  On
+    /// acceptance, the route is installed on the vehicle (`v.path` /
+    /// `v.path_idx`) here — the single mutation point shared by the sync and
+    /// async paths.
+    pub fn vehicle_goto_poll(&mut self, id: u64) -> VehicleGotoPoll {
+        let poll = if let Some(poll) = self.sync_vehicle_paths.remove(&id) {
+            poll
+        } else if let Some(worker) = self.pathfinder.as_mut() {
+            match worker.poll_vehicle_path(id) {
+                PathPoll::Pending => VehicleGotoPoll::Pending,
+                PathPoll::NoPath => VehicleGotoPoll::NoPath,
+                PathPoll::Path(cells) => {
+                    VehicleGotoPoll::Accepted(cells.into_iter().map(|(x, y)| [x, y]).collect())
+                }
+            }
+        } else {
+            VehicleGotoPoll::Pending
+        };
+
+        match &poll {
+            VehicleGotoPoll::Accepted(path) => {
+                if let Some(ve) = self.vehicle_path_entities.remove(&id) {
+                    if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
+                        v.path = path.clone();
+                        v.path_idx = if v.path.len() > 1 { 1 } else { 0 };
+                    }
+                }
+            }
+            VehicleGotoPoll::NoPath => {
+                self.vehicle_path_entities.remove(&id);
+            }
+            VehicleGotoPoll::Pending => {}
+        }
+
+        poll
     }
 
     /// Stop a vehicle, clearing its movement path.
@@ -817,6 +905,20 @@ mod tests {
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
         }
+    }
+
+    /// Submit a vehicle goto under `synchronous_workers` (inline search) and
+    /// return the poll outcome immediately, mirroring the guest's submit/poll
+    /// idiom.  Airborne / unknown-vehicle submissions resolve to `NoPath`.
+    fn goto_sync(engine: &mut Engine, name: &str, tx: i32, ty: i32) -> VehicleGotoPoll {
+        engine.set_synchronous_workers(true);
+        let id = match engine.vehicle_goto(name, tx, ty) {
+            VehicleGotoSubmit::Submitted(id) => id,
+            VehicleGotoSubmit::Airborne | VehicleGotoSubmit::NoVehicle => {
+                return VehicleGotoPoll::NoPath;
+            }
+        };
+        engine.vehicle_goto_poll(id)
     }
 
     #[test]
@@ -1011,7 +1113,7 @@ mod tests {
         let nm = engine.world.spawn((nav, Role::new(RoleKind::NavMesh)));
         engine.names.insert("navmesh".into(), nm);
 
-        assert!(engine.vehicle_goto("lrv", 2, 1));
+        assert!(matches!(goto_sync(&mut engine, "lrv", 2, 1), VehicleGotoPoll::Accepted(_)));
         assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
         assert!(engine.vehicle_stop("lrv"));
         assert!(engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
@@ -1191,13 +1293,13 @@ mod tests {
         let body = *engine.names.get("lrv").unwrap();
 
         // Grounded: goto succeeds.
-        assert!(engine.vehicle_goto("lrv", 2, 1));
+        assert!(matches!(goto_sync(&mut engine, "lrv", 2, 1), VehicleGotoPoll::Accepted(_)));
         assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
         engine.vehicle_stop("lrv");
 
         // Airborne: goto is rejected and the path stays empty.
         engine.world.get::<&mut IsoVehicle>(body).unwrap().airborne = true;
-        assert!(!engine.vehicle_goto("lrv", 2, 1));
+        assert!(matches!(goto_sync(&mut engine, "lrv", 2, 1), VehicleGotoPoll::NoPath));
         assert!(engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
     }
 
@@ -1532,7 +1634,10 @@ mod tests {
     fn vehicle_goto_paths_across_flat_lrvtest_like_map() {
         let mut engine = engine_with_lrvtest_like_map(None);
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
-        assert!(engine.vehicle_goto("lrv", 24, 24), "flat click-to-move should path");
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 24, 24), VehicleGotoPoll::Accepted(_)),
+            "flat click-to-move should path"
+        );
         let body = *engine.names.get("lrv").unwrap();
         assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().path.is_empty());
     }
@@ -1560,9 +1665,15 @@ mod tests {
         let mut engine = engine_with_lrvtest_like_map(Some(heights));
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
         // Flat destination far from features.
-        assert!(engine.vehicle_goto("lrv", 10, 10), "flat destination should path");
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 10, 10), VehicleGotoPoll::Accepted(_)),
+            "flat destination should path"
+        );
         // Ramp face (gentle) should be reachable.
-        assert!(engine.vehicle_goto("lrv", 33, 25), "gentle ramp face should path");
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 33, 25), VehicleGotoPoll::Accepted(_)),
+            "gentle ramp face should path"
+        );
     }
 
     #[test]
@@ -1584,7 +1695,10 @@ mod tests {
         };
         assert_eq!(footprint_len, (half_x * 2 + 1) * (half_y * 2 + 1));
 
-        assert!(engine.vehicle_goto("lrv", 24, 24), "goto with real def + auto footprint");
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 24, 24), VehicleGotoPoll::Accepted(_)),
+            "goto with real def + auto footprint"
+        );
     }
 
     /// The full `lrvtest` ramp-course height field, mirroring
@@ -1662,18 +1776,42 @@ mod tests {
 
         // Flat base, the ramp faces (gentle slopes), and the central hill must
         // be reachable.
-        assert!(engine.vehicle_goto("lrv", 20, 20), "flat base should path");
-        assert!(engine.vehicle_goto("lrv", 11, 25), "west ramp face should path");
-        assert!(engine.vehicle_goto("lrv", 33, 25), "east ramp face should path");
-        assert!(engine.vehicle_goto("lrv", 24, 24), "central hill should path");
-        assert!(engine.vehicle_goto("lrv", 16, 29), "flat tile beside the ramp should path");
-        assert!(engine.vehicle_goto("lrv", 10, 10), "nw diagonal ramp face should path");
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 20, 20), VehicleGotoPoll::Accepted(_)),
+            "flat base should path"
+        );
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 11, 25), VehicleGotoPoll::Accepted(_)),
+            "west ramp face should path"
+        );
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 33, 25), VehicleGotoPoll::Accepted(_)),
+            "east ramp face should path"
+        );
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 24, 24), VehicleGotoPoll::Accepted(_)),
+            "central hill should path"
+        );
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 16, 29), VehicleGotoPoll::Accepted(_)),
+            "flat tile beside the ramp should path"
+        );
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 10, 10), VehicleGotoPoll::Accepted(_)),
+            "nw diagonal ramp face should path"
+        );
         // The 1-unit curb is a ~14.5° pitch over the wheelbase — within the
         // 20° limit, so the vehicle can drive over it.
-        assert!(engine.vehicle_goto("lrv", 28, 45), "1-unit curb should be traversable");
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 28, 45), VehicleGotoPoll::Accepted(_)),
+            "1-unit curb should be traversable"
+        );
 
         // The ramp's 3-unit cliff sides are a ~38° pitch over the wheelbase —
         // beyond the 20° limit, so the vehicle can't stand on them.
-        assert!(!engine.vehicle_goto("lrv", 7, 29), "ramp cliff edge should not path");
+        assert!(
+            matches!(goto_sync(&mut engine, "lrv", 7, 29), VehicleGotoPoll::NoPath),
+            "ramp cliff edge should not path"
+        );
     }
 }

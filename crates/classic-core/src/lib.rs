@@ -5,7 +5,6 @@ pub mod components;
 pub mod fields;
 pub mod instrument;
 pub mod math;
-pub mod pathfinder;
 pub mod registry;
 pub mod sdf_builder;
 pub mod terrain;
@@ -23,6 +22,11 @@ use components::{
 pub use camera::Camera;
 pub use components::{RoleKind, SpriteRender, Transform};
 pub use types::Rect;
+
+/// Pathfinding lives in the standalone `classic-pathfinder` crate (shared by
+/// the native host, the native worker thread, and the web `pathfinder.wasm`
+/// module).  Re-exported here so `classic_core::pathfinder::*` keeps resolving.
+pub use classic_pathfinder as pathfinder;
 
 /// Install all known component types into the registry.  Idempotent — the
 /// first call wins and later calls are no-ops.

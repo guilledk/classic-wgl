@@ -11,6 +11,7 @@ use classic_core::fields::FieldDtype;
 use classic_core::instrument::Chan;
 use classic_core::pathfinder::PathPoll;
 use classic_core::terrain::kernels::{FieldOp, Reduce};
+use classic_engine::vehicle::{VehicleGotoPoll, VehicleGotoSubmit};
 use classic_engine::Engine;
 
 /// Map an integer to a [`UiAnchor`] (0..=8, TopLeft → BotRight).
@@ -248,10 +249,26 @@ impl GuestHost {
         self.engine_mut().spawn_vehicle(def, name, x as f32, y as f32) as i32
     }
 
-    /// Set a wheeled vehicle's destination (integer tile coordinates).  The
-    /// host runs its own A* and stores the waypoints on the vehicle.
+    /// Set a wheeled vehicle's destination (integer tile coordinates).  Returns
+    /// `> 0` (a request id to poll with [`Self::vehicle_goto_poll`]), `0` when
+    /// the vehicle is airborne (re-issue next frame), or `-1` for an unknown
+    /// vehicle.
     pub fn vehicle_goto(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
-        self.engine_mut().vehicle_goto(name, tx, ty) as i32
+        match self.engine_mut().vehicle_goto(name, tx, ty) {
+            VehicleGotoSubmit::Airborne => 0,
+            VehicleGotoSubmit::NoVehicle => -1,
+            VehicleGotoSubmit::Submitted(id) => id as i32,
+        }
+    }
+
+    /// Poll a vehicle path request by id: `0` pending, `1` accepted (path
+    /// installed), `-1` no path.
+    pub fn vehicle_goto_poll(&mut self, id: i32) -> i32 {
+        match self.engine_mut().vehicle_goto_poll(id as u64) {
+            VehicleGotoPoll::Pending => 0,
+            VehicleGotoPoll::Accepted(_) => 1,
+            VehicleGotoPoll::NoPath => -1,
+        }
     }
 
     /// Stop a wheeled vehicle, clearing its movement path.

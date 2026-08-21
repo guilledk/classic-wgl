@@ -10,10 +10,12 @@
 //!   cargo xtask fetch-roms --url <rom-base>    # override the ROM base URL
 //!   cargo xtask fetch-roms --skip-verify       # proceed without a roms.json index
 //!   cargo xtask                                # alias for fetch-roms
+//!   cargo xtask build-pathfinder               # compile + stage pathfinder.wasm
 
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -31,6 +33,10 @@ const ROMS: &[(&str, &str)] =
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("build-pathfinder") {
+        return build_pathfinder();
+    }
+
     let mut url = DEFAULT_ROM_BASE.to_string();
     let mut skip_verify = false;
     let mut i = 0;
@@ -83,6 +89,34 @@ fn main() -> anyhow::Result<()> {
     }
 
     println!("roms ready under roms/out/; boot with CLASSIC_ROM=rom:demo (etc.)");
+    Ok(())
+}
+
+/// Build the web `pathfinder.wasm` module (the Rust pathfinder compiled to
+/// wasm) and stage it next to `web.rs` so the web `Worker` can instantiate it.
+/// Must run before any `--target wasm32-unknown-unknown` build/check.
+fn build_pathfinder() -> anyhow::Result<()> {
+    let root = std::env::current_dir().context("current dir")?;
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "--target",
+            "wasm32-unknown-unknown",
+            "-p",
+            "classic-pathfinder-wasm",
+            "--release",
+        ])
+        .current_dir(&root)
+        .status()
+        .context("build classic-pathfinder-wasm")?;
+    if !status.success() {
+        anyhow::bail!("classic-pathfinder-wasm build failed");
+    }
+    let wasm = root.join("target/wasm32-unknown-unknown/release/classic_pathfinder_wasm.wasm");
+    let dst = root.join("crates/classic-worker/src/pathfinder_worker/pathfinder.wasm");
+    fs::copy(&wasm, &dst)
+        .with_context(|| format!("copy {} -> {}", wasm.display(), dst.display()))?;
+    println!("staged {}", dst.display());
     Ok(())
 }
 

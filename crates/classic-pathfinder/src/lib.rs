@@ -1,14 +1,22 @@
-//! # Skill: `classic-physics`
+//! A* pathfinding over a 2D grid of walkable/blocked cells, plus the
+//! footprint-, slope- and jump-aware vehicle search.
 //!
-//! **Read `.claude/skills/classic-physics/SKILL.md` before working on this module.**
+//! `#![no_std]` (with `alloc`) so the same code compiles into the host
+//! (`classic-core` re-exports this as `pathfinder`), the native worker thread,
+//! and the web `pathfinder.wasm` worker module — a single source of truth for
+//! native + web routes.  Transcendental functions use `libm` so results are
+//! reproducible across targets (the same rationale as `classic-terrain`).
 //!
-//! A* pathfinding over a 2D grid of walkable/blocked cells.
-//!
-//! Port of the algorithm from `src/classic/pathfinder.ts` (web worker),
-//! running in-thread.  The nav mesh is a flat `[i32]` where `1` = walkable,
-//! `0` = blocked.
+//! Port of the algorithm from `src/classic/pathfinder.ts` (web worker).  The
+//! nav mesh is a flat `[i32]` where `1` = walkable, `0` = blocked.
 
-use std::collections::BinaryHeap;
+#![no_std]
+
+extern crate alloc;
+
+use alloc::collections::BinaryHeap;
+use alloc::vec;
+use alloc::vec::Vec;
 
 /// Ordered float for priority queue keys.
 #[derive(Copy, Clone, PartialEq)]
@@ -19,12 +27,12 @@ struct Key {
 
 impl Eq for Key {}
 impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 impl Ord for Key {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         // Reverse: lower cost = higher priority.
         other.cost.total_cmp(&self.cost).then_with(|| self.cell.cmp(&other.cell))
     }
@@ -134,7 +142,7 @@ pub fn find_path(
             return None;
         }
         Some(if neighbour.0 != current.0 && neighbour.1 != current.1 {
-            (2.0_f32).sqrt()
+            libm::sqrtf(2.0)
         } else {
             1.0
         })
@@ -206,6 +214,37 @@ pub fn find_path_for_footprint(
     find_path(&eroded, size_x, size_y, from, to)
 }
 
+/// Bilinear interpolation of height data at an iso-space position (px, py).
+///
+/// `heights` has shape `(size_x + 1) × (size_y + 1)` (one sample per edge vertex).
+pub fn bilinear_height(heights: &[f32], size_x: i32, size_y: i32, px: f32, py: f32) -> f32 {
+    // A generated map has no height grid until its guest uploads one, so
+    // callers that sample terrain every frame must tolerate an empty (or
+    // not-yet-committed) grid.  Treat it as flat (height 0) rather than
+    // indexing out of bounds.
+    if heights.len() != (size_x as usize + 1) * (size_y as usize + 1) {
+        return 0.0;
+    }
+
+    let ftx = libm::floorf(px) as i32;
+    let fty = libm::floorf(py) as i32;
+    let fx = px - ftx as f32;
+    let fy = py - fty as f32;
+
+    let at = |tx: i32, ty: i32| -> f32 {
+        let tx = tx.clamp(0, size_x) as usize;
+        let ty = ty.clamp(0, size_y) as usize;
+        heights[ty * (size_x as usize + 1) + tx]
+    };
+
+    let h_nw = at(ftx, fty);
+    let h_ne = at(ftx + 1, fty);
+    let h_sw = at(ftx, fty + 1);
+    let h_se = at(ftx + 1, fty + 1);
+
+    h_nw + (h_ne - h_nw) * fx + (h_sw - h_nw) * fy + (h_nw - h_ne - h_sw + h_se) * fx * fy
+}
+
 /// Derive a vehicle-specific slope-feasibility walkability grid from a vertex
 /// height grid: `1` where the vehicle can stand (i.e. *some* heading keeps its
 /// pitch/roll within limits), `0` otherwise.
@@ -234,8 +273,8 @@ pub fn derive_vehicle_slope_nav(
     }
     let half_wb = (wheelbase_px / tile_scale.max(1e-6)) * 0.5;
     let half_tr = (track_px / tile_scale.max(1e-6)) * 0.5;
-    let max_pitch_tan = max_pitch.tan();
-    let max_roll_tan = max_roll.tan();
+    let max_pitch_tan = libm::tanf(max_pitch);
+    let max_roll_tan = libm::tanf(max_roll);
 
     for y in 0..size_y {
         for x in 0..size_x {
@@ -243,37 +282,17 @@ pub fn derive_vehicle_slope_nav(
             let cy = y as f32 + 0.5;
             let mut walkable = false;
             for d in 0..8 {
-                let angle = d as f32 * std::f32::consts::FRAC_PI_4;
-                let (hx, hy) = (angle.cos(), angle.sin());
+                let angle = d as f32 * core::f32::consts::FRAC_PI_4;
+                let (hx, hy) = (libm::cosf(angle), libm::sinf(angle));
                 let (lx, ly) = (-hy, hx);
-                let front = crate::tilemap::bilinear_height(
-                    heights,
-                    size_x,
-                    size_y,
-                    cx + hx * half_wb,
-                    cy + hy * half_wb,
-                );
-                let rear = crate::tilemap::bilinear_height(
-                    heights,
-                    size_x,
-                    size_y,
-                    cx - hx * half_wb,
-                    cy - hy * half_wb,
-                );
-                let left = crate::tilemap::bilinear_height(
-                    heights,
-                    size_x,
-                    size_y,
-                    cx + lx * half_tr,
-                    cy + ly * half_tr,
-                );
-                let right = crate::tilemap::bilinear_height(
-                    heights,
-                    size_x,
-                    size_y,
-                    cx - lx * half_tr,
-                    cy - ly * half_tr,
-                );
+                let front =
+                    bilinear_height(heights, size_x, size_y, cx + hx * half_wb, cy + hy * half_wb);
+                let rear =
+                    bilinear_height(heights, size_x, size_y, cx - hx * half_wb, cy - hy * half_wb);
+                let left =
+                    bilinear_height(heights, size_x, size_y, cx + lx * half_tr, cy + ly * half_tr);
+                let right =
+                    bilinear_height(heights, size_x, size_y, cx - lx * half_tr, cy - ly * half_tr);
                 let pitch = (front - rear).abs() * height_scale / wheelbase_px;
                 let roll = (left - right).abs() * height_scale / track_px;
                 if pitch <= max_pitch_tan && roll <= max_roll_tan {
@@ -334,7 +353,7 @@ pub fn find_path_for_footprint_with_jumps(
     a_star(size_x, size_y, from, to, |current, neighbour| {
         let idx = (neighbour.0 + neighbour.1 * size_x) as usize;
         let diagonal = neighbour.0 != current.0 && neighbour.1 != current.1;
-        let base = if diagonal { (2.0_f32).sqrt() } else { 1.0 };
+        let base = if diagonal { libm::sqrtf(2.0) } else { 1.0 };
 
         if walk_eroded[idx] == 1 {
             return Some(base);
@@ -350,12 +369,107 @@ pub fn find_path_for_footprint_with_jumps(
     })
 }
 
+/// A snapshot of the terrain the vehicle pathfinder needs: the structural nav
+/// grid (obstacle-free walkability) plus the vertex height grid it derives the
+/// slope-feasibility grid from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VehicleNavSnapshot {
+    pub size_x: i32,
+    pub size_y: i32,
+    /// Obstacle-free walkability (`1` = open, `0` = blocked), row-major.
+    pub structural: Vec<i32>,
+    /// Vertex height grid `(size_x + 1) × (size_y + 1)`, row-major.
+    pub heights: Vec<f32>,
+    /// Vertical world units per height unit (the tilemap `height_scale`).
+    pub height_scale: f32,
+    /// World size of a tile edge (the tilemap `scale.x`), used to convert the
+    /// pixel wheelbase/track back into tile units for slope sampling.
+    pub tile_scale: f32,
+}
+
+impl VehicleNavSnapshot {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        size_x: i32,
+        size_y: i32,
+        structural: Vec<i32>,
+        heights: Vec<f32>,
+        height_scale: f32,
+        tile_scale: f32,
+    ) -> Self {
+        Self { size_x, size_y, structural, heights, height_scale, tile_scale }
+    }
+}
+
+/// Footprint-, slope- and jump-aware vehicle A* over a [`VehicleNavSnapshot`].
+///
+/// Derives the slope-feasibility grid from `snapshot.heights`, combines it with
+/// `snapshot.structural`, and runs [`find_path_for_footprint_with_jumps`].  The
+/// worker-callable equivalent of `Engine::find_vehicle_path` (see
+/// `classic-engine`), so native + web produce identical routes.
+#[allow(clippy::too_many_arguments)]
+pub fn find_vehicle_path_snapshot(
+    snapshot: &VehicleNavSnapshot,
+    from: GridCell,
+    to: GridCell,
+    footprint: &[GridCell],
+    pitch_max: f32,
+    roll_max: f32,
+    wheelbase_px: f32,
+    track_px: f32,
+    safe_fall_px: f32,
+    jump_cost: f32,
+) -> Option<Vec<GridCell>> {
+    let slope = derive_vehicle_slope_nav(
+        &snapshot.heights,
+        snapshot.size_x,
+        snapshot.size_y,
+        snapshot.height_scale,
+        snapshot.tile_scale,
+        wheelbase_px,
+        track_px,
+        pitch_max,
+        roll_max,
+    );
+    find_vehicle_path_with_slope(snapshot, &slope, from, to, footprint, safe_fall_px, jump_cost)
+}
+
+/// Vehicle A* reusing a pre-derived slope-feasibility grid (`slope`, the output
+/// of [`derive_vehicle_slope_nav`]).  The worker caches `slope` per
+/// `(pitch, roll, wheelbase, track)` to avoid re-deriving it per request.
+#[allow(clippy::too_many_arguments)]
+pub fn find_vehicle_path_with_slope(
+    snapshot: &VehicleNavSnapshot,
+    slope: &[i32],
+    from: GridCell,
+    to: GridCell,
+    footprint: &[GridCell],
+    safe_fall_px: f32,
+    jump_cost: f32,
+) -> Option<Vec<GridCell>> {
+    let walkable: Vec<i32> =
+        snapshot.structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
+    find_path_for_footprint_with_jumps(
+        &walkable,
+        &snapshot.structural,
+        &snapshot.heights,
+        snapshot.size_x,
+        snapshot.size_y,
+        from,
+        to,
+        footprint,
+        snapshot.height_scale,
+        safe_fall_px,
+        jump_cost,
+    )
+}
+
 /// Chebyshev-approximation heuristic (admissible for 8-directional grid).
 /// Returns the estimate of cost from `a` to `b`.
 fn heuristic(a: GridCell, b: GridCell) -> f32 {
     let dx = (a.0 - b.0).abs() as f32;
     let dy = (a.1 - b.1).abs() as f32;
-    dx + dy + (2.0_f32.sqrt() - 2.0) * dx.min(dy)
+    dx + dy + (libm::sqrtf(2.0) - 2.0) * dx.min(dy)
 }
 
 /// Walk backwards from `to` through `came_from` to rebuild the path.
@@ -426,6 +540,82 @@ impl NavSnapshot {
             return None;
         }
         find_path(&self.data, self.size_x, self.size_y, from, to)
+    }
+}
+
+/// A stateful pathfinder: the nav + vehicle snapshots plus the cached derived
+/// slope grid.  Shared by the native worker thread and the wasm worker module so
+/// both run identical searches with identical caching and invalidation.
+pub struct PathfinderState {
+    nav: NavSnapshot,
+    vehicle: Option<VehicleNavSnapshot>,
+    vehicle_slope_cache: Option<([u32; 4], Vec<i32>)>,
+}
+
+impl PathfinderState {
+    pub fn new(nav: NavSnapshot) -> Self {
+        Self { nav, vehicle: None, vehicle_slope_cache: None }
+    }
+
+    /// Replace the nav snapshot searched by [`Self::find`].
+    pub fn set_nav(&mut self, nav: NavSnapshot) {
+        self.nav = nav;
+    }
+
+    /// Replace the vehicle snapshot; clears the cached slope grid (the terrain
+    /// changed).
+    pub fn set_vehicle(&mut self, vehicle: VehicleNavSnapshot) {
+        self.vehicle = Some(vehicle);
+        self.vehicle_slope_cache = None;
+    }
+
+    /// Run plain humanoid A* over the current nav snapshot.
+    pub fn find(&self, from: GridCell, to: GridCell) -> Option<Vec<GridCell>> {
+        self.nav.find_path(from, to)
+    }
+
+    /// Run footprint-, slope- and jump-aware vehicle A* over the current vehicle
+    /// snapshot, caching the derived slope grid per `(pitch, roll, wheelbase,
+    /// track)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn find_vehicle(
+        &mut self,
+        from: GridCell,
+        to: GridCell,
+        footprint: &[GridCell],
+        pitch_max: f32,
+        roll_max: f32,
+        wheelbase_px: f32,
+        track_px: f32,
+        safe_fall_px: f32,
+        jump_cost: f32,
+    ) -> Option<Vec<GridCell>> {
+        let snap = self.vehicle.as_ref()?;
+        let key =
+            [pitch_max.to_bits(), roll_max.to_bits(), wheelbase_px.to_bits(), track_px.to_bits()];
+        let slope: Vec<i32> = match self
+            .vehicle_slope_cache
+            .as_ref()
+            .and_then(|(k, grid)| (*k == key).then(|| grid.clone()))
+        {
+            Some(grid) => grid,
+            None => {
+                let grid = derive_vehicle_slope_nav(
+                    &snap.heights,
+                    snap.size_x,
+                    snap.size_y,
+                    snap.height_scale,
+                    snap.tile_scale,
+                    wheelbase_px,
+                    track_px,
+                    pitch_max,
+                    roll_max,
+                );
+                self.vehicle_slope_cache = Some((key, grid.clone()));
+                grid
+            }
+        };
+        find_vehicle_path_with_slope(snap, &slope, from, to, footprint, safe_fall_px, jump_cost)
     }
 }
 
@@ -580,7 +770,8 @@ mod tests {
     /// Slope-nav params for a vehicle with ~2-tile wheelbase, 1-tile track,
     /// 20° pitch/roll limits (matching the LRV tuning).
     fn slope_params() -> (f32, f32, f32, f32) {
-        (45.0 * 2.0, 45.0 * 1.0, 20.0f32.to_radians(), 20.0f32.to_radians())
+        let twenty_deg = 20.0 * core::f32::consts::PI / 180.0;
+        (45.0 * 2.0, 45.0 * 1.0, twenty_deg, twenty_deg)
     }
 
     #[test]
@@ -728,5 +919,145 @@ mod tests {
             1.3,
         );
         assert!(path.is_none(), "cannot jump uphill");
+    }
+
+    #[test]
+    fn vehicle_nav_snapshot_roundtrip() {
+        let (w, h) = (4, 4);
+        let structural = vec![1_i32; (w * h) as usize];
+        let heights = vec![1.0f32; ((w + 1) * (h + 1)) as usize];
+        let snap = VehicleNavSnapshot::new(w, h, structural.clone(), heights.clone(), 32.0, 45.0);
+        assert_eq!(snap.size_x, w);
+        assert_eq!(snap.size_y, h);
+        assert_eq!(snap.structural, structural);
+        assert_eq!(snap.heights, heights);
+        assert_eq!(snap.height_scale, 32.0);
+        assert_eq!(snap.tile_scale, 45.0);
+    }
+
+    #[test]
+    fn vehicle_path_snapshot_matches_manual_pipeline() {
+        let size = 16;
+        let structural = vec![1_i32; (size * size) as usize];
+        let heights = ramp_heights(size, 0.375);
+        let (wb, tr, pitch, roll) = slope_params();
+        let snap =
+            VehicleNavSnapshot::new(size, size, structural.clone(), heights.clone(), 32.0, 45.0);
+
+        let via_snapshot = find_vehicle_path_snapshot(
+            &snap,
+            (0, 0),
+            (15, 15),
+            &[(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            64.0,
+            1.3,
+        );
+
+        let slope = derive_vehicle_slope_nav(&heights, size, size, 32.0, 45.0, wb, tr, pitch, roll);
+        let walkable: Vec<i32> =
+            structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
+        let manual = find_path_for_footprint_with_jumps(
+            &walkable,
+            &structural,
+            &heights,
+            size,
+            size,
+            (0, 0),
+            (15, 15),
+            &[(0, 0)],
+            32.0,
+            64.0,
+            1.3,
+        );
+        assert_eq!(via_snapshot, manual);
+    }
+
+    #[test]
+    fn vehicle_path_snapshot_flat_is_routable() {
+        let size = 16;
+        let structural = vec![1_i32; (size * size) as usize];
+        let heights = vec![1.0f32; ((size + 1) * (size + 1)) as usize];
+        let snap = VehicleNavSnapshot::new(size, size, structural, heights, 32.0, 45.0);
+        let (wb, tr, pitch, roll) = slope_params();
+        let path = find_vehicle_path_snapshot(
+            &snap,
+            (0, 0),
+            (15, 15),
+            &[(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            0.0,
+            1.3,
+        );
+        assert!(path.is_some(), "flat ground should route");
+    }
+
+    #[test]
+    fn vehicle_path_snapshot_blocks_steep_ramp() {
+        let size = 16;
+        let structural = vec![1_i32; (size * size) as usize];
+        let heights = ramp_heights(size, 1.0); // exceeds the 20° pitch limit
+        let snap = VehicleNavSnapshot::new(size, size, structural, heights, 32.0, 45.0);
+        let (wb, tr, pitch, roll) = slope_params();
+        let path = find_vehicle_path_snapshot(
+            &snap,
+            (0, 8),
+            (15, 8),
+            &[(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            0.0,
+            1.3,
+        );
+        assert!(path.is_none(), "a 1.0/tile ramp exceeds the pitch limit");
+    }
+
+    #[test]
+    fn pathfinder_state_caches_and_invalidates_slope() {
+        let size = 8;
+        let n = (size + 1) as usize;
+        let mut state =
+            PathfinderState::new(NavSnapshot::new(size, size, vec![1; (size * size) as usize]));
+        let (wb, tr, pitch, roll) = slope_params();
+
+        // Flat terrain: straight diagonal.
+        state.set_vehicle(VehicleNavSnapshot::new(
+            size,
+            size,
+            vec![1; (size * size) as usize],
+            vec![1.0; n * n],
+            32.0,
+            45.0,
+        ));
+        assert!(state
+            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3)
+            .is_some());
+
+        // Steep terrain (1.0/tile): no path — the slope grid was re-derived.
+        let mut steep = vec![0.0f32; n * n];
+        for y in 0..n {
+            for x in 0..n {
+                steep[y * n + x] = x as f32;
+            }
+        }
+        state.set_vehicle(VehicleNavSnapshot::new(
+            size,
+            size,
+            vec![1; (size * size) as usize],
+            steep,
+            32.0,
+            45.0,
+        ));
+        assert!(state
+            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3)
+            .is_none());
     }
 }

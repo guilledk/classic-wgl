@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+classic-pathfinder = { path = "../classic-pathfinder" }
 classic-terrain = { path = "../classic-terrain" }
 glam.workspace = true
 hecs.workspace = true

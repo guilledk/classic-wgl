@@ -37,6 +37,9 @@ cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platfor
 
 # ROMs (must run once after checkout, and when the published ROMs bump)
 cargo xtask fetch-roms               # downloads the staged demo/lunar ROMs (and worker wasm) into roms/out/ (gitignored)
+
+# Web pathfinder module (must run before any --target wasm32 build/check, or trunk build)
+cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm to pathfinder.wasm and stages it next to web.rs
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
@@ -52,9 +55,13 @@ submodule.
 ```
 Cargo.toml               workspace root (11 members)
 crates/
-  classic-core/           fundamental types, components, ECS registry, math, collision, pathfinder,
-                          tilemap, instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder, plus the
-                          shared ABI marshalling (abi.rs) and field-buffer registry (fields.rs)
+  classic-core/           fundamental types, components, ECS registry, math, collision, tilemap,
+                          instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder, plus the
+                          shared ABI marshalling (abi.rs) and field-buffer registry (fields.rs);
+                          re-exports `classic-pathfinder` as `pathfinder`
+  classic-pathfinder/     #![no_std] A* + footprint/slope/jump vehicle search (single source of
+                          truth for native + web; compiled to `pathfinder.wasm` for the web Worker)
+  classic-pathfinder-wasm/ thin `#[no_mangle]` wasm ABI over `classic-pathfinder` (cdylib)
   classic-worker/         background workers: generic native ThreadPool, PathfinderWorker (native
                           thread + web Worker), and the Tier-3 GuestWorker (a second .wasm instance
                           running pure guest entries against a reduced import surface)
@@ -126,9 +133,11 @@ plans/
   Colliders are synced via `add_collider_to_elem` → `PhysicsProvider` → `sync_colliders`.
   See `classic-ui` skill.
 - **Isometric/pathfinding**: `classic-core/src/tilemap.rs` builds the 3D tilemap mesh;
-  `classic-core/src/pathfinder.rs` implements A* over an immutable `NavSnapshot`
+  the A* + vehicle search lives in the standalone `classic-pathfinder` crate
+  (re-exported as `classic_core::pathfinder`), over an immutable `NavSnapshot`
   (`Arc`-shared).  The engine offloads searches to a host `PathfinderWorker`
-  (`classic-worker`, native thread / web `Worker`); guests drive it through the
+  (`classic-worker`, native thread / web `Worker` running the compiled
+  `pathfinder.wasm`); guests drive it through the
   async `request_path`/`poll_path` SDK imports (with a synchronous fallback for
   the deterministic harness).  See `classic-iso` and `classic-physics` skills.
 - **Wheeled vehicles**: `classic-engine/src/vehicle.rs` implements the `IsoVehicle`

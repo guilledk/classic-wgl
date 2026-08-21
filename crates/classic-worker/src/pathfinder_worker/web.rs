@@ -1,10 +1,11 @@
 //! Host-owned A* pathfinding worker (web backend).
 //!
-//! Spawns a dedicated `Worker` running the A* algorithm in JavaScript (see
-//! `worker.js`, a mirror of the retired TypeScript `pathfinder.ts`).  The
-//! render thread posts a `snapshot` message when the nav grid changes and a
-//! `find` message per request; results arrive via `onmessage` and are buffered
-//! until [`PathfinderWorker::poll_path`] drains them.  A synchronous fallback
+//! Spawns a dedicated `Worker` running the compiled `pathfinder.wasm` module
+//! (the same Rust pathfinder the native worker thread runs — see `worker.js`,
+//! which only instantiates the wasm and forwards messages).  The render thread
+//! posts a `snapshot` message when the nav grid changes and a `find` message
+//! per request; results arrive via `onmessage` and are buffered until
+//! [`PathfinderWorker::poll_path`] drains them.  A synchronous fallback
 //! ([`PathfinderWorker::find_path_sync`]) runs the same search inline for the
 //! deterministic test harness.
 
@@ -13,13 +14,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use classic_core::pathfinder::{GridCell, NavSnapshot, PathPoll};
+use classic_core::pathfinder::{GridCell, NavSnapshot, PathPoll, VehicleNavSnapshot};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use super::PathId;
 
 const WORKER_SRC: &str = include_str!("worker.js");
+const PATHFINDER_WASM: &[u8] = include_bytes!("pathfinder.wasm");
 
 /// Web pathfinding worker: a `Worker` running JS A* + a main-thread result map.
 pub struct PathfinderWorker {
@@ -69,6 +71,17 @@ impl PathfinderWorker {
             }) as Box<dyn FnMut(JsValue)>);
             worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
             onmessage.forget();
+        }
+
+        // Hand the compiled pathfinder.wasm bytes to the worker (it instantiates
+        // them and queues any snapshot/find messages until ready).
+        {
+            let wasm = js_sys::Uint8Array::from(PATHFINDER_WASM);
+            let init = js_sys::Object::new();
+            let _ =
+                js_sys::Reflect::set(&init, &JsValue::from_str("type"), &JsValue::from_str("init"));
+            let _ = js_sys::Reflect::set(&init, &JsValue::from_str("wasm"), &wasm);
+            let _ = worker.post_message(&init);
         }
 
         let worker_handle = Self { worker, results, snapshot };
@@ -128,6 +141,122 @@ impl PathfinderWorker {
     /// [`PathPoll::Pending`] until the worker has delivered a result.
     pub fn poll_path(&mut self, id: PathId) -> PathPoll {
         self.results.borrow_mut().remove(&id).unwrap_or(PathPoll::Pending)
+    }
+
+    /// Post the current vehicle snapshot to the worker (message ordering
+    /// guarantees the worker holds it before any subsequent `findVehicle`).
+    fn push_vehicle_snapshot(&self, snapshot: &Arc<VehicleNavSnapshot>) {
+        let structural = js_sys::Int32Array::new_with_length(snapshot.structural.len() as u32);
+        structural.copy_from(&snapshot.structural);
+        let heights = js_sys::Float32Array::new_with_length(snapshot.heights.len() as u32);
+        heights.copy_from(&snapshot.heights);
+
+        let msg = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("type"),
+            &JsValue::from_str("vehicleSnapshot"),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("sizeX"),
+            &JsValue::from_f64(snapshot.size_x as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("sizeY"),
+            &JsValue::from_f64(snapshot.size_y as f64),
+        );
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("structural"), &structural);
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("heights"), &heights);
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("heightScale"),
+            &JsValue::from_f64(snapshot.height_scale as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("tileScale"),
+            &JsValue::from_f64(snapshot.tile_scale as f64),
+        );
+        let _ = self.worker.post_message(&msg);
+    }
+
+    /// Replace the vehicle nav snapshot the worker derives the slope grid from.
+    pub fn set_vehicle_snapshot(&mut self, snapshot: Arc<VehicleNavSnapshot>) {
+        self.push_vehicle_snapshot(&snapshot);
+    }
+
+    /// Submit a vehicle path request under a caller-chosen `id`.  Non-blocking.
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_vehicle_path(
+        &mut self,
+        id: PathId,
+        from: GridCell,
+        to: GridCell,
+        footprint: Vec<GridCell>,
+        pitch_max: f32,
+        roll_max: f32,
+        wheelbase_px: f32,
+        track_px: f32,
+        safe_fall_px: f32,
+        jump_cost: f32,
+    ) {
+        let from = js_sys::Array::of2(&JsValue::from(from.0), &JsValue::from(from.1));
+        let to = js_sys::Array::of2(&JsValue::from(to.0), &JsValue::from(to.1));
+        let fp = js_sys::Array::new();
+        for (dx, dy) in footprint {
+            fp.push(&js_sys::Array::of2(&JsValue::from(dx), &JsValue::from(dy)));
+        }
+
+        let msg = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("type"),
+            &JsValue::from_str("findVehicle"),
+        );
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_f64(id as f64));
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("from"), &from);
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("to"), &to);
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("footprint"), &fp);
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("pitchMax"),
+            &JsValue::from_f64(pitch_max as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("rollMax"),
+            &JsValue::from_f64(roll_max as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("wheelbasePx"),
+            &JsValue::from_f64(wheelbase_px as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("trackPx"),
+            &JsValue::from_f64(track_px as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("safeFallPx"),
+            &JsValue::from_f64(safe_fall_px as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("jumpCost"),
+            &JsValue::from_f64(jump_cost as f64),
+        );
+        let _ = self.worker.post_message(&msg);
+    }
+
+    /// Poll a previously submitted vehicle request (non-blocking).  Shares the
+    /// same result map as [`PathfinderWorker::poll_path`], so ids must be
+    /// unique across both request kinds.
+    pub fn poll_vehicle_path(&mut self, id: PathId) -> PathPoll {
+        self.poll_path(id)
     }
 
     /// Synchronous fallback: run A* inline against the latest snapshot.

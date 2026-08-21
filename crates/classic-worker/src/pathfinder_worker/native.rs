@@ -11,13 +11,32 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 
-use classic_core::pathfinder::{GridCell, NavSnapshot, PathPoll};
+use classic_core::pathfinder::{
+    GridCell, NavSnapshot, PathPoll, PathfinderState, VehicleNavSnapshot,
+};
 
 use super::PathId;
 
 enum Command {
-    Find { id: PathId, from: GridCell, to: GridCell },
+    Find {
+        id: PathId,
+        from: GridCell,
+        to: GridCell,
+    },
     SetSnapshot(Arc<NavSnapshot>),
+    SetVehicleSnapshot(Arc<VehicleNavSnapshot>),
+    FindVehicle {
+        id: PathId,
+        from: GridCell,
+        to: GridCell,
+        footprint: Vec<GridCell>,
+        pitch_max: f32,
+        roll_max: f32,
+        wheelbase_px: f32,
+        track_px: f32,
+        safe_fall_px: f32,
+        jump_cost: f32,
+    },
     Flush(mpsc::Sender<()>),
     Shutdown,
 }
@@ -38,14 +57,40 @@ impl PathfinderWorker {
         let worker_snapshot = Arc::clone(&snapshot);
 
         thread::spawn(move || {
-            let mut snapshot = worker_snapshot;
+            let mut state = PathfinderState::new((*worker_snapshot).clone());
             while let Ok(command) = worker_rx.recv() {
                 match command {
                     Command::Find { id, from, to } => {
-                        let result = snapshot.find_path(from, to);
+                        let result = state.find(from, to);
                         let _ = worker_tx.send((id, result));
                     }
-                    Command::SetSnapshot(next) => snapshot = next,
+                    Command::SetSnapshot(next) => state.set_nav((*next).clone()),
+                    Command::SetVehicleSnapshot(next) => state.set_vehicle((*next).clone()),
+                    Command::FindVehicle {
+                        id,
+                        from,
+                        to,
+                        footprint,
+                        pitch_max,
+                        roll_max,
+                        wheelbase_px,
+                        track_px,
+                        safe_fall_px,
+                        jump_cost,
+                    } => {
+                        let result = state.find_vehicle(
+                            from,
+                            to,
+                            &footprint,
+                            pitch_max,
+                            roll_max,
+                            wheelbase_px,
+                            track_px,
+                            safe_fall_px,
+                            jump_cost,
+                        );
+                        let _ = worker_tx.send((id, result));
+                    }
                     Command::Flush(ack) => {
                         let _ = ack.send(());
                     }
@@ -79,6 +124,48 @@ impl PathfinderWorker {
     pub fn poll_path(&mut self, id: PathId) -> PathPoll {
         self.drain_results();
         self.results.remove(&id).unwrap_or(PathPoll::Pending)
+    }
+
+    /// Replace the vehicle nav snapshot the worker derives the slope grid from.
+    /// Also clears the cached slope grid (the terrain changed).
+    pub fn set_vehicle_snapshot(&mut self, snapshot: Arc<VehicleNavSnapshot>) {
+        let _ = self.tx.send(Command::SetVehicleSnapshot(snapshot));
+    }
+
+    /// Submit a vehicle path request under a caller-chosen `id`.  Non-blocking.
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_vehicle_path(
+        &mut self,
+        id: PathId,
+        from: GridCell,
+        to: GridCell,
+        footprint: Vec<GridCell>,
+        pitch_max: f32,
+        roll_max: f32,
+        wheelbase_px: f32,
+        track_px: f32,
+        safe_fall_px: f32,
+        jump_cost: f32,
+    ) {
+        let _ = self.tx.send(Command::FindVehicle {
+            id,
+            from,
+            to,
+            footprint,
+            pitch_max,
+            roll_max,
+            wheelbase_px,
+            track_px,
+            safe_fall_px,
+            jump_cost,
+        });
+    }
+
+    /// Poll a previously submitted vehicle request (non-blocking).  Shares the
+    /// same result channel/map as [`PathfinderWorker::poll_path`], so ids must
+    /// be unique across both request kinds.
+    pub fn poll_vehicle_path(&mut self, id: PathId) -> PathPoll {
+        self.poll_path(id)
     }
 
     /// Synchronous fallback: run A* inline against the latest snapshot.
@@ -197,5 +284,92 @@ mod tests {
         worker.join();
         // After the barrier, the result must already be buffered (no Pending).
         assert_ne!(worker.poll_path(0), PathPoll::Pending);
+    }
+
+    fn open_vehicle_snapshot(w: i32, h: i32) -> Arc<VehicleNavSnapshot> {
+        Arc::new(VehicleNavSnapshot::new(
+            w,
+            h,
+            vec![1; (w * h) as usize],
+            vec![1.0; ((w + 1) * (h + 1)) as usize],
+            32.0,
+            45.0,
+        ))
+    }
+
+    fn steep_vehicle_snapshot(w: i32, h: i32) -> Arc<VehicleNavSnapshot> {
+        let n = (w + 1) as usize;
+        let mut heights = vec![0.0f32; n * n];
+        for y in 0..n {
+            for x in 0..n {
+                heights[y * n + x] = x as f32; // 1.0 unit/tile ramp
+            }
+        }
+        Arc::new(VehicleNavSnapshot::new(w, h, vec![1; (w * h) as usize], heights, 32.0, 45.0))
+    }
+
+    fn vehicle_params() -> (f32, f32, f32, f32) {
+        let pitch = 20.0f32.to_radians();
+        let roll = 20.0f32.to_radians();
+        (pitch, roll, 90.0, 45.0)
+    }
+
+    #[test]
+    fn finds_a_vehicle_path_async() {
+        let mut worker = PathfinderWorker::new(open_snapshot(8, 8));
+        worker.set_vehicle_snapshot(open_vehicle_snapshot(8, 8));
+        let (pitch, roll, wb, tr) = vehicle_params();
+        worker.request_vehicle_path(0, (0, 0), (7, 7), vec![(0, 0)], pitch, roll, wb, tr, 0.0, 1.3);
+        match poll_until(&mut worker, 0) {
+            PathPoll::Path(path) => {
+                assert_eq!(path.first(), Some(&(0, 0)));
+                assert_eq!(path.last(), Some(&(7, 7)));
+            }
+            other => panic!("expected a vehicle path, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vehicle_snapshot_update_repins_search() {
+        let mut worker = PathfinderWorker::new(open_snapshot(8, 8));
+        let (pitch, roll, wb, tr) = vehicle_params();
+
+        // Flat terrain: straight diagonal route.
+        worker.set_vehicle_snapshot(open_vehicle_snapshot(8, 8));
+        worker.request_vehicle_path(1, (0, 0), (7, 7), vec![(0, 0)], pitch, roll, wb, tr, 0.0, 1.3);
+        match poll_until(&mut worker, 1) {
+            PathPoll::Path(path) => {
+                assert_eq!(path.first(), Some(&(0, 0)));
+                assert_eq!(path.last(), Some(&(7, 7)));
+            }
+            other => panic!("expected a path on flat terrain, got {other:?}"),
+        }
+
+        // Push a steep snapshot (1.0/tile exceeds the 20° pitch limit): the same
+        // query must now find no path — the slope grid was re-derived.
+        worker.set_vehicle_snapshot(steep_vehicle_snapshot(8, 8));
+        worker.request_vehicle_path(2, (0, 0), (7, 7), vec![(0, 0)], pitch, roll, wb, tr, 0.0, 1.3);
+        assert_eq!(poll_until(&mut worker, 2), PathPoll::NoPath);
+    }
+
+    #[test]
+    fn join_barrier_waits_for_vehicle_inflight() {
+        let mut worker = PathfinderWorker::new(open_snapshot(64, 64));
+        worker.set_vehicle_snapshot(open_vehicle_snapshot(64, 64));
+        let (pitch, roll, wb, tr) = vehicle_params();
+        worker.request_vehicle_path(
+            0,
+            (0, 0),
+            (63, 63),
+            vec![(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            0.0,
+            1.3,
+        );
+        worker.join();
+        assert_ne!(worker.poll_vehicle_path(0), PathPoll::Pending);
     }
 }
