@@ -742,16 +742,45 @@ The ghost pass uses a hardcoded `ghostAlpha = 0.4`.  The TS engine exposed
 this as a per-sprite parameter.  In Rust it is fixed.  Adjust
 `draw_iso_sprite_ghost` in `classic-gfx` if needed.
 
-### Per-pixel depth maps (per-texture)
+### Per-pixel depth maps (per-sheet)
 
 A texture may declare a grayscale depth map (`depth` + `depth_range` in the
-manifest).  When present, the sprite writes `gl_FragDepth` from the map in
-`sheet.frag` (clip→window remapped), so overlapping sprites occlude each other
-per-pixel rather than by draw order, and the ghost pass becomes `GREATER`
-against the depth buffer.  Sprites sharing a non-zero `ghost_group` (a
-vehicle's body + wheels) never ghost through each other (stencil
-`NOTEQUAL`).  Depth maps are emitted by the Blender exporter
-(`classic-assets`) and packed by the ROM `xtask`.
+manifest, keyed per **sheet**).  When
+present, the sprite writes `gl_FragDepth` from the map in `sheet.frag`, so
+overlapping sprites occlude each other per-pixel rather than by draw order, and
+the ghost pass becomes `GREATER` against the depth buffer.  Sprites sharing a
+non-zero `ghost_group` (a vehicle's body + wheels) never ghost through each
+other (stencil `NOTEQUAL`).  Depth maps are emitted by the Blender exporter
+(`classic-assets` `render/materials.py`), encoded `gray = 0.5 - dot/range`
+(gray `0.5` == the ground anchor == `depth_base`), and packed by the ROM
+`xtask`.  All depth maps share one global `DEPTH_RANGE` (classic-assets
+`presets.DEPTH_RANGE`) so several assets can pack into a single depth sheet.
+
+### Per-pixel normal maps (per-sheet)
+
+A texture may declare a normal map (`normal` in the manifest, keyed per sheet
+like `depth`).  When present, `sheet.frag` samples the RGB normal
+(same `sheetUv` as colour/depth), decodes `n = rgb * 2 - 1`, and shades with
+the tilemap's Lambertian term:
+
+```glsl
+float diff = max(dot(n, light_direction), 0.0);
+color.rgb *= ambient_color + diff * light_color;
+```
+
+The normal is baked **world-space** (Blender `Geometry.Normal` — or the
+material's wired tangent normal map when present — remapped `[-1,1] → [0,1]`),
+so no `normal_matrix` is applied in the sprite shader — the light dir must be
+in the same world space as the tilemap's `vNormal`.  `use_normal_map = 0` (no
+normal map) is byte-identical to the baked-lit path.  Normal-mapped sprites
+therefore react to the `light_*` presets at runtime, which is why those
+sprites are baked **unlit** (`--lighting unlit`): the normal map + light preset
+supply all shading.
+
+An **unlit sentinel** marks emissive sprite regions (e.g. the rocket's
+flame cones): a `(0.5,0.5,0.5)` texel decodes to `(0,0,0)` and `sheet.frag`
+skips the Lambertian term when `dot(n,n) < 0.001`, so those pixels stay flat
+albedo instead of being shaded.
 
 ### SDF shadow/glow not rendered
 

@@ -49,6 +49,22 @@ set up attribute pointers via `vertex_attrib_ptr_f32` within that VAO.
 Textures and shaders are keyed by name string (from the manifest).
 `quad` is a shared 1×1 quad used by `draw_rect`, `draw_sprite`, `draw_iso_sprite`.
 
+### Shared draw types
+
+- `SpriteRegion<'a>` — how a sprite's texture region is addressed:
+  `Grid { frame, tile_set_size }` (uniform-grid index, non-packed fallback) or
+  `Uv { uv_rect, trim_offset, source_size, content_size }` (packed-atlas rect).
+  The packed form is canonical.
+- `IsoSpritePass` — `Normal` | `Ghost`, selecting which phase of the two-phase
+  isometric draw to run.
+- `RenderSettings` — `ambient`/`light_dir`/`light_color`/`depth_scale`/
+  `normal_matrix`, the shared lighting/projection bundle passed to
+  `draw_tilemap` and (its ambient/dir/color fields) to `draw_sprite` /
+  `draw_iso_sprite` for the runtime Lambertian term.
+
+The projection/camera/model preamble shared by every draw is factored into the
+private `Gfx::bind_view(s, camera, model, ignore_cam)` helper.
+
 ---
 
 ## 2. begin_frame GL State Contract
@@ -83,9 +99,9 @@ test — layering is purely draw-order (z-sort on the render list).
 
 ```
 draw_tilemap()          → ENABLE; draw; DISABLE
-draw_iso_sprite_normal() → ENABLE; LEQUAL; depthMask(depth_map.is_some());
+draw_iso_sprite(Normal) → ENABLE; LEQUAL; depthMask(depth_map.is_some());
                            stencil ALWAYS/REPLACE group; draw; DISABLE
-draw_iso_sprite_ghost() → ENABLE; GREATER; depthMask(false);
+draw_iso_sprite(Ghost)  → ENABLE; GREATER; depthMask(false);
                            stencil NOTEQUAL group / ALWAYS; draw; DISABLE
 draw_line_loop()        → depthFunc(ALWAYS); depthMask(false); draw;
                            depthMask(true); depthFunc(LEQUAL)
@@ -116,12 +132,10 @@ fn draw_tilemap(
     tileset_name: &str,                 // key into Gfx.textures
     tile_set_size: &[f32; 2],           // tiles per row/col in tileset PNG
     tile_pixel_size: &[f32; 2],         // pixel size of one tile in tileset
-    depth_scale: &[f32; 2],             // [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX]
     map_size: &[f32; 2],
     selected_tile: &[f32; 2], selection_begin: &[f32; 2],
     selection_mode: i32, selection_color: &[f32; 4],
-    normal_matrix: &Mat3,
-    ambient: &[f32; 3], light_dir: &[f32; 3], light_color: &[f32; 3],
+    settings: &RenderSettings,          // ambient/light_dir/light_color/depth_scale/normal_matrix
     show_grid: bool,
     vertex_count: i32, vertex_buffer: &GlBuffer,
 );
@@ -161,19 +175,26 @@ parent tilemap for correct depth ordering.
 
 ---
 
-## 5. draw_iso_sprite_normal / draw_iso_sprite_ghost
+## 5. draw_iso_sprite
 
 ```rust
-fn draw_iso_sprite_normal(
+fn draw_iso_sprite(
     &self, model: &Mat4, camera: &Mat4, texture_name: &str,
-    frame: f32, tile_set_size: &[f32; 2],
-    iso_depth_corners: &[f32; 4],       // [sw, se, nw, ne]
-    depth_map: Option<(&str, f32)>,     // (depth texture name, depth_range)
-    depth_base: f32,                    // anchor-plane iso depth (0.5 gray)
+    region: SpriteRegion<'_>,              // Grid { frame, tile_set_size } | Uv { … }
+    iso_depth_corners: &[f32; 4],          // [sw, se, nw, ne]
+    depth_map: Option<(&str, f32)>,        // (depth texture name, depth_range)
+    depth_base: f32,                       // anchor-plane iso depth (0.5 gray)
+    normal_map: Option<&str>,              // normal-map texture name (runtime Lambertian)
+    settings: &RenderSettings,             // ambient/light_dir/light_color (sprite uses these three)
     ghost_group: u32,
+    pass: IsoSpritePass,                   // Normal | Ghost
 );
-// draw_iso_sprite_ghost has the same signature (ghost alpha fixed at 0.4).
 ```
+
+The two-phase isometric sprite draw is a single entry point selected by
+`pass` (`IsoSpritePass::Normal` / `IsoSpritePass::Ghost`).  The `region`
+selects the texture region (`SpriteRegion::Grid` for the uniform-grid fallback,
+`SpriteRegion::Uv` for a packed-atlas rect).
 
 Uses `imageSheet` shader with `useIsoDepth = 1.0`.  The vertex shader
 (`direct_tex.vert`) interpolates `iso_depth_corners` across the quad to set
@@ -188,6 +209,28 @@ gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
 `gl_Position.z`), so no clip→window remap is needed — the depth map and terrain
 share one consistent depth space.
 
+When `normal_map` is `Some(name)`, the sprite is shaded with a runtime
+Lambertian term in `sheet.frag` (matching `iso_tilemap.frag`): the normal map
+is sampled at the same `sheetUv` as colour/depth, decoded `n = rgb * 2 - 1`,
+and applied as `color.rgb *= ambient_color + max(dot(n, light_direction), 0)
+* light_color`.  `use_normal_map = 0` (no normal map) is byte-identical to the
+baked-lit path.
+
+**Unlit sentinel:** a `(0.5, 0.5, 0.5)` normal texel decodes to
+`(0, 0, 0)`, and `sheet.frag` skips the Lambertian term when
+`dot(n, n) < 0.001`.  classic-assets emits this sentinel for emissive sprite
+regions (e.g. the rocket's flame cones) so they stay flat albedo instead of
+being shaded.
+
+**Per-sheet normal/depth:** `SpriteSheetEntry` now carries optional
+`normal`/`depth`/`depth_range` per sheet (shared-atlas parallel companions).
+The engine's `resolve_frame` derives the GL texture names
+`"{sheet_name}-normal"` / `"{sheet_name}-depth"` (bundled as plain textures by
+classic-roms) and binds them per-frame, falling back to the per-texture
+`entry.normal`/`entry.depth` manifest fields for non-shared assets.  The
+`depth_map`/`normal_map` args remain `Option<(&str, f32)>` / `Option<&str>`
+resolved GL texture names.
+
 Two **separate** passes (driven by two engine loops, all normals then all
 ghosts):
 
@@ -200,6 +243,9 @@ ghosts):
 Both restore `depth_mask(true)`, `depth_func(LEQUAL)`, `disable(DEPTH_TEST)`,
 `disable(STENCIL_TEST)`.
 
+The depth map binds on texture unit 1 (`depth_sampler`) and the normal map on
+unit 2 (`normal_sampler`); colour is unit 0 (`tex_sampler`).
+
 ---
 
 ## 6. draw_sprite / draw_rect
@@ -209,13 +255,20 @@ Both restore `depth_mask(true)`, `depth_func(LEQUAL)`, `disable(DEPTH_TEST)`,
 ```rust
 fn draw_sprite(
     &self, model: &Mat4, camera: &Mat4, texture_name: &str,
-    frame: f32, tile_set_size: &[f32; 2],
+    region: SpriteRegion<'_>,          // Grid { frame, tile_set_size } | Uv { … }
     ignore_cam: bool, ghost_alpha: f32,
+    settings: &RenderSettings,         // light preset; unused unless a normal map is bound
 );
 ```
 
-Uses `imageSheet` shader with `useIsoDepth = 0.0`.  For UI: `ignore_cam: true`
-(identity camera), `ghost_alpha: 1.0`.  For world sprites, camera transform applies.
+Uses `imageSheet` shader with `useIsoDepth = 0.0`.  The `region` selects the
+texture region: `SpriteRegion::Grid { frame, tile_set_size }` for the
+uniform-grid frame index (non-packed fallback), or `SpriteRegion::Uv { uv_rect,
+trim_offset, source_size, content_size }` for a packed-atlas rect.  For UI:
+`ignore_cam: true` (identity camera), `ghost_alpha: 1.0`.  For world sprites,
+camera transform applies.  `draw_sprite` never binds a normal map
+(`use_normal_map = 0`), so `settings` only supplies the (unused) light
+uniforms — plain sprites stay baked-lit.
 
 ### draw_rect
 
@@ -354,6 +407,15 @@ TS GLSL 100 `attribute`/`varying` syntax).  A standalone `ShaderSourceRegistry`
 sources by the filename's last `/`-segment (via `shader_filename`), not a
 substring match.
 
+**Shader ownership:** the ROM manifest's `shaders[]` is now `[]`.  The
+engine compiles its built-in declaration catalog via
+`classic_gfx::builtin_shaders()` (a `Vec<BuiltinShader>` = name + vertex/
+fragment filenames + attr/unif layout), resolving each source through
+`ShaderSourceRegistry::builtin()`.  A non-empty manifest `shaders[]` entry
+overrides a builtin **by name** (swapping its vertex/fragment filenames +
+layout).  `classic_core::types::Manifest.shaders` is `#[serde(default)]`, so
+the field may be absent.
+
 ### Shader → draw-function mapping
 
 | Shader name | Used by | Vertex | Fragment |
@@ -425,11 +487,11 @@ garbage texture and corrupts every tile lookup — no GL error is raised.  See
 
 ## 14. draw_iso_sprite Ghost Pass Numeric Constraint
 
-The ghost-pass `ghostAlpha` is hardcoded to 0.4 inside `draw_iso_sprite_ghost`.
-This value is NOT a parameter — callers cannot override it.  A ghost pass only
-runs for `draw_iso_sprite_ghost`; `draw_sprite` with `ghost_alpha: 0.4` is not
-an equivalent substitute (it lacks the depth-corner interpolation and the
-`GREATER`/stencil ghost-group test).
+The ghost-pass `ghostAlpha` is hardcoded to 0.4 inside `draw_iso_sprite`
+(`IsoSpritePass::Ghost`).  This value is NOT a parameter — callers cannot
+override it.  A ghost pass only runs for `draw_iso_sprite(…, IsoSpritePass::Ghost)`;
+`draw_sprite` with `ghost_alpha: 0.4` is not an equivalent substitute (it lacks
+the depth-corner interpolation and the `GREATER`/stencil ghost-group test).
 
 ---
 

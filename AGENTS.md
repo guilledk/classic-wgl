@@ -82,7 +82,6 @@ tests/
 roms/
   out/                    GENERATED (gitignored) staged ROMs — populated by `cargo xtask fetch-roms`
 xtask/                    Rust build tool: `cargo xtask fetch-roms` (stages published demo/lunar ROMs)
-crates/sdf-atlas/         Rust SDF font-atlas generator (TTF -> atlas PNG + metrics JSON)
 docs/
   TS-PARITY.md            formulas, LIGHT_PRESETS, dump key ordering, TS↔Rust divergence list
 plans/

@@ -21,6 +21,9 @@ pub enum ResourceKind {
     /// Per-texture depth map (grayscale `gl_FragDepth` mask), keyed by the
     /// *texture* name it belongs to.
     Depth,
+    /// Per-texture normal map (RGB world-space normal, keyed by the *texture*
+    /// name it belongs to).
+    Normal,
     Font,
     Code,
     /// Per-animation renderer metadata (e.g. per-frame visual offsets).
@@ -38,6 +41,7 @@ pub enum ResourceKind {
 pub struct ResourceSet {
     textures: BTreeMap<String, Vec<u8>>,
     depths: BTreeMap<String, Vec<u8>>,
+    normals: BTreeMap<String, Vec<u8>>,
     fonts: BTreeMap<String, Vec<u8>>,
     code: BTreeMap<String, Vec<u8>>,
     animations: BTreeMap<String, Vec<u8>>,
@@ -62,6 +66,7 @@ impl ResourceSet {
     pub fn len(&self) -> usize {
         self.textures.len()
             + self.depths.len()
+            + self.normals.len()
             + self.fonts.len()
             + self.code.len()
             + self.animations.len()
@@ -80,6 +85,10 @@ impl ResourceSet {
 
     pub fn depths(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.depths
+    }
+
+    pub fn normals(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.normals
     }
 
     pub fn fonts(&self) -> &BTreeMap<String, Vec<u8>> {
@@ -134,6 +143,9 @@ impl ResourceSet {
             if let Some(depth) = &entry.depth {
                 set.depths.insert(entry.name.clone(), load(crate::rom_path(depth))?);
             }
+            if let Some(normal) = &entry.normal {
+                set.normals.insert(entry.name.clone(), load(crate::rom_path(normal))?);
+            }
         }
         for entry in &manifest.manifest.sdf_fonts {
             set.fonts.insert(entry.name.clone(), load(crate::rom_path(&entry.metrics))?);
@@ -164,6 +176,7 @@ impl ResourceSet {
         match kind {
             ResourceKind::Texture => &self.textures,
             ResourceKind::Depth => &self.depths,
+            ResourceKind::Normal => &self.normals,
             ResourceKind::Font => &self.fonts,
             ResourceKind::Code => &self.code,
             ResourceKind::Animation => &self.animations,
@@ -177,6 +190,7 @@ impl ResourceSet {
         match kind {
             ResourceKind::Texture => &mut self.textures,
             ResourceKind::Depth => &mut self.depths,
+            ResourceKind::Normal => &mut self.normals,
             ResourceKind::Font => &mut self.fonts,
             ResourceKind::Code => &mut self.code,
             ResourceKind::Animation => &mut self.animations,
@@ -376,5 +390,38 @@ mod tests {
         assert_eq!(set.get(ResourceKind::Depth, "lrvBody"), Some(b"depth".as_slice()));
         // Textures without a depth map get no entry.
         assert_eq!(set.get(ResourceKind::Depth, "tree"), None);
+    }
+
+    #[test]
+    fn from_archive_populates_normal_maps() {
+        let manifest: RomManifest = serde_json::from_str(
+            r#"{
+                "shaders": [],
+                "textures": [
+                    {"name": "lrvBody", "src": "res/lrv_body.png", "normal": "res/lrv_body_normal.png"},
+                    {"name": "tree", "src": "res/tree.png"}
+                ],
+                "animations": []
+            }"#,
+        )
+        .unwrap();
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in [
+            ("res/lrv_body.png", b"body".as_slice()),
+            ("res/lrv_body_normal.png", b"normal".as_slice()),
+            ("res/tree.png", b"tree".as_slice()),
+        ] {
+            writer.start_file(name, opts).unwrap();
+            writer.write_all(data).unwrap();
+        }
+        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+
+        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        assert_eq!(set.get(ResourceKind::Normal, "lrvBody"), Some(b"normal".as_slice()));
+        // Textures without a normal map get no entry.
+        assert_eq!(set.get(ResourceKind::Normal, "tree"), None);
     }
 }

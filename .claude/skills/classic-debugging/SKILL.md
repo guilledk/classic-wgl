@@ -456,3 +456,28 @@ original and will produce no diagnostics when broken:
 | **Web Worker pathfinder** | TS ran A* on a Web Worker for non-blocking path computation. Rust runs A* on a host `PathfinderWorker` (native thread / web `Worker`) via async `request_path`/`poll_path`, with a synchronous fallback under the deterministic harness. |
 | **`classic_log` hot-reload** | Channels are parsed once at startup. There is no runtime reload or live toggle — changing channels requires a process restart (or page reload on web). |
 
+---
+
+## 10. Cross-repo staleness & validation
+
+Two fail-loud checks guard the asset→ROM→engine boundary; both emit actionable
+diagnostics:
+
+| Check | Where | What it catches |
+|---|---|---|
+| `cargo xtask check` | classic-roms | A `scene.json` referencing a texture/anim/grid/font/vehicle/entity not in the `dist.json` catalog (bails with the dangling name), and a `dist.json.manifest_version` / `catalog_source_hash` mismatch against the assets checkout (the `assets/` submodule is stale or the tree is uncommitted). |
+| `cargo xtask fetch-roms` | classic-wgl | A ROM whose sha256 doesn't match the published `roms.json`, or a missing `roms.json` index (now a hard error unless `--skip-verify`). |
+
+Diagnosing a "stale" failure:
+
+- **`catalog_source_hash` mismatch** — `dist.json` was built from a different
+  assets commit than the checkout being bundled.  Either the `assets` submodule
+  is not at the pinned rev (`git submodule update`), or you're building from a
+  dirty standalone checkout (set `CLASSIC_ASSETS_DIR` to make it a warning).
+- **`manifest_version` unsupported** — the classic-assets catalog schema is
+  newer than this classic-roms; bump the supported version in `xtask` before
+  consuming it.
+- **`roms.json` missing / sha256 mismatch** — the R2 bucket was republished
+  without its index, or a stale/partial upload.  Republish via `publish.sh`,
+  or (local dev only) pass `--skip-verify`.
+

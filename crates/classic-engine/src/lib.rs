@@ -41,7 +41,7 @@ use classic_core::types::AnimationData;
 use classic_core::types::FrameTable;
 use classic_core::types::SdfFontMetrics;
 use classic_core::{Camera, RoleKind, SpriteRender, Transform};
-use classic_gfx::{Gfx, GlBuffer};
+use classic_gfx::{Gfx, GlBuffer, GlTexture, IsoSpritePass, RenderSettings, SpriteRegion};
 use classic_platform::InputState;
 use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
@@ -92,7 +92,21 @@ struct IsoDraw {
     depth_corners: [f32; 4],
     depth_map: Option<(String, f32)>,
     depth_base: f32,
+    normal_map: Option<String>,
     ghost_group: u32,
+}
+
+impl IsoDraw {
+    /// The texture region this draw addresses: the packed-atlas UV rect when a
+    /// frame was resolved, else the uniform-grid frame fallback.
+    fn region(&self) -> SpriteRegion<'_> {
+        match &self.uv {
+            Some((uv_rect, trim_offset, source_size, content_size)) => {
+                SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size }
+            }
+            None => SpriteRegion::Grid { frame: self.frame, tile_set_size: self.tile_set_size },
+        }
+    }
 }
 
 struct SdfTextGpu {
@@ -116,6 +130,12 @@ struct ResolvedFrame {
     trim_offset: [i32; 2],
     /// Optional packer-provided anchor, already in trimmed-frame `[0..1]`.
     anchor: Option<[f32; 2]>,
+    /// Per-sheet normal-map GL texture name (`"{sheet_name}-normal"`), set when
+    /// the frame's sheet declares a `normal` companion.
+    normal_tex: Option<String>,
+    /// Per-sheet depth-map GL texture name + depth range, set when the frame's
+    /// sheet declares a `depth` companion.
+    depth_tex: Option<(String, f32)>,
 }
 
 pub struct Engine {
@@ -159,6 +179,10 @@ pub struct Engine {
     /// Per-texture depth-mask metadata keyed by color texture name (loaded
     /// from the manifest's `depth` / `depth_range` fields).
     texture_depths: HashMap<String, TextureDepth>,
+    /// Per-texture normal-map texture name keyed by color texture name (loaded
+    /// from the manifest's `normal` field).  Sprites with a normal map are
+    /// shaded with a runtime Lambertian term.
+    texture_normals: HashMap<String, String>,
     /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
     /// `vehicles` resources at boot.
     pub vehicles: HashMap<String, classic_core::types::VehicleDef>,
@@ -291,6 +315,7 @@ impl Engine {
             sdf_fonts: HashMap::new(),
             frame_tables: HashMap::new(),
             texture_depths: HashMap::new(),
+            texture_normals: HashMap::new(),
             vehicles: HashMap::new(),
             next_ghost_group: 1,
             rom_manifest_json: None,
@@ -341,26 +366,59 @@ impl Engine {
     ) {
         self.gfx = Some(Gfx::new(gl));
         let registry = classic_gfx::ShaderSourceRegistry::builtin();
-        for info in &manifest.manifest.shaders {
-            let vs = registry.resolve_vertex(&info.vertex);
-            let fs = registry.resolve_fragment(&info.fragment);
+        // The engine owns the shader declarations: compile the full builtin
+        // catalog by default, letting the ROM override any shader by *name*
+        // (a manifest `shaders[]` entry with a matching name swaps its
+        // vertex/fragment filenames + layout).
+        let overrides: HashMap<&str, &classic_core::types::ShaderInfo> =
+            manifest.manifest.shaders.iter().map(|info| (info.name.as_str(), info)).collect();
+        for builtin in classic_gfx::builtin_shaders() {
+            let (vs_name, fs_name, attr, unif): (&str, &str, Vec<&str>, Vec<&str>) = match overrides
+                .get(builtin.name)
+            {
+                Some(info) => (
+                    info.vertex.as_str(),
+                    info.fragment.as_str(),
+                    info.attr.iter().map(String::as_str).collect(),
+                    info.unif.iter().map(String::as_str).collect(),
+                ),
+                None => {
+                    (builtin.vertex, builtin.fragment, builtin.attr.to_vec(), builtin.unif.to_vec())
+                }
+            };
+            let vs = registry.resolve_vertex(vs_name);
+            let fs = registry.resolve_fragment(fs_name);
             self.gfx
                 .as_mut()
                 .unwrap()
-                .add_shader(&info.name, &vs, &fs, &info.attr, &info.unif)
+                .add_shader(builtin.name, &vs, &fs, &attr, &unif)
                 .expect("compile shader");
         }
 
-        // Textures from the manifest (via the resource set), skipping the SDF
-        // atlas textures (those are uploaded by the SDF font path with LINEAR
-        // filtering).
+        // Textures from the manifest, skipping the SDF atlas textures (those
+        // are uploaded by the SDF font path with LINEAR filtering).  Several
+        // manifest entries may share one `src` — every frame-table texture
+        // points at its shared colour sheet — so decode + upload each unique
+        // `src` once and alias the rest to the same GL texture (the packed-atlas
+        // draw path binds the sheet name, not the frame-table name).
         let atlas_names: std::collections::HashSet<String> =
             resources.fonts().keys().map(|f| format!("{f}-sdf")).collect();
-        for (name, bytes) in resources.textures() {
-            if atlas_names.contains(name) {
+        let mut uploaded_by_src: HashMap<String, GlTexture> = HashMap::new();
+        for entry in &manifest.manifest.textures {
+            if atlas_names.contains(&entry.name) {
                 continue;
             }
-            self.load_texture_png(name, bytes);
+            let Some(bytes) = resources.textures().get(&entry.name) else {
+                continue;
+            };
+            if let Some(tex) = uploaded_by_src.get(&entry.src) {
+                self.gfx.as_mut().unwrap().textures.insert(entry.name.clone(), tex.clone());
+                continue;
+            }
+            self.load_texture_png(&entry.name, bytes);
+            if let Some(tex) = self.gfx.as_ref().unwrap().textures.get(&entry.name) {
+                uploaded_by_src.insert(entry.src.clone(), tex.clone());
+            }
         }
 
         // Per-texture depth maps (grayscale `gl_FragDepth` masks).  Uploaded as
@@ -375,6 +433,20 @@ impl Engine {
                         entry.name.clone(),
                         TextureDepth { depth_tex, depth_range: entry.depth_range },
                     );
+                }
+            }
+        }
+
+        // Per-texture normal maps (RGB world-space normals).  Uploaded as
+        // sibling textures named `"{name}-normal"` and recorded against the
+        // color texture name so `draw_iso_sprite` can bind them for the
+        // runtime Lambertian term.
+        for entry in &manifest.manifest.textures {
+            if entry.normal.is_some() {
+                if let Some(bytes) = resources.normals().get(&entry.name) {
+                    let normal_tex = format!("{}-normal", entry.name);
+                    self.load_texture_png(&normal_tex, bytes);
+                    self.texture_normals.insert(entry.name.clone(), normal_tex);
                 }
             }
         }
@@ -2242,10 +2314,18 @@ impl Engine {
                 anchor_px,
             );
             let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
-            let depth_map = self
-                .texture_depths
-                .get(&iso_sprite.texture)
-                .map(|d| (d.depth_tex.clone(), d.depth_range));
+            // Per-sheet normal/depth companions (from the resolved frame's
+            // sheet) win; fall back to the per-texture `entry.normal`/`depth`
+            // manifest fields for assets not on a shared atlas.
+            let depth_map = frame_ref.as_ref().and_then(|fr| fr.depth_tex.clone()).or_else(|| {
+                self.texture_depths
+                    .get(&iso_sprite.texture)
+                    .map(|d| (d.depth_tex.clone(), d.depth_range))
+            });
+            let normal_map = frame_ref
+                .as_ref()
+                .and_then(|fr| fr.normal_tex.clone())
+                .or_else(|| self.texture_normals.get(&iso_sprite.texture).cloned());
             iso_draws.push(IsoDraw {
                 order: *order,
                 name: name_by_entity.get(entity).copied().unwrap_or("").to_string(),
@@ -2257,6 +2337,7 @@ impl Engine {
                 depth_corners,
                 depth_map,
                 depth_base: Self::compute_iso_base_depth(tf.position),
+                normal_map,
                 ghost_group: iso_sprite.ghost_group,
             });
         }
@@ -2298,6 +2379,7 @@ impl Engine {
                                 color: None,
                                 depth: None,
                                 depth_range: None,
+                                normal: None,
                             });
                         }
                         gfx.draw_tilemap(
@@ -2308,16 +2390,18 @@ impl Engine {
                             &nav.tile_set,
                             &nav_ts,
                             &[8.0, 8.0],
-                            &[HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
                             &[nav.size_x as f32, nav.size_y as f32],
                             &[0.0, 0.0],
                             &[-1.0, -1.0],
                             -1,
                             &[0.0, 0.0, 1.0, 0.3],
-                            &normal_matrix,
-                            &self.light_ambient,
-                            &self.light_dir,
-                            &self.light_color,
+                            &RenderSettings {
+                                ambient: self.light_ambient,
+                                light_dir: self.light_dir,
+                                light_color: self.light_color,
+                                depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+                                normal_matrix,
+                            },
                             false,
                             gpu.vertex_count as i32,
                             &gpu.mesh_buf,
@@ -2362,6 +2446,7 @@ impl Engine {
                         color: None,
                         depth: None,
                         depth_range: None,
+                        normal: None,
                     });
                 }
 
@@ -2373,16 +2458,18 @@ impl Engine {
                     &tm.tile_set,
                     &tile_set_size,
                     &tile_pixel_size,
-                    &[HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
                     &[tm.size_x as f32, tm.size_y as f32],
                     &[tm.mouse_iso_pos.x, tm.mouse_iso_pos.y],
                     &[tm.selection_iso_begin.x, tm.selection_iso_begin.y],
                     self.selection_mode,
                     &[0.0, 1.0, 1.0, 1.0],
-                    &normal_matrix,
-                    &self.light_ambient,
-                    &self.light_dir,
-                    &self.light_color,
+                    &RenderSettings {
+                        ambient: self.light_ambient,
+                        light_dir: self.light_dir,
+                        light_color: self.light_color,
+                        depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+                        normal_matrix,
+                    },
                     self.show_grid,
                     gpu.vertex_count as i32,
                     &gpu.mesh_buf,
@@ -2391,7 +2478,19 @@ impl Engine {
         }
 
         // Phase 2: isometric normal passes — draw on top of terrain, writing
-        // depth (depth-mapped sprites) and stencil ghost-group ids.
+        // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
+        // `RenderSettings` (shared by both sprite passes) carries the light
+        // preset; the sprite shader only consumes the ambient/dir/color terms
+        // (the normal is baked world-space, so `normal_matrix` is unused by
+        // sprites, but the struct needs a value).
+        let iso = cartesian_to_iso_4().inverse();
+        let sprite_settings = RenderSettings {
+            ambient: self.light_ambient,
+            light_dir: self.light_dir,
+            light_color: self.light_color,
+            depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+            normal_matrix: Mat3::from_mat4(iso).inverse().transpose(),
+        };
         for draw in &iso_draws {
             if let Some(ref mut t) = self.trace {
                 t.push(golden::TraceItemParams {
@@ -2405,36 +2504,39 @@ impl Engine {
                     color: None,
                     depth: draw.depth_map.as_ref().map(|(t, _)| t.as_str()),
                     depth_range: draw.depth_map.as_ref().map(|(_, r)| *r),
+                    normal: draw.normal_map.as_deref(),
                 });
             }
-            gfx.draw_iso_sprite_normal(
+            gfx.draw_iso_sprite(
                 &draw.model,
                 &cam,
                 &draw.texture,
-                draw.frame,
-                &draw.tile_set_size,
+                draw.region(),
                 &draw.depth_corners,
                 draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
                 draw.depth_base,
+                draw.normal_map.as_deref(),
+                &sprite_settings,
                 draw.ghost_group,
-                draw.uv.as_ref().map(|(u, t, s, c)| (u, t, s, c)),
+                IsoSpritePass::Normal,
             );
         }
 
         // Phase 3: isometric ghost passes — 40% alpha where behind the depth
         // buffer, skipping pixels the sprite's own ghost group already occludes.
         for draw in &iso_draws {
-            gfx.draw_iso_sprite_ghost(
+            gfx.draw_iso_sprite(
                 &draw.model,
                 &cam,
                 &draw.texture,
-                draw.frame,
-                &draw.tile_set_size,
+                draw.region(),
                 &draw.depth_corners,
                 draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
                 draw.depth_base,
+                draw.normal_map.as_deref(),
+                &sprite_settings,
                 draw.ghost_group,
-                draw.uv.as_ref().map(|(u, t, s, c)| (u, t, s, c)),
+                IsoSpritePass::Ghost,
             );
         }
 
@@ -2456,7 +2558,7 @@ impl Engine {
                         .frame_name
                         .as_deref()
                         .and_then(|n| Self::resolve_frame(&self.frame_tables, &sprite.texture, n));
-                    let (sprite_size, sheet_name, uv_rect, uv_params) = match &frame_ref {
+                    let (sprite_size, sheet_name, uv) = match &frame_ref {
                         Some(fr) => {
                             let sw = if fr.source_size[0] > 0 {
                                 fr.source_size[0] as f32
@@ -2473,8 +2575,7 @@ impl Engine {
                             (
                                 (sw, sh),
                                 fr.sheet_name.clone(),
-                                Some(fr.uv_rect),
-                                Some(([bx, by], [sw, sh], [cw, ch])),
+                                Some((fr.uv_rect, [bx, by], [sw, sh], [cw, ch])),
                             )
                         }
                         None => {
@@ -2483,12 +2584,7 @@ impl Engine {
                                 .get(&sprite.texture)
                                 .map(|t| (t.size.0 as f32, t.size.1 as f32))
                                 .unwrap_or((1.0, 1.0));
-                            (
-                                (tex_size.0 / ts[0], tex_size.1 / ts[1]),
-                                sprite.texture.clone(),
-                                None,
-                                None,
-                            )
+                            ((tex_size.0 / ts[0], tex_size.1 / ts[1]), sprite.texture.clone(), None)
                         }
                     };
                     let sprite_model = Mat4::from_translation(tf.position)
@@ -2510,30 +2606,24 @@ impl Engine {
                             color: None,
                             depth: None,
                             depth_range: None,
+                            normal: None,
                         });
                     }
-                    match (uv_rect, uv_params) {
-                        (Some(uv), Some((trim, src, csz))) => gfx.draw_sprite_uv(
-                            &sprite_model,
-                            &cam,
-                            &sheet_name,
-                            &uv,
-                            &trim,
-                            &src,
-                            &csz,
-                            sprite.ignore_cam,
-                            1.0,
-                        ),
-                        _ => gfx.draw_sprite(
-                            &sprite_model,
-                            &cam,
-                            &sprite.texture,
-                            sprite.frame,
-                            &ts,
-                            sprite.ignore_cam,
-                            1.0,
-                        ),
-                    }
+                    let region = match &uv {
+                        Some((uv_rect, trim_offset, source_size, content_size)) => {
+                            SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size }
+                        }
+                        None => SpriteRegion::Grid { frame: sprite.frame, tile_set_size: ts },
+                    };
+                    gfx.draw_sprite(
+                        &sprite_model,
+                        &cam,
+                        &sheet_name,
+                        region,
+                        sprite.ignore_cam,
+                        1.0,
+                        &sprite_settings,
+                    );
                 }
                 DrawKind::UiRect => {
                     let Ok(rect) = self.world.get::<&RectRender>(*entity) else {
@@ -2559,6 +2649,7 @@ impl Engine {
                             color: Some(rect.color),
                             depth: None,
                             depth_range: None,
+                            normal: None,
                         });
                     }
                     let cam_mat = if rect.ignore_cam { Mat4::IDENTITY } else { cam };
@@ -2588,6 +2679,7 @@ impl Engine {
                             color: None,
                             depth: None,
                             depth_range: None,
+                            normal: None,
                         });
                     }
                     let ts = [sprite.tile_set_size.x, sprite.tile_set_size.y];
@@ -2595,10 +2687,10 @@ impl Engine {
                         &model,
                         &Mat4::IDENTITY,
                         &sprite.texture,
-                        sprite.frame,
-                        &ts,
+                        SpriteRegion::Grid { frame: sprite.frame, tile_set_size: ts },
                         true,
                         1.0,
+                        &sprite_settings,
                     );
                 }
                 DrawKind::SdfText => {
@@ -2712,6 +2804,7 @@ impl Engine {
                             color: Some(sdf.color),
                             depth: None,
                             depth_range: None,
+                            normal: None,
                         });
                     }
                     let sdf_cam = if sdf.ignore_cam { Mat4::IDENTITY } else { cam };
@@ -3269,8 +3362,9 @@ impl Engine {
 
     /// Resolve a `frame_name` for a texture through its packed-atlas frame
     /// table, returning the bound sheet texture name, the normalized UV rect,
-    /// the frame's content pixel size, and its trim/anchor metadata.  Returns
-    /// `None` if the texture has no frame table or the name is unknown.
+    /// the frame's content pixel size, its trim/anchor metadata, and any
+    /// per-sheet normal/depth companion GL texture names.  Returns `None` if
+    /// the texture has no frame table or the name is unknown.
     fn resolve_frame(
         tables: &HashMap<String, FrameTable>,
         texture: &str,
@@ -3280,6 +3374,9 @@ impl Engine {
         let frame = table.frames.get(frame_name)?;
         let sheet = table.sheets.get(frame.sheet as usize)?;
         let uv = table.uv_rect(frame)?;
+        let normal_tex = sheet.normal.as_ref().map(|_| format!("{}-normal", sheet.name));
+        let depth_tex =
+            sheet.depth.as_ref().map(|_| (format!("{}-depth", sheet.name), sheet.depth_range));
         Some(ResolvedFrame {
             sheet_name: sheet.name.clone(),
             uv_rect: uv,
@@ -3287,6 +3384,8 @@ impl Engine {
             source_size: frame.source_size,
             trim_offset: frame.trim_offset,
             anchor: frame.anchor,
+            normal_tex,
+            depth_tex,
         })
     }
 
@@ -3470,6 +3569,8 @@ mod tests {
             source_size: [64, 64],
             trim_offset: [0, 0],
             anchor: None,
+            normal_tex: None,
+            depth_tex: None,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &full);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
@@ -3483,6 +3584,8 @@ mod tests {
             source_size: [512, 928],
             trim_offset: [8, 62],
             anchor: None,
+            normal_tex: None,
+            depth_tex: None,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &trimmed);
         assert!((a.x - (0.5 * 512.0 - 8.0) / 466.0).abs() < 1e-6, "got {a:?}");
@@ -3496,6 +3599,8 @@ mod tests {
             source_size: [512, 928],
             trim_offset: [8, 62],
             anchor: Some([0.25, 0.75]),
+            normal_tex: None,
+            depth_tex: None,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &packed);
         assert!((a.x - 0.25).abs() < 1e-6 && (a.y - 0.75).abs() < 1e-6, "got {a:?}");
@@ -3508,6 +3613,8 @@ mod tests {
             source_size: [0, 0],
             trim_offset: [0, 0],
             anchor: None,
+            normal_tex: None,
+            depth_tex: None,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &unknown);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");

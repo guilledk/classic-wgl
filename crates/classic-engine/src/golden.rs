@@ -49,6 +49,9 @@ pub struct TraceItem {
     /// Depth range (isoDepth units) the depth map's grayscale spans.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth_range: Option<f32>,
+    /// Normal-map texture name if the sprite shades with runtime lighting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal: Option<String>,
 }
 
 /// A complete render trace for one capture point (tag + frame).
@@ -97,6 +100,7 @@ pub struct TraceItemParams<'a> {
     pub color: Option<[f32; 4]>,
     pub depth: Option<&'a str>,
     pub depth_range: Option<f32>,
+    pub normal: Option<&'a str>,
 }
 
 impl TraceCollector {
@@ -130,6 +134,7 @@ impl TraceCollector {
             color: p.color,
             depth: p.depth.map(|s| s.to_string()),
             depth_range: p.depth_range,
+            normal: p.normal.map(|s| s.to_string()),
         });
     }
 

@@ -39,7 +39,7 @@ pub struct SdfGlyphBuffer {
 }
 
 /// Space advance (cell px) used when the atlas omits a space glyph.  Matches
-/// `sdf-atlas`'s `SPACE_ADVANCE` (`FONT_CELL_SIZE * 0.28` = 25.6 * 0.28).
+/// the font generator's `SPACE_ADVANCE` (`FONT_CELL_SIZE * 0.28` = 25.6 * 0.28).
 const DEFAULT_SPACE_ADVANCE: f32 = 7.168;
 
 /// Advance width for a character (pixels × scale).

@@ -376,7 +376,43 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
   The runner processes `STEPS` as a `LazyLock`, computed once per process
   lifetime.  Running multiple scenarios requires separate invocations.
 
-- **No headless assets check**: CI runs `cargo xtask all` before building,
-  but there is no automated check that `roms/out/res/` matches the committed
-  asset submodule.  A stale `roms/out/` (missing regenerated assets)
-  causes runtime errors only, not build-time errors.
+- **No headless assets check**: CI runs `cargo xtask fetch-roms` before
+  building, which verifies each ROM against the published `roms.json` sha256
+  index (and now fails loudly when the index is absent, unless
+  `--skip-verify`).  A stale `roms/out/` is caught by that sha256 check, not a
+  build-time error.
+
+## 10. Cross-repo integration checks (classic-roms ↔ classic-wgl)
+
+The asset→ROM→engine boundary is validated outside this repo by `classic-roms`
+(`cargo xtask check` / `cargo xtask diff`) and by a manual smoke boot:
+
+- **`cargo xtask check`** (classic-roms) validates every name a scene
+  references (textures/animations/grids/fonts/vehicles/entities) against the
+  `dist.json` catalog and fails loudly on a dangling reference, plus the
+  catalog staleness check (`manifest_version` + `catalog_source_hash` vs the
+  assets checkout).  This is the check class that would have caught the
+  rocket-landing regression at build time.
+- **`cargo xtask diff [--url <base>]`** (classic-roms) diffs the local
+  `roms/out/*.rom` size/sha256 against the published `roms.json` — see what
+  changed before republishing.
+
+### Smoke test (manual)
+
+Boot a locally-built fixture ROM headless; a clean exit means the asset
+rendered → packed → bundled → loaded → drawn without error:
+
+```bash
+# classic-roms (inside the classic-assets `nix develop` shell):
+CLASSIC_ASSETS_DIR=$PWD/../classic-assets cargo xtask all      # builds roms/out/packtest.rom
+
+# classic-wgl:
+CLASSIC_ROM=$PWD/../classic-roms/roms/out/packtest.rom \
+  CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 cargo run -p classic-desktop
+```
+
+The `packtest` ROM is a minimal fixture (`corner_building` IsoSprite + a
+tilemap), so it exercises the whole pack path without a guest.  Extending this
+to a `pixelAtEntity` assertion on `cornerBuilding` needs a `CLASSIC_TEST`
+scenario referencing that entity (the hardcoded scenario is demo-specific) —
+see §3 for the `pixelAtEntity` semantics and §4 for scenario authoring.
