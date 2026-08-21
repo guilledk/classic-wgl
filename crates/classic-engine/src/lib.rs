@@ -213,13 +213,23 @@ pub struct Engine {
     nav_version: u64,
     /// Force pathfinding to run synchronously (deterministic test harness).
     synchronous_workers: bool,
-    /// Next path-request id handed to a guest.
+    /// Next path-request id handed to a guest.  Shared by the humanoid
+    /// `request_path` and vehicle `vehicle_goto` (the worker's result map is a
+    /// single `PathId` namespace), starting at 1 so a vehicle id is always `> 0`
+    /// (the ABI's "airborne" code is `0`).
     next_path_id: u64,
     /// Synchronously-computed path results (synchronous_workers mode / web).
     sync_paths: HashMap<u64, pathfinder::PathPoll>,
     /// Pathfinding worker (spawned lazily on first async request; native
     /// thread or web `Worker` depending on target).
     pathfinder: Option<classic_worker::PathfinderWorker>,
+    /// Immutable vehicle nav snapshot (structural nav + heights) shared with
+    /// the pathfinding worker.
+    vehicle_nav_snapshot: Arc<pathfinder::VehicleNavSnapshot>,
+    /// Synchronously-computed vehicle path results (synchronous_workers mode).
+    sync_vehicle_paths: HashMap<u64, vehicle::VehicleGotoPoll>,
+    /// Vehicle entity for each in-flight vehicle path request id.
+    vehicle_path_entities: HashMap<u64, hecs::Entity>,
     /// Next background-task id handed to a guest.
     next_task_id: u64,
     /// Background guest worker (Tier 3): a second `.wasm` instance running pure
@@ -244,10 +254,6 @@ pub struct Engine {
     sdf_text_gpu: HashMap<hecs::Entity, SdfTextGpu>,
     last_vw: f32,
     last_vh: f32,
-    /// Cached slope-feasibility grid, keyed by `(nav_version, slope params)`.
-    /// Recomputed lazily on terrain rebuild / a different vehicle geometry.
-    /// Single-slot (the demo has one vehicle); extend to a map for many.
-    slope_nav_cache: Option<(u64, [u32; 4], Vec<i32>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -329,9 +335,19 @@ impl Engine {
             nav_snapshot: Arc::new(pathfinder::NavSnapshot::new(0, 0, Vec::new())),
             nav_version: 0,
             synchronous_workers: false,
-            next_path_id: 0,
+            next_path_id: 1,
             sync_paths: HashMap::new(),
             pathfinder: None,
+            vehicle_nav_snapshot: Arc::new(pathfinder::VehicleNavSnapshot::new(
+                0,
+                0,
+                Vec::new(),
+                Vec::new(),
+                0.0,
+                45.0,
+            )),
+            sync_vehicle_paths: HashMap::new(),
+            vehicle_path_entities: HashMap::new(),
             next_task_id: 0,
             guest_worker: None,
             fields: fields::FieldRegistry::default(),
@@ -350,7 +366,6 @@ impl Engine {
             sdf_text_gpu: HashMap::new(),
             last_vw: 0.0,
             last_vh: 0.0,
-            slope_nav_cache: None,
         }
     }
 
@@ -1205,17 +1220,13 @@ impl Engine {
         pathfinder::find_path_for_footprint(&nav_i32, nav.size_x, nav.size_y, from, to, footprint)
     }
 
-    /// Footprint-, slope- and jump-aware A* for a wheeled vehicle.
-    ///
-    /// Combines the structural nav (`NavMesh.data`) with a slope-feasibility
-    /// grid derived from the tilemap heights sampled at the vehicle's wheel
-    /// positions (`pitch_max`/`roll_max` limits over `wheelbase_px`/`track_px`),
-    /// then runs A* with downward jump edges: a drop within `safe_fall_px`
-    /// (suspension absorbs it) is routable even where the slope grid blocks, at
-    /// `jump_cost`× the normal cost.  `safe_fall_px <= 0` disables jumps.
+    /// Footprint-, slope- and jump-aware A* for a wheeled vehicle (the
+    /// synchronous fallback, used under `synchronous_workers`).  Builds the
+    /// vehicle nav snapshot and delegates to [`pathfinder::find_vehicle_path_snapshot`],
+    /// the same single code path the worker runs.
     #[allow(clippy::too_many_arguments)]
     pub fn find_vehicle_path(
-        &mut self,
+        &self,
         from: (i32, i32),
         to: (i32, i32),
         footprint: &[(i32, i32)],
@@ -1226,98 +1237,30 @@ impl Engine {
         safe_fall_px: f32,
         jump_cost: f32,
     ) -> Option<Vec<(i32, i32)>> {
-        // Extract everything out of the world up front so the slope cache can
-        // be mutated without holding a `World` borrow.
-        let (nav_data, nav_size_x, nav_size_y) = {
-            let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
-            let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
-            (nav.data.clone(), nav.size_x, nav.size_y)
-        };
-        let (heights, height_scale, tile_scale, size_x, size_y) = {
-            let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
-            let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
-            (tm.height_data.clone(), tm.height_scale, tm.scale.x, tm.size_x, tm.size_y)
-        };
-
-        let structural: Vec<i32> = nav_data.iter().map(|&v| v as i32).collect();
-        let slope = self.cached_slope_nav(
-            &heights,
-            size_x,
-            size_y,
-            height_scale,
-            tile_scale,
-            wheelbase_px,
-            track_px,
-            pitch_max,
-            roll_max,
-        );
-        let walkable: Vec<i32> =
-            structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
-
-        let result = pathfinder::find_path_for_footprint_with_jumps(
-            &walkable,
-            &structural,
-            &heights,
-            nav_size_x,
-            nav_size_y,
+        let snapshot = self.build_vehicle_nav_snapshot()?;
+        let result = pathfinder::find_vehicle_path_snapshot(
+            &snapshot,
             from,
             to,
             footprint,
-            height_scale,
+            pitch_max,
+            roll_max,
+            wheelbase_px,
+            track_px,
             safe_fall_px,
             jump_cost,
         );
         classic_core::cl_info!(
             classic_core::instrument::Chan::Path,
-            "find_vehicle_path {} -> {}: walkable={}/{}, footprint={} tiles, pitch={:.3}rad fall={}px, found={}",
+            "find_vehicle_path {} -> {}: footprint={} tiles, pitch={:.3}rad fall={}px, found={}",
             format!("{from:?}"),
             format!("{to:?}"),
-            walkable.iter().filter(|&&v| v == 1).count(),
-            walkable.len(),
             footprint.len(),
             pitch_max.min(roll_max),
             safe_fall_px,
             result.is_some(),
         );
         result
-    }
-
-    /// The slope-feasibility grid for a vehicle, cached per `nav_version` and
-    /// slope params (recomputed only when the terrain or the vehicle geometry
-    /// changes).
-    #[allow(clippy::too_many_arguments)]
-    fn cached_slope_nav(
-        &mut self,
-        heights: &[f32],
-        size_x: i32,
-        size_y: i32,
-        height_scale: f32,
-        tile_scale: f32,
-        wheelbase_px: f32,
-        track_px: f32,
-        pitch_max: f32,
-        roll_max: f32,
-    ) -> Vec<i32> {
-        let key =
-            [pitch_max.to_bits(), roll_max.to_bits(), wheelbase_px.to_bits(), track_px.to_bits()];
-        if let Some((ver, k, grid)) = &self.slope_nav_cache {
-            if *ver == self.nav_version && *k == key {
-                return grid.clone();
-            }
-        }
-        let grid = pathfinder::derive_vehicle_slope_nav(
-            heights,
-            size_x,
-            size_y,
-            height_scale,
-            tile_scale,
-            wheelbase_px,
-            track_px,
-            pitch_max,
-            roll_max,
-        );
-        self.slope_nav_cache = Some((self.nav_version, key, grid.clone()));
-        grid
     }
 
     /// Rebuild the shared nav snapshot from the live `NavMesh` component and
@@ -1337,8 +1280,40 @@ impl Engine {
             worker.set_snapshot(Arc::clone(&snapshot));
         }
         self.nav_snapshot = snapshot;
+
+        // Rebuild + push the vehicle nav snapshot (structural nav + heights +
+        // height/tile scale) so the worker can run vehicle A* off-thread too.
+        if let Some(vehicle_snapshot) = self.build_vehicle_nav_snapshot() {
+            if let Some(worker) = self.pathfinder.as_mut() {
+                worker.set_vehicle_snapshot(Arc::clone(&vehicle_snapshot));
+            }
+            self.vehicle_nav_snapshot = vehicle_snapshot;
+        }
+
         self.refresh_guest_worker_nav();
         self.nav_version = self.nav_version.wrapping_add(1);
+    }
+
+    /// Build the [`pathfinder::VehicleNavSnapshot`] the worker uses for vehicle
+    /// A*, from the live `NavMesh` (structural nav) and `Tilemap` (heights +
+    /// scales).  Returns `None` when either component is missing.
+    fn build_vehicle_nav_snapshot(&self) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
+        let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
+        let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
+        let structural: Vec<i32> = nav.data.iter().map(|&v| v as i32).collect();
+        let size_x = nav.size_x;
+        let size_y = nav.size_y;
+
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+        Some(Arc::new(pathfinder::VehicleNavSnapshot::new(
+            size_x,
+            size_y,
+            structural,
+            tm.height_data.clone(),
+            tm.height_scale,
+            tm.scale.x,
+        )))
     }
 
     /// Force pathfinding to run synchronously on the render thread (the
@@ -1406,11 +1381,12 @@ impl Engine {
     }
 
     /// Spawn the pathfinding worker on first use, sharing the current nav
-    /// snapshot.
+    /// snapshot and vehicle nav snapshot.
     fn ensure_pathfinder(&mut self) {
         if self.pathfinder.is_none() {
-            self.pathfinder =
-                Some(classic_worker::PathfinderWorker::new(Arc::clone(&self.nav_snapshot)));
+            let mut worker = classic_worker::PathfinderWorker::new(Arc::clone(&self.nav_snapshot));
+            worker.set_vehicle_snapshot(Arc::clone(&self.vehicle_nav_snapshot));
+            self.pathfinder = Some(worker);
         }
     }
 

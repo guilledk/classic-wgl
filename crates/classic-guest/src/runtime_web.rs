@@ -919,6 +919,16 @@ impl WebWasmRuntime {
             );
         }
 
+        // vehicle_goto_poll
+        {
+            let host = host.clone();
+            set_import!(
+                "vehicle_goto_poll",
+                Box::new(move |id: i32| -> i32 { host.borrow_mut().vehicle_goto_poll(id) })
+                    as Box<dyn FnMut(i32) -> i32>
+            );
+        }
+
         // vehicle_stop
         {
             let host = host.clone();

@@ -314,6 +314,14 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
+            "vehicle_goto_poll",
+            |mut caller: Caller<'_, $host>, id: i32| -> i32 {
+                caller.data_mut().guest_mut().vehicle_goto_poll(id)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
             "vehicle_stop",
             |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
                 let name = $read_str(&mut caller, ptr, len);
