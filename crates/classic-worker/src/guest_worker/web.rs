@@ -1,28 +1,46 @@
 //! Background guest worker (web backend): a second `.wasm` instance running
-//! pure guest entry points, backed by wasmi.
+//! pure guest entry points.
 //!
-//! The browser has no `std::thread`, and a real async `Worker`-bridged wasm
-//! runtime is not yet implemented.  For now the web
-//! backend runs entries **synchronously** on the render thread, so `spawn_task`
-//! runs the entry inline and `poll_task` returns the result immediately.  The
-//! reduced import surface (mutating imports trap) is identical to native.
+//! Two modes share one API:
+//! - **Worker** (default): the guest wasm runs in a dedicated `web_sys::Worker`
+//!   (`guest_worker.js`), so heavy entries (e.g. the lunar map generator)
+//!   execute off the render thread and on the browser's native wasm JIT.
+//! - **Sync**: the wasmi runtime stays on the render thread and each entry runs
+//!   inline at `spawn_task` time (the `synchronous_workers` fallback used by
+//!   the deterministic test/golden harness).
+//!
+//! The Worker surfaces only the `task_arg`/`task_return` imports the shipped
+//! `lunar-worker` guest uses; the wider reduced import surface (mutating
+//! imports trap) is provided by the sync `wasmi` backend and remains the
+//! fallback for any guest that needs it.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use classic_core::pathfinder::NavSnapshot;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 use wasmi::{Caller, Config, Engine as WasmiEngine, Instance, Linker, Module, Store};
 
 use super::install_worker_imports;
 use super::{TaskId, WorkerHost};
+
+const WORKER_SRC: &str = include_str!("guest_worker.js");
 
 /// A completed task result (see the native backend).
 pub type TaskResult = Result<Vec<u8>, String>;
 
 /// The engine-facing handle to the background guest worker.
 pub struct GuestWorker {
-    runtime: Runtime,
-    results: HashMap<TaskId, TaskResult>,
+    mode: Mode,
+    results: Rc<RefCell<HashMap<TaskId, TaskResult>>>,
+}
+
+enum Mode {
+    Worker(web_sys::Worker),
+    Sync(Box<Runtime>),
 }
 
 /// The wasmi runtime pieces (owned here; web is single-threaded).
@@ -49,34 +67,136 @@ impl Runtime {
 }
 
 impl GuestWorker {
-    /// Compile and instantiate the worker guest.  The `synchronous` flag is
-    /// accepted for API parity with the native backend but ignored — the web
-    /// backend always runs entries inline (a real async web `Worker` is
-    /// not yet implemented).
-    pub fn new(wasm: &[u8], nav: Arc<NavSnapshot>, _synchronous: bool) -> Result<Self, String> {
-        let runtime = build_runtime(wasm, nav)?;
-        Ok(Self { runtime, results: HashMap::new() })
+    /// Compile and instantiate the worker guest.  When `synchronous` is true the
+    /// wasmi runtime runs entries inline on the render thread; otherwise the
+    /// guest wasm runs in a dedicated `Worker`.
+    pub fn new(wasm: &[u8], nav: Arc<NavSnapshot>, synchronous: bool) -> Result<Self, String> {
+        let results = Rc::new(RefCell::new(HashMap::new()));
+
+        if synchronous {
+            let runtime = build_runtime(wasm, nav)?;
+            return Ok(Self { mode: Mode::Sync(Box::new(runtime)), results });
+        }
+
+        // Build the worker from an inline source Blob (mirrors the pathfinder
+        // worker's approach).
+        let blob_parts = js_sys::Array::of1(&JsValue::from_str(WORKER_SRC));
+        let blob = web_sys::Blob::new_with_str_sequence(blob_parts.as_ref())
+            .map_err(|e| format!("failed to build guest worker blob: {e:?}"))?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob)
+            .map_err(|e| format!("failed to create guest worker url: {e:?}"))?;
+        let worker = web_sys::Worker::new(&url)
+            .map_err(|e| format!("failed to spawn guest worker: {e:?}"))?;
+
+        // Install the result handler.  Uses `JsValue` for the event so no
+        // `MessageEvent` web-sys feature is required.
+        {
+            let results = results.clone();
+            let onmessage = Closure::wrap(Box::new(move |event: JsValue| {
+                let data = js_sys::Reflect::get(&event, &JsValue::from_str("data"))
+                    .unwrap_or(JsValue::NULL);
+                let id = js_sys::Reflect::get(&data, &JsValue::from_str("id"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0) as TaskId;
+                let kind = js_sys::Reflect::get(&data, &JsValue::from_str("type"))
+                    .ok()
+                    .and_then(|v| v.as_string());
+                let result = match kind.as_deref() {
+                    Some("result") => {
+                        let bytes = js_sys::Reflect::get(&data, &JsValue::from_str("result")).ok();
+                        match bytes {
+                            Some(b) if b.is_object() => Ok(js_sys::Uint8Array::new(&b).to_vec()),
+                            _ => Ok(Vec::new()),
+                        }
+                    }
+                    Some("error") => {
+                        let msg = js_sys::Reflect::get(&data, &JsValue::from_str("message"))
+                            .ok()
+                            .and_then(|v| v.as_string())
+                            .unwrap_or_else(|| "worker guest trapped".to_string());
+                        Err(msg)
+                    }
+                    _ => return,
+                };
+                results.borrow_mut().insert(id, result);
+            }) as Box<dyn FnMut(JsValue)>);
+            worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+            onmessage.forget();
+        }
+
+        // Hand the guest wasm bytes to the worker (it instantiates them and
+        // queues any run messages until ready).
+        {
+            let wasm = js_sys::Uint8Array::from(wasm);
+            let init = js_sys::Object::new();
+            let _ =
+                js_sys::Reflect::set(&init, &JsValue::from_str("type"), &JsValue::from_str("init"));
+            let _ = js_sys::Reflect::set(&init, &JsValue::from_str("wasm"), &wasm);
+            let _ = worker.post_message(&init);
+        }
+
+        Ok(Self { mode: Mode::Worker(worker), results })
     }
 
-    /// Replace the nav snapshot used by the worker.
+    /// Replace the nav snapshot used by the worker.  A no-op in Worker mode —
+    /// the reduced surface surfaced there (`task_arg`/`task_return`) does not
+    /// touch the nav snapshot.
     pub fn set_nav(&mut self, nav: Arc<NavSnapshot>) {
-        self.runtime.store.data_mut().set_nav(nav);
+        if let Mode::Sync(runtime) = &mut self.mode {
+            runtime.store.data_mut().set_nav(nav);
+        }
     }
 
-    /// Run a task synchronously and buffer its result.
+    /// Run a task and buffer its result.  Posts to the Worker (non-blocking) in
+    /// Worker mode; runs inline in sync mode.
     pub fn spawn_task(&mut self, id: TaskId, entry: &str, arg: Vec<u8>) {
-        let result = self.runtime.run(entry, arg);
-        self.results.insert(id, result);
+        match &mut self.mode {
+            Mode::Sync(runtime) => {
+                let result = runtime.run(entry, arg);
+                self.results.borrow_mut().insert(id, result);
+            }
+            Mode::Worker(worker) => {
+                let arg = js_sys::Uint8Array::from(arg.as_slice());
+                let msg = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(
+                    &msg,
+                    &JsValue::from_str("type"),
+                    &JsValue::from_str("run"),
+                );
+                let _ = js_sys::Reflect::set(
+                    &msg,
+                    &JsValue::from_str("id"),
+                    &JsValue::from_f64(id as f64),
+                );
+                let _ = js_sys::Reflect::set(
+                    &msg,
+                    &JsValue::from_str("entry"),
+                    &JsValue::from_str(entry),
+                );
+                let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("arg"), &arg);
+                let _ = worker.post_message(&msg);
+            }
+        }
     }
 
-    /// Poll a previously submitted task.  Synchronous on web, so the result is
-    /// always available immediately.
+    /// Poll a previously submitted task.  Non-blocking; `None` while the Worker
+    /// has not yet delivered a result.
     pub fn poll_task(&mut self, id: TaskId) -> Option<TaskResult> {
-        self.results.remove(&id)
+        self.results.borrow_mut().remove(&id)
     }
 
-    /// No-op on web (synchronous).
+    /// Web has no blocking join; determinism is handled by the synchronous
+    /// fallback (`synchronous_workers`), not this worker.
     pub fn join(&self) {}
+}
+
+impl Drop for GuestWorker {
+    fn drop(&mut self) {
+        if let Mode::Worker(worker) = &self.mode {
+            worker.terminate();
+        }
+    }
 }
 
 /// Produce the trap error for a mutating import.
