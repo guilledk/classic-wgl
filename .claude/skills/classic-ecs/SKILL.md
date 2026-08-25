@@ -138,7 +138,7 @@ categories:
   spawner creates both an `IsoAgent` and an `IsoSprite`).  Adds `speed`,
   `anim_speed`, `anim_prefix` on top of the `IsoSprite` fields.  There is no
   path-tracking state on the component — click-to-move / path-following lives
-  entirely in the ROM guest (e.g. `guest/demo-guest`).
+  entirely in the ROM guest (e.g. `classic-roms/guest/demo-guest`).
 
 - **`Animator`** — frame-animator tied to a sprite by `target` field
   (`"entityName.ComponentName"` format).  Fields: `speed: f32`, plus
@@ -489,22 +489,20 @@ The opposite order (`S * T`) would multiply the translation by `scale`,
 sending the visible area far from the intended camera position at high zoom.
 `Transform::model_matrix()` uses the same time-tested `T(pos) * S(scale)`.
 
-### Zoom: additive, not proportional
-
-The TS zoom is additive:
+### Zoom: proportional
 
 ```rust
-let dz = engine.input.mouse_wheel * engine.time.delta;
-engine.camera.scale.x += dz;
-engine.camera.scale.y += dz;
+let factor = 1.0 + engine.input.mouse_wheel * engine.time.delta;
+engine.camera.scale.x *= factor;
+engine.camera.scale.y *= factor;
 let min = Vec3::new(0.1, 0.1, 1.0);
 engine.camera.scale = engine.camera.scale.max(min);
 ```
 
-Proportional zoom (`scale *= 1 + wheel * dt`) would produce the same
-world-space change per scroll notch regardless of current zoom level —
-additive zoom tracks the TS behaviour.  The `scroll_speed` constant (600)
-is for WASD panning only, not zoom.
+Proportional zoom multiplies the scale by a factor derived from the wheel
+delta, so each scroll notch changes the zoom by the same proportion regardless
+of the current zoom level.  The `scroll_speed` constant (600) is for WASD
+panning only, not zoom.
 
 ### WASD panning
 
@@ -591,16 +589,14 @@ after `load_state`.  `Tilemap.data`/`height_data` and `NavMesh.data` are
 
 Unlike most ECS frameworks, there is no system graph, no stage ordering,
 and no parallel dispatch.  `on_update` closures execute sequentially in
-registration order.  This was an intentional parity choice with the TS
-original's imperative update model.
+registration order.
 
 ### No ECS serialization for non-spatial components
 
 `Collider`, `UiNode`, and `SdfTextRender` have no dumper
 implementations and are not part of the registry.  They are created
 programmatically at runtime by `init_*` functions and are not persisted
-to `state.json`.  Serializing them would require dumper functions and
-coordinating with the TS `state.json` schema.
+to `state.json`.  Serializing them would require dumper functions.
 
 ### No mock hecs backend for testing
 
@@ -617,10 +613,9 @@ after startup.  Adding a component type still requires a source edit in
 
 The Camera is strictly 2D orthographic with pan and uniform zoom.
 There is no rotation, no perspective projection, and no look-at target.
-This matches the TS camera, which was designed for isometric map editors.
 
 ### Transform::scale.z is unused in rendering
 
 Most shaders use 2D scaling (x, y) from the transform model matrix.
-The z component of scale exists for parity with TS but is not actively
-used by GPU draw calls except in the iso sprite depth computation.
+The z component of scale is reserved — it is used only by the SDF text
+model matrix (`tf.scale.z`).

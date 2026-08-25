@@ -30,16 +30,16 @@ generator.
 ## 1. The noise/terrain module contract
 
 The open noise primitives live in `crates/classic-terrain`; the lunar-specific
-material/tileset/generator live in `guest/lunar-guest`:
+material/tileset/generator live in `classic-roms/guest/lunar-guest`:
 
 | Module | Owns | Generic? |
 |---|---|---|
 | `crates/classic-terrain/src/simplex_noise.rs` | seedable simplex + deterministic `Random` | Yes |
 | `crates/classic-terrain/src/fractal.rs` | fBm / ridged / billow, domain warp, periodic (tiling) noise | Yes |
 | `crates/classic-terrain/src/noise_fields.rs` | bulk noise fields | Yes |
-| `guest/lunar-guest/src/material.rs` | `LunarMaterial` table — `MATERIALS`, `tile_id`, `spec_for` | No |
-| `guest/lunar-guest/src/tileset.rs` | Paints an RGBA tile sheet from `MATERIALS` | No |
-| `guest/lunar-guest/src/lunar.rs` | The lunar generator (`generate_lunar`) | No |
+| `classic-roms/guest/lunar-guest/src/material.rs` | `LunarMaterial` table — `MATERIALS`, `tile_id`, `spec_for` | No |
+| `classic-roms/guest/lunar-guest/src/tileset.rs` | Paints an RGBA tile sheet from `MATERIALS` | No |
+| `classic-roms/guest/lunar-guest/src/lunar.rs` | The lunar generator (`generate_lunar`) | No |
 
 **The one invariant that makes this work:** the generator *classifies* tiles
 into materials and the tileset *paints* those materials, and both read the
@@ -51,9 +51,9 @@ Every function is pure (`&SimplexNoise`, `&params`) → deterministic from a see
 string, GL-free, unit-testable, and safe on `wasm32`.  `Random` only exposes
 `from_seed` / `from_seed_str` — there is no entropy source, so nothing can
 accidentally read the system clock and break golden traces.  (`Random::next_f64`
-was once silently returning `[0, 2)` instead of the documented `[0, 1)` — see
-`docs/TS-PARITY.md` — so a seed that "looks fine" can still hide a broken RNG
-if you copy the old bug.)
+was once silently returning `[0, 2)` instead of the documented `[0, 1)` — the
+terrain regression net pins it — so a seed that "looks fine" can still hide a
+broken RNG if you copy the old bug.)
 
 ---
 
@@ -61,34 +61,35 @@ if you copy the old bug.)
 
 The `lunar` scene is the worked example.  To add another (`<name>`):
 
-1. **Generator** — `guest/<name>-guest/src/<name>.rs`, exporting
+1. **Generator** — `classic-roms/guest/<name>-guest/src/<name>.rs`, exporting
    `<Name>Params` (with `Default`) and `generate_<name>(&Params) -> Terrain`.
    The output struct must carry `heights` (vertex grid, `(sx+1)*(sy+1)`),
    `tiles` (tile grid, `sx*sy`, ids >= 1), and `nav` (tile grid, 1=walkable).
    Watch the grid-layout mismatch — it is the #1 latent bug (`build_mesh`
    asserts both lengths).
 2. **Materials** — add `<Name>Material` variants + `MaterialSpec`s to
-   `guest/<name>-guest/src/material.rs`, keeping `tile_count() < cols*rows`
+   `classic-roms/guest/<name>-guest/src/material.rs`, keeping `tile_count() < cols*rows`
    (id 0 is reserved).
 3. **Tileset** — the shared `build_lunar_tileset` (or a new
    `build_<name>_tileset`) already paints `MATERIALS`; if you reuse it, this
    step is automatic.
-4. **Scene description** — `roms/<name>/state.json` with the demo entity
+4. **Scene description** — `classic-roms/roms/<name>/state.json` with the demo entity
    names (`tilemap`, `tilemapNavigation`, `cursor`; the agent `navAgent` is
    demo-only — generated scenes have no agent).  See §4 for why.
-5. **ROM + entrypoint** — add a `pack_scene(...)` call in `xtask/src/main.rs`
+5. **ROM + entrypoint** — add a `pack_scene(...)` call in classic-roms's
+   `xtask/src/main.rs`
    (injects `format_version`/`entrypoint`/`state`/`host_features`/`trusted`/
    `code`) so the scene ships as `roms/out/<name>.rom`; the apps resolve
    `CLASSIC_ROM`/`?rom=` (a `rom:<name>` selector, file path, or URL) to the
    embedded ROM.
-6. **Guest** — `guest/<name>-guest/src/lib.rs`: `init()` generates the map,
+6. **Guest** — `classic-roms/guest/<name>-guest/src/lib.rs`: `init()` generates the map,
    bulk-uploads the grids via `set_tiles`/`set_heights`/`set_nav`/`set_tileset`,
    `commit_terrain(height_scale)`, then owns its own view setup
    (`iso_to_screen` → `set_camera` + `set_light` + `set_grid`).  The host is a
    generic terrain store; the map algorithm lives in the ROM guest.
 7. **Golden** — `tests/golden/<name>/` + a CI job (the lunar job needs
    `CLASSIC_FIXED_DT` so the idle animator lands on a deterministic frame).
-8. **Tests** — a `guest/<name>-guest/tests/terrain_<name>.rs` asserting the
+8. **Tests** — a `classic-roms/guest/<name>-guest/tests/terrain_<name>.rs` asserting the
    *gameplay guarantees* (lengths, slope bound, flat pads, buildable fraction,
    mutual spawn reachability via `pathfinder::find_path`), not pixels.
 
@@ -113,7 +114,7 @@ and only these: `size_x`/`size_y`, `auto_landing_zones`, `ray_crater_count`
 relative footprint on a 4x map).
 
 **Guard:** `terrain_character_is_stable_across_map_sizes` (in
-`guest/lunar-guest/tests/terrain_lunar.rs`) generates at 200/400/600 and
+`classic-roms/guest/lunar-guest/tests/terrain_lunar.rs`) generates at 200/400/600 and
 asserts crater density, walkable/buildable fractions, relief, and slope bound
 all stay in band.  Add the same test for a new generator.  It is the
 difference between "a parameter changed the map" and "a parameter broke the map
@@ -184,7 +185,7 @@ Details worth internalising:
 ## 6. Verification workflow
 
 1. **Structure/stats first:** `cargo run --manifest-path
-   guest/lunar-guest/Cargo.toml --release --example dbg_lunar -- <seed> <size>`
+   classic-roms/guest/lunar-guest/Cargo.toml --release --example dbg_lunar -- <seed> <size>`
    prints stats plus ASCII height/material/nav maps — far faster than rendering
    for iterating on parameters.
 2. **Appearance:** render a frame (pixel capture fires only on
@@ -194,7 +195,7 @@ Details worth internalising:
    CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=update \
    CLASSIC_GOLDEN_DIR=/tmp/shot cargo run -p classic-desktop
    ```
-3. **Guarantees:** `cargo test --manifest-path guest/lunar-guest/Cargo.toml
+3. **Guarantees:** `cargo test --manifest-path classic-roms/guest/lunar-guest/Cargo.toml
    --test terrain_lunar`.
 4. **Determinism/regression:** regenerate the scene's golden trace with
    `CLASSIC_FIXED_DT=0.016666668` and `CLASSIC_GOLDEN=update`, then `check`.

@@ -30,12 +30,8 @@ The `SdfTextRender` component:
 pub struct SdfTextRender {
     pub atlas_name: String,        // "dejavusans" (without -sdf suffix)
     pub color: [f32; 4],
-    pub bgcolor: [f32; 4],         // STORED, NOT RENDERED (§10)
     pub outline_color: [f32; 4],
     pub outline_width: f32,
-    pub shadow_offset: [f32; 2],   // STORED, NOT RENDERED (§10)
-    pub shadow_color: [f32; 4],    // STORED, NOT RENDERED (§10)
-    pub shadow_blur: f32,          // STORED, NOT RENDERED (§10)
     pub ignore_cam: bool,          // always true for UI text
     pub text: String,
     pub justify: TextJustify,
@@ -246,25 +242,17 @@ marker in `.build-cache/`) to skip regeneration when inputs are unchanged.
 
 ## 10. Known-divergent / non-functional
 
-- **Shadow rendering** — `shadow_offset`, `shadow_color`, and `shadow_blur`
-  fields are stored in `SdfTextRender` and deserialized from JSON. They are
-  NEVER rendered. The render loop makes exactly one `draw_sdf` call per text
-  entity with the main `color` and `outline` uniforms. There is no
-  shadow-pass draw call.
-
-- **Background colour** — `bgcolor` is stored but never used. The SDF shader
-  renders only the glyph interior (via the distance field); the background
-  colour would require drawing a full quad behind the text.
+- **No shadow or background rendering** — the render loop makes exactly one
+  `draw_sdf` call per text entity with the main `color` and `outline` uniforms.
+  There is no shadow-pass or background-quad draw call.
 
 - **Weight and gamma** — These SDF sharpness parameters are stored in the
   component but `spawn_sdf_text()` initializes them to `weight=0.0, gamma=1.0`
   (no effect). The `init_ui` FPS label sets weight to 0.15 directly. The
   `draw_sdf` call always passes the stored values.
 
-- **Single-pass only** — The original TypeScript `SdfText` rendered three
-  passes (shadow, glow/background, main). The Rust implementation renders only
-  one pass (main + outline). This means text shadow and glow effects do not
-  appear even when configured in the component.
+- **Single-pass only** — the render loop makes exactly one `draw_sdf` call per
+  text entity (main + outline). Text shadow and glow effects are not rendered.
 
 - **`UiKind::Text`** — Similar to the UI skill note, `UiKind::Text` exists but
   no factory creates it. `spawn_sdf_text` creates `UiKind::SdfText`. There is

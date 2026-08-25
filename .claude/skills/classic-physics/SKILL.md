@@ -344,7 +344,7 @@ both endpoints.
 
 Pathfinding is exposed to ROM guests as the async `request_path`/`poll_path`
 SDK imports (see the `classic-guest` skill).  Click-to-move is implemented in
-`guest/demo-guest`: on a left click with the agent tool selected (and not
+`classic-roms/guest/demo-guest`: on a left click with the agent tool selected (and not
 consumed by UI), it submits a request and polls each frame until the waypoints
 land, then follows them via `set_pos`/`get_pos`.  The engine no longer wires
 click-to-move — it only holds the nav grid (installed by `load_state` inline
@@ -393,16 +393,14 @@ texture from the current `NavMesh::data`.  This uses the same `build_mesh` /
 ## 11. Known-divergent / Non-functional
 
 - **GJK max-iteration panic**: `perform_test` panics with `max iterations
-  (1000) reached` if the simplex evolution fails to converge.  This is a
-  direct port of the TS guard; it has never fired in practice but the
-  fallback behaviour (return `false` or use a separating-axis fallback) was
-  not implemented.
+  (1000) reached` if the simplex evolution fails to converge.  It has never
+  fired in practice, but the fallback behaviour (return `false` or use a
+  separating-axis fallback) is not implemented.
 
 - **Single-frame enter/exit**: because enter/exit dispatch compares
   frame(N) vs frame(N+1) `colliding`/`collided` tables, an enter + exit
   that both occur within a single frame (collider passing through another at
-  very high velocity) will be missed entirely.  The TS original has the same
-  limitation.
+  very high velocity) will be missed entirely.
 
 - **No multi-agent pathfinding**: A\* runs on a single static nav grid.
   There is no cooperative avoidance, no dynamic obstacle updating, and no
