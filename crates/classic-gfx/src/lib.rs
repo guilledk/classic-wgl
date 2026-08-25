@@ -377,6 +377,7 @@ pub struct RenderSettings {
     pub light_dir: [f32; 3],
     pub light_color: [f32; 3],
     pub depth_scale: [f32; 2],
+    pub ppm: f32,
     pub normal_matrix: Mat3,
 }
 
@@ -964,6 +965,7 @@ impl Gfx {
         s.uniform_vec2(gl, "tile_set_size", tile_set_size);
         s.uniform_vec2(gl, "tile_pixel_size", tile_pixel_size);
         s.uniform_vec2(gl, "depth_scale", &settings.depth_scale);
+        s.uniform_1f(gl, "ppm", settings.ppm);
         s.uniform_vec2(gl, "map_size", map_size);
         s.uniform_vec2(gl, "selected_tile", selected_tile);
         s.uniform_vec2(gl, "selection_begin", selection_begin);
@@ -1161,6 +1163,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "tile_set_size",
                 "tile_pixel_size",
                 "depth_scale",
+                "ppm",
                 "selected_tile",
                 "selection_begin",
                 "selection_mode",

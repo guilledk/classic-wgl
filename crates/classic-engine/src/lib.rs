@@ -35,7 +35,7 @@ use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{
     bilinear_height, build_mesh, build_tile_texture, horizontal_depth_scale, sample_height_mesh,
-    HEIGHT_DEPTH_SCALE_PX, HORIZONTAL_DEPTH_SCALE,
+    HEIGHT_DEPTH_SCALE_M, HORIZONTAL_DEPTH_SCALE, PPM_TARGET,
 };
 use classic_core::types::AnimationData;
 use classic_core::types::FrameTable;
@@ -2379,8 +2379,9 @@ impl Engine {
                                 light_color: self.light_color,
                                 depth_scale: [
                                     horizontal_depth_scale(nav.size_x, nav.size_y),
-                                    HEIGHT_DEPTH_SCALE_PX,
+                                    HEIGHT_DEPTH_SCALE_M,
                                 ],
+                                ppm: PPM_TARGET,
                                 normal_matrix,
                             },
                             false,
@@ -2450,8 +2451,9 @@ impl Engine {
                         light_color: self.light_color,
                         depth_scale: [
                             horizontal_depth_scale(tm.size_x, tm.size_y),
-                            HEIGHT_DEPTH_SCALE_PX,
+                            HEIGHT_DEPTH_SCALE_M,
                         ],
+                        ppm: PPM_TARGET,
                         normal_matrix,
                     },
                     self.show_grid,
@@ -2472,7 +2474,8 @@ impl Engine {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
             light_color: self.light_color,
-            depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+            depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_M],
+            ppm: PPM_TARGET,
             normal_matrix: Mat3::from_mat4(iso).inverse().transpose(),
         };
         for draw in &iso_draws {
@@ -3435,7 +3438,7 @@ impl Engine {
     /// `h_depth` is the tilemap's horizontal depth scale (see
     /// [`classic_core::tilemap::horizontal_depth_scale`]).
     fn compute_iso_base_depth(pos: Vec3, h_depth: f32) -> f32 {
-        (pos.x - pos.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX
+        (pos.x - pos.y) / h_depth + 0.5 + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
     }
 
     /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.  `h_depth` is the tilemap's horizontal depth
@@ -3454,7 +3457,9 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX;
+            let d = (pos.x + pt.x - pos.y - pt.y) / h_depth
+                + 0.5
+                + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
             raw_depths[i] = d.min(base_depth);
         }
 
@@ -3608,7 +3613,9 @@ mod tests {
     #[test]
     fn compute_iso_base_depth_matches_anchor_plane_formula() {
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
-        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE + 0.5 + 64.0 / HEIGHT_DEPTH_SCALE_PX;
+        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE
+            + 0.5
+            + (64.0 / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
         assert!(
             (Engine::compute_iso_base_depth(pos, HORIZONTAL_DEPTH_SCALE) - expected).abs() < 1e-9
         );

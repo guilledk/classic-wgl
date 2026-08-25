@@ -153,12 +153,13 @@ then `worldPos.y -= vertexPos.z` for height correction, then the canonical
 iso-depth formula sets `gl_Position.z` in window space:
 
 ```glsl
-highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + vertex_pos.z / depth_scale.y;
+highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
 clipPos.z = isoDepth * 2.0 - 1.0;
 ```
 
-`depth_scale` is set from the `classic-core::tilemap` constants
-(`HORIZONTAL_DEPTH_SCALE`, `HEIGHT_DEPTH_SCALE_PX`) so there are no GLSL literals.
+`depth_scale` and `ppm` are set from the `classic-core::tilemap` constants
+(`horizontal_depth_scale`, `HEIGHT_DEPTH_SCALE_M`, `PPM_TARGET`) so there are no
+GLSL literals.
 
 `selection_mode` (0=invert, 1=colorize, -1=none) highlights tiles between
 `selectionBegin` and `selectedTile`.  Lighting is diffuse:

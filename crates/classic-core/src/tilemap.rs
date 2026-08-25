@@ -274,8 +274,14 @@ pub fn horizontal_depth_scale(size_x: i32, size_y: i32) -> f32 {
     2.0 * size_x.max(size_y).max(1) as f32
 }
 
+/// Pixels per metre: the fixed conversion the render/depth space uses between
+/// world metres and tileset pixels.  `height_data` is authored in **metres**
+/// (the exporter's unit); the mesh and sprite positioning convert metres to
+/// screen pixels via `* PPM_TARGET`.
+pub const PPM_TARGET: f32 = 64.0;
+
 /// Height depth divisor in the canonical iso-depth formula, for `z` in
-/// **tileset pixels** (`height_data · height_scale`).
+/// **metres** (`height_data`, after re-expression from tileset pixels).
 ///
 /// Derived from the exporter's 30°-elevation view axis (see
 /// `classic-assets` / `make_lrv_spritesheet.py`): the camera basis is
@@ -283,11 +289,14 @@ pub fn horizontal_depth_scale(size_x: i32, size_y: i32) -> f32 {
 /// contributes `back.z = 0.5` of view depth while one tile of `tx - ty`
 /// contributes `√(3/8) · (TILE_PX / PPM_TARGET)`.  The height term is
 /// **positive** (`+ z / D`): `back.z = +0.5` means taller terrain is farther,
-/// i.e. larger depth.  The metre-space divisor is `344.46`; scaling by
-/// `PPM_TARGET = 64` px/m gives the pixel-space form:
+/// i.e. larger depth.
 ///
-/// `D_px = 344.46 · 64 ≈ 22045.4`
-pub const HEIGHT_DEPTH_SCALE_PX: f32 = 22045.4;
+/// The mesh/sprite `z` is carried in tileset pixels; the depth formula converts
+/// it back to metres via `z_m = z_px / PPM_TARGET`, so the pixel-space divisor
+/// is `HEIGHT_DEPTH_SCALE_M · PPM_TARGET ≈ 22045.4`:
+///
+/// `z_m / 344.46 = (z_px / 64) / 344.46 = z_px / 22045.4`
+pub const HEIGHT_DEPTH_SCALE_M: f32 = 344.46;
 
 /// Sample terrain height at iso-space position `(px, py)` using the same
 /// triangle-linear interpolation as [`build_mesh`] (top faces split into
