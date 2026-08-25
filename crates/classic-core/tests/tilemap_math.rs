@@ -6,6 +6,10 @@ fn horizontal_depth_scale_covers_map_diagonal() {
     assert_eq!(horizontal_depth_scale(200, 200), 400.0);
     // 400×400 (the lunar scene) doubles it so the NE/SW corners are not clipped.
     assert_eq!(horizontal_depth_scale(400, 400), 800.0);
+    // Small maps (48×48 container/lrvtest) must NOT fall below 400: the depth
+    // maps are baked with the legacy 400 divisor, so a smaller divisor
+    // misaligns sprite depth maps with the terrain (front corners ghost).
+    assert_eq!(horizontal_depth_scale(48, 48), 400.0);
 
     // The full tile diagonal must stay within window depth [0, 1]:
     //   iso_depth(tx, ty, z) = (tx - ty) / scale + 0.5 + (z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
