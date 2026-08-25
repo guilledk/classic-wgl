@@ -96,7 +96,10 @@ fn main() -> anyhow::Result<()> {
 /// wasm) and stage it next to `web.rs` so the web `Worker` can instantiate it.
 /// Must run before any `--target wasm32-unknown-unknown` build/check.
 fn build_pathfinder() -> anyhow::Result<()> {
-    let root = std::env::current_dir().context("current dir")?;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("xtask manifest dir has a repo-root parent")?
+        .to_path_buf();
     let status = Command::new("cargo")
         .args([
             "build",

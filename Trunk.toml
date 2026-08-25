@@ -1,0 +1,6 @@
+# classic-wgl web target. `classic-worker` embeds the compiled `pathfinder.wasm`
+# via `include_bytes!`, so build it before trunk compiles the wasm32 app.
+[[hooks]]
+stage = "pre_build"
+command = "cargo"
+command_arguments = ["xtask", "build-pathfinder"]
