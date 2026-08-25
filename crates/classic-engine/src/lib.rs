@@ -1564,12 +1564,8 @@ impl Engine {
             SdfTextRender {
                 atlas_name: classic_core::components::DEFAULT_SDF_FONT.into(),
                 color,
-                bgcolor: [0.0, 0.0, 0.0, 0.0],
                 outline_color: [0.0, 0.0, 0.0, 0.0],
                 outline_width: 0.0,
-                shadow_offset: [1.0, 1.0],
-                shadow_color: [0.0, 0.0, 0.0, 0.0],
-                shadow_blur: 0.0,
                 ignore_cam: true,
                 text: text.to_string(),
                 justify: classic_core::components::TextJustify::Left,

@@ -97,12 +97,8 @@ pub struct SdfTextRender {
     /// SDF font atlas name (without `-sdf` suffix).
     pub atlas_name: String,
     pub color: [f32; 4],
-    pub bgcolor: [f32; 4],
     pub outline_color: [f32; 4],
     pub outline_width: f32,
-    pub shadow_offset: [f32; 2],
-    pub shadow_color: [f32; 4],
-    pub shadow_blur: f32,
     pub ignore_cam: bool,
     pub text: String,
     pub justify: TextJustify,

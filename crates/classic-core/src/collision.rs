@@ -422,23 +422,6 @@ impl PhysicsProvider {
         }
 
         // Click dispatch.
-        // Pre-scan for click consumers.
-        {
-            let mouse_cands: Vec<_> =
-                self.screen.retrieve(&self.mouse.rect).iter().copied().cloned().collect();
-            for ch in &mouse_cands {
-                if ch.pid <= 1 {
-                    continue;
-                }
-                if let Some(entry) = self.entries.get(&ch.pid) {
-                    if entry.collider.consumes_click && self.gjk_test(0, ch.pid) {
-                        // uiConsumedClick = true (set by caller in engine)
-                        break;
-                    }
-                }
-            }
-        }
-
         // Dispatch click handlers sorted by clickPriority desc, pid asc.
         if !self.mouse.rect.intersects(&self.screen_collider) {
             // mouse outside screen, don't dispatch clicks
