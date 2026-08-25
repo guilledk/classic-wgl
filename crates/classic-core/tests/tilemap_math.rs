@@ -1,4 +1,25 @@
-use classic_core::tilemap::{bilinear_height, sample_height_mesh};
+use classic_core::tilemap::{bilinear_height, horizontal_depth_scale, sample_height_mesh};
+
+#[test]
+fn horizontal_depth_scale_covers_map_diagonal() {
+    // 200×200 (the demo) matches the legacy fixed constant exactly.
+    assert_eq!(horizontal_depth_scale(200, 200), 400.0);
+    // 400×400 (the lunar scene) doubles it so the NE/SW corners are not clipped.
+    assert_eq!(horizontal_depth_scale(400, 400), 800.0);
+
+    // The full tile diagonal must stay within window depth [0, 1]:
+    //   iso_depth(tx, ty, z) = (tx - ty) / scale + 0.5 + z / HEIGHT_DEPTH_SCALE_PX
+    for &(sx, sy) in &[(200, 200), (400, 400), (600, 600), (400, 200)] {
+        let scale = horizontal_depth_scale(sx, sy);
+        let ne = (sx as f32) / scale + 0.5;
+        let sw = -(sy as f32) / scale + 0.5;
+        assert!(ne <= 1.0, "NE depth {ne} clipped (scale {scale})");
+        assert!(sw >= 0.0, "SW depth {sw} clipped (scale {scale})");
+    }
+
+    // Degenerate maps must not divide by zero.
+    assert!(horizontal_depth_scale(0, 0) > 0.0);
+}
 
 #[test]
 fn bilinear_height_flat_uniform() {
