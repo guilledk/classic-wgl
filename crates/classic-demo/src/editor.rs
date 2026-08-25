@@ -5,10 +5,12 @@
 //! edits through the engine's generic `rebuild_*` / `sync_nav_heights`
 //! primitives.  They share `DemoState` via `Rc<RefCell<DemoState>>`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use classic_core::components::{NavMesh, SdfTextRender, TextJustify, Tilemap, Transform, UiAnchor};
+use classic_core::components::{
+    IsoVehicle, NavMesh, SdfTextRender, TextJustify, Tilemap, Transform, UiAnchor,
+};
 use classic_core::instrument::Chan;
 use classic_engine::ui;
 use classic_engine::Engine;
@@ -675,6 +677,216 @@ pub fn init_height_widget(engine: &mut Engine, state: &DemoStateRef) {
                     sdf.text = state.borrow().editor.height_mode.clone();
                 }
             }
+        }
+    });
+}
+
+/// Always-visible vehicle tuning panel: +/- buttons for speed (tiles/sec) and
+/// turn rate (deg/sec), driving the `IsoVehicle` follow-controller parameters
+/// directly.  Built only when a wheeled vehicle exists (e.g. the `lrvtest`
+/// scene), so scenes without one — and their golden baselines — are untouched.
+pub fn init_vehicle_widget(engine: &mut Engine) {
+    // Locate the vehicle body entity (carries `IsoVehicle`).  The guest spawns
+    // it in its `init` hook, which runs before the editor UI is built.
+    let vehicle_e = engine.world.query::<&IsoVehicle>().iter().next().map(|(e, _)| e);
+    let Some(vehicle_e) = vehicle_e else { return };
+
+    let (init_speed, init_turn_deg) = {
+        let v = engine.world.get::<&IsoVehicle>(vehicle_e).unwrap();
+        (v.speed, v.turn_rate.to_degrees())
+    };
+
+    let speed_cell = Rc::new(Cell::new(init_speed));
+    let turn_cell = Rc::new(Cell::new(init_turn_deg));
+    let ve_cell = Rc::new(Cell::new(Some(vehicle_e)));
+
+    let btn_sz: f32 = 26.0;
+    let label_w: f32 = 64.0;
+    let gap: f32 = 4.0;
+    let row_h: f32 = 28.0;
+    let widget_w: f32 = gap * 4.0 + btn_sz * 2.0 + label_w;
+    let widget_h: f32 = row_h * 2.0 + gap * 3.0;
+    let border: f32 = 10.0;
+
+    let Some(ref mut ui) = engine.ui else { return };
+
+    let container = ui.spawn_container(&mut engine.world, widget_w, widget_h, [0.0, 0.0, 0.0, 0.4]);
+
+    // Row 1: speed.
+    let s_minus;
+    {
+        let sp = speed_cell.clone();
+        s_minus = ui.spawn_button(
+            &mut engine.world,
+            &mut engine.physics,
+            btn_sz,
+            btn_sz,
+            [0.6, 0.1, 0.1, 1.0],
+            ui::ButtonOptions {
+                text: Some("S-".into()),
+                text_scale: 0.4,
+                sdf_text: true,
+                hover: true,
+                click_action: Some(Box::new(move || {
+                    sp.set((sp.get() - 0.1).max(0.0));
+                    true
+                })),
+                ..Default::default()
+            },
+        );
+    }
+    let s_label = ui.spawn_sdf_text(
+        &mut engine.world,
+        &format!("{init_speed:.1}"),
+        0.9,
+        200.0,
+        [1.0, 1.0, 1.0, 1.0],
+        TextJustify::Center,
+    );
+    let s_plus;
+    {
+        let sp = speed_cell.clone();
+        s_plus = ui.spawn_button(
+            &mut engine.world,
+            &mut engine.physics,
+            btn_sz,
+            btn_sz,
+            [0.1, 0.6, 0.1, 1.0],
+            ui::ButtonOptions {
+                text: Some("S+".into()),
+                text_scale: 0.4,
+                sdf_text: true,
+                hover: true,
+                click_action: Some(Box::new(move || {
+                    sp.set(sp.get() + 0.1);
+                    true
+                })),
+                ..Default::default()
+            },
+        );
+    }
+
+    // Row 2: turn rate.
+    let t_minus;
+    {
+        let tr = turn_cell.clone();
+        t_minus = ui.spawn_button(
+            &mut engine.world,
+            &mut engine.physics,
+            btn_sz,
+            btn_sz,
+            [0.6, 0.1, 0.1, 1.0],
+            ui::ButtonOptions {
+                text: Some("T-".into()),
+                text_scale: 0.4,
+                sdf_text: true,
+                hover: true,
+                click_action: Some(Box::new(move || {
+                    tr.set((tr.get() - 5.0).max(0.0));
+                    true
+                })),
+                ..Default::default()
+            },
+        );
+    }
+    let t_label = ui.spawn_sdf_text(
+        &mut engine.world,
+        &format!("{init_turn_deg:.0}"),
+        0.9,
+        200.0,
+        [1.0, 1.0, 1.0, 1.0],
+        TextJustify::Center,
+    );
+    let t_plus;
+    {
+        let tr = turn_cell.clone();
+        t_plus = ui.spawn_button(
+            &mut engine.world,
+            &mut engine.physics,
+            btn_sz,
+            btn_sz,
+            [0.1, 0.1, 0.6, 1.0],
+            ui::ButtonOptions {
+                text: Some("T+".into()),
+                text_scale: 0.4,
+                sdf_text: true,
+                hover: true,
+                click_action: Some(Box::new(move || {
+                    tr.set(tr.get() + 5.0);
+                    true
+                })),
+                ..Default::default()
+            },
+        );
+    }
+
+    ui.add_children(
+        &mut engine.world,
+        container,
+        &[s_minus, s_plus, s_label, t_minus, t_plus, t_label],
+        UiAnchor::TopLeft,
+        UiAnchor::TopLeft,
+    );
+
+    let con_e = container;
+    let s_mi_e = s_minus;
+    let s_pl_e = s_plus;
+    let s_lb_e = s_label;
+    let t_mi_e = t_minus;
+    let t_pl_e = t_plus;
+    let t_lb_e = t_label;
+
+    engine.on_update(move |engine| {
+        // Apply the editor values to the vehicle (the follow controller reads
+        // these each frame, so tweaks take effect immediately).
+        if let Some(ve) = ve_cell.get() {
+            if let Ok(mut v) = engine.world.get::<&mut IsoVehicle>(ve) {
+                v.speed = speed_cell.get();
+                v.turn_rate = turn_cell.get().to_radians();
+            }
+        }
+
+        let Some(ref ui) = engine.ui else { return };
+        let vw = ui.viewport_w;
+        let x0 = vw - border - widget_w;
+        let y0 = 78.0; // just below the 68px top bar
+        let cx = gap;
+        let cy1 = gap;
+        let cy2 = row_h + gap * 2.0;
+
+        if let Ok(mut tf) = engine.world.get::<&mut Transform>(con_e) {
+            tf.position = glam::Vec3::new(x0, y0, tf.position.z);
+        }
+        if let Ok(mut tf) = engine.world.get::<&mut Transform>(s_mi_e) {
+            tf.position = glam::Vec3::new(x0 + cx, y0 + cy1, tf.position.z);
+        }
+        ui::UIManager::position_children_of(s_mi_e, &mut engine.world);
+        if let Ok(mut tf) = engine.world.get::<&mut Transform>(s_lb_e) {
+            tf.position = glam::Vec3::new(x0 + cx + btn_sz + gap, y0 + cy1, tf.position.z);
+        }
+        if let Ok(mut tf) = engine.world.get::<&mut Transform>(s_pl_e) {
+            tf.position =
+                glam::Vec3::new(x0 + cx + btn_sz + gap + label_w, y0 + cy1, tf.position.z);
+        }
+        ui::UIManager::position_children_of(s_pl_e, &mut engine.world);
+        if let Ok(mut tf) = engine.world.get::<&mut Transform>(t_mi_e) {
+            tf.position = glam::Vec3::new(x0 + cx, y0 + cy2, tf.position.z);
+        }
+        ui::UIManager::position_children_of(t_mi_e, &mut engine.world);
+        if let Ok(mut tf) = engine.world.get::<&mut Transform>(t_lb_e) {
+            tf.position = glam::Vec3::new(x0 + cx + btn_sz + gap, y0 + cy2, tf.position.z);
+        }
+        if let Ok(mut tf) = engine.world.get::<&mut Transform>(t_pl_e) {
+            tf.position =
+                glam::Vec3::new(x0 + cx + btn_sz + gap + label_w, y0 + cy2, tf.position.z);
+        }
+        ui::UIManager::position_children_of(t_pl_e, &mut engine.world);
+
+        if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(s_lb_e) {
+            sdf.text = format!("{:.1}", speed_cell.get());
+        }
+        if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(t_lb_e) {
+            sdf.text = format!("{:.0}", turn_cell.get());
         }
     });
 }
