@@ -529,9 +529,15 @@ vertically (the exporter renders the body tilted about its ground origin on a
   and `roll_levels`/`roll_max_deg`, plus per-part ground-origin `anchors`; the
   exporter emits it and `Engine::spawn_vehicle` derives the wheel tile offsets
   from it.
-- `Engine::update_vehicles` (`classic-engine/src/vehicle.rs`) computes the body
-  pitch/roll as angles and quantizes them against `pitch_max`/`roll_max` to pick
-  the frame; `frame_offset.y` still carries the suspension/jump delta.
+- `Engine::update_vehicles` (`classic-engine/src/vehicle.rs`) drives the body as
+  a single **chassis plane** `(altitude, pitch, roll)` fit to the four wheel
+  contacts and spring-smoothed, then quantizes pitch/roll against
+  `pitch_max`/`roll_max` to pick the frame; `frame_offset.y` still carries the
+  suspension/jump delta.  Each wheel is a per-wheel suspension spring clamped to
+  a travel envelope (`wheel_travel_up`/`wheel_travel_down`, derived from the def
+  geometry at spawn) around the body plane, so wheels never ride over the body —
+  the plane lifts/tilts to absorb terrain instead.  A soft dead-zone
+  (`tilt_dead_zone`) suppresses body tilt on sub-frame slopes.
 
 ---
 

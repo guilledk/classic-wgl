@@ -406,6 +406,21 @@ pub struct IsoVehicle {
     /// spawn).  `0` disables jumps.
     #[serde(skip)]
     pub safe_fall_px: f32,
+    /// Max upward wheel compression (pixels) above the body plane.  A wheel
+    /// whose terrain rises more than this is clamped, and the body plane lifts
+    /// instead.  Derived from the vehicle def at spawn (see `spawn_vehicle`).
+    #[serde(skip)]
+    pub wheel_travel_up: f32,
+    /// Max downward wheel droop (pixels) below the body plane before a wheel
+    /// hangs.  Derived from the vehicle def at spawn (see `spawn_vehicle`).
+    #[serde(skip)]
+    pub wheel_travel_down: f32,
+    /// Minimum body pitch/roll slope (radians) before the body takes a tilt
+    /// frame; sub-threshold slopes are absorbed by wheel compression instead
+    /// (an OpenRA-style terrain-orientation margin).  Derived from the frame
+    /// quantization at spawn.
+    #[serde(skip)]
+    pub tilt_dead_zone: f32,
 
     // -- transient simulation state (not serialized) ----------------------
     /// Per-wheel, per-direction tile-space offset from the body, derived from
@@ -419,10 +434,12 @@ pub struct IsoVehicle {
     /// Body vertical velocity, in pixels per second.
     #[serde(skip)]
     pub vel_z: f32,
-    /// Smoothed per-wheel terrain height (pixels), `[fl, fr, rl, rr]`.
+    /// Smoothed per-wheel terrain height (pixels), `[fl, fr, rl, rr]`, clamped
+    /// to a travel envelope around the body plane (`wheel_travel_up` /
+    /// `wheel_travel_down`) so wheels never ride over the body or sink.
     #[serde(skip)]
     pub wheel_h: [f32; 4],
-    /// Per-wheel smoothing velocity.
+    /// Per-wheel smoothing velocity (pixels/second).
     #[serde(skip)]
     pub wheel_v: [f32; 4],
     /// A* waypoints the host follows (guest-set via `vehicle_goto`), in integer
@@ -472,6 +489,9 @@ impl Default for IsoVehicle {
             path_footprint: vec![(0, 0)],
             turn_rate: 720.0f32.to_radians(),
             safe_fall_px: 0.0,
+            wheel_travel_up: 10.0,
+            wheel_travel_down: 20.0,
+            tilt_dead_zone: 0.0,
             wheel_tile_offsets: [[[0.0, 0.0]; 8]; 4],
             altitude: 0.0,
             vel_z: 0.0,

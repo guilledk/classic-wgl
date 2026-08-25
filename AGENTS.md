@@ -140,8 +140,10 @@ plans/
 - **Wheeled vehicles**: `classic-engine/src/vehicle.rs` implements the `IsoVehicle`
   system — `spawn_vehicle` assembles a body + 4 wheel `IsoSprite`s from a
   `VehicleDef` sidecar (per-direction ground-origin anchors emitted by the Blender
-  exporter), and `update_vehicles` runs a point-mass moon-gravity jump, per-wheel
-  suspension, and an underdamped pitch/roll spring each frame.  Guests drive vehicles
+  exporter), and `update_vehicles` drives the body as a single chassis plane
+  (`altitude` + `pitch` + `roll`) fit to the four wheel contacts, with per-wheel
+  suspension springs clamped to a travel envelope (compression/droop, derived from
+  the def geometry) and a point-mass moon-gravity jump.  Guests drive vehicles
   through the `vehicle_spawn`/`vehicle_teleport`/`vehicle_goto`/`vehicle_stop` host
   API.  See `classic-ecs` (`IsoVehicle` component) and `classic-iso` (pitch/roll
   frame layout).
