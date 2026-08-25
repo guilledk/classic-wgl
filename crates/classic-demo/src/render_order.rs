@@ -44,7 +44,11 @@ pub fn read_pixel_rgba(engine: &Engine, sx: f32, sy: f32) -> Option<[f32; 4]> {
     gfx.read_pixel_rgba(sx as i32, sy as i32)
 }
 
-/// Assert a pixel at an entity's iso position.
+/// Assert a pixel at an entity's iso position, optionally offset in tile units.
+///
+/// `offset` is a tile-space `(dx, dy)` added to the entity's `(x, y)` before
+/// projecting to screen pixels, so callers can sample a sprite corner rather
+/// than only its ground anchor.
 ///
 /// When `expected` is `Some(rgba)`, every channel must match within `tol`.
 /// When `expected` is `None`, the pixel is checked for opacity (alpha must be
@@ -56,6 +60,7 @@ pub fn assert_pixel_at_entity(
     name: &str,
     expected: Option<[f32; 4]>,
     tol: f32,
+    offset: (f32, f32),
 ) -> bool {
     let Some(&entity) = engine.names.get(name) else {
         classic_core::cl_info!(
@@ -71,7 +76,9 @@ pub fn assert_pixel_at_entity(
         );
         return false;
     };
-    let Some((sx, sy)) = iso_to_screen_px(engine, tf.position.x, tf.position.y) else {
+    let Some((sx, sy)) =
+        iso_to_screen_px(engine, tf.position.x + offset.0, tf.position.y + offset.1)
+    else {
         classic_core::cl_info!(
             classic_core::instrument::Chan::Test,
             "  [Pixel] no tilemap for '{name}'"
@@ -92,7 +99,7 @@ pub fn assert_pixel_at_entity(
     if !ok {
         classic_core::cl_info!(
             classic_core::instrument::Chan::Test,
-            "  [Pixel] '{name}' @ ({sx:.1},{sy:.1}) actual={:?} expected={:?} tol={tol}",
+            "  [Pixel] '{name}' @ ({sx:.1},{sy:.1}) offset={offset:?} actual={:?} expected={:?} tol={tol}",
             actual,
             expected
         );

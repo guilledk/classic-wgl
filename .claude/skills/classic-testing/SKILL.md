@@ -49,8 +49,8 @@ Key lifecycle properties:
 
 ## 2. Test Actions
 
-Each `TestStep` carries a `Vec<TestAction>`.  All nine actions are mapped in
-`run_test_frame` and directly modify `Engine` input/editor state:
+Each `TestStep` carries a `Vec<TestAction>`.  All actions are mapped in
+`run_test_frame` and directly modify `Engine` input/editor/entity state:
 
 | Action | JSON key | Description |
 |---|---|---|
@@ -64,6 +64,9 @@ Each `TestStep` carries a `Vec<TestAction>`.  All nine actions are mapped in
 | `Wheel` | `wheel` | Sets `input.mouse_wheel`. The engine's wheel-decay logic runs after the test frame, so wheel values may need to be set immediately before assertions that depend on them. |
 | `Wait` | `wait` | No-op; only useful as a sentinel in the JSON. Frame-based waiting is achieved by scheduling a step on a later frame. |
 | `SetCameraIso` | `setCameraIso` | Centers the camera on iso tile `(tx, ty)` at the given `scale` (via `Engine::iso_to_screen` + `set_camera`). Useful for framing a sprite for pixel assertions. |
+| `SetMouseIso` | `setMouseIso` | Sets `input.mouse_pos` to the screen position of iso tile `(tx, ty)` via `render_order::iso_to_screen_px`. Note: in a native (winit) window the OS cursor overwrites `input.mouse_pos` every `CursorMoved`, so this action is only reliable headless — prefer `setEntityPos` for deterministic native placement. |
+| `SetEntityPos` | `setEntityPos` | Sets a named entity's `Transform.position` to `(x, y, z)` **and arms a persistent per-frame override** (`runner.pos_override`), so a mouse-following guest (which re-writes the position every frame) can't steal the placement. `z` is in px (metres × `PPM_TARGET`). |
+| `SetSpriteFrame` | `setSpriteFrame` | Calls `Engine::set_sprite_frame(name, frame)` **and arms a persistent per-frame override** (`runner.frame_override`), keeping a packed-atlas sprite on a chosen pitch/roll frame even though the guest recomputes it from the terrain each frame. |
 
 Drag simulation detail: the drag is processed by `run_test_frame`'s drag state
 machine.  On frame `start+0` it sets `selection_iso_begin=mouse_iso_pos=from`
@@ -88,7 +91,7 @@ tile coordinates for spatial assertions; its meaning varies by assertion kind.
 | `CameraAt` | `cameraAt` | `region = (ex, ey, ez, expected_scale)`.  Checks `camera.position` against `(ex, ey, ez)` with default tolerance 1.0 in position and 0.01 in scale.  `expected` overrides the tolerance if > 0.  If `region.3 == 0`, scale defaults to 1.0. |
 | `EntityVisible` | `entityVisible` | Uses `log` as the entity name lookup key in `Engine::names`.  Checks `is_disabled` matches `expected != 0.0`. |
 | `EntityPos` | `entityPos` | Uses `log` as the entity name.  `region = (ex, ey, ...)`.  Checks `Transform::position.x/y` within tolerance (default 1.0) of `(ex, ey)`.  `expected` overrides tolerance if > 0. |
-| `PixelAtEntity` | `pixelAtEntity` | **GPU-only.** Uses `log` as the entity name; projects its iso position to screen pixels (`render_order::iso_to_screen_px`) and reads the framebuffer pixel (`Gfx::read_pixel_rgba`). With `color` set, checks all 4 channels within `expected` tolerance; with `color` absent/null, checks alpha `>= expected`. |
+| `PixelAtEntity` | `pixelAtEntity` | **GPU-only.** Uses `log` as the entity name; projects its iso position (plus an optional tile-space `offset: [dx, dy]`) to screen pixels (`render_order::iso_to_screen_px`) and reads the framebuffer pixel (`Gfx::read_pixel_rgba`). With `color` set, checks all 4 channels within `expected` tolerance; with `color` absent/null, checks alpha `>= expected`. The `offset` lets a test sample a sprite's footprint corner (e.g. `[-1.735, 1.735]` = front-bottom) rather than only its ground anchor — this is how the shipping-container corner-ghost regression was pinned down. |
 
 `PixelAtEntity` is the render-order / depth-occlusion assertion (per-texture
 depth maps, ghost pass).  It reads the previous frame's framebuffer (the test
@@ -155,6 +158,11 @@ complete).
 - `expected`: `f32`.  Used as the target value for height/tile assertions,
   tolerance for `UiTextCentered`/`CameraAt`/`EntityPos`, or boolean intent
   for `UiEnabled`/`EntityVisible`.
+- `color`: `[r, g, b, a]` (optional) — expected RGBA for `PixelAtEntity`;
+  absent/null = opacity-only (alpha `>= expected`).
+- `offset`: `[dx, dy]` (optional, default `[0,0]`) — tile-space offset added to
+  the entity's position for `PixelAtEntity`, so a test can sample a footprint
+  corner instead of the ground anchor.
 - `log`: free-form description, emitted on pass/fail.
 
 ## 5. Scenario Authoring Workflow

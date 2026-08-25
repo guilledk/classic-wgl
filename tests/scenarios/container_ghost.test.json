@@ -1,0 +1,24 @@
+[
+  {
+    "frame": 2,
+    "actions": [
+      { "setCameraIso": { "tx": 24.5, "ty": 43.5, "scale": 0.8 } },
+      { "setEntityPos": { "name": "container", "x": 24.5, "y": 43.5, "z": 96 } },
+      { "setSpriteFrame": { "name": "container", "frame": 56 } }
+    ],
+    "assertions": [],
+    "log": "place the container flat on the south plateau, level pitch/roll frame (56)"
+  },
+  {
+    "frame": 8,
+    "actions": [],
+    "assertions": [
+      { "kind": "entityPos", "region": [24, 43, 0, 0], "expected": 1.0, "log": "container" },
+      { "kind": "pixelAtEntity", "region": [0, 0, 0, 0], "expected": 0.9, "log": "container", "offset": [0, 0] },
+      { "kind": "pixelAtEntity", "region": [0, 0, 0, 0], "expected": 0.9, "log": "container", "offset": [-1.735, 1.735] },
+      { "kind": "pixelAtEntity", "region": [0, 0, 0, 0], "expected": 0.9, "log": "container", "offset": [1.735, 1.735] },
+      { "kind": "pixelAtEntity", "region": [0, 0, 0, 0], "expected": 0.9, "log": "container", "offset": [1.735, -1.735] }
+    ],
+    "log": "footprint corners render opaque on flat terrain (front-bottom corner no longer ghosts)"
+  }
+]
