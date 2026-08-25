@@ -765,6 +765,12 @@ impl Engine {
                 iso_pos.y = orig.y + z_offset;
             }
 
+            // Ground the height: `mouse_iso_pos` becomes a full (x, y, z)
+            // position where `z` is the terrain height (metres) under the
+            // cursor, sampled with the same triangle-linear interpolation as
+            // the rendered mesh.
+            iso_pos.z = sample_height_mesh(&height_data, size_x, size_y, iso_pos.x, iso_pos.y);
+
             if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(tm_entity) {
                 tm.mouse_iso_pos = iso_pos;
             }
