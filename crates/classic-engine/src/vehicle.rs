@@ -251,6 +251,28 @@ fn soft_deadzone(slope: f32, dz: f32) -> f32 {
     (slope.abs() - dz).max(0.0) * slope.signum()
 }
 
+/// Quantize a signed steering demand (radians, positive = turn left) to a
+/// steering frame index in `0..steer_levels`.  `0` = full-right, the centre
+/// (`(steer_levels - 1) / 2`) = straight, `steer_levels - 1` = full-left,
+/// matching the exporter's steer-major frame order (frame `0` is the +max
+/// Z-yaw render, which projects as the vehicle's right).
+fn steer_index(demand: f32, steer_max: f32, steer_levels: u32) -> u32 {
+    if steer_levels <= 1 {
+        return 0;
+    }
+    let max = steer_max.abs().max(1e-4);
+    // demand: turn-left (+demand) maps up to the top frame (full-left).
+    let t = (demand / max).clamp(-1.0, 1.0);
+    let idx = ((t + 1.0) * 0.5 * (steer_levels - 1) as f32).round() as u32;
+    idx.min(steer_levels - 1)
+}
+
+/// The "straight" steering frame index for a given level count (centre of an
+/// odd range, 0 for a single level).
+fn straight_steer(steer_levels: u32) -> u32 {
+    steer_levels.saturating_sub(1) / 2
+}
+
 /// A part's anchors as a fixed 8-slot array (padded/truncated to 8 directions).
 fn anchors8(anchors: &[[f32; 2]]) -> [[f32; 2]; 8] {
     let mut out = [[0.5f32, 0.5f32]; 8];
@@ -296,6 +318,7 @@ struct VehicleWrite {
     wheel_off_y: [f32; 4],
     wheel_z: [f32; 4],
     wheel_anchors: [[f32; 2]; 4],
+    steer_index: u32,
 }
 
 impl Engine {
@@ -330,6 +353,18 @@ impl Engine {
         };
         let mut handles = [None; 4];
         for (i, name) in v.wheel_entities.iter().enumerate() {
+            handles[i] = self.names.get(name).copied();
+        }
+        handles
+    }
+
+    /// Resolve the steering-tire entity handles referenced by a vehicle.
+    fn vehicle_tire_handles(&self, ve: hecs::Entity) -> [Option<hecs::Entity>; 2] {
+        let Ok(v) = self.world.get::<&IsoVehicle>(ve) else {
+            return [None; 2];
+        };
+        let mut handles = [None; 2];
+        for (i, name) in v.tire_entities.iter().enumerate() {
             handles[i] = self.names.get(name).copied();
         }
         handles
@@ -457,6 +492,36 @@ impl Engine {
             self.name_order.push(wheel_names[i].clone());
         }
 
+        // Spawn the steering tires (rotating disks over the wheels, matched by
+        // index: `tires[0]` steers `wheel_fl`, `tires[1]` steers `wheel_fr`).
+        // A tire shares its wheel's ground-origin anchor — steering yaws the disk
+        // about the axle's vertical axis, so the anchor is steer-invariant.
+        let steer_levels = def.steer_levels.max(1);
+        let tire_tile_set_size =
+            Vec2::new(def.columns as f32, def.rows as f32 * steer_levels as f32);
+        let mut tire_entities = [String::new(), String::new()];
+        for (i, tire) in def.tires.iter().take(2).enumerate() {
+            let name = format!("{entity_name}Tire{}", WHEEL_SUFFIXES[i]);
+            let sprite = IsoSprite {
+                position: Vec3::new(x, y, 0.0),
+                scale: Vec3::ONE,
+                texture: tire.texture.clone(),
+                tilemap: tilemap_name.clone(),
+                frame: 0.0,
+                frame_name: None,
+                tile_set_size: tire_tile_set_size,
+                anchor: Vec2::from(wheel_anchors[i][0]),
+                frame_offset: Vec3::ZERO,
+                footprint: vec![],
+                ghost_group,
+            };
+            let te = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
+            let _ = self.world.insert_one(te, DebugName(name.clone()));
+            self.names.insert(name.clone(), te);
+            self.name_order.push(name.clone());
+            tire_entities[i] = name;
+        }
+
         // Spawn the body entity with the IsoVehicle component.
         let body_sprite = IsoSprite {
             position: Vec3::new(x, y, 0.0),
@@ -479,6 +544,7 @@ impl Engine {
                 wheel_names[2].clone(),
                 wheel_names[3].clone(),
             ],
+            tire_entities,
             body_anchors,
             wheel_anchors,
             speed: 2.6,
@@ -496,6 +562,9 @@ impl Engine {
             wheel_travel_up,
             wheel_travel_down,
             tilt_dead_zone,
+            steer_index: straight_steer(steer_levels),
+            steer_levels,
+            steer_max: def.steer_max_deg.to_radians(),
             ..Default::default()
         };
         let be = self.world.spawn((
@@ -534,6 +603,7 @@ impl Engine {
             Err(_) => return,
         };
         let wheel_handles = self.vehicle_wheel_handles(ve);
+        let tire_handles = self.vehicle_tire_handles(ve);
 
         let write = {
             let Some(mut v) = self.world.get::<&mut IsoVehicle>(ve).ok() else { return };
@@ -541,6 +611,7 @@ impl Engine {
             // -- movement along the A* path (bounded-turn, forward-only) ----
             let mut x = body_x;
             let mut y = body_y;
+            let mut steer_demand = 0.0f32;
             if !v.path.is_empty() {
                 // Arrive once the final waypoint is within tolerance; snap to
                 // its center and stop.
@@ -571,6 +642,8 @@ impl Engine {
                     let err = wrap_pi(desired - v.heading);
                     let max_turn = v.turn_rate * delta;
                     v.heading = wrap_pi(v.heading + err.clamp(-max_turn, max_turn));
+                    // Front wheels steer into the desired turn.
+                    steer_demand = err;
 
                     // Advance forward only (a wheeled vehicle never reverses).
                     let step = v.speed * delta;
@@ -581,6 +654,7 @@ impl Engine {
 
             // Quantize the continuous heading for the 8-way sprite sheets.
             v.direction = heading_to_dir(v.heading);
+            v.steer_index = steer_index(steer_demand, v.steer_max, v.steer_levels);
 
             // -- wheel ground contacts --------------------------------------
             let mut wheel_xy = [[0.0f32; 2]; 4];
@@ -698,10 +772,11 @@ impl Engine {
                 wheel_off_y,
                 wheel_z,
                 wheel_anchors,
+                steer_index: v.steer_index,
             }
         };
 
-        self.apply_pose(ve, &wheel_handles, &write);
+        self.apply_pose(ve, &wheel_handles, &tire_handles, &write);
     }
 
     /// Write a computed pose into the body + wheel `Transform`/`IsoSprite`s.
@@ -709,6 +784,7 @@ impl Engine {
         &mut self,
         ve: hecs::Entity,
         wheel_handles: &[Option<hecs::Entity>; 4],
+        tire_handles: &[Option<hecs::Entity>; 2],
         write: &VehicleWrite,
     ) {
         if let Ok(mut tf) = self.world.get::<&mut Transform>(ve) {
@@ -737,6 +813,24 @@ impl Engine {
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
             }
         }
+
+        // Steering tires ride the same axle/vertical offset as their wheel but
+        // select a frame by steer-major order (`steer_index · 8 + direction`).
+        for (i, handle) in tire_handles.iter().enumerate() {
+            let Some(te) = handle else { continue };
+            if let Ok(mut tf) = self.world.get::<&mut Transform>(*te) {
+                tf.position.x = write.wheel_xy[i][0];
+                tf.position.y = write.wheel_xy[i][1];
+                tf.position.z = write.wheel_z[i];
+            }
+            if let Ok(mut s) = self.world.get::<&mut IsoSprite>(*te) {
+                let frame = (write.steer_index * DIRECTIONS + write.direction) as f32;
+                s.frame = frame;
+                s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, frame);
+                s.frame_offset.y = write.wheel_off_y[i];
+                s.anchor = Vec2::from(write.wheel_anchors[i]);
+            }
+        }
     }
 
     /// Reposition a vehicle (body + 4 wheels) and zero its transient physics.
@@ -745,6 +839,7 @@ impl Engine {
         let Some(&ve) = self.names.get(name) else { return false };
         let Some(terrain) = self.vehicle_terrain() else { return false };
         let wheel_handles = self.vehicle_wheel_handles(ve);
+        let tire_handles = self.vehicle_tire_handles(ve);
 
         let write = {
             let Some(mut v) = self.world.get::<&mut IsoVehicle>(ve).ok() else { return false };
@@ -754,6 +849,7 @@ impl Engine {
             v.heading = dir_to_heading(v.direction);
             v.path.clear();
             v.path_idx = 0;
+            v.steer_index = straight_steer(v.steer_levels);
 
             let mut wheel_xy = [[0.0f32; 2]; 4];
             let mut wheel_z = [0.0f32; 4];
@@ -801,10 +897,11 @@ impl Engine {
                 wheel_off_y: [0.0; 4],
                 wheel_z,
                 wheel_anchors,
+                steer_index: v.steer_index,
             }
         };
 
-        self.apply_pose(ve, &wheel_handles, &write);
+        self.apply_pose(ve, &wheel_handles, &tire_handles, &write);
         true
     }
 
@@ -1092,6 +1189,29 @@ mod tests {
     }
 
     #[test]
+    fn steer_index_quantizes_demand_to_five_levels() {
+        let max = 30.0f32.to_radians();
+        // 0 = full-right, 2 = straight, 4 = full-left (positive demand = left).
+        assert_eq!(steer_index(max, max, 5), 4);
+        assert_eq!(steer_index(0.0, max, 5), 2);
+        assert_eq!(steer_index(-max, max, 5), 0);
+        // Half-scale demand lands on the mid frames.
+        assert_eq!(steer_index(max * 0.5, max, 5), 3);
+        assert_eq!(steer_index(-max * 0.5, max, 5), 1);
+        // Clamps beyond the range, and a single level always stays straight.
+        assert_eq!(steer_index(2.0, max, 5), 4);
+        assert_eq!(steer_index(-2.0, max, 5), 0);
+        assert_eq!(steer_index(1.0, max, 1), 0);
+    }
+
+    #[test]
+    fn straight_steer_is_the_centre_frame() {
+        assert_eq!(straight_steer(1), 0);
+        assert_eq!(straight_steer(3), 1);
+        assert_eq!(straight_steer(5), 2);
+    }
+
+    #[test]
     fn derived_offsets_round_trip_through_iso() {
         let cell = [247.0, 247.0];
         let tile_scale = 45.0;
@@ -1140,6 +1260,9 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
             safe_fall_px: 0.0,
+            steer_levels: 1,
+            steer_max_deg: 30.0,
+            tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
                 serde_json::from_value(serde_json::json!({
@@ -1273,6 +1396,9 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
             safe_fall_px: 0.0,
+            steer_levels: 1,
+            steer_max_deg: 30.0,
+            tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
                 serde_json::from_value(serde_json::json!({
@@ -1347,6 +1473,9 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
             safe_fall_px: 0.0,
+            steer_levels: 1,
+            steer_max_deg: 30.0,
+            tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
                 serde_json::from_value(serde_json::json!({
@@ -1489,6 +1618,9 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: None,
             safe_fall_px: 0.0,
+            steer_levels: 1,
+            steer_max_deg: 30.0,
+            tires: vec![],
             turn_rate_deg_per_sec: turn_rate_deg,
             parts: vec![
                 part("body", "lrvBody", [0.5, 0.7352]),
@@ -1627,6 +1759,9 @@ mod tests {
             path_footprint: None,
             turn_rate_deg_per_sec: 90.0,
             safe_fall_px: 96.0,
+            steer_levels: 1,
+            steer_max_deg: 30.0,
+            tires: vec![],
             parts: vec![
                 part("body", "lrvBody", vec![[0.5, 0.6618]; 8]),
                 part(
@@ -1687,6 +1822,26 @@ mod tests {
                 ),
             ],
         }
+    }
+
+    /// `lrv_def_real()` plus two front steering tires (5 steer levels), matching
+    /// the exporter's front-wheel-steering sidecar shape.  Tires reuse their
+    /// wheel's anchors (the steering yaw is about the axle's vertical axis, so
+    /// the ground-origin anchor is steer-invariant).
+    fn lrv_def_steering() -> VehicleDef {
+        let mut def = lrv_def_real();
+        def.steer_levels = 5;
+        def.steer_max_deg = 30.0;
+        let tire = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| VehiclePartDef {
+            name: name.into(),
+            texture: texture.into(),
+            anchors,
+        };
+        def.tires = vec![
+            tire("tire_fl", "lrvTireFl", def.parts[1].anchors.clone()),
+            tire("tire_fr", "lrvTireFr", def.parts[2].anchors.clone()),
+        ];
+        def
     }
 
     /// Build an engine with a 48×48 tilemap + all-walkable nav (the lrvtest
@@ -1811,6 +1966,58 @@ mod tests {
         );
         // pitch_levels = 5 for the real def, so the dead-zone is non-zero.
         assert!(v.tilt_dead_zone > 0.0, "dead-zone must be derived from frame quantization");
+    }
+
+    #[test]
+    fn spawn_vehicle_spawns_steering_tires() {
+        let mut engine = engine_with_lrvtest_like_map(None);
+        engine.vehicles.insert("lrv".into(), lrv_def_steering());
+
+        assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
+        let body = *engine.names.get("lrv").unwrap();
+        let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+
+        assert_eq!(v.steer_levels, 5);
+        assert!((v.steer_max - 30.0f32.to_radians()).abs() < 1e-6);
+        assert_eq!(v.tire_entities[0], "lrvTireFl");
+        assert_eq!(v.tire_entities[1], "lrvTireFr");
+        // The tire sheet stacks 5 steer levels over the 2-row wheel grid.
+        let tire = engine.names.get("lrvTireFl").copied().unwrap();
+        let s = engine.world.get::<&IsoSprite>(tire).unwrap();
+        assert_eq!(s.tile_set_size, Vec2::new(4.0, 10.0));
+        // Both tires share the front wheels' ghost group (never ghost through
+        // their own body/arm).
+        assert_eq!(s.ghost_group, engine.world.get::<&IsoSprite>(body).unwrap().ghost_group);
+    }
+
+    #[test]
+    fn front_tires_steer_into_a_turn() {
+        let mut engine = engine_with_lrvtest_like_map(None);
+        engine.vehicles.insert("lrv".into(), lrv_def_steering());
+        assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
+        let body = *engine.names.get("lrv").unwrap();
+        {
+            let mut v = engine.world.get::<&mut IsoVehicle>(body).unwrap();
+            v.path = vec![[1, 1], [5, 1], [5, 5]];
+            v.path_idx = 1;
+        }
+
+        // Idle before the first update: steering is straight.
+        assert_eq!(engine.world.get::<&IsoVehicle>(body).unwrap().steer_index, straight_steer(5));
+
+        let mut ever_steered = false;
+        for _ in 0..600 {
+            engine.time.delta = 1.0 / 60.0;
+            engine.update_vehicles();
+            let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+            if v.steer_index != straight_steer(v.steer_levels) {
+                ever_steered = true;
+            }
+            if v.path.is_empty() {
+                break;
+            }
+        }
+        assert!(ever_steered, "front tires never steered into the turn");
     }
 
     #[test]

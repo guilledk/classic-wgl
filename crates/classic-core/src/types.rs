@@ -213,6 +213,22 @@ pub struct VehicleDef {
     /// distance; larger drops are impassable (issue #35).  `0` disables jumps.
     #[serde(default)]
     pub safe_fall_px: f32,
+    /// Number of steering angles rendered for the front tires (1 = no steering).
+    /// A steering-tire sheet stacks `steer_levels` direction blocks vertically,
+    /// so its `tile_set_size` is `[columns, rows · steer_levels]`.
+    #[serde(default = "default_vehicle_steer_levels")]
+    pub steer_levels: u32,
+    /// Max front-wheel steering angle (degrees, symmetric ±) the frames span,
+    /// emitted by the exporter.  The engine quantizes the steering demand
+    /// against this ceiling.
+    #[serde(default = "default_vehicle_steer_max_deg")]
+    pub steer_max_deg: f32,
+    /// Steering-tire parts, in `[fl, fr, …]` order, matched to `parts` wheels by
+    /// index (`tires[0]` steers `parts[1]`, the front-left wheel).  Empty = no
+    /// steering.  A tire shares its wheel's ground-origin anchor (the steering
+    /// yaw is about the axle's vertical axis, so the anchor is steer-invariant).
+    #[serde(default)]
+    pub tires: Vec<VehiclePartDef>,
     pub parts: Vec<VehiclePartDef>,
 }
 
@@ -242,6 +258,14 @@ fn default_vehicle_roll_max_deg() -> f32 {
 
 fn default_vehicle_turn_rate() -> f32 {
     720.0
+}
+
+fn default_vehicle_steer_levels() -> u32 {
+    1
+}
+
+fn default_vehicle_steer_max_deg() -> f32 {
+    30.0
 }
 
 /// One part (body or wheel) of a [`VehicleDef`].
