@@ -99,6 +99,7 @@ pub fn register_all_components() {
                     frame_offset: a.frame_offset,
                     footprint: a.footprint.clone(),
                     ghost_group: 0,
+                    color: [1.0, 1.0, 1.0, 1.0],
                 });
                 b.add(a);
                 Ok(())

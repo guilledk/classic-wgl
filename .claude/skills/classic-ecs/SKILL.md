@@ -130,8 +130,11 @@ categories:
   `size_x`, `size_y`.  Rendered on top of the tilemap at z-order 19999.
 
 - **`IsoSprite`** — billboard in iso space.  Fields: `position`, `scale`,
-  `texture`, `tilemap` (entity name), `frame`, `tile_set_size`, `anchor`,
-  `footprint: Vec<Vec2>` (four corner vertices in iso tile coords).
+  `texture`, `tilemap` (entity name), `frame`, `frame_name` (packed-atlas
+  frame resolution), `tile_set_size`, `anchor`, `footprint: Vec<Vec2>` (four
+  corner vertices in iso tile coords), `ghost_group` (stencil id so grouped
+  sprites never ghost through each other), `color: [f32; 4]` (per-sprite tint
+  multiplied onto the albedo by `sheet.frag` before the Lambertian term).
   Drawn via `draw_iso_sprite`.
 
 - **`IsoAgent`** — pathfinding sprite.  Subsumes `IsoSprite` (i.e. the

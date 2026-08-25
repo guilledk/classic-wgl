@@ -235,10 +235,24 @@ pub struct IsoSprite {
     /// declaratively in `state.json`; `spawn_vehicle` assigns it imperatively.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub ghost_group: u32,
+    /// Per-sprite tint (RGBA) multiplied onto the sprite's albedo by the sheet
+    /// shader before the Lambertian term.  Defaults to white (a no-op).
+    /// Tintable assets (e.g. the grayscale shipping container cargo) set this
+    /// at spawn to render the same sheet in different colours.
+    #[serde(default = "default_white", skip_serializing_if = "is_white")]
+    pub color: [f32; 4],
 }
 
 fn is_zero(v: &u32) -> bool {
     *v == 0
+}
+
+fn default_white() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+fn is_white(c: &[f32; 4]) -> bool {
+    *c == default_white()
 }
 
 fn default_footprint() -> Vec<Vec2> {

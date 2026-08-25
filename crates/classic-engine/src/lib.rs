@@ -94,6 +94,7 @@ struct IsoDraw {
     depth_base: f32,
     normal_map: Option<String>,
     ghost_group: u32,
+    color: [f32; 4],
 }
 
 impl IsoDraw {
@@ -2323,6 +2324,7 @@ impl Engine {
                 depth_base: Self::compute_iso_base_depth(tf.position, h_depth),
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,
+                color: iso_sprite.color,
             });
         }
 
@@ -2509,6 +2511,7 @@ impl Engine {
                 draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
                 draw.depth_base,
                 draw.normal_map.as_deref(),
+                &[draw.color[0], draw.color[1], draw.color[2]],
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Normal,
@@ -2527,6 +2530,7 @@ impl Engine {
                 draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
                 draw.depth_base,
                 draw.normal_map.as_deref(),
+                &[draw.color[0], draw.color[1], draw.color[2]],
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Ghost,
