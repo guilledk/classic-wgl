@@ -989,6 +989,56 @@ impl Engine {
         }
     }
 
+    /// Set a named entity's `IsoSprite` frame index.  When the sprite's texture
+    /// has a packed-atlas frame table, the matching `frame_name` is resolved so
+    /// the packed path is used; otherwise the uniform-grid path takes over.
+    pub fn set_sprite_frame(&mut self, name: &str, frame: f32) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        let Ok(mut sprite) = self.world.get::<&mut IsoSprite>(entity) else { return false };
+        sprite.frame = frame;
+        sprite.frame_name = if self.frame_tables.contains_key(&sprite.texture) {
+            Some(format!("{}_{}", sprite.texture, frame as u32))
+        } else {
+            None
+        };
+        true
+    }
+
+    /// Set a named entity's `IsoSprite` tint colour (RGBA).
+    pub fn set_sprite_color(&mut self, name: &str, color: [f32; 4]) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        let Ok(mut sprite) = self.world.get::<&mut IsoSprite>(entity) else { return false };
+        sprite.color = color;
+        true
+    }
+
+    /// Spawn a new `IsoSprite` entity cloned from a template entity (e.g. a
+    /// mouse-follow placement ghost), so a guest can drop copies at runtime.
+    /// Copies the template's `IsoSprite` and `Transform` (the latter carries the
+    /// live position written by `set_pos`); the caller then adjusts the clone
+    /// with `set_pos`/`set_sprite_frame`/`set_sprite_color` as usual.  Returns
+    /// `false` when the name is taken, the template is unknown, or the template
+    /// has no `IsoSprite`.
+    pub fn spawn_sprite_clone(&mut self, template: &str, name: &str) -> bool {
+        if self.names.contains_key(name) {
+            return false;
+        }
+        let Some(&template_entity) = self.names.get(template) else { return false };
+        let sprite = match self.world.get::<&IsoSprite>(template_entity) {
+            Ok(s) => (*s).clone(),
+            Err(_) => return false,
+        };
+        let transform = self
+            .world
+            .get::<&Transform>(template_entity)
+            .ok()
+            .map(|t| (*t).clone())
+            .unwrap_or_else(|| Transform::new(sprite.position, sprite.scale));
+        let entity = self.world.spawn((sprite, transform));
+        self.register_named_entity(name, entity);
+        true
+    }
+
     /// The iso tile coordinates under the mouse cursor (from the tilemap).
     pub fn mouse_iso(&self) -> Option<(f32, f32)> {
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;

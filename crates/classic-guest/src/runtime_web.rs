@@ -579,6 +579,55 @@ impl WebWasmRuntime {
             );
         }
 
+        // set_sprite_frame
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_sprite_frame",
+                Box::new(move |ptr: i32, len: i32, frame: f64| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().set_sprite_frame(&name, frame)
+                }) as Box<dyn FnMut(i32, i32, f64) -> i32>
+            );
+        }
+
+        // set_sprite_color
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_sprite_color",
+                Box::new(move |ptr: i32, len: i32, r: f64, g: f64, b: f64, a: f64| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().set_sprite_color(&name, r, g, b, a)
+                }) as Box<dyn FnMut(i32, i32, f64, f64, f64, f64) -> i32>
+            );
+        }
+
+        // spawn_sprite_clone
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "spawn_sprite_clone",
+                Box::new(move |t_ptr: i32, t_len: i32, n_ptr: i32, n_len: i32| -> i32 {
+                    let (template, name) = {
+                        let mem = mem.borrow();
+                        let m = mem.as_ref().unwrap();
+                        (read_str(m, t_ptr, t_len), read_str(m, n_ptr, n_len))
+                    };
+                    host.borrow_mut().spawn_sprite_clone(&template, &name)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
         // mouse
         {
             let host = host.clone();

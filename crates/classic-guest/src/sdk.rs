@@ -134,6 +134,22 @@ impl GuestHost {
         self.engine().get_pos(name).map(|(x, y, z)| (x as f64, y as f64, z as f64))
     }
 
+    /// Set a named entity's `IsoSprite` frame index (packed-atlas aware).
+    pub fn set_sprite_frame(&mut self, name: &str, frame: f64) -> i32 {
+        self.engine_mut().set_sprite_frame(name, frame as f32) as i32
+    }
+
+    /// Set a named entity's `IsoSprite` tint colour (RGBA, `0..=1`).
+    pub fn set_sprite_color(&mut self, name: &str, r: f64, g: f64, b: f64, a: f64) -> i32 {
+        self.engine_mut().set_sprite_color(name, [r as f32, g as f32, b as f32, a as f32]) as i32
+    }
+
+    /// Spawn a new `IsoSprite` entity cloned from a template entity's
+    /// `IsoSprite` + `Transform` (e.g. a placement ghost), under a new name.
+    pub fn spawn_sprite_clone(&mut self, template: &str, name: &str) -> i32 {
+        self.engine_mut().spawn_sprite_clone(template, name) as i32
+    }
+
     pub fn mouse(&mut self) -> (f64, f64) {
         let p = self.engine().input.mouse_pos;
         (p.x as f64, p.y as f64)
