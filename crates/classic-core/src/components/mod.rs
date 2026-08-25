@@ -6,8 +6,6 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 
 /// Transforms position + scale, the basic renderable spatial component.
-///
-/// Port of `Transform` from `transforms.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transform {
     pub position: Vec3,
@@ -65,7 +63,6 @@ impl Role {
 }
 
 /// Render a solid-colour rectangle.
-/// Port of `Rectangle` from `transforms.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RectRender {
     pub color: [f32; 4],
@@ -73,7 +70,6 @@ pub struct RectRender {
 }
 
 /// Render a sprite (single frame from a sprite sheet).
-/// Port of `Sprite` from `transforms.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SpriteRender {
     pub position: Vec3,
@@ -95,7 +91,7 @@ pub struct SpriteRender {
 /// one explicitly.
 pub const DEFAULT_SDF_FONT: &str = "dejavusans";
 
-/// Port of `SdfText` from `sdfText.ts`.
+/// SDF text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SdfTextRender {
     /// SDF font atlas name (without `-sdf` suffix).
@@ -123,7 +119,6 @@ pub enum TextJustify {
 }
 
 /// Iso tilemap — the terrain grid.
-/// Port of `Tilemap` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tilemap {
     pub position: Vec3,
@@ -187,7 +182,7 @@ fn default_nav_tileset() -> String {
     DEFAULT_NAV_TILESET.to_string()
 }
 
-/// Port of `IsometricNavMesh` from `isometric.ts`.
+/// Navigation mesh (walkability overlay rendered on top of a Tilemap).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NavMesh {
     #[serde(default)]
@@ -212,7 +207,6 @@ pub struct NavMesh {
 }
 
 /// An isometric sprite (billboard in iso space).
-/// Port of `IsoSprite` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IsoSprite {
     pub position: Vec3,
@@ -252,7 +246,6 @@ fn default_footprint() -> Vec<Vec2> {
 }
 
 /// An isometric agent (pathfinding sprite).
-/// Port of `IsoAgent` from `isometric.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IsoAgent {
     pub position: Vec3,
@@ -299,7 +292,6 @@ impl Default for IsoAgent {
 }
 
 /// A frame-animator tied to a sprite.
-/// Port of `Animator` from `animator.ts`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Animator {
     /// Target component in "entityName.ComponentName" format.
@@ -502,7 +494,7 @@ pub enum Shape {
 
 /// Collider component — serializable physics data (no runtime handlers).
 ///
-/// Port of `Collider` from `collision.ts`.  Interaction handlers
+/// Interaction handlers
 /// (`Box<dyn FnMut>`) are *not* part of this component; they are stored on the
 /// [`PhysicsProvider`](crate::collision::PhysicsProvider) keyed by PID, so the
 /// component round-trips through `state.json` without baked closures.
@@ -533,7 +525,6 @@ impl ColliderData {
 }
 
 /// UI node — the visual + layout element for retained-mode UI.
-/// Port of `UIElement`/`UIContainer`/`UIArray`/`UIPadding` from `ui.ts`.
 #[derive(Clone, Debug)]
 pub struct UiNode {
     pub parent: Option<hecs::Entity>,

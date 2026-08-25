@@ -1,6 +1,4 @@
 /// Axis-aligned rectangle. Used by quadtree, colliders, and layout.
-///
-/// Matches the TS `Rect` interface (`types.ts:118-123`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rect {
     pub x: f32,
@@ -27,7 +25,7 @@ impl Rect {
     }
 }
 
-/// Collider event names from `collision.ts:138`.
+/// Collider event kinds dispatched by the physics layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ColliderEvent {
     Enter,
@@ -341,7 +339,6 @@ pub struct SdfFontMetrics {
 }
 
 /// Loading-progress weight constants.
-/// Port of `utils.ts:171-177`.
 pub const MANIFEST_WEIGHT: f32 = 2.0;
 pub const SHADER_FETCH_WEIGHT: f32 = 2.0;
 pub const SHADER_COMPILE_WEIGHT: f32 = 1.0;
@@ -351,7 +348,6 @@ pub const SDF_FONT_WEIGHT: f32 = 1.0;
 pub const ANIMATIONS_WEIGHT: f32 = 1.0;
 
 /// Estimate total loading-progress weight for a manifest.
-/// Port of `utils.ts:179-187`.
 pub fn estimate_manifest_weight(m: &Manifest) -> f32 {
     MANIFEST_WEIGHT
         + m.shaders.len() as f32 * (SHADER_FETCH_WEIGHT + SHADER_COMPILE_WEIGHT)
@@ -377,7 +373,7 @@ impl Viewport {
         self.width / self.height
     }
 
-    /// Build an orthographic projection matching `state.ts:355-363`.
+    /// Build an orthographic projection.
     /// Left=0, right=w, bottom=h, top=0, near=-10000, far=10000.
     pub fn ortho_matrix(&self) -> glam::Mat4 {
         glam::Mat4::orthographic_rh(0.0, self.width, self.height, 0.0, -10000.0, 10000.0)

@@ -29,7 +29,7 @@ impl Shader {
     /// Compile a shader program from GLSL 300 es source strings.
     ///
     /// `attr_names` are bound to consecutive attribute locations
-    /// (index = location, matching `utils.ts:239-243`).
+    /// (index = location).
     pub fn compile(
         gl: &glow::Context,
         vs_src: &str,
@@ -45,8 +45,8 @@ impl Shader {
             gl.attach_shader(p, vs);
             gl.attach_shader(p, fs);
 
-            // Bind attribute locations by manifest index (critical for
-            // matching the TS behaviour — attribute arrays are positional).
+            // Bind attribute locations by manifest index (attribute arrays
+            // are positional).
             for (i, name) in attr_names.iter().enumerate() {
                 gl.bind_attrib_location(p, i as u32, name);
             }
@@ -419,7 +419,6 @@ impl Gfx {
     }
 
     /// Build the orthographic projection matrix.
-    /// Matches `mat4.ortho(m, 0, vw, vh, 0, -10000, 10000)` from `state.ts:355-363`.
     pub fn projection(&self) -> Mat4 {
         Mat4::orthographic_rh(0.0, self.viewport_w, self.viewport_h, 0.0, -10000.0, 10000.0)
     }
@@ -461,7 +460,6 @@ impl Gfx {
     // -- frame begin -------------------------------------------------------
 
     /// Clear the framebuffer and set up state for the current frame.
-    /// Matches `draw()` at `state.ts:455-465`.
     pub fn begin_frame(&self) {
         let gl = &self.gl;
         unsafe {

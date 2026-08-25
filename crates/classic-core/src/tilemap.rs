@@ -3,8 +3,6 @@
 //! **Read `.claude/skills/classic-iso/SKILL.md` before working on this module.**
 //!
 //! Isometric tilemap mesh generation.
-//!
-//! Port of `buildMesh()`, `uploadToGPU()` and helpers from `src/classic/isometric.ts`.
 
 /// One vertex in the interleaved tilemap buffer.
 /// Layout: vertexPos(3), mapCoord(2), tileId(1), normal(3) = 9 floats, 36 bytes.

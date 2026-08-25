@@ -2,8 +2,7 @@
 //! common `PathfinderWorker` API.
 //!
 //! Native uses a dedicated `std::thread` + `mpsc`; web uses a dedicated
-//! `Worker` running the A* algorithm in JavaScript (`worker.js`, a mirror of
-//! the retired TypeScript `pathfinder.ts`).
+//! `Worker` running the A* algorithm in JavaScript (`worker.js`).
 
 /// Request/result correlation id (owned by the caller, e.g. the engine).
 pub type PathId = u64;

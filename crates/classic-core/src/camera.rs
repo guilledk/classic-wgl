@@ -5,8 +5,6 @@
 use glam::{Mat4, Vec3};
 
 /// 2D camera for an orthographic projection.
-///
-/// Port of `src/classic/camera.ts`.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub position: Vec3,
@@ -29,7 +27,6 @@ impl Camera {
     /// Compute the "fix point" — the scaled position re-centred on the viewport.
     /// This is what the camera-matrix translation negates.
     ///
-    /// Port of `camera.ts:getFix()`.
     /// Formula: `fix = position * scale - size / [2, 2, 1]`
     /// (This makes `position * scale` map to the viewport centre `size/2`.)
     pub fn fix(&self) -> Vec3 {
@@ -38,7 +35,6 @@ impl Camera {
 
     /// Build the camera view matrix.
     ///
-    /// port of `camera.ts:matrix()`.
     pub fn matrix(&self) -> Mat4 {
         let fix = self.fix();
         Mat4::from_translation(-fix) * Mat4::from_scale(self.scale)

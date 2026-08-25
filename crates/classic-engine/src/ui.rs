@@ -4,7 +4,6 @@
 //!
 //! Retained-mode UI layout manager.
 //!
-//! Port of `UIManager` + `UIContainer` from `src/classic/ui.ts`.
 //! UI elements are regular ECS entities with `Transform` + a render component
 //! (`RectRender` / `SdfTextRender`) + a `UiNode` layout component.
 

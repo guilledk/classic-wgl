@@ -2,7 +2,7 @@ use glam::Vec3;
 
 use classic_core::gjk::{GjkContext, GjkShape};
 
-/// A simple unit-square shape for testing, matching the TS test helpers.
+/// A simple unit-square shape for testing.
 struct UnitSquare {
     pos: Vec3,
     scale: Vec3,

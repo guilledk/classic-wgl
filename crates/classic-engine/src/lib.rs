@@ -2049,9 +2049,8 @@ impl Engine {
             self.join_workers();
         }
 
-        // Wheel decay matches TS: 1.4 * delta, then [-1, 1] clamp.
+        // Wheel decay: 1.4 * delta, then [-1, 1] clamp.
         // Without write-back, decay resets to zero every frame.
-        // Wheel decay + clamp (matches TS: 1.4 * deltaTime, then [-1, 1])
         let mw = &mut self.input.mouse_wheel;
         *mw = (mw.abs() - 1.4 * self.time.delta).max(0.0) * mw.signum();
         if mw.abs() < 0.01 {
@@ -2404,7 +2403,7 @@ impl Engine {
                 let Some(gpu) = self.tilemap_gpu.get(entity_name) else {
                     continue;
                 };
-                // Build iso matrix: same as TS constructor
+                // Build the iso matrix.
                 let iso = cartesian_to_iso_4().inverse();
                 let iso_matrix = Mat4::from_scale(tf.scale) * iso;
 
@@ -3103,7 +3102,7 @@ impl Engine {
         self.nav_gpu = Some(TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
 
         // Add Transform to nav entity so render query (&Transform, &NavMesh) matches.
-        // Borrow position + scale from parent tilemap (matches TS IsometricNavMesh constructor).
+        // Borrow position + scale from parent tilemap.
         {
             let (pos, scl) = self
                 .entity_by_role(RoleKind::Tilemap)
@@ -3399,7 +3398,7 @@ impl Engine {
         Vec2::new((component_anchor.x * cw - bx0) / fw, (component_anchor.y * ch - by0) / fh)
     }
 
-    /// Compute the model matrix for an IsoSprite (matches TS `IsoSprite.modelMatrix()`).
+    /// Compute the model matrix for an IsoSprite.
     /// `tex_dim` is the quad size in pixels; `anchor_px` is the ground-contact
     /// point in that same pixel space (the quad is shifted so it lands on the
     /// sprite's position).
@@ -3443,8 +3442,7 @@ impl Engine {
         (pos.x - pos.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX
     }
 
-    /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`),
-    /// in **window space** `[0, 1]`.  `h_depth` is the tilemap's horizontal depth
+    /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.  `h_depth` is the tilemap's horizontal depth
     /// scale, kept identical to the terrain's `depth_scale.x` uniform so sprite
     /// occlusion matches the tilemap.
     fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2], h_depth: f32) -> [f32; 4] {

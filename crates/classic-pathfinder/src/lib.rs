@@ -7,8 +7,7 @@
 //! native + web routes.  Transcendental functions use `libm` so results are
 //! reproducible across targets (the same rationale as `classic-terrain`).
 //!
-//! Port of the algorithm from `src/classic/pathfinder.ts` (web worker).  The
-//! nav mesh is a flat `[i32]` where `1` = walkable, `0` = blocked.
+//! The nav mesh is a flat `[i32]` where `1` = walkable, `0` = blocked.
 
 #![no_std]
 
