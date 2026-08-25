@@ -66,5 +66,5 @@
 {"order":-1500.0,"kind":"SdfText","name":"iso_debug_Z","model":[21.03125,0.0,0.0,0.0,0.0,25.923203,0.0,0.0,0.0,0.0,1.0,0.0,213.0,90.0,-1500.0,1.0],"camera_ignored":true,"texture":"dejavusans-sdf","color":[0.2,0.2,1.0,1.0]}
 {"order":-1500.0,"kind":"SdfText","name":"iso_debug_X0.0","model":[90.27867,0.0,0.0,0.0,0.0,21.936,0.0,0.0,0.0,0.0,1.0,0.0,340.0,130.0,-1500.0,1.0],"camera_ignored":true,"texture":"dejavusans-sdf","color":[1.0,0.3,0.3,1.0]}
 {"order":-1500.0,"kind":"SdfText","name":"iso_debug_Y0.0","model":[81.33467,0.0,0.0,0.0,0.0,22.186,0.0,0.0,0.0,0.0,1.0,0.0,340.0,152.0,-1500.0,1.0],"camera_ignored":true,"texture":"dejavusans-sdf","color":[0.3,1.0,0.3,1.0]}
-{"order":-1500.0,"kind":"SdfText","name":"iso_debug_Z0","model":[65.868515,0.0,0.0,0.0,0.0,21.936,0.0,0.0,0.0,0.0,1.0,0.0,340.0,174.0,-1500.0,1.0],"camera_ignored":true,"texture":"dejavusans-sdf","color":[0.4,0.4,1.0,1.0]}
+{"order":-1500.0,"kind":"SdfText","name":"iso_debug_Z0","model":[90.27867,0.0,0.0,0.0,0.0,21.936,0.0,0.0,0.0,0.0,1.0,0.0,340.0,174.0,-1500.0,1.0],"camera_ignored":true,"texture":"dejavusans-sdf","color":[0.4,0.4,1.0,1.0]}
 {"order":-20000.0,"kind":"Sprite","name":"cursor","model":[32.0,0.0,0.0,0.0,0.0,32.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,-10000.0,1.0],"camera_ignored":true,"texture":"cursor","frame":0.0}
