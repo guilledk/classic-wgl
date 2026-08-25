@@ -30,9 +30,9 @@ pub fn init_camera_wasd(engine: &mut Engine) {
             engine.camera.position.x += speed;
         }
         if engine.input.mouse_wheel.abs() > 0.01 {
-            let dz = engine.input.mouse_wheel * engine.time.delta;
-            engine.camera.scale.x += dz;
-            engine.camera.scale.y += dz;
+            let factor = 1.0 + engine.input.mouse_wheel * engine.time.delta;
+            engine.camera.scale.x *= factor;
+            engine.camera.scale.y *= factor;
             let min = glam::Vec3::new(0.1, 0.1, 1.0);
             engine.camera.scale = engine.camera.scale.max(min);
         }
