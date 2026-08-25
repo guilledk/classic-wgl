@@ -2011,17 +2011,22 @@ impl Engine {
         for f in pre.iter_mut() {
             f(self);
         }
+        pre.append(&mut self.pre_update_hooks);
         self.pre_update_hooks = pre;
 
         // Take-restore dance: closures fire with &mut Engine, but the Vec
         // is owned by Engine. Taking means closures can call on_update()
         // without borrow conflicts. Restoring preserves them for next frame.
+        // Closures registered *during* the loop (e.g. the tilemap's mouse-iso
+        // solve, installed lazily by `commit_terrain`) land in the emptied
+        // `self.update_fns`; append them before restoring so they survive.
         // Handlers use iter_mut(), NOT std::mem::take — they must survive
         // across frames (click, enter, exit, selection).
         let mut fns = std::mem::take(&mut self.update_fns);
         for f in fns.iter_mut() {
             f(self);
         }
+        fns.append(&mut self.update_fns);
         self.update_fns = fns;
 
         // Wheeled-vehicle simulation runs after the guest update closures
