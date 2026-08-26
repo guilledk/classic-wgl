@@ -431,7 +431,16 @@ impl Engine {
                 self.gfx.as_mut().unwrap().textures.insert(entry.name.clone(), tex.clone());
                 continue;
             }
-            self.load_texture_png(&entry.name, bytes);
+            // Shared-atlas companion sheets are named `{sheet}-normal` /
+            // `{sheet}-depth` by the packer; upload them in their native channel
+            // count (RGB8 / R8) instead of RGBA8.
+            if entry.name.ends_with("-depth") {
+                self.load_texture_luma8(&entry.name, bytes);
+            } else if entry.name.ends_with("-normal") {
+                self.load_texture_rgb8(&entry.name, bytes);
+            } else {
+                self.load_texture_png(&entry.name, bytes);
+            }
             if let Some(tex) = self.gfx.as_ref().unwrap().textures.get(&entry.name) {
                 uploaded_by_src.insert(entry.src.clone(), tex.clone());
             }
@@ -444,7 +453,7 @@ impl Engine {
             if entry.depth.is_some() {
                 if let Some(bytes) = resources.depths().get(&entry.name) {
                     let depth_tex = format!("{}-depth", entry.name);
-                    self.load_texture_png(&depth_tex, bytes);
+                    self.load_texture_luma8(&depth_tex, bytes);
                     self.texture_depths.insert(
                         entry.name.clone(),
                         TextureDepth { depth_tex, depth_range: entry.depth_range },
@@ -461,7 +470,7 @@ impl Engine {
             if entry.normal.is_some() {
                 if let Some(bytes) = resources.normals().get(&entry.name) {
                     let normal_tex = format!("{}-normal", entry.name);
-                    self.load_texture_png(&normal_tex, bytes);
+                    self.load_texture_rgb8(&normal_tex, bytes);
                     self.texture_normals.insert(entry.name.clone(), normal_tex);
                 }
             }
@@ -663,6 +672,24 @@ impl Engine {
         }
     }
 
+    /// Upload a grayscale PNG as an R8 texture (depth maps, SDF atlases).
+    pub fn load_texture_luma8(&mut self, name: &str, png_bytes: &[u8]) {
+        let img = image::load_from_memory(png_bytes).expect("decode PNG");
+        let luma = img.to_luma8();
+        if let Some(gfx) = self.gfx.as_mut() {
+            gfx.add_texture_r8(name, &luma, luma.width(), luma.height());
+        }
+    }
+
+    /// Upload an RGB PNG as an RGB8 texture (world-space normal maps).
+    pub fn load_texture_rgb8(&mut self, name: &str, png_bytes: &[u8]) {
+        let img = image::load_from_memory(png_bytes).expect("decode PNG");
+        let rgb = img.to_rgb8();
+        if let Some(gfx) = self.gfx.as_mut() {
+            gfx.add_texture_rgb8(name, &rgb, rgb.width(), rgb.height());
+        }
+    }
+
     /// Load an SDF font from its metrics JSON and atlas PNG.
     /// The atlas texture is set to LINEAR filtering.
     pub fn load_sdf_font(&mut self, atlas_name: &str, metrics_json: &str, atlas_png: &[u8]) {
@@ -671,9 +698,9 @@ impl Engine {
         self.sdf_fonts.insert(metrics.name.clone(), metrics);
 
         let img = image::load_from_memory(atlas_png).expect("decode SDF atlas PNG");
-        let rgba = img.to_rgba8();
+        let luma = img.to_luma8();
         if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_rgba8(atlas_name, &rgba, rgba.width(), rgba.height());
+            gfx.add_texture_r8(atlas_name, &luma, luma.width(), luma.height());
             if let Some(tex) = gfx.textures.get(atlas_name) {
                 tex.set_linear(&gfx.gl);
             }

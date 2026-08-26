@@ -190,21 +190,31 @@ pub struct GlTexture {
 }
 
 impl GlTexture {
-    /// Upload RGBA8 pixel data to a new 2D texture.
-    pub fn from_rgba8(gl: &glow::Context, rgba: &[u8], width: u32, height: u32) -> Self {
+    /// Upload pixel data to a new 2D texture with the given internal format,
+    /// data format, and unpack alignment (1 for R8/RGB8, 4 for RGBA8).
+    fn upload(
+        gl: &glow::Context,
+        internal: u32,
+        format: u32,
+        data: &[u8],
+        width: u32,
+        height: u32,
+        alignment: i32,
+    ) -> Self {
         let texture = unsafe { gl.create_texture() }.expect("create texture");
         unsafe {
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, alignment);
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                glow::RGBA as i32,
+                internal as i32,
                 width as i32,
                 height as i32,
                 0,
-                glow::RGBA,
+                format,
                 glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(rgba)),
+                glow::PixelUnpackData::Slice(Some(data)),
             );
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
@@ -218,9 +228,27 @@ impl GlTexture {
                 glow::TEXTURE_WRAP_T,
                 glow::CLAMP_TO_EDGE as i32,
             );
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
         Self { texture, size: (width, height) }
+    }
+
+    /// Upload RGBA8 pixel data to a new 2D texture.
+    pub fn from_rgba8(gl: &glow::Context, rgba: &[u8], width: u32, height: u32) -> Self {
+        Self::upload(gl, glow::RGBA, glow::RGBA, rgba, width, height, 4)
+    }
+
+    /// Upload R8 (single-channel) pixel data to a new 2D texture.  Used for
+    /// grayscale depth maps and the SDF font atlas (sampled as `.r`).
+    pub fn from_r8(gl: &glow::Context, r: &[u8], width: u32, height: u32) -> Self {
+        Self::upload(gl, glow::R8, glow::RED, r, width, height, 1)
+    }
+
+    /// Upload RGB8 pixel data to a new 2D texture.  Used for world-space normal
+    /// maps (sampled as `.rgb`).
+    pub fn from_rgb8(gl: &glow::Context, rgb: &[u8], width: u32, height: u32) -> Self {
+        Self::upload(gl, glow::RGB8, glow::RGB, rgb, width, height, 1)
     }
 
     /// Set LINEAR filtering (used for SDF atlas).
@@ -448,6 +476,14 @@ impl Gfx {
 
     pub fn add_texture_rgba8(&mut self, name: &str, rgba: &[u8], w: u32, h: u32) {
         self.textures.insert(name.to_string(), GlTexture::from_rgba8(&self.gl, rgba, w, h));
+    }
+
+    pub fn add_texture_r8(&mut self, name: &str, r: &[u8], w: u32, h: u32) {
+        self.textures.insert(name.to_string(), GlTexture::from_r8(&self.gl, r, w, h));
+    }
+
+    pub fn add_texture_rgb8(&mut self, name: &str, rgb: &[u8], w: u32, h: u32) {
+        self.textures.insert(name.to_string(), GlTexture::from_rgb8(&self.gl, rgb, w, h));
     }
 
     pub fn shader(&self, name: &str) -> &Shader {
