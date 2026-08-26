@@ -128,6 +128,7 @@ const OP_POLL_PATH: i32 = 76;
 const OP_SET_SPRITE_FRAME: i32 = 77;
 const OP_SET_SPRITE_COLOR: i32 = 78;
 const OP_SPAWN_SPRITE_CLONE: i32 = 79;
+const OP_SET_ENABLED: i32 = 80;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -293,6 +294,7 @@ impl WorkerWasmRuntime {
                 (host.set_sprite_color(&strs[0], nf(0), nf(1), nf(2), nf(3)) as f64, None)
             }
             OP_SPAWN_SPRITE_CLONE => (host.spawn_sprite_clone(&strs[0], &strs[1]) as f64, None),
+            OP_SET_ENABLED => (host.set_enabled(&strs[0], ni(0)) as f64, None),
             OP_GET_CAMERA => {
                 let (x, y, s) = host.get_camera();
                 (1.0, Some(enc_f64s(&[x, y, s])))

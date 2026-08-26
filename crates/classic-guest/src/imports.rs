@@ -195,6 +195,15 @@ macro_rules! install_host_imports {
             },
         )?;
 
+        $linker.func_wrap(
+            m,
+            "set_enabled",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, enabled: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().set_enabled(&name, enabled)
+            },
+        )?;
+
         $linker.func_wrap(m, "agent_selected", |mut caller: Caller<'_, $host>| -> i32 {
             caller.data_mut().guest_mut().agent_selected()
         })?;

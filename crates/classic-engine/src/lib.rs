@@ -3473,6 +3473,13 @@ impl Engine {
         }
     }
 
+    /// Toggle a named entity's visibility (add/remove the `Disabled` marker).
+    pub fn set_enabled_named(&mut self, name: &str, enabled: bool) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        self.set_enabled(entity, enabled);
+        true
+    }
+
     /// Check whether an entity (or any of its ancestors) is disabled.
     pub fn is_disabled(&self, entity: hecs::Entity) -> bool {
         if self.world.get::<&classic_core::components::Disabled>(entity).is_ok() {

@@ -180,6 +180,11 @@ impl GuestHost {
         self.engine_mut().start_anim(name, anim, repeat != 0) as i32
     }
 
+    /// Show/hide a named entity (add/remove the `Disabled` marker).
+    pub fn set_enabled(&mut self, name: &str, enabled: i32) -> i32 {
+        self.engine_mut().set_enabled_named(name, enabled != 0) as i32
+    }
+
     /// Whether the editor's agent tool is active.
     pub fn agent_selected(&mut self) -> i32 {
         self.engine().guest_flag("agent_selected") as i32
