@@ -296,13 +296,16 @@ computed at insertion time in `begin_frame`.
 
 ## 9. A\* Pathfinding
 
-`classic-core/src/pathfinder.rs` implements A* over an immutable `NavSnapshot`
-(`size_x`/`size_y`/`data`, `Arc`-shared).  The engine offloads searches to a
-host `PathfinderWorker` (`classic-worker` — native `std::thread` on desktop, a
-dedicated `Worker` on web) so the render thread never blocks mid-frame.  The
-engine owns the request id and the snapshot; `request_path` submits, `poll_path`
-collects, `join_workers` is the determinism barrier.  `Engine::find_path` (the
-inline search over the live `NavMesh`) is retained only for tests.
+The standalone `classic-pathfinder` crate (re-exported as `classic_core::pathfinder`,
+`#![no_std]`) implements A* over an immutable `NavSnapshot`
+(`size_x`/`size_y`/`data`, `Arc`-shared).  It is the single source of truth for
+native + web: compiled to `pathfinder.wasm` for the web `Worker`.  The engine
+offloads searches to a host `PathfinderWorker` (`classic-worker` — native
+`std::thread` on desktop, a dedicated `Worker` on web) so the render thread
+never blocks mid-frame.  The engine owns the request id and the snapshot;
+`request_path` submits, `poll_path` collects, `join_workers` is the determinism
+barrier.  `Engine::find_path` (the inline search over the live `NavMesh`) is
+retained only for tests.
 
 ### Signature
 
@@ -339,6 +342,36 @@ equal-cost nodes.
 `reconstruct_path` walks the `came_from` array backwards from `to` to `from`,
 reverses the resulting vector, and returns it.  The returned path includes
 both endpoints.
+
+### Vehicle search (footprint / slope / jump / turn-cost)
+
+Wheeled vehicles use a richer search than the 1×1 humanoid A\* — still a 2D
+grid search (no heading state, no state lattice), but with four layered gates:
+
+- **Footprint**: `erode_for_footprint` inflates the walkability grid by the
+  vehicle's `path_footprint`, then A\* runs as a point agent.
+- **Slope**: `derive_vehicle_slope_nav` derives a per-tile feasibility grid by
+  sampling terrain at the wheel positions (`±wheelbase/2`, `±track/2`) in all 8
+  headings; a tile is walkable if *some* heading keeps `|pitch| ≤ pitch_max` and
+  `|roll| ≤ roll_max`.
+- **Jump**: `find_path_for_footprint_with_jumps` allows a *downward* step whose
+  drop (px) is within `safe_fall_px` even when the slope grid marks it blocked,
+  scaled by `jump_cost`.
+- **Turn cost**: the `a_star` step-cost closure now takes the *previous* cell —
+  `FnMut(prev: Option<GridCell>, current, neighbour)` — and `turn_penalty` adds
+  `turn_cost` per 45° of heading change (straight free, 90° = `2·turn_cost`,
+  180° = `4·turn_cost`).  The penalty only *raises* costs, so the octile
+  heuristic stays admissible.
+
+`turn_cost` is threaded end-to-end as a plain `f32` (a `VehicleDef` field →
+`IsoVehicle` → `Engine::vehicle_goto` → `request_vehicle_path` →
+`Command::FindVehicle` → `PathfinderState::find_vehicle` →
+`find_vehicle_path_with_slope` → `find_path_for_footprint_with_jumps`), and
+mirrored through the web path (`worker.js` `findVehicle` message →
+`find_vehicle` wasm ABI).  The slope grid cache keys off `(pitch, roll,
+wheelbase, track)` only — `turn_cost` does not affect it.  The path stays a
+`Vec<GridCell>`; reverse is a *follower* manoeuvre (see `classic-ecs` /
+`classic-iso`), not a planner edge.
 
 ### Integration
 
