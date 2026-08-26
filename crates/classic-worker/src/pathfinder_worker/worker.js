@@ -10,7 +10,7 @@
 //     heights: Float32Array, heightScale, tileScale }         — replace vehicle nav
 //   { type: "findVehicle", id, from: [x, y], to: [x, y],
 //     footprint: [[dx, dy], …], pitchMax, rollMax, wheelbasePx, trackPx,
-//     safeFallPx, jumpCost }                                  — run a vehicle search
+//     safeFallPx, jumpCost, turnCost }                         — run a vehicle search
 // Replies (to the main thread):
 //   { type: "result", id, path: Int32Array | null }           — flat [x0,y0,…]
 //      where `path` is null when no route exists.
@@ -70,6 +70,7 @@ function handle(msg) {
             msg.trackPx,
             msg.safeFallPx,
             msg.jumpCost,
+            msg.turnCost,
         );
         self.postMessage({ type: "result", id: msg.id, path: n < 0 ? null : readResult(n) });
     }

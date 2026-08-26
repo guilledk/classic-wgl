@@ -102,6 +102,7 @@ pub extern "C" fn find_vehicle(
     track_px: f32,
     safe_fall_px: f32,
     jump_cost: f32,
+    turn_cost: f32,
 ) -> i32 {
     let fp_len = footprint_len.max(0) as usize;
     let footprint: Vec<GridCell> = unsafe { core::slice::from_raw_parts(footprint, fp_len * 2) }
@@ -120,6 +121,7 @@ pub extern "C" fn find_vehicle(
         track_px,
         safe_fall_px,
         jump_cost,
+        turn_cost,
     ) {
         Some(path) => write_result(&mut st.result, path),
         None => -1,

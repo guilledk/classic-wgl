@@ -1321,6 +1321,7 @@ impl Engine {
         track_px: f32,
         safe_fall_px: f32,
         jump_cost: f32,
+        turn_cost: f32,
     ) -> Option<Vec<(i32, i32)>> {
         let snapshot = self.build_vehicle_nav_snapshot()?;
         let result = pathfinder::find_vehicle_path_snapshot(
@@ -1334,6 +1335,7 @@ impl Engine {
             track_px,
             safe_fall_px,
             jump_cost,
+            turn_cost,
         );
         classic_core::cl_info!(
             classic_core::instrument::Chan::Path,

@@ -972,7 +972,7 @@ impl Engine {
             );
             return VehicleGotoSubmit::NoVehicle;
         };
-        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px) = {
+        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px, turn_cost) = {
             let Ok(v) = self.world.get::<&IsoVehicle>(ve) else {
                 return VehicleGotoSubmit::NoVehicle;
             };
@@ -992,6 +992,7 @@ impl Engine {
                 v.wheelbase_px,
                 v.track_px,
                 v.safe_fall_px,
+                v.turn_cost,
             )
         };
         let from = {
@@ -1020,6 +1021,7 @@ impl Engine {
                     track_px,
                     safe_fall_px,
                     JUMP_COST,
+                    turn_cost,
                 );
             }
         } else {
@@ -1033,6 +1035,7 @@ impl Engine {
                 track_px,
                 safe_fall_px,
                 JUMP_COST,
+                turn_cost,
             ) {
                 Some(path) => {
                     VehicleGotoPoll::Accepted(path.into_iter().map(|(x, y)| [x, y]).collect())
