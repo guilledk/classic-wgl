@@ -244,6 +244,21 @@ pub struct VehicleDef {
     /// against this ceiling.
     #[serde(default = "default_vehicle_steer_max_deg")]
     pub steer_max_deg: f32,
+    /// Max front-wheel steering-angle rate while driving, in degrees per second.
+    /// The follow controller integrates the steering angle toward its demand at
+    /// this rate, so the tires sweep between steer frames instead of snapping.
+    #[serde(default = "default_vehicle_steer_rate")]
+    pub steer_rate_deg_per_sec: f32,
+    /// Reverse speed in tiles per second (used when the vehicle backs up to
+    /// recover from a goal/waypoint behind it).  `0` disables reversing.
+    #[serde(default = "default_vehicle_reverse_speed")]
+    pub reverse_speed: f32,
+    /// A* turn penalty: cost added per 45° of heading change between successive
+    /// steps (forward is cheapest, a 180° reversal costs the most).  `0`
+    /// disables the penalty.  Threaded to the pathfinder so routes prefer
+    /// gentle turns.
+    #[serde(default = "default_vehicle_turn_cost")]
+    pub turn_cost: f32,
     /// Steering-tire parts, in `[fl, fr, …]` order, matched to `parts` wheels by
     /// index (`tires[0]` steers `parts[1]`, the front-left wheel).  Empty = no
     /// steering.  A tire shares its wheel's ground-origin anchor (the steering
@@ -283,6 +298,18 @@ fn default_vehicle_turn_rate() -> f32 {
 
 fn default_vehicle_steer_levels() -> u32 {
     1
+}
+
+fn default_vehicle_steer_rate() -> f32 {
+    360.0
+}
+
+fn default_vehicle_reverse_speed() -> f32 {
+    1.3
+}
+
+fn default_vehicle_turn_cost() -> f32 {
+    0.0
 }
 
 fn default_vehicle_steer_max_deg() -> f32 {

@@ -59,6 +59,13 @@ const GOAL_TOLERANCE: f32 = 0.5;
 /// clearly shortens the path.
 const JUMP_COST: f32 = 1.3;
 
+/// Heading error (radians) above which the vehicle shifts into reverse to
+/// reorient rather than arcing forward off-traversable.
+const REVERSE_ENTER: f32 = 100.0f32.to_radians();
+/// Heading error (radians) below which the vehicle shifts back to forward
+/// (hysteresis around [`REVERSE_ENTER`]).
+const REVERSE_EXIT: f32 = 70.0f32.to_radians();
+
 /// The outcome of submitting a vehicle path request via [`Engine::vehicle_goto`].
 pub enum VehicleGotoSubmit {
     /// Vehicle is airborne; the guest should re-issue next frame.
@@ -271,6 +278,30 @@ fn steer_index(demand: f32, steer_max: f32, steer_levels: u32) -> u32 {
 /// odd range, 0 for a single level).
 fn straight_steer(steer_levels: u32) -> u32 {
     steer_levels.saturating_sub(1) / 2
+}
+
+/// Advance the steering angle (radians, positive = turn left) toward `demand`
+/// at a max rate of `steer_rate` (rad/s), clamped to `[-steer_max, steer_max]`.
+/// Rate-limiting the steering *state* (rather than quantizing the raw heading
+/// error) is what makes the tires sweep smoothly through their steer frames.
+fn step_steer(steer: f32, demand: f32, steer_max: f32, steer_rate: f32, dt: f32) -> f32 {
+    let demand = demand.clamp(-steer_max, steer_max);
+    let max_delta = steer_rate * dt;
+    (steer + (demand - steer).clamp(-max_delta, max_delta)).clamp(-steer_max, steer_max)
+}
+
+/// Decide whether the vehicle should reverse to reach a target whose relative
+/// heading error is `err` (radians, wrapped).  Hysteresis: enter reverse past
+/// `REVERSE_ENTER`, exit only below `REVERSE_EXIT`, so the gear doesn't flap.
+fn should_reverse(err: f32, reversing: bool) -> bool {
+    let enter = REVERSE_ENTER;
+    let exit = REVERSE_EXIT;
+    let abs = err.abs();
+    if reversing {
+        abs > exit
+    } else {
+        abs > enter
+    }
 }
 
 /// A part's anchors as a fixed 8-slot array (padded/truncated to 8 directions).
@@ -568,6 +599,9 @@ impl Engine {
             steer_index: straight_steer(steer_levels),
             steer_levels,
             steer_max: def.steer_max_deg.to_radians(),
+            steer_rate: def.steer_rate_deg_per_sec.to_radians(),
+            reverse_speed: def.reverse_speed,
+            turn_cost: def.turn_cost,
             ..Default::default()
         };
         let be = self.world.spawn((
@@ -611,10 +645,10 @@ impl Engine {
         let write = {
             let Some(mut v) = self.world.get::<&mut IsoVehicle>(ve).ok() else { return };
 
-            // -- movement along the A* path (bounded-turn, forward-only) ----
+            // -- movement along the A* path (kinematic bicycle, forward+reverse) --
             let mut x = body_x;
             let mut y = body_y;
-            let mut steer_demand = 0.0f32;
+            let mut following = false;
             if !v.path.is_empty() {
                 // Arrive once the final waypoint is within tolerance; snap to
                 // its center and stop.
@@ -629,6 +663,7 @@ impl Engine {
                     y = goal.1;
                     v.path.clear();
                     v.path_idx = 0;
+                    v.reversing = false;
                 } else {
                     // Pure-pursuit: lead the target by ~1.5× the minimum
                     // turning radius (speed / turn_rate) so the vehicle arcs
@@ -639,25 +674,40 @@ impl Engine {
                     let (gx, gy, next_idx) = lookahead(&v.path, v.path_idx, x, y, lookahead_dist);
                     v.path_idx = next_idx;
 
-                    // Steer the heading toward the look-ahead target, bounded
-                    // by the max turn rate.
+                    // Heading error to the look-ahead target.  When it's
+                    // substantially behind, reverse and reorient instead of
+                    // arcing wide off-traversable.
                     let desired = (gy - y).atan2(gx - x);
                     let err = wrap_pi(desired - v.heading);
+                    v.reversing = v.reverse_speed > 0.0 && should_reverse(err, v.reversing);
+
+                    // Front wheels steer into the turn (rate-limited state, so
+                    // the tires sweep through their steer frames rather than
+                    // snapping); the body rotates toward the target at the max
+                    // turn rate.
+                    v.steer = step_steer(v.steer, err, v.steer_max, v.steer_rate, delta);
                     let max_turn = v.turn_rate * delta;
                     v.heading = wrap_pi(v.heading + err.clamp(-max_turn, max_turn));
-                    // Front wheels steer into the desired turn.
-                    steer_demand = err;
 
-                    // Advance forward only (a wheeled vehicle never reverses).
-                    let step = v.speed * delta;
-                    x += v.heading.cos() * step;
-                    y += v.heading.sin() * step;
+                    // Forward drives ahead; reverse backs up along the heading.
+                    let dir: f32 = if v.reversing { -1.0 } else { 1.0 };
+                    let drive_speed = if v.reversing { v.reverse_speed } else { v.speed };
+                    let step = drive_speed * delta;
+                    x += dir * v.heading.cos() * step;
+                    y += dir * v.heading.sin() * step;
+                    following = true;
                 }
             }
+            if !following {
+                // Stopped: return the steering wheel to straight.
+                v.steer = step_steer(v.steer, 0.0, v.steer_max, v.steer_rate, delta);
+                v.reversing = false;
+            }
 
-            // Quantize the continuous heading for the 8-way sprite sheets.
+            // Quantize the continuous heading for the 8-way sprite sheets; the
+            // tires follow the integrated steering angle, not the raw error.
             v.direction = heading_to_dir(v.heading);
-            v.steer_index = steer_index(steer_demand, v.steer_max, v.steer_levels);
+            v.steer_index = steer_index(v.steer, v.steer_max, v.steer_levels);
 
             // -- wheel ground contacts --------------------------------------
             let mut wheel_xy = [[0.0f32; 2]; 4];
@@ -853,6 +903,8 @@ impl Engine {
             v.path.clear();
             v.path_idx = 0;
             v.steer_index = straight_steer(v.steer_levels);
+            v.steer = 0.0;
+            v.reversing = false;
 
             let mut wheel_xy = [[0.0f32; 2]; 4];
             let mut wheel_z = [0.0f32; 4];
@@ -1215,6 +1267,34 @@ mod tests {
     }
 
     #[test]
+    fn step_steer_rate_limits_the_wheel_sweep() {
+        let max = 30.0f32.to_radians();
+        let rate = 360.0f32.to_radians();
+        // From straight to full-left in one 1/60s frame: only `rate · dt` of the
+        // way there (a sweep, not a snap).
+        let dt = 1.0 / 60.0;
+        let stepped = step_steer(0.0, max, max, rate, dt);
+        assert!(stepped > 0.0 && stepped < max, "should be between straight and full-left");
+        assert!((stepped - rate * dt).abs() < 1e-6, "should move exactly rate·dt");
+        // Demand is clamped to the steer envelope.
+        assert_eq!(step_steer(0.0, 10.0, max, rate, 1.0), max);
+        assert_eq!(step_steer(0.0, -10.0, max, rate, 1.0), -max);
+    }
+
+    #[test]
+    fn should_reverse_uses_hysteresis() {
+        let enter = REVERSE_ENTER;
+        let exit = REVERSE_EXIT;
+        // Below enter (while driving forward) stays forward.
+        assert!(!should_reverse(exit + 0.01, false));
+        // Above enter flips into reverse.
+        assert!(should_reverse(enter + 0.01, false));
+        // While reversing, stays reversed until below exit.
+        assert!(should_reverse(exit + 0.01, true));
+        assert!(!should_reverse(exit - 0.01, true));
+    }
+
+    #[test]
     fn derived_offsets_round_trip_through_iso() {
         let cell = [247.0, 247.0];
         let tile_scale = 45.0;
@@ -1265,6 +1345,9 @@ mod tests {
             safe_fall_px: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
+            steer_rate_deg_per_sec: 360.0,
+            reverse_speed: 1.3,
+            turn_cost: 0.0,
             tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
@@ -1406,6 +1489,9 @@ mod tests {
             safe_fall_px: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
+            steer_rate_deg_per_sec: 360.0,
+            reverse_speed: 1.3,
+            turn_cost: 0.0,
             tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
@@ -1483,6 +1569,9 @@ mod tests {
             safe_fall_px: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
+            steer_rate_deg_per_sec: 360.0,
+            reverse_speed: 1.3,
+            turn_cost: 0.0,
             tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
@@ -1628,6 +1717,9 @@ mod tests {
             safe_fall_px: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
+            steer_rate_deg_per_sec: 360.0,
+            reverse_speed: 1.3,
+            turn_cost: 0.0,
             tires: vec![],
             turn_rate_deg_per_sec: turn_rate_deg,
             parts: vec![
@@ -1769,6 +1861,9 @@ mod tests {
             safe_fall_px: 96.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
+            steer_rate_deg_per_sec: 360.0,
+            reverse_speed: 1.3,
+            turn_cost: 0.0,
             tires: vec![],
             parts: vec![
                 part("body", "lrvBody", vec![[0.5, 0.6618]; 8]),
