@@ -486,7 +486,8 @@ impl Engine {
         // referenced by name from each frame's `sheet` index.
         for (name, bytes) in resources.frames() {
             match serde_json::from_slice::<FrameTable>(bytes) {
-                Ok(table) => {
+                Ok(mut table) => {
+                    table.precompute_companions();
                     self.frame_tables.insert(name.clone(), table);
                 }
                 Err(e) => {
@@ -3427,9 +3428,9 @@ impl Engine {
         let frame = table.frames.get(frame_name)?;
         let sheet = table.sheets.get(frame.sheet as usize)?;
         let uv = table.uv_rect(frame)?;
-        let normal_tex = sheet.normal.as_ref().map(|_| format!("{}-normal", sheet.name));
-        let depth_tex =
-            sheet.depth.as_ref().map(|_| (format!("{}-depth", sheet.name), sheet.depth_range));
+        let (normal_tex, depth_name) =
+            table.companions.get(frame.sheet as usize).cloned().unwrap_or((None, None));
+        let depth_tex = depth_name.map(|d| (d, sheet.depth_range));
         Some(ResolvedFrame {
             sheet_name: sheet.name.clone(),
             uv_rect: uv,

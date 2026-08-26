@@ -1348,7 +1348,12 @@ mod tests {
 
         // An empty frame table is enough: `frame_name` only keys off the
         // texture name, so the frame resolves to `{texture}_{frame}`.
-        let empty = FrameTable { version: 1, sheets: vec![], frames: Default::default() };
+        let empty = FrameTable {
+            version: 1,
+            sheets: vec![],
+            frames: Default::default(),
+            companions: vec![],
+        };
         for texture in ["lrvBody", "lrvWheelFl", "lrvWheelFr", "lrvWheelRl", "lrvWheelRr"] {
             engine.frame_tables.insert(texture.into(), empty.clone());
         }
