@@ -7,6 +7,7 @@ use classic_core::collision::polygon_from_verts;
 use classic_core::components::{Animator, ColliderData, IsoAgent, IsoSprite, Tilemap, Transform};
 use classic_core::math::iso_to_cartesian_4;
 use classic_core::tilemap::bilinear_height;
+use classic_core::types::AnimationData;
 use classic_engine::Engine;
 use glam::Mat4;
 
@@ -52,6 +53,38 @@ pub fn init_cursor(engine: &mut Engine) {
     });
 }
 
+/// Resolve the visual offset at a fractional animation time.
+///
+/// Sparse keyframes (the versioned rocket blob) are linearly interpolated
+/// between the surrounding keyframes, matching the Blender `location` fcurves;
+/// the legacy dense format is indexed directly by the floored frame.
+fn interpolate_offset(animation: &AnimationData, counter: f32) -> glam::Vec3 {
+    let kf = &animation.offset_keyframes;
+    if kf.is_empty() {
+        let frame_idx = counter.floor() as usize;
+        return animation
+            .offsets
+            .get(frame_idx)
+            .map(|v| glam::Vec3::from_array(*v))
+            .unwrap_or(glam::Vec3::ZERO);
+    }
+    if counter <= kf[0].frame as f32 {
+        return glam::Vec3::from_array(kf[0].offset);
+    }
+    if counter >= kf[kf.len() - 1].frame as f32 {
+        return glam::Vec3::from_array(kf[kf.len() - 1].offset);
+    }
+    let mut lo = 0usize;
+    while lo + 1 < kf.len() && (kf[lo + 1].frame as f32) <= counter {
+        lo += 1;
+    }
+    let lo_kf = &kf[lo];
+    let hi_kf = &kf[lo + 1];
+    let span = hi_kf.frame as f32 - lo_kf.frame as f32;
+    let t = if span > f32::EPSILON { (counter - lo_kf.frame as f32) / span } else { 0.0 };
+    glam::Vec3::from_array(lo_kf.offset).lerp(glam::Vec3::from_array(hi_kf.offset), t)
+}
+
 /// Register the animator system: advances all `Animator` counters and
 /// pushes frame changes to their target IsoSprite / IsoAgent components.
 pub fn init_animator_system(engine: &mut Engine) {
@@ -88,8 +121,7 @@ pub fn init_animator_system(engine: &mut Engine) {
             let frame_idx = anim.counter.floor() as usize;
             let animation_data = engine.animations.get(anim_name.as_str());
             let frame_offset = animation_data
-                .and_then(|a| a.offsets.get(frame_idx))
-                .map(|v| glam::Vec3::from_array(*v))
+                .map(|a| interpolate_offset(a, anim.counter))
                 .unwrap_or(glam::Vec3::ZERO);
             anim.offset = frame_offset;
             if frame_idx >= seq_len {
@@ -253,4 +285,48 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
             engine.save_rom();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::interpolate_offset;
+    use classic_core::types::{AnimationData, OffsetKeyframe};
+
+    fn anim(offsets: Vec<[f32; 3]>, keyframes: Vec<OffsetKeyframe>) -> AnimationData {
+        AnimationData {
+            name: "a".into(),
+            src: "a".into(),
+            rate: 24.0,
+            sequence: vec![],
+            offsets,
+            offset_keyframes: keyframes,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn interpolate_offset_lerps_between_keyframes() {
+        let a = anim(
+            vec![],
+            vec![
+                OffsetKeyframe { frame: 0, offset: [0.0, -3200.0, 0.0] },
+                OffsetKeyframe { frame: 240, offset: [0.0, 0.0, 0.0] },
+            ],
+        );
+        // Clamp before the first keyframe.
+        assert!((interpolate_offset(&a, -10.0).y - (-3200.0)).abs() < 0.001);
+        // Halfway between keyframes → half the descent.
+        assert!((interpolate_offset(&a, 120.0).y - (-1600.0)).abs() < 0.001);
+        // At a keyframe exactly.
+        assert!(interpolate_offset(&a, 240.0).y.abs() < 0.001);
+        // Clamp after the last keyframe.
+        assert!(interpolate_offset(&a, 250.0).y.abs() < 0.001);
+    }
+
+    #[test]
+    fn interpolate_offset_falls_back_to_dense() {
+        let a = anim(vec![[0.0, -100.0, 0.0], [0.0, -50.0, 0.0]], vec![]);
+        // Floor(1.9) = 1 → the second dense entry.
+        assert!((interpolate_offset(&a, 1.9).y - (-50.0)).abs() < 0.001);
+    }
 }

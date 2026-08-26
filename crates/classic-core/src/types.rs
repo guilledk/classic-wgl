@@ -326,6 +326,17 @@ pub struct VehiclePartDef {
     pub anchors: Vec<[f32; 2]>,
 }
 
+/// A sparse, frame-keyed visual offset.  The engine linearly interpolates
+/// between consecutive keyframes (matching the Blender ``location`` fcurves),
+/// so a long descent ships only its true breakpoints.
+#[derive(Clone, Debug)]
+pub struct OffsetKeyframe {
+    /// Animation timeline frame (an index into [`AnimationData::sequence`]).
+    pub frame: u32,
+    /// Screen-space offset at that frame (already scaled by `pixels_per_meter`).
+    pub offset: [f32; 3],
+}
+
 /// A manifest entry for an animation.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct AnimationData {
@@ -333,11 +344,19 @@ pub struct AnimationData {
     pub src: String,
     pub rate: f32,
     pub sequence: Vec<u32>,
-    /// Per-sequence-entry visual offsets in iso units. Missing entries are zero.
+    /// Per-sequence-entry visual offsets in iso units (the legacy dense format).
+    /// Missing entries are zero.
     #[serde(default)]
     pub offsets: Vec<[f32; 3]>,
+    /// Sparse, frame-keyed offsets (the versioned blob).  Interpolated between
+    /// keyframes by the animator; takes precedence over [`Self::offsets`] when
+    /// non-empty.  Never present in the JSON manifest — filled from the ROM's
+    /// `animations/` metadata at boot.
+    #[serde(skip)]
+    pub offset_keyframes: Vec<OffsetKeyframe>,
     /// Optional path to a ROM resource with per-frame renderer metadata (e.g.
-    /// Blender `rig_location` offsets), loaded into [`Self::offsets`] at boot.
+    /// Blender `rig_location` offsets), loaded into [`Self::offsets`] /
+    /// [`Self::offset_keyframes`] at boot.
     #[serde(default)]
     pub metadata: Option<String>,
 }

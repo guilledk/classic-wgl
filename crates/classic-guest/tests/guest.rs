@@ -963,6 +963,7 @@ fn install_test_resources(engine: &mut Engine) {
             rate: 1.0,
             sequence: vec![],
             offsets: vec![],
+            offset_keyframes: vec![],
             metadata: None,
         },
     );
