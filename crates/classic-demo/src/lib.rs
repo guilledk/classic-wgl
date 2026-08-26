@@ -160,8 +160,8 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
             let s = state.clone();
             e.add_overlay(move |engine| hud::draw_debug_overlay(engine, &s));
         }
-        testing::install(&mut e, &state);
     }
+    testing::install(&mut e, &state);
 
     cl_info!(Chan::Frame, "classic-demo initialized (entrypoint={})", rom.manifest.entrypoint);
     e
