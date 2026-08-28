@@ -2914,8 +2914,7 @@ impl Engine {
                     if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
                         let iso = cartesian_to_iso_4().inverse();
                         let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-                        let iso3 = Mat3::from_mat4(iso);
-                        let normal_matrix = iso3.inverse().transpose();
+                        let normal_matrix = terrain_normal_matrix(&iso_matrix);
                         let nav_ts = gfx
                             .textures
                             .get(&nav.tile_set)
@@ -2982,9 +2981,7 @@ impl Engine {
                 let iso = cartesian_to_iso_4().inverse();
                 let iso_matrix = Mat4::from_scale(tf.scale) * iso;
 
-                // Normal matrix: transpose(inverse(mat3(iso)))
-                let iso3 = Mat3::from_mat4(iso);
-                let normal_matrix = iso3.inverse().transpose();
+                let normal_matrix = terrain_normal_matrix(&iso_matrix);
 
                 let tps = tm.tile_pixel_size;
                 let tile_pixel_size = [tps[0] as f32, tps[1] as f32];
@@ -4130,6 +4127,27 @@ impl Default for Engine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Normal matrix for terrain meshes: `inverse_transpose(mat3(iso_matrix))`.
+///
+/// The tilemap mesh is authored in **tile space** — `vertex_pos` is
+/// `(tile_x, tile_y, height_px)`, so x and y are tile *indices* while z is
+/// pixels — and `build_vertex_normals` takes cross products in that same
+/// space.  The world transform is `iso_matrix = S(tilemap.scale) * iso`, which
+/// scales x and y by the tile pixel size (45) and leaves z alone.
+///
+/// This previously used the **unscaled** `iso`, dropping that factor of 45 from
+/// the normals but not from the positions.  A 1 m/tile slope then produced a
+/// normal near `(-64, 0, 1)`, i.e. an almost vertical cliff, and the terrain
+/// Lambert term degenerated into a binary slope mask: flat ground fully lit,
+/// any incline nearly black.  See issue #77.
+///
+/// Including the scale makes the slope ratio physical.  Terrain shading gets
+/// substantially softer as a result — that softness is correct, and cast
+/// shadows now supply the depth cue the exaggerated normals were faking.
+fn terrain_normal_matrix(iso_matrix: &Mat4) -> Mat3 {
+    Mat3::from_mat4(*iso_matrix).inverse().transpose()
 }
 
 /// Decode a little-endian `u32` grid byte blob.
