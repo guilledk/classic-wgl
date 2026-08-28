@@ -85,6 +85,18 @@ fn interpolate_offset(animation: &AnimationData, counter: f32) -> glam::Vec3 {
     glam::Vec3::from_array(lo_kf.offset).lerp(glam::Vec3::from_array(hi_kf.offset), t)
 }
 
+/// The frame a finished animation rests on.  A looping animation returns to its
+/// first frame; a one-shot holds its last frame so the sprite stays in its end
+/// pose (e.g. the landing rocket keeps its legs deployed on the pad) instead of
+/// snapping back to the folded frame-zero pose.
+fn rest_frame(sequence: &[u32], repeat: bool) -> f32 {
+    if repeat {
+        sequence.first().copied().unwrap_or(0) as f32
+    } else {
+        sequence.last().copied().unwrap_or(0) as f32
+    }
+}
+
 /// Register the animator system: advances all `Animator` counters and
 /// pushes frame changes to their target IsoSprite / IsoAgent components.
 pub fn init_animator_system(engine: &mut Engine) {
@@ -97,7 +109,8 @@ pub fn init_animator_system(engine: &mut Engine) {
             .map(|(n, a)| (n.clone(), (a.rate, a.sequence.len())))
             .collect();
 
-        let mut frame_writes: Vec<(hecs::Entity, String, f32, glam::Vec3)> = Vec::new();
+        let mut frame_writes: Vec<(hecs::Entity, String, f32, glam::Vec3, Option<String>)> =
+            Vec::new();
         for (_e, anim) in engine.world.query::<&mut Animator>().iter() {
             if !anim.playing && !anim.repeat {
                 continue;
@@ -125,34 +138,46 @@ pub fn init_animator_system(engine: &mut Engine) {
                 .unwrap_or(glam::Vec3::ZERO);
             anim.offset = frame_offset;
             if frame_idx >= seq_len {
-                anim.counter = 0.0;
-                anim.frame = engine
-                    .animations
-                    .get(anim_name.as_str())
-                    .and_then(|a| a.sequence.first().copied())
-                    .unwrap_or(0) as f32;
-                anim.offset = glam::Vec3::ZERO;
-                if !anim.repeat {
+                anim.frame =
+                    animation_data.map(|a| rest_frame(&a.sequence, anim.repeat)).unwrap_or(0.0);
+                if anim.repeat {
+                    anim.counter = 0.0;
+                    anim.offset = glam::Vec3::ZERO;
+                } else {
+                    // One-shot finished: hold the final frame + offset so the
+                    // sprite rests in its end pose (e.g. the rocket's legs stay
+                    // deployed on the pad) instead of snapping back to frame 0.
+                    anim.counter = seq_len as f32;
                     anim.playing = false;
                 }
-            } else if let Some(&frame) =
-                engine.animations.get(anim_name.as_str()).and_then(|a| a.sequence.get(frame_idx))
-            {
+            } else if let Some(&frame) = animation_data.and_then(|a| a.sequence.get(frame_idx)) {
                 anim.frame = frame as f32;
             }
 
+            let texture = animation_data.map(|a| a.src.clone());
             let parts: Vec<&str> = anim.target.splitn(2, '.').collect();
             if parts.len() == 2 {
                 if let Some(&target_e) = engine.names.get(parts[0]) {
-                    frame_writes.push((target_e, parts[1].to_string(), anim.frame, frame_offset));
+                    frame_writes.push((
+                        target_e,
+                        parts[1].to_string(),
+                        anim.frame,
+                        frame_offset,
+                        texture,
+                    ));
                 }
             }
         }
 
-        for (target_e, comp_type, frame, offset) in &frame_writes {
+        for (target_e, comp_type, frame, offset, texture) in &frame_writes {
             match comp_type.as_str() {
                 "IsoAgent" => {
                     if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(*target_e) {
+                        if let Some(t) = texture {
+                            if &a.texture != t {
+                                a.texture.clone_from(t);
+                            }
+                        }
                         a.frame = *frame;
                         a.frame_offset = *offset;
                         a.frame_name = engine
@@ -161,6 +186,11 @@ pub fn init_animator_system(engine: &mut Engine) {
                             .then(|| format!("{}_{}", a.texture, *frame as u32));
                     }
                     if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
+                        if let Some(t) = texture {
+                            if &s.texture != t {
+                                s.texture.clone_from(t);
+                            }
+                        }
                         s.frame = *frame;
                         s.frame_offset = *offset;
                         s.frame_name = engine
@@ -171,6 +201,11 @@ pub fn init_animator_system(engine: &mut Engine) {
                 }
                 "IsoSprite" => {
                     if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
+                        if let Some(t) = texture {
+                            if &s.texture != t {
+                                s.texture.clone_from(t);
+                            }
+                        }
                         s.frame = *frame;
                         s.frame_offset = *offset;
                         s.frame_name = engine
@@ -289,7 +324,7 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
 
 #[cfg(test)]
 mod tests {
-    use super::interpolate_offset;
+    use super::{interpolate_offset, rest_frame};
     use classic_core::types::{AnimationData, OffsetKeyframe};
 
     fn anim(offsets: Vec<[f32; 3]>, keyframes: Vec<OffsetKeyframe>) -> AnimationData {
@@ -328,5 +363,24 @@ mod tests {
         let a = anim(vec![[0.0, -100.0, 0.0], [0.0, -50.0, 0.0]], vec![]);
         // Floor(1.9) = 1 → the second dense entry.
         assert!((interpolate_offset(&a, 1.9).y - (-50.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn rest_frame_holds_last_for_one_shot() {
+        // A one-shot rests on its final frame (legs deployed), not frame 0.
+        let seq = vec![0, 0, 0, 1, 1, 2];
+        assert_eq!(rest_frame(&seq, false), 2.0);
+    }
+
+    #[test]
+    fn rest_frame_loops_back_to_first() {
+        let seq = vec![5, 6, 7, 8];
+        assert_eq!(rest_frame(&seq, true), 5.0);
+    }
+
+    #[test]
+    fn rest_frame_empty_sequence_is_zero() {
+        assert_eq!(rest_frame(&[], false), 0.0);
+        assert_eq!(rest_frame(&[], true), 0.0);
     }
 }
