@@ -1357,9 +1357,15 @@ impl Engine {
     fn build_vehicle_nav_snapshot(&self) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
         let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
         let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
-        let structural: Vec<i32> = nav.data.iter().map(|&v| v as i32).collect();
         let size_x = nav.size_x;
         let size_y = nav.size_y;
+        // The terrain nav grid encodes slope-limited *human* walkability, not
+        // obstacles.  A vehicle derives climbability from its own per-request
+        // pitch/roll tolerance, so the shared snapshot's `structural` grid only
+        // needs to gate hard obstacles.  No current vehicle scene (lunar,
+        // lrvtest, container) has any, so treat it as fully open and let
+        // pitch/roll be the sole slope gate.
+        let structural: Vec<i32> = vec![1; (size_x * size_y) as usize];
 
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
         let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
