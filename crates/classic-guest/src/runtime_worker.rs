@@ -145,6 +145,9 @@ const OP_VEHICLE_PROBE_CLEAR: i32 = 93;
 const OP_INVENTORY_UI_SHOW: i32 = 94;
 const OP_SET_COLLIDER_BLOCKS_NAV: i32 = 95;
 const OP_VEHICLE_FOOTPRINT_RADIUS: i32 = 96;
+const OP_LIGHT_SPAWN: i32 = 97;
+const OP_LIGHT_SET: i32 = 98;
+const OP_LIGHT_RELEASE: i32 = 99;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -385,6 +388,27 @@ impl WorkerWasmRuntime {
                     as f64,
                 None,
             ),
+            OP_LIGHT_SPAWN => (
+                host.light_spawn(
+                    ni(0),
+                    nf(1),
+                    nf(2),
+                    nf(3),
+                    nf(4),
+                    nf(5),
+                    nf(6),
+                    nf(7),
+                    nf(8),
+                    nf(9),
+                ) as f64,
+                None,
+            ),
+            OP_LIGHT_SET => (
+                host.light_set(ni(0), nf(1), nf(2), nf(3), nf(4), nf(5), nf(6), nf(7), nf(8))
+                    as f64,
+                None,
+            ),
+            OP_LIGHT_RELEASE => (host.light_release(ni(0)) as f64, None),
             OP_SPAWN_RECT => (
                 host.spawn_rect(&strs[0], nf(0), nf(1), nf(2), nf(3), nf(4), nf(5), nf(6), nf(7))
                     as f64,

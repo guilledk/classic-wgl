@@ -13,6 +13,7 @@ wasmi.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 log.workspace = true
+glam.workspace = true
 
 [dev-dependencies]
 wat = "1"

@@ -527,3 +527,67 @@ the depth-corner interpolation and the `GREATER`/stencil ghost-group test).
   introspection beyond the per-frame `gl.get_error()` flush in `begin_frame`.
   GL errors that occur mid-frame are silently accumulated until the next frame
   start, where they are discarded.
+
+---
+
+## 16. Dynamic lights (UBO)
+
+Point lights (and future spotlights) beyond the sun term are uploaded to a
+single `std140` uniform block each frame.  The two lit shaders (`isoTilemap`,
+`imageSheet`) declare the block and share an `evaluateLight`/`evaluateLights`
+pair; both emit a `highp vec3 vWorldPos` varying.
+
+### Host side (`classic-gfx/src/lib.rs`)
+
+- `MAX_LIGHTS = 256` (block = `16 + 256*48 = 12304` bytes, under the WebGL2
+  16 KB `MAX_UNIFORM_BLOCK_SIZE`), `LIGHT_UBO_BINDING = 1`.
+- `pack_lights(&[Light], capacity) -> Vec<f32>` — pure, testable std140 packer.
+  Layout: `vec4 count` then per light 3 `vec4`s `[pos.xyz|radius]
+  [color.rgb|intensity] [dir.xyz|cone_angle]`.  `kind` is encoded as
+  `cone_angle <= 0` (Point) vs `> 0` (Spot) — no separate `kind` vec4.
+- `LightBuffer` wraps a `GlBuffer` bound to `UNIFORM_BUFFER`;
+  `LightBuffer::upload` does `buffer_data` + `bind_buffer_base(LIGHT_UBO_BINDING)`.
+- `Gfx::upload_lights(&self, lights: &[Light])` is called once per frame by
+  `Engine::frame` (after `begin_frame`).  The `LightBuffer` is created in
+  `Gfx::new`.
+- `Shader::bind_uniform_block(gl, "LightBlock", LIGHT_UBO_BINDING)` is called in
+  `Gfx::add_shader` for every program (no-op when the block is absent), via
+  `gl.get_uniform_block_index` (returns `Option<u32>`) + `uniform_block_binding`.
+
+### Shader (`sheet.frag`, `iso_tilemap.frag`)
+
+```glsl
+layout(std140) uniform LightBlock {
+    vec4 count;                  // x = active light count
+    Light lights[MAX_LIGHTS];    // struct { pos_radius, color_intensity, dir_cone }
+} u_lights;
+
+vec3 evaluateLight(Light l, vec3 n, vec3 p) {
+    vec3 toLight = l.pos_radius.xyz - p;
+    float dist = length(toLight);
+    vec3 L = toLight / max(dist, 0.0001);
+    float radius = l.pos_radius.w;
+    float attenuation;
+    if (radius <= 0.0) { attenuation = 1.0; }
+    else { float d = dist / radius;
+           attenuation = clamp(1.0 - d * d, 0.0, 1.0);
+           attenuation *= attenuation; }          // soft windowed falloff
+    float cone = 1.0;
+    if (l.dir_cone.w > 0.0) { /* spot: smoothstep(cosAngle*0.6, cosAngle, dot(L, dir)) */ }
+    float diff = max(dot(n, L), 0.0);
+    return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;
+}
+```
+
+The point-light term is **added** after the sun multiply
+(`color.rgb += evaluateLights(n, vWorldPos)`), so it illuminates sun-shadowed
+faces too.  It is currently **unoccluded** (no point-light shadows) — see the
+plan `iso-shadows-dynamic-lights.md` (M2/M3).
+
+### Gotchas
+
+- `iso_tilemap.vert`/`frag` must use `highp` for `vNormal` — `mediump`
+  interpolation of the smooth terrain normal causes visible banding.
+- The falloff `saturate(1-(d/r)²)²` is a symmetric plateau and reads as a
+  "sphere" on flat terrain; an inverse-square hot core would soften it, but real
+  grounding needs shadows.

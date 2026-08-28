@@ -17,6 +17,7 @@ pub mod env_config;
 pub mod golden;
 pub mod inventory;
 pub mod inventory_ui;
+pub mod light;
 pub mod selection;
 pub mod ui;
 pub mod vehicle;
@@ -29,7 +30,7 @@ use std::sync::Arc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    Animator, ColliderData, DebugName, IsoSprite, IsoVehicle, NavMesh, RectRender, Role,
+    Animator, ColliderData, DebugName, IsoSprite, IsoVehicle, Light, NavMesh, RectRender, Role,
     SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
@@ -199,6 +200,9 @@ pub struct Engine {
     pub light_ambient: [f32; 3],
     pub light_dir: [f32; 3],
     pub light_color: [f32; 3],
+    /// Dynamic light pool (point/spot lights beyond the sun term).  Gathered +
+    /// uploaded to the `LightBlock` UBO once per frame.
+    pub light_pool: light::LightPool,
     pub animations: HashMap<String, AnimationData>,
     /// Packed-atlas frame tables keyed by texture name, loaded from the ROM's
     /// `frames` resources at boot (issue #45).  A sprite with `frame_name` set
@@ -359,6 +363,7 @@ impl Engine {
             light_ambient: [0.15, 0.15, 0.2],
             light_dir: [0.45, -0.35, 0.82],
             light_color: [1.0, 0.95, 0.85],
+            light_pool: light::LightPool::new(),
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
             frame_tables: HashMap::new(),
@@ -1252,6 +1257,33 @@ impl Engine {
         Some((screen.x, screen.y))
     }
 
+    /// Convert an iso tile coordinate to a **world-space** point (the same
+    /// space consumed by the lit shaders' `worldPos` varyings and by
+    /// [`Light::position`]).  This is the light-placement coordinate flag:
+    /// world space is `iso_to_cartesian * scale * (x, y, 0)` plus the tilemap
+    /// origin, with the surface height lifted along `-y` and carried in `z`
+    /// (matching the tilemap shader's `worldPos.y -= z; worldPos.z = z`).
+    ///
+    /// `elevation` is metres above the sampled terrain surface (same units as
+    /// `height_data`; `height_scale` converts metres to world px).  Returns
+    /// `None` without a Tilemap-role entity.
+    pub fn iso_to_world(&self, x: f32, y: f32, elevation: f32) -> Option<Vec3> {
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let (tm, tm_tf) = {
+            let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+            let tf = self.world.get::<&Transform>(tm_entity).ok()?;
+            (tm, tf)
+        };
+        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale);
+        let mut cart = iso_to_cart_world.transform_point3(Vec3::new(x, y, 0.0));
+        cart += tm_tf.position;
+        let h = sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y);
+        let z_px = (h + elevation) * tm.height_scale;
+        cart.y -= z_px;
+        cart.z = z_px;
+        Some(cart)
+    }
+
     /// Terrain height (in world z units) at the given iso tile coordinate.
     pub fn height_at(&self, x: f32, y: f32) -> f32 {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
@@ -1871,6 +1903,23 @@ impl Engine {
         self.light_ambient = ambient;
         self.light_dir = dir;
         self.light_color = color;
+    }
+
+    /// Spawn a dynamic light in the pool, returning its handle (or `None` when
+    /// the pool is full).  A `ttl` of `None` makes the light persistent; a
+    /// finite `ttl` (seconds) auto-releases it after decaying.
+    pub fn spawn_light(&mut self, light: Light, ttl: Option<f32>) -> Option<u32> {
+        self.light_pool.spawn(light, ttl)
+    }
+
+    /// Overwrite an active pooled light's parameters by handle.
+    pub fn update_light(&mut self, handle: u32, light: Light) -> bool {
+        self.light_pool.set(handle, light)
+    }
+
+    /// Release a pooled light back to the free-list.
+    pub fn release_light(&mut self, handle: u32) -> bool {
+        self.light_pool.release(handle)
     }
 
     /// Spawn a named screen-space solid-color rectangle (a HUD element).
@@ -2593,6 +2642,10 @@ impl Engine {
         // drag; under RTS selection the tilemap selection is off.
         let paint_mode = if self.guest_flag("rts_selection") { -1 } else { self.selection_mode };
 
+        // Decay transient lights and gather the active set for the UBO upload.
+        self.light_pool.decay(delta);
+        let lights = self.light_pool.gather();
+
         let Some(gfx) = self.gfx.as_mut() else { return };
         let vp = gfx.viewport_w;
         let vh2 = gfx.viewport_h;
@@ -2602,6 +2655,9 @@ impl Engine {
         // draw_tilemap/draw_iso_sprite toggle it locally. UI/SDF runs without it.
         // Enabling it globally depth-rejects all UI under ortho projection.
         gfx.begin_frame();
+        // Upload the dynamic light block once per frame (consumed by the lit
+        // tilemap + sprite shaders).
+        gfx.upload_lights(&lights);
         let cam = self.camera.matrix();
 
         // Create trace collector when golden mode is active and we're on the capture frame.
@@ -4150,5 +4206,53 @@ mod tests {
         assert!(
             (Engine::compute_iso_base_depth(pos, HORIZONTAL_DEPTH_SCALE) - expected).abs() < 1e-9
         );
+    }
+
+    #[test]
+    fn iso_to_world_lifts_elevation_above_terrain() {
+        classic_core::register_all_components();
+        let mut engine = Engine::new_for_test();
+
+        // A flat 4x4 tilemap at the origin with a uniform 1-metre plateau,
+        // scale [45,45,1] and a 64 px/metre height scale (the lunar PPM).
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::new(45.0, 45.0, 1.0),
+            size_x: 4,
+            size_y: 4,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 16],
+            height_data: vec![1.0f32; 25],
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+            selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        };
+        let entity = engine.world.spawn((
+            tilemap,
+            Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0)),
+            Role::new(RoleKind::Tilemap),
+        ));
+        engine.names.insert("tilemap".into(), entity);
+
+        // Ground level: the light sits at the 1 m surface → z = 1 * 64.
+        let ground = engine.iso_to_world(0.0, 0.0, 0.0).unwrap();
+        assert!((ground.z - 64.0).abs() < 1e-3, "got z {}", ground.z);
+
+        // 2 m above: z = 3 * 64, and y is lifted (moved toward -y) by 2 * 64.
+        let raised = engine.iso_to_world(0.0, 0.0, 2.0).unwrap();
+        assert!((raised.z - 192.0).abs() < 1e-3, "got z {}", raised.z);
+        assert!((ground.y - raised.y - 128.0).abs() < 1e-2, "got y {}", raised.y);
+        assert!((ground.x - raised.x).abs() < 1e-4, "x should not move");
+
+        // Without a Tilemap-role entity, the mapping is unavailable.
+        let empty = Engine::new_for_test();
+        assert!(empty.iso_to_world(0.0, 0.0, 0.0).is_none());
     }
 }

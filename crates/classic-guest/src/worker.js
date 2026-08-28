@@ -133,6 +133,9 @@ var OP_VEHICLE_PROBE_CLEAR = 93;
 var OP_INVENTORY_UI_SHOW = 94;
 var OP_SET_COLLIDER_BLOCKS_NAV = 95;
 var OP_VEHICLE_FOOTPRINT_RADIUS = 96;
+var OP_LIGHT_SPAWN = 97;
+var OP_LIGHT_SET = 98;
+var OP_LIGHT_RELEASE = 99;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -421,6 +424,15 @@ function envImports() {
         },
         set_light: function (a0, a1, a2, d0, d1, d2, c0, c1, c2) {
             return hostCall(OP_SET_LIGHT, [], [a0, a1, a2, d0, d1, d2, c0, c1, c2]).ret | 0;
+        },
+        light_spawn: function (kind, x, y, z, r, g, b, intensity, radius, ttl) {
+            return hostCall(OP_LIGHT_SPAWN, [], [kind, x, y, z, r, g, b, intensity, radius, ttl]).ret | 0;
+        },
+        light_set: function (handle, x, y, z, r, g, b, intensity, radius) {
+            return hostCall(OP_LIGHT_SET, [], [handle, x, y, z, r, g, b, intensity, radius]).ret | 0;
+        },
+        light_release: function (handle) {
+            return hostCall(OP_LIGHT_RELEASE, [], [handle]).ret | 0;
         },
         spawn_rect: function (namePtr, nameLen, x, y, w, h, r, g, b, a) {
             return hostCall(OP_SPAWN_RECT, [readStr(namePtr, nameLen)], [x, y, w, h, r, g, b, a]).ret | 0;

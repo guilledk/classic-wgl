@@ -9,6 +9,7 @@
 
 mod shaders;
 
+use classic_core::components::Light;
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
 use std::cell::RefCell;
@@ -161,6 +162,14 @@ impl Shader {
             unsafe { gl.uniform_1_i32(Some(&loc), v as i32) }
         }
     }
+
+    /// Bind a named `std140` uniform block to a UBO binding point.  A no-op for
+    /// programs that don't declare the block (the index query returns `None`).
+    pub fn bind_uniform_block(&self, gl: &glow::Context, name: &str, binding: u32) {
+        if let Some(idx) = unsafe { gl.get_uniform_block_index(self.program, name) } {
+            unsafe { gl.uniform_block_binding(self.program, idx, binding) };
+        }
+    }
 }
 
 fn compile_single(gl: &glow::Context, ty: u32, src: &str) -> Result<glow::Shader, String> {
@@ -306,6 +315,76 @@ impl GlBuffer {
         self.bind(gl);
         unsafe { gl.buffer_sub_data_u8_slice(self.target, 0, bytes) }
     }
+
+    /// Bind this buffer to a numbered indexed-buffer binding point (used for
+    /// uniform blocks; the target must be `UNIFORM_BUFFER`).
+    pub fn bind_base(&self, gl: &glow::Context, index: u32) {
+        unsafe { gl.bind_buffer_base(self.target, index, Some(self.buffer)) }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic lights (std140 uniform block)
+// ---------------------------------------------------------------------------
+
+/// Maximum number of dynamic lights uploadable to the `LightBlock` UBO.
+/// The block is 3 `vec4`s per light, so `256` lights occupy
+/// `16 + 256 * 48 = 12304` bytes — comfortably within the WebGL2-guaranteed
+/// 16 KB `MAX_UNIFORM_BLOCK_SIZE`.
+pub const MAX_LIGHTS: usize = 256;
+
+/// The UBO binding point shared by every shader that declares `LightBlock`.
+pub const LIGHT_UBO_BINDING: u32 = 1;
+
+/// Pack a slice of [`Light`]s into the flat `f32` buffer consumed by the
+/// `LightBlock` `std140` uniform block:
+///
+/// ```text
+/// offset 0        : vec4 count            (x = active light count)
+/// per light i     : vec4 pos_radius       (xyz = position, w = radius)
+///                 : vec4 color_intensity  (rgb = color, a = intensity)
+///                 : vec4 dir_cone         (xyz = direction, w = cone_angle)
+/// ```
+///
+/// `cone_angle <= 0` is the point-light sentinel (the shader skips the cone
+/// term), so both `LightKind::Point` and `LightKind::Spot` share one layout.
+/// The returned buffer is always `(1 + MAX_LIGHTS * 3) * 4` floats; trailing
+/// lights beyond `capacity` are silently dropped.
+pub fn pack_lights(lights: &[Light], capacity: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; (1 + capacity * 3) * 4];
+    out[0] = (lights.len().min(capacity)) as f32;
+    for (i, l) in lights.iter().take(capacity).enumerate() {
+        let base = (1 + i * 3) * 4;
+        out[base..base + 4].copy_from_slice(&[l.position.x, l.position.y, l.position.z, l.radius]);
+        out[base + 4..base + 8].copy_from_slice(&[l.color[0], l.color[1], l.color[2], l.intensity]);
+        let cone =
+            if l.kind == classic_core::components::LightKind::Point { 0.0 } else { l.cone_angle };
+        out[base + 8..base + 12].copy_from_slice(&[l.dir.x, l.dir.y, l.dir.z, cone]);
+    }
+    out
+}
+
+/// A host-side UBO backing the `LightBlock` uniform block.  Owns the CPU-side
+/// capacity and the GPU buffer; uploaded once per frame by [`Gfx::upload_lights`].
+pub struct LightBuffer {
+    buffer: GlBuffer,
+    capacity: usize,
+}
+
+impl LightBuffer {
+    pub fn new(gl: &glow::Context, capacity: usize) -> Self {
+        let floats = (1 + capacity * 3) * 4;
+        let zeros = vec![0.0f32; floats];
+        let buffer = GlBuffer::from_slice(gl, glow::UNIFORM_BUFFER, &zeros, glow::DYNAMIC_DRAW);
+        Self { buffer, capacity }
+    }
+
+    /// Upload the packed light block and bind it to [`LIGHT_UBO_BINDING`].
+    pub fn upload(&self, gl: &glow::Context, lights: &[Light]) {
+        let data = pack_lights(lights, self.capacity);
+        self.buffer.sub_data(gl, &data);
+        self.buffer.bind_base(gl, LIGHT_UBO_BINDING);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +496,7 @@ pub struct Gfx {
     pub viewport_w: f32,
     pub viewport_h: f32,
     pub render_target: Option<GlFrameBuffer>,
+    lights: LightBuffer,
     vao: glow::VertexArray,
 }
 
@@ -424,6 +504,7 @@ impl Gfx {
     pub fn new(gl: Rc<glow::Context>) -> Self {
         let quad = build_quad(&gl);
         let vao = unsafe { gl.create_vertex_array() }.expect("create VAO");
+        let lights = LightBuffer::new(&gl, MAX_LIGHTS);
         Self {
             gl,
             shaders: HashMap::new(),
@@ -432,8 +513,15 @@ impl Gfx {
             viewport_w: 1920.0,
             viewport_h: 1080.0,
             render_target: None,
+            lights,
             vao,
         }
+    }
+
+    /// Upload the active dynamic lights into the `LightBlock` UBO and bind it to
+    /// [`LIGHT_UBO_BINDING`] (consumed by `sheet.frag` + `iso_tilemap.frag`).
+    pub fn upload_lights(&self, lights: &[Light]) {
+        self.lights.upload(&self.gl, lights);
     }
 
     /// Create and set an offscreen render target of the given size.
@@ -470,6 +558,9 @@ impl Gfx {
         unif: &[&str],
     ) -> Result<(), String> {
         let s = Shader::compile(&self.gl, vs_src, fs_src, attr, unif)?;
+        // Bind the light UBO for any shader that declares `LightBlock` (the two
+        // lit shaders); a no-op for every other program.
+        s.bind_uniform_block(&self.gl, "LightBlock", LIGHT_UBO_BINDING);
         self.shaders.insert(name.to_string(), s);
         Ok(())
     }
@@ -1461,5 +1552,54 @@ impl Drop for GlFrameBuffer {
     fn drop(&mut self) {
         // Resources are leaked intentionally — this struct lives for the
         // process lifetime and Drop can't access the GL context.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use classic_core::components::{Light, LightKind};
+
+    #[test]
+    fn pack_lights_std140_layout() {
+        let lights = vec![Light {
+            kind: LightKind::Point,
+            position: glam::Vec3::new(1.0, 2.0, 3.0),
+            color: [0.1, 0.2, 0.3],
+            intensity: 4.0,
+            radius: 50.0,
+            dir: glam::Vec3::new(5.0, 6.0, 7.0),
+            cone_angle: 0.5,
+        }];
+        let buf = pack_lights(&lights, MAX_LIGHTS);
+        assert_eq!(buf.len(), (1 + MAX_LIGHTS * 3) * 4);
+        // count vec4
+        assert_eq!(buf[0], 1.0);
+        assert_eq!(buf[1], 0.0);
+        // light 0: [pos.xyz | radius]
+        assert_eq!(&buf[4..8], &[1.0, 2.0, 3.0, 50.0]);
+        // light 0: [color.rgb | intensity]
+        assert_eq!(&buf[8..12], &[0.1, 0.2, 0.3, 4.0]);
+        // light 0: [dir.xyz | cone]; a Point light forces cone_angle to 0.
+        assert_eq!(&buf[12..16], &[5.0, 6.0, 7.0, 0.0]);
+    }
+
+    #[test]
+    fn pack_lights_spot_keeps_cone_angle() {
+        let lights = vec![Light {
+            kind: LightKind::Spot,
+            dir: glam::Vec3::new(0.0, 0.0, 1.0),
+            cone_angle: 0.7,
+            ..Default::default()
+        }];
+        let buf = pack_lights(&lights, MAX_LIGHTS);
+        assert_eq!(&buf[12..16], &[0.0, 0.0, 1.0, 0.7]);
+    }
+
+    #[test]
+    fn pack_lights_truncates_beyond_capacity() {
+        let lights = vec![Light::default(); MAX_LIGHTS + 5];
+        let buf = pack_lights(&lights, MAX_LIGHTS);
+        assert_eq!(buf[0], MAX_LIGHTS as f32);
     }
 }
