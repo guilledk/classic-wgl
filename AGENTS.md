@@ -38,7 +38,8 @@ cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platfor
 # ROMs (must run once after checkout, and when the published ROMs bump)
 cargo xtask fetch-roms               # downloads the staged demo/lunar ROMs (and worker wasm) into roms/out/ (gitignored)
 
-# Web pathfinder module (must run before any --target wasm32 build/check, or trunk build)
+# Web pathfinder module (must run before any --target wasm32 build/check;
+# trunk serve/build do it automatically via the `pre_build` hook in `Trunk.toml`)
 cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm to pathfinder.wasm and stages it next to web.rs
 ```
 
