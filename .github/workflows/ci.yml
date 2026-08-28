@@ -9,6 +9,29 @@ env:
     CARGO_TERM_COLOR: always
 
 jobs:
+    version:
+        name: version + changelog
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+            - uses: dtolnay/rust-toolchain@stable
+            - name: Cargo.toml vs CHANGELOG.md
+              run: cargo xtask check-version
+            - name: changelog updated when code changed
+              if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+              run: |
+                  base="${{ github.event.pull_request.base.sha }}"
+                  changed_code=$(git diff --name-only "$base...HEAD" | grep -E '^(crates|apps)/' || true)
+                  changed_changelog=$(git diff --name-only "$base...HEAD" | grep -E '^CHANGELOG.md$' || true)
+                  if [ -n "$changed_code" ] && [ -z "$changed_changelog" ]; then
+                    echo "::error::source under crates/ or apps/ changed without a CHANGELOG.md update (add to [Unreleased], or label the PR 'skip-changelog')"
+                    exit 1
+                  fi
+                  echo "changelog ok"
+
     lint:
         name: lint (fmt + clippy)
         runs-on: ubuntu-latest
