@@ -34,6 +34,7 @@ uniform float shadow_bias;
 uniform float shadow_strength;
 uniform vec2 shadow_texel;
 uniform float use_shadow;
+uniform float shadow_debug;
 
 #define MAX_LIGHTS 256
 
@@ -167,6 +168,16 @@ void main(void ) {
     if (color.a < 0.01) discard;
 
     vec3 n = normalize(vNormal);
+
+    // Bring-up diagnostic: show sun visibility alone (white = lit, black =
+    // occluded), with no albedo, ambient, Lambert term or point lights to hide
+    // behind.  See CLASSIC_SHADOW_DEBUG.
+    if (shadow_debug > 0.5) {
+        float vis = use_shadow > 0.5 ? shadowFactor(vWorldPos) : 1.0;
+        fragColor = vec4(vec3(vis), 1.0);
+        return;
+    }
+
     float diff = max(dot(n, light_direction), 0.0);
     if (use_shadow > 0.5) {
         diff *= shadowFactor(vWorldPos);

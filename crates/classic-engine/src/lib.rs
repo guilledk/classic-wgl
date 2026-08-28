@@ -2869,6 +2869,7 @@ impl Engine {
                         bias: shadow::SHADOW_BIAS,
                         strength: shadow::SHADOW_STRENGTH,
                         texel: [texel, texel],
+                        debug: config.shadow_debug,
                     })
                 } else {
                     None

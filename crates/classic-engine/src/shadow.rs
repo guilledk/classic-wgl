@@ -19,9 +19,14 @@ pub const SHADOW_PADDING: f32 = 64.0;
 pub const SHADOW_BIAS: f32 = 0.0002;
 
 /// Diffuse fraction a fully-shadowed pixel keeps (`0..=1`).  Lit pixels keep
-/// `1.0`; `0.65` reads as a subtle slope shade rather than an opaque black,
-/// matching the old baked terrain-darkening look.
-pub const SHADOW_STRENGTH: f32 = 0.65;
+/// `1.0`.
+///
+/// **Currently pinned to `0.0` (hard black) for shadow bring-up.**  A partial
+/// value makes "the shadow map is broken" and "the shadow is subtle" visually
+/// and numerically indistinguishable — that ambiguity is what made the
+/// session-2 audit necessary.  Restore to a tuned value (~`0.65`, matching the
+/// old baked terrain darkening) only once cast shadows are confirmed correct.
+pub const SHADOW_STRENGTH: f32 = 0.0;
 
 /// The directional light's view/projection matrices in world space.
 pub struct LightMatrix {
@@ -150,7 +155,7 @@ pub fn fit_directional_light_matrix(
 mod tests {
     use super::*;
     use classic_core::math::cartesian_to_iso_4;
-    use glam::Vec4Swizzles;
+    use glam::{Vec3Swizzles, Vec4Swizzles};
 
     fn tilemap_mats(scale: [f32; 3], pos: Vec3) -> (Mat4, Mat4) {
         let iso = cartesian_to_iso_4().inverse();
@@ -241,6 +246,86 @@ mod tests {
             assert!(ndc.y >= -1.0 && ndc.y <= 1.0, "caster ndc.y={}", ndc.y);
             assert!(ndc.z >= -1.0 && ndc.z <= 1.0, "caster ndc.z={}", ndc.z);
         }
+    }
+
+    /// The basetest sun: azimuth 120°, elevation 30°, already unit length.
+    const SUN: Vec3 = Vec3::new(0.75, 0.433_012_7, 0.5);
+
+    /// `classic_gfx::SHADOW_MAP_SIZE` as a float (classic-engine does not
+    /// depend on classic-gfx for pure math).
+    const SHADOW_MAP_SIZE_F: f32 = 2048.0;
+
+    /// **Space contract.**  `light_dir` is authored in the unsheared cartesian
+    /// space where +Z is up (`classic-demo/src/lighting.rs` sets
+    /// `d.z = sin(elevation)`), and `vNormal` is transformed into that same
+    /// space.  The shadow map must therefore project positions in *that* space
+    /// too.
+    ///
+    /// This asserts the shadow map actually sees the sun at its authored
+    /// elevation.  Projecting sheared ("hybrid") positions, where a height
+    /// increase moves a vertex along `(0,-1,1)`, instead presents the sun at
+    /// ~2.7° — a near-degenerate grazing angle that casts no usable shadow.
+    #[test]
+    fn shadow_space_sees_the_sun_at_its_authored_elevation() {
+        let (model, iso) = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
+
+        let ground = world_corner(&model, &iso, Vec3::new(50.0, 50.0, 0.0));
+        let raised = world_corner(&model, &iso, Vec3::new(50.0, 50.0, 100.0));
+        let up = (raised - ground).normalize();
+
+        let elevation_deg = up.dot(SUN).asin().to_degrees();
+        assert!(
+            (elevation_deg - 30.0).abs() < 1.0,
+            "shadow space sees the sun at {elevation_deg:.1}°, expected 30° \
+             (raising terrain must move a vertex along +Z, not along (0,-1,1))"
+        );
+    }
+
+    /// **Space contract.**  A raised terrain vertex and the *flat terrain
+    /// vertex its shadow lands on* must resolve to the same shadow-map texel —
+    /// that is the entire premise of a shadow map.  The occluder must also be
+    /// nearer the light in depth, or the compare picks the wrong surface.
+    ///
+    /// Both endpoints go through `world_corner`, so this exercises the actual
+    /// vertex transform.  (Constructing the receiver as `caster - light_dir*t`
+    /// instead would be vacuous: an orthographic projection along `light_dir`
+    /// maps any such pair to one texel by construction, whatever the shear.)
+    #[test]
+    fn caster_and_the_ground_it_shadows_share_a_shadow_texel() {
+        let (model, iso) = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
+        let m = fit_directional_light_matrix(&model, &iso, 200.0, 200.0, 0.0, SUN, 64.0, &[]);
+
+        // A terrain vertex at tile (100,100) standing `h` px proud of the map.
+        let caster_tile = Vec3::new(100.0, 100.0, 0.0);
+        let h = 256.0f32;
+        let caster = world_corner(&model, &iso, caster_tile + Vec3::new(0.0, 0.0, h));
+
+        // Where the sun ray through it meets the z = 0 plane, expressed back in
+        // tile coordinates so the receiver also goes through `world_corner`.
+        let drop_world = Vec3::new(-SUN.x * h / SUN.z, -SUN.y * h / SUN.z, 0.0);
+        let drop_tile = iso.inverse().transform_vector3(drop_world);
+        let receiver = world_corner(&model, &iso, caster_tile + drop_tile);
+
+        let project = |p: Vec3| {
+            let clip = m.view_proj * p.extend(1.0);
+            let ndc = clip.xyz() / clip.w;
+            (ndc.xy() * 0.5 + 0.5, ndc.z * 0.5 + 0.5)
+        };
+        let (caster_uv, caster_depth) = project(caster);
+        let (receiver_uv, receiver_depth) = project(receiver);
+
+        let slip = (caster_uv - receiver_uv).length() * SHADOW_MAP_SIZE_F;
+        assert!(
+            slip < 1.0,
+            "caster and the ground it shadows land {slip:.1} texels apart in the \
+             shadow map: it is projecting a different space than the one \
+             `light_dir` is authored in"
+        );
+        assert!(
+            caster_depth < receiver_depth,
+            "caster depth {caster_depth:.5} is not nearer the light than the \
+             ground it shadows ({receiver_depth:.5})"
+        );
     }
 
     #[test]

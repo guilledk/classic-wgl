@@ -515,6 +515,10 @@ pub struct ShadowSettings {
     pub strength: f32,
     /// One shadow-map texel in UV space (`1 / SHADOW_MAP_SIZE`), for PCF.
     pub texel: [f32; 2],
+    /// `CLASSIC_SHADOW_DEBUG`: replace the shaded output with the raw shadow
+    /// visibility factor (white = lit, black = occluded), bypassing albedo,
+    /// ambient and point lights.  Diagnostic only.
+    pub debug: bool,
 }
 
 pub struct Gfx {
@@ -855,9 +859,11 @@ impl Gfx {
                 s.uniform_1f(gl, "shadow_strength", shadow.strength);
                 s.uniform_vec2(gl, "shadow_texel", &shadow.texel);
                 s.uniform_1f(gl, "use_shadow", 1.0);
+                s.uniform_1f(gl, "shadow_debug", if shadow.debug { 1.0 } else { 0.0 });
             }
             None => {
                 s.uniform_1f(gl, "use_shadow", 0.0);
+                s.uniform_1f(gl, "shadow_debug", 0.0);
             }
         }
     }
@@ -941,6 +947,7 @@ impl Gfx {
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         s.uniform_vec3(gl, "tint", Vec3::from_array([1.0, 1.0, 1.0]));
         s.uniform_1f(gl, "use_shadow", 0.0);
+        s.uniform_1f(gl, "shadow_debug", 0.0);
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -1498,6 +1505,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "shadow_strength",
                 "shadow_texel",
                 "use_shadow",
+                "shadow_debug",
             ],
         },
         BuiltinShader {
@@ -1580,6 +1588,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "shadow_strength",
                 "shadow_texel",
                 "use_shadow",
+                "shadow_debug",
             ],
         },
     ]
