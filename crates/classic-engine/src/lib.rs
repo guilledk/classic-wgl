@@ -1261,12 +1261,19 @@ impl Engine {
         Some((screen.x, screen.y))
     }
 
-    /// Convert an iso tile coordinate to a **world-space** point (the same
-    /// space consumed by the lit shaders' `worldPos` varyings and by
-    /// [`Light::position`]).  This is the light-placement coordinate flag:
-    /// world space is `iso_to_cartesian * scale * (x, y, 0)` plus the tilemap
-    /// origin, with the surface height lifted along `-y` and carried in `z`
-    /// (matching the tilemap shader's `worldPos.y -= z; worldPos.z = z`).
+    /// Convert an iso tile coordinate to a **light-space** point (the space
+    /// consumed by the lit shaders' `vLightPos` varying, by `light_dir`, by
+    /// `vNormal`, and by [`Light::position`]).
+    ///
+    /// Light space is `iso_to_cartesian * scale * (x, y, 0)` plus the tilemap
+    /// origin, with the surface height carried in **z alone** — +Z is up, as in
+    /// [`crate::shadow`].
+    ///
+    /// This previously also applied the renderer's isometric shear
+    /// (`cart.y -= z_px`), placing lights in the sheared screen space while the
+    /// normals they are dotted against live in light space.  `dot(n, L)` then
+    /// mixed two spaces, which is part of why an unoccluded point light read as
+    /// a floating sphere rather than as light landing on a surface.
     ///
     /// `elevation` is metres above the sampled terrain surface (same units as
     /// `height_data`; `height_scale` converts metres to world px).  Returns
@@ -1283,7 +1290,6 @@ impl Engine {
         cart += tm_tf.position;
         let h = sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y);
         let z_px = (h + elevation) * tm.height_scale;
-        cart.y -= z_px;
         cart.z = z_px;
         Some(cart)
     }
@@ -4384,10 +4390,14 @@ mod tests {
         let ground = engine.iso_to_world(0.0, 0.0, 0.0).unwrap();
         assert!((ground.z - 64.0).abs() < 1e-3, "got z {}", ground.z);
 
-        // 2 m above: z = 3 * 64, and y is lifted (moved toward -y) by 2 * 64.
+        // 2 m above: z = 3 * 64.  Elevation is carried in z alone — light space
+        // is +Z up, so raising a light must not move it in x or y.  (This
+        // previously asserted a y lift of 2 * 64, the renderer's isometric
+        // shear, which put lights in a different space from the normals they
+        // are dotted against.)
         let raised = engine.iso_to_world(0.0, 0.0, 2.0).unwrap();
         assert!((raised.z - 192.0).abs() < 1e-3, "got z {}", raised.z);
-        assert!((ground.y - raised.y - 128.0).abs() < 1e-2, "got y {}", raised.y);
+        assert!((ground.y - raised.y).abs() < 1e-4, "y should not move");
         assert!((ground.x - raised.x).abs() < 1e-4, "x should not move");
 
         // Without a Tilemap-role entity, the mapping is unavailable.

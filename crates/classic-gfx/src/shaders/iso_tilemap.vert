@@ -21,7 +21,6 @@ uniform float ppm;
 out mediump vec2 vMapCoord;
 out mediump float vTileId;
 out highp vec3 vNormal;
-out highp vec3 vWorldPos;
 out highp vec3 vLightPos;
 
 void main(void ) {
@@ -47,6 +46,5 @@ void main(void ) {
     vMapCoord = map_coord;
     vTileId = tile_id;
     vNormal = normalize(normal_matrix * normal);
-    vWorldPos = worldPos.xyz;
     vLightPos = lightPos.xyz;
 }

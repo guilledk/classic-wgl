@@ -3,7 +3,6 @@
 precision mediump float;
 
 in highp vec2 vTexCoord;
-in highp vec3 vWorldPos;
 in highp vec3 vLightPos;
 
 uniform sampler2D tex_sampler;
@@ -219,7 +218,7 @@ void main(void ) {
             diff *= shadowFactor(vLightPos, n);
         }
         color.rgb *= ambient_color + diff * light_color;
-        color.rgb += evaluateLights(n, vWorldPos);
+        color.rgb += evaluateLights(n, vLightPos);
     }
     if (ghost_alpha > 0.0) {
         color.a = ghost_alpha;
