@@ -39,6 +39,7 @@ use classic_core::tilemap::{
 };
 use classic_core::types::AnimationData;
 use classic_core::types::FrameTable;
+use classic_core::types::OffsetKeyframe;
 use classic_core::types::SdfFontMetrics;
 use classic_core::{Camera, RoleKind, SpriteRender, Transform};
 use classic_gfx::{Gfx, GlBuffer, GlTexture, IsoSpritePass, RenderSettings, SpriteRegion};
@@ -631,14 +632,63 @@ impl Engine {
 
     /// Load per-frame visual offsets emitted by the animation renderer.
     ///
-    /// The blob is little-endian: `u32` frame_count, `f32` `pixels_per_meter`,
-    /// then `frame_count × [f32 x, f32 y, f32 z]` `rig_location` triplets.
+    /// Two encodings are accepted, distinguished by a 4-byte magic prefix:
+    ///
+    /// - **Sparse keyframes** (current): `b"KAOS"`, `u8` version (= 1), `u32`
+    ///   keyframe_count, `f32` `pixels_per_meter`, then keyframe_count ×
+    ///   `(u32 frame_idx, f32 x, f32 y, f32 z)` `rig_location` triplets.  The
+    ///   animator linearly interpolates between keyframes.
+    /// - **Legacy dense**: `u32` frame_count, `f32` `pixels_per_meter`, then
+    ///   frame_count × `[f32 x, f32 y, f32 z]` triplets (one per frame).
+    ///
     /// `rig_location` is Blender world `(x = drift, y = drift, z = altitude)`
     /// in metres.  It is converted here to a cartesian screen-space offset:
     /// the altitude maps onto the vertical (screen-Y, negative = up), and the
     /// drift maps onto screen X/Y, all scaled by `pixels_per_meter` so the
     /// rocket's motion matches the sprite's render resolution.
     pub fn load_animation_offsets(&mut self, animation_name: &str, bytes: &[u8]) {
+        const MAGIC: &[u8; 4] = b"KAOS";
+
+        let Some(animation) = self.animations.get_mut(animation_name) else {
+            return;
+        };
+
+        if bytes.len() >= 13 && &bytes[0..4] == MAGIC {
+            let version = bytes[4];
+            if version != 1 {
+                return;
+            }
+            let count = u32::from_le_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
+            let ppm = f32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]);
+            let mut keyframes = Vec::with_capacity(count);
+            let mut o = 13;
+            for _ in 0..count {
+                if o + 16 > bytes.len() {
+                    break;
+                }
+                let frame =
+                    u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+                let x =
+                    f32::from_le_bytes([bytes[o + 4], bytes[o + 5], bytes[o + 6], bytes[o + 7]]);
+                let y =
+                    f32::from_le_bytes([bytes[o + 8], bytes[o + 9], bytes[o + 10], bytes[o + 11]]);
+                let z = f32::from_le_bytes([
+                    bytes[o + 12],
+                    bytes[o + 13],
+                    bytes[o + 14],
+                    bytes[o + 15],
+                ]);
+                o += 16;
+                keyframes.push(OffsetKeyframe {
+                    frame,
+                    // Altitude (z) lifts the rocket up = smaller cart_pos.y.
+                    offset: Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array(),
+                });
+            }
+            animation.offset_keyframes = keyframes;
+            return;
+        }
+
         if bytes.len() < 8 {
             return;
         }
@@ -657,10 +707,7 @@ impl Engine {
             // Altitude (z) lifts the rocket up = smaller cart_pos.y.
             offsets.push(Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array());
         }
-
-        if let Some(animation) = self.animations.get_mut(animation_name) {
-            animation.offsets = offsets;
-        }
+        animation.offsets = offsets;
     }
 
     /// Upload a PNG texture from raw bytes.
@@ -3426,6 +3473,13 @@ impl Engine {
         }
     }
 
+    /// Toggle a named entity's visibility (add/remove the `Disabled` marker).
+    pub fn set_enabled_named(&mut self, name: &str, enabled: bool) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        self.set_enabled(entity, enabled);
+        true
+    }
+
     /// Check whether an entity (or any of its ancestors) is disabled.
     pub fn is_disabled(&self, entity: hecs::Entity) -> bool {
         if self.world.get::<&classic_core::components::Disabled>(entity).is_ok() {
@@ -3617,6 +3671,7 @@ mod tests {
                 rate: 24.0,
                 sequence: vec![0, 1],
                 offsets: vec![],
+                offset_keyframes: vec![],
                 metadata: None,
             },
         );
@@ -3643,6 +3698,53 @@ mod tests {
         assert!((offsets[1][0] - (-8.0)).abs() < 0.001, "got {:?}", offsets[1]);
         // Altitude 0 → zero vertical offset.
         assert!((offsets[2][1]).abs() < 0.001, "got {:?}", offsets[2]);
+    }
+
+    #[test]
+    fn animation_offsets_parse_sparse_keyframes() {
+        classic_core::register_all_components();
+        let mut engine = Engine::new();
+        engine.animations.insert(
+            "rocketLanding".to_string(),
+            AnimationData {
+                name: "rocketLanding".to_string(),
+                src: "rocketLanding".to_string(),
+                rate: 24.0,
+                sequence: vec![0, 1],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                metadata: None,
+            },
+        );
+
+        // Sparse blob: magic b"KAOS", u8 version=1, u32 count, f32 ppm, then
+        // count × (u32 frame, f32 x, f32 y, f32 z).
+        let mut metadata = Vec::new();
+        metadata.extend_from_slice(b"KAOS");
+        metadata.push(1u8);
+        metadata.extend_from_slice(&2u32.to_le_bytes());
+        metadata.extend_from_slice(&64.0f32.to_le_bytes());
+        for (frame, x, y, z) in [(0u32, 0.0f32, 0.0f32, 50.0f32), (240, 0.0, 0.0, 0.0)] {
+            metadata.extend_from_slice(&frame.to_le_bytes());
+            metadata.extend_from_slice(&x.to_le_bytes());
+            metadata.extend_from_slice(&y.to_le_bytes());
+            metadata.extend_from_slice(&z.to_le_bytes());
+        }
+        engine.load_animation_offsets("rocketLanding", &metadata);
+
+        let anim = &engine.animations["rocketLanding"];
+        assert!(anim.offsets.is_empty(), "sparse blob must not fill `offsets`");
+        assert_eq!(anim.offset_keyframes.len(), 2);
+        // Frame 0: 50 m altitude at ppm=64 → 3200 units up (negative screen Y).
+        assert_eq!(anim.offset_keyframes[0].frame, 0);
+        assert!(
+            (anim.offset_keyframes[0].offset[1] - (-3200.0)).abs() < 0.01,
+            "got {:?}",
+            anim.offset_keyframes[0]
+        );
+        // Frame 240: touchdown → zero vertical offset.
+        assert_eq!(anim.offset_keyframes[1].frame, 240);
+        assert!(anim.offset_keyframes[1].offset[1].abs() < 0.01);
     }
 
     #[test]

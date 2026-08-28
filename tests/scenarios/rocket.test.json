@@ -1,0 +1,33 @@
+[
+  {
+    "frame": 2,
+    "actions": [
+      { "setCameraIso": { "tx": 200.0, "ty": 165.0, "scale": 0.15 } }
+    ],
+    "assertions": [],
+    "log": "frame the camera on the rocket body (35 tiles north of its ground anchor)"
+  },
+  {
+    "frame": 8,
+    "actions": [],
+    "assertions": [
+      {
+        "kind": "pixelAtEntity",
+        "region": [0, 0, 0, 0],
+        "expected": 0.1,
+        "log": "rocket",
+        "color": [0.15, 0.15, 0.2, 1.0],
+        "offset": [44.0, -44.0]
+      },
+      {
+        "kind": "pixelAtEntity",
+        "region": [0, 0, 0, 0],
+        "expected": 0.1,
+        "log": "rocket",
+        "color": [0.0, 0.97, 0.0, 1.0],
+        "offset": [0.0, 0.0]
+      }
+    ],
+    "log": "rocket body renders dark on the green pad (body + anchor-ground pixels)"
+  }
+]

@@ -1,7 +1,9 @@
 //! Integration tests for the WASM guest runtime, driving every backend (wasmi
 //! always; wasmtime on native) with small hand-written WAT guest modules.
 
-use classic_core::components::{Animator, ColliderData, IsoSprite, NavMesh, Role, Shape, Tilemap};
+use classic_core::components::{
+    Animator, ColliderData, Disabled, IsoSprite, NavMesh, Role, Shape, Tilemap,
+};
 use classic_core::types::AnimationData;
 use classic_core::RoleKind;
 use classic_engine::Engine;
@@ -756,6 +758,26 @@ fn guest_start_anim_import_is_wired() {
 }
 
 #[test]
+fn guest_set_enabled_import_is_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "set_enabled" (func $se (param i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "unit")
+            (func (export "update") (param f64)
+                (drop (call $se (i32.const 0) (i32.const 4) (i32.const 0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.spawn_named("unit");
+            let entity = *engine.names.get("unit").unwrap();
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(engine.world.get::<&Disabled>(entity).is_ok());
+        },
+    );
+}
+
+#[test]
 fn guest_init_hook_spawns_once_before_update() {
     with_each_runtime(
         r#"(module
@@ -963,6 +985,7 @@ fn install_test_resources(engine: &mut Engine) {
             rate: 1.0,
             sequence: vec![],
             offsets: vec![],
+            offset_keyframes: vec![],
             metadata: None,
         },
     );

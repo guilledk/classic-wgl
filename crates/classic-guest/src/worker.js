@@ -116,6 +116,7 @@ var OP_POLL_PATH = 76;
 var OP_SET_SPRITE_FRAME = 77;
 var OP_SET_SPRITE_COLOR = 78;
 var OP_SPAWN_SPRITE_CLONE = 79;
+var OP_SET_ENABLED = 80;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -212,6 +213,9 @@ function envImports() {
         },
         spawn_sprite_clone: function (tPtr, tLen, nPtr, nLen) {
             return hostCall(OP_SPAWN_SPRITE_CLONE, [readStr(tPtr, tLen), readStr(nPtr, nLen)], []).ret | 0;
+        },
+        set_enabled: function (ptr, len, enabled) {
+            return hostCall(OP_SET_ENABLED, [readStr(ptr, len)], [enabled]).ret | 0;
         },
         get_pos: function (ptr, len, outPtr) {
             var r = hostCall(OP_GET_POS, [readStr(ptr, len)], [outPtr]);

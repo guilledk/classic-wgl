@@ -723,6 +723,22 @@ impl WebWasmRuntime {
             );
         }
 
+        // set_enabled
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_enabled",
+                Box::new(move |ptr: i32, len: i32, enabled: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().set_enabled(&name, enabled)
+                }) as Box<dyn FnMut(i32, i32, i32) -> i32>
+            );
+        }
+
         // agent_selected
         {
             let host = host.clone();
