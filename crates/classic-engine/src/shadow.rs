@@ -83,19 +83,29 @@ fn world_corner(model: &Mat4, iso_matrix: &Mat4, p: Vec3) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
 }
 
-/// The four world-space corners of a sprite billboard (a unit quad in the
-/// cartesian x-y plane, transformed by the sprite's model matrix).
-fn sprite_billboard_corners(model: &Mat4) -> [Vec3; 4] {
+/// The four **light-space** corners of a sprite billboard.
+///
+/// `model` places a screen-aligned unit quad, so its corners come out in the
+/// sheared screen space where the quad lies flat on the ground.  A sprite
+/// stands up out of the terrain, so screen up is unprojected to world +Z about
+/// the ground anchor — the same reconstruction `shadow_sprite.vert` and
+/// `direct_tex.vert` perform, kept in step so the fitted box actually contains
+/// the geometry the shadow pass will rasterise.
+///
+/// `anchor` is `(sheared y, light-space height)` of the sprite's ground anchor.
+fn sprite_billboard_corners(model: &Mat4, anchor: [f32; 2]) -> [Vec3; 4] {
     let pts = [
         Vec3::new(0.0, 0.0, 0.0),
         Vec3::new(1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
         Vec3::new(1.0, 1.0, 0.0),
     ];
+    let (anchor_y, anchor_z) = (anchor[0], anchor[1]);
     let mut out = [Vec3::ZERO; 4];
     for (i, p) in pts.iter().enumerate() {
         let v = *model * p.extend(1.0);
-        out[i] = Vec3::new(v.x, v.y, v.z);
+        let up_from_anchor = anchor_y - v.y;
+        out[i] = Vec3::new(v.x, anchor_y + anchor_z, anchor_z + up_from_anchor);
     }
     out
 }
@@ -111,9 +121,9 @@ fn sprite_billboard_corners(model: &Mat4) -> [Vec3; 4] {
 ///   `light_direction`); normalized internally.
 /// * `padding` — world-space margin added around the box (protects the map
 ///   edges and reduces clamp artifacts).
-/// * `casters` — light-space model matrices of the sprite shadow casters, whose
-///   billboards extend "up" out of the terrain plane and must fit inside the
-///   box or their shadows clip at the near plane.
+/// * `casters` — `(model matrix, ground anchor)` per sprite shadow caster.  The
+///   billboards stand up out of the terrain plane and must fit inside the box
+///   or their shadows clip at the near plane.
 /// * `shadow_map_size` — resolution of the depth target, used to report
 ///   [`LightMatrix::world_texel`].
 #[allow(clippy::too_many_arguments)]
@@ -125,7 +135,7 @@ pub fn fit_directional_light_matrix(
     z_max: f32,
     light_dir: Vec3,
     padding: f32,
-    casters: &[Mat4],
+    casters: &[(Mat4, [f32; 2])],
     shadow_map_size: f32,
 ) -> LightMatrix {
     let light_dir = {
@@ -145,8 +155,8 @@ pub fn fit_directional_light_matrix(
             }
         }
     }
-    for c in casters {
-        corners.extend_from_slice(&sprite_billboard_corners(c));
+    for (model, anchor) in casters {
+        corners.extend_from_slice(&sprite_billboard_corners(model, *anchor));
     }
 
     let mut center = Vec3::ZERO;
@@ -275,14 +285,15 @@ mod tests {
 
     #[test]
     fn caster_billboard_fits_inside_box() {
-        // A sprite billboard standing "up" (in -y, screen up) above the ground
-        // plane must land inside the fitted box — otherwise its shadow clips at
-        // the near plane.
+        // A sprite billboard standing up out of the ground plane must land
+        // inside the fitted box — otherwise its shadow clips at the near plane.
         let (model, iso) = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
         // A billboard at the map centre, 400 px tall (screen up = -y), anchored
         // on the ground: model = translate(centre) * scale(100, 400, 1).
         let caster = Mat4::from_translation(Vec3::new(0.0, -200.0, 0.0))
             * Mat4::from_scale(Vec3::new(100.0, 400.0, 1.0));
+        // Ground anchor: sheared y 0.0, standing on terrain of height 0.
+        let anchor = [0.0f32, 0.0];
         let m = fit_directional_light_matrix(
             &model,
             &iso,
@@ -291,16 +302,42 @@ mod tests {
             0.0,
             Vec3::new(0.45, -0.35, 0.82),
             64.0,
-            &[caster],
+            &[(caster, anchor)],
             SHADOW_MAP_SIZE_F,
         );
-        for c in sprite_billboard_corners(&caster) {
+        for c in sprite_billboard_corners(&caster, anchor) {
             let clip = m.view_proj * Vec4::new(c.x, c.y, c.z, 1.0);
             let ndc = clip.xyz() / clip.w;
             assert!(ndc.x >= -1.0 && ndc.x <= 1.0, "caster ndc.x={}", ndc.x);
             assert!(ndc.y >= -1.0 && ndc.y <= 1.0, "caster ndc.y={}", ndc.y);
             assert!(ndc.z >= -1.0 && ndc.z <= 1.0, "caster ndc.z={}", ndc.z);
         }
+    }
+
+    /// A billboard must be reconstructed as *standing* geometry: its screen-up
+    /// extent has to become height, not horizontal depth.  Rendering it as the
+    /// flat quad the model matrix literally describes casts a puddle-shaped
+    /// decal instead of a sprite-shaped shadow.
+    #[test]
+    fn billboard_corners_stand_up_out_of_the_ground() {
+        // 400 px tall (screen up = -y), 100 px wide, anchored at the origin.
+        let caster = Mat4::from_translation(Vec3::new(0.0, -200.0, 0.0))
+            * Mat4::from_scale(Vec3::new(100.0, 400.0, 1.0));
+        let corners = sprite_billboard_corners(&caster, [0.0, 0.0]);
+
+        let z_min = corners.iter().map(|c| c.z).fold(f32::MAX, f32::min);
+        let z_max = corners.iter().map(|c| c.z).fold(f32::MIN, f32::max);
+        assert!(
+            (z_max - z_min - 400.0).abs() < 1e-3,
+            "billboard spans {:.1} in height, expected 400",
+            z_max - z_min
+        );
+
+        // ...and it must occupy a single world y: a billboard does not recede
+        // into the scene, or it would shadow tiles behind it.
+        let y_min = corners.iter().map(|c| c.y).fold(f32::MAX, f32::min);
+        let y_max = corners.iter().map(|c| c.y).fold(f32::MIN, f32::max);
+        assert!((y_max - y_min).abs() < 1e-3, "billboard is not planar in y");
     }
 
     /// The basetest sun: azimuth 120°, elevation 30°, already unit length.

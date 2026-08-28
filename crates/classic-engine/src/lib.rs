@@ -2790,7 +2790,8 @@ impl Engine {
                 let iso_matrix = Mat4::from_scale(tf.scale) * iso;
                 let model = Mat4::from_translation(tf.position);
                 let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max) * tm.height_scale;
-                let casters: Vec<Mat4> = iso_draws.iter().map(|d| d.model).collect();
+                let casters: Vec<(Mat4, [f32; 2])> =
+                    iso_draws.iter().map(|d| (d.model, d.sprite_anchor)).collect();
                 Some(shadow::fit_directional_light_matrix(
                     &model,
                     &iso_matrix,
@@ -2858,12 +2859,16 @@ impl Engine {
                     }
                     // Sprite shadow casters: each iso sprite casts its alpha
                     // silhouette into the shadow map (vehicles, agents, props).
+                    // Billboards are their own receivers, so they need a
+                    // slope-scaled offset the terrain does not.
+                    gfx.set_shadow_sprite_offset();
                     for draw in &iso_draws {
                         gfx.draw_shadow_sprite(
                             &draw.model,
                             &m.view_proj,
                             &draw.texture,
                             draw.region(),
+                            &draw.sprite_anchor,
                         );
                     }
                     gfx.end_shadow_pass();
