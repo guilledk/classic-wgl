@@ -5,7 +5,6 @@ precision mediump float;
 in mediump vec2 vMapCoord;
 in mediump float vTileId;
 in highp vec3 vNormal;
-in highp vec3 vWorldPos;
 in highp vec3 vLightPos;
 
 uniform sampler2D map_data;
@@ -189,7 +188,7 @@ void main(void ) {
         diff *= shadowFactor(vLightPos, n);
     }
     color.rgb *= ambient_color + diff * light_color;
-    color.rgb += evaluateLights(n, vWorldPos);
+    color.rgb += evaluateLights(n, vLightPos);
 
     if (show_grid > 0 && selection_mode == -1 && vTileId <= 0.5) {
         vec2 tileCoord = vMapCoord * map_size;

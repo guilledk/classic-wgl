@@ -12,7 +12,6 @@ uniform vec4 iso_depth_corners;
 uniform vec2 sprite_anchor;
 
 out highp vec2 vTexCoord;
-out highp vec3 vWorldPos;
 out highp vec3 vLightPos;
 
 void main(void ) {
@@ -26,7 +25,6 @@ void main(void ) {
     }
     vTexCoord = tex_coord;
     highp vec3 screenPos = (model_matrix * vertex_pos).xyz;
-    vWorldPos = screenPos;
 
     // Unproject the billboard into light space (+Z up).
     //
