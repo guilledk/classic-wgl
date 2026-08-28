@@ -6,6 +6,7 @@ in mediump vec2 vMapCoord;
 in mediump float vTileId;
 in highp vec3 vNormal;
 in highp vec3 vWorldPos;
+in highp vec3 vLightPos;
 
 uniform sampler2D map_data;
 uniform vec2 map_size;
@@ -35,6 +36,7 @@ uniform float shadow_strength;
 uniform vec2 shadow_texel;
 uniform float use_shadow;
 uniform float shadow_debug;
+uniform float shadow_normal_offset;
 
 #define MAX_LIGHTS 256
 
@@ -99,8 +101,12 @@ float shadowSample(vec2 suv, float fragDepth) {
     return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
 }
 
-float shadowFactor(vec3 worldPos) {
-    vec4 lp = light_view_proj * vec4(worldPos, 1.0);
+// `n` is the receiver's surface normal in light space.  Nudging the sample
+// point along it by ~a texel keeps a surface from sampling the very texel it
+// wrote, which is what causes shadow acne, without detaching the shadow from
+// its caster the way a large depth bias would.
+float shadowFactor(vec3 lightPos, vec3 n) {
+    vec4 lp = light_view_proj * vec4(lightPos + n * shadow_normal_offset, 1.0);
     vec3 ndc = lp.xyz / lp.w;
     vec2 suv = ndc.xy * 0.5 + 0.5;
     if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
@@ -173,14 +179,14 @@ void main(void ) {
     // occluded), with no albedo, ambient, Lambert term or point lights to hide
     // behind.  See CLASSIC_SHADOW_DEBUG.
     if (shadow_debug > 0.5) {
-        float vis = use_shadow > 0.5 ? shadowFactor(vWorldPos) : 1.0;
+        float vis = use_shadow > 0.5 ? shadowFactor(vLightPos, n) : 1.0;
         fragColor = vec4(vec3(vis), 1.0);
         return;
     }
 
     float diff = max(dot(n, light_direction), 0.0);
     if (use_shadow > 0.5) {
-        diff *= shadowFactor(vWorldPos);
+        diff *= shadowFactor(vLightPos, n);
     }
     color.rgb *= ambient_color + diff * light_color;
     color.rgb += evaluateLights(n, vWorldPos);

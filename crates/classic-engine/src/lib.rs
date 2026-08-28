@@ -112,6 +112,9 @@ struct IsoDraw {
     color: [f32; 4],
     /// Whether the sprite is currently RTS-selected (draws a silhouette edge).
     selected: bool,
+    /// The sprite's ground anchor as `(sheared y, light-space height)`, used
+    /// to unproject billboard fragments into light space for shadowing.
+    sprite_anchor: [f32; 2],
 }
 
 impl IsoDraw {
@@ -2734,7 +2737,7 @@ impl Engine {
                 }
             };
 
-            let model = Self::compute_iso_sprite_model(
+            let (model, sprite_anchor) = Self::compute_iso_sprite_model(
                 &iso_sprite,
                 &tf,
                 &tilemap_tf,
@@ -2772,6 +2775,7 @@ impl Engine {
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
+                sprite_anchor,
             });
         }
 
@@ -2796,6 +2800,7 @@ impl Engine {
                     Vec3::from_array(self.light_dir),
                     shadow::SHADOW_PADDING,
                     &casters,
+                    classic_gfx::SHADOW_MAP_SIZE as f32,
                 ))
             })
         } else {
@@ -2869,6 +2874,7 @@ impl Engine {
                         bias: shadow::SHADOW_BIAS,
                         strength: shadow::SHADOW_STRENGTH,
                         texel: [texel, texel],
+                        normal_offset: m.world_texel * shadow::SHADOW_NORMAL_OFFSET,
                         debug: config.shadow_debug,
                     })
                 } else {
@@ -3078,6 +3084,7 @@ impl Engine {
                 draw.depth_base,
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
+                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Normal,
@@ -3100,6 +3107,7 @@ impl Engine {
                 draw.depth_base,
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
+                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Ghost,
@@ -4043,7 +4051,7 @@ impl Engine {
         tilemap: &Tilemap,
         tex_dim: (f32, f32),
         anchor_px: Vec2,
-    ) -> Mat4 {
+    ) -> (Mat4, [f32; 2]) {
         let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
 
         let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
@@ -4065,10 +4073,18 @@ impl Engine {
 
         let anchor_delta = Vec3::new(-anchor_px.x, -anchor_px.y, 0.0);
 
-        Mat4::from_translation(cart_pos)
+        let model = Mat4::from_translation(cart_pos)
             * Mat4::from_scale(sprite_tf.scale)
             * Mat4::from_translation(anchor_delta)
-            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0))
+            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0));
+
+        // The sprite's ground anchor, as `(sheared y, light-space height)`.
+        // A billboard is a screen-aligned quad: its tall axis is *screen* up,
+        // which in an isometric view means world **+Z**, not world -Y.  The
+        // shaders use this pair to unproject billboard fragments back into
+        // light space so sprites cast and receive shadows as standing geometry
+        // rather than as decals lying flat on the ground.
+        (model, [cart_pos.y, cart_pos.z])
     }
 
     /// Compute the anchor-plane iso depth for a sprite position (the depth a

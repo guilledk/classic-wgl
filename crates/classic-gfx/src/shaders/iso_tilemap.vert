@@ -22,9 +22,15 @@ out mediump vec2 vMapCoord;
 out mediump float vTileId;
 out highp vec3 vNormal;
 out highp vec3 vWorldPos;
+out highp vec3 vLightPos;
 
 void main(void ) {
-    vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
+    // Light space (+Z up): the space `light_direction` and `vNormal` live in,
+    // and the space the shadow map is rendered and sampled in.
+    vec4 lightPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
+    // Screen space: the isometric shear that makes height visible.  It carries
+    // height in both y and z, so it must never be used for lighting or shadows.
+    vec4 worldPos = lightPos;
     worldPos.y -= vertex_pos.z;
     vec4 clipPos = projection_matrix * camera_matrix * worldPos;
     // Canonical iso depth in window space `[0, 1]`:
@@ -42,4 +48,5 @@ void main(void ) {
     vTileId = tile_id;
     vNormal = normalize(normal_matrix * normal);
     vWorldPos = worldPos.xyz;
+    vLightPos = lightPos.xyz;
 }

@@ -515,6 +515,10 @@ pub struct ShadowSettings {
     pub strength: f32,
     /// One shadow-map texel in UV space (`1 / SHADOW_MAP_SIZE`), for PCF.
     pub texel: [f32; 2],
+    /// Distance to push the receiver along its surface normal before sampling,
+    /// in world units (normal-offset bias).  Suppresses shadow acne without the
+    /// peter-panning a comparable depth bias would cause.
+    pub normal_offset: f32,
     /// `CLASSIC_SHADOW_DEBUG`: replace the shaded output with the raw shadow
     /// visibility factor (white = lit, black = occluded), bypassing albedo,
     /// ambient and point lights.  Diagnostic only.
@@ -688,8 +692,13 @@ impl Gfx {
             gl.depth_mask(true);
             // Push casters slightly away from the light so coplanar terrain
             // triangles don't self-shadow into speckles (shadow acne).
+            // Constant-depth offset only.  A slope-scaled factor (the old
+            // `polygon_offset(2.0, 4.0)`) blows up as the depth slope grows,
+            // which pushed every occluder behind every receiver and produced
+            // exactly zero shadows.  Acne is handled by normal-offset bias on
+            // the receive side instead — see `SHADOW_NORMAL_OFFSET`.
             gl.enable(glow::POLYGON_OFFSET_FILL);
-            gl.polygon_offset(2.0, 4.0);
+            gl.polygon_offset(0.0, 1.0);
         }
     }
 
@@ -858,6 +867,7 @@ impl Gfx {
                 s.uniform_1f(gl, "shadow_bias", shadow.bias);
                 s.uniform_1f(gl, "shadow_strength", shadow.strength);
                 s.uniform_vec2(gl, "shadow_texel", &shadow.texel);
+                s.uniform_1f(gl, "shadow_normal_offset", shadow.normal_offset);
                 s.uniform_1f(gl, "use_shadow", 1.0);
                 s.uniform_1f(gl, "shadow_debug", if shadow.debug { 1.0 } else { 0.0 });
             }
@@ -1028,6 +1038,7 @@ impl Gfx {
         depth_base: f32,
         normal_map: Option<&str>,
         tint: &[f32; 3],
+        sprite_anchor: &[f32; 2],
         settings: &RenderSettings,
         ghost_alpha: f32,
         selected: bool,
@@ -1112,6 +1123,7 @@ impl Gfx {
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         s.uniform_vec3(gl, "tint", Vec3::from_array(*tint));
+        s.uniform_vec2(gl, "sprite_anchor", sprite_anchor);
         self.bind_shadow(s, settings);
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
@@ -1145,6 +1157,7 @@ impl Gfx {
         depth_base: f32,
         normal_map: Option<&str>,
         tint: &[f32; 3],
+        sprite_anchor: &[f32; 2],
         settings: &RenderSettings,
         ghost_group: u32,
         pass: IsoSpritePass,
@@ -1167,6 +1180,7 @@ impl Gfx {
             depth_base,
             normal_map,
             tint,
+            sprite_anchor,
             settings,
             ghost_alpha,
             selected,
@@ -1499,6 +1513,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "light_direction",
                 "light_color",
                 "tint",
+                "sprite_anchor",
                 "shadow_map",
                 "light_view_proj",
                 "shadow_bias",
@@ -1506,6 +1521,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "shadow_texel",
                 "use_shadow",
                 "shadow_debug",
+                "shadow_normal_offset",
             ],
         },
         BuiltinShader {
@@ -1589,6 +1605,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "shadow_texel",
                 "use_shadow",
                 "shadow_debug",
+                "shadow_normal_offset",
             ],
         },
     ]
