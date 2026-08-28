@@ -339,6 +339,13 @@ pub const LIGHT_UBO_BINDING: u32 = 1;
 /// Edge length of the square directional shadow map (depth texture).
 pub const SHADOW_MAP_SIZE: u32 = 2048;
 
+/// Slope-scaled depth offset applied to sprite billboard shadow casters, in
+/// OpenGL polygon-offset factor units.  See `Gfx::set_shadow_sprite_offset`.
+pub const SHADOW_SPRITE_SLOPE_OFFSET: f32 = 4.0;
+
+/// Constant depth offset paired with `SHADOW_SPRITE_SLOPE_OFFSET`.
+pub const SHADOW_SPRITE_UNIT_OFFSET: f32 = 8.0;
+
 /// Texture unit the directional shadow map is bound to in the lit shaders.
 /// Tilemap uses units 0/1, sprites use 0/1/2 — unit 3 is free for both.
 pub const SHADOW_MAP_UNIT: u32 = 3;
@@ -691,7 +698,6 @@ impl Gfx {
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(true);
             // Push casters slightly away from the light so coplanar terrain
-            // triangles don't self-shadow into speckles (shadow acne).
             // Constant-depth offset only.  A slope-scaled factor (the old
             // `polygon_offset(2.0, 4.0)`) blows up as the depth slope grows,
             // which pushed every occluder behind every receiver and produced
@@ -724,6 +730,27 @@ impl Gfx {
         }
     }
 
+    /// Switch the shadow pass to slope-scaled depth offset for sprite casters.
+    ///
+    /// A sprite is a *plane*, and it is both caster and receiver: every sprite
+    /// fragment samples the very texels its own billboard wrote.  Because the
+    /// plane is slanted relative to the light, stored depth varies across the
+    /// PCF kernel, neighbouring taps disagree, and the sprite stipples itself
+    /// with ~50% self-shadow.  Normal-offset bias cannot fix this — the offset
+    /// stays inside the billboard's own (large) footprint in the shadow map.
+    ///
+    /// Slope-scaled offset is the right tool here precisely because the error
+    /// being corrected *is* proportional to the depth slope.  It is safe now
+    /// that the light-space geometry is correct; it was catastrophic before
+    /// only because the degenerate 2.7° sun made every slope enormous.
+    ///
+    /// Terrain casters keep the constant offset from [`Gfx::begin_shadow_pass`].
+    pub fn set_shadow_sprite_offset(&self) {
+        unsafe {
+            self.gl.polygon_offset(SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET);
+        }
+    }
+
     /// Draw one sprite billboard into the shadow map.  The colour texture's
     /// alpha is the silhouette (transparent pixels discard), so the sprite casts
     /// a shaped shadow rather than a full quad.
@@ -733,6 +760,7 @@ impl Gfx {
         view_proj: &Mat4,
         texture_name: &str,
         region: SpriteRegion<'_>,
+        sprite_anchor: &[f32; 2],
     ) {
         let gl = &self.gl;
         let s = self.shader("shadowSprite");
@@ -743,6 +771,7 @@ impl Gfx {
         s.uniform_1i(gl, "tex_sampler", 0);
         s.uniform_mat4(gl, "model_matrix", model);
         s.uniform_mat4(gl, "light_view_proj", view_proj);
+        s.uniform_vec2(gl, "sprite_anchor", sprite_anchor);
         match region {
             SpriteRegion::Grid { frame, tile_set_size } => {
                 s.uniform_1f(gl, "tile_id_flat", frame);
@@ -1559,6 +1588,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             unif: &[
                 "model_matrix",
                 "light_view_proj",
+                "sprite_anchor",
                 "tex_sampler",
                 "tile_id_flat",
                 "tile_set_size",
