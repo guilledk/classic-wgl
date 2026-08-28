@@ -139,10 +139,14 @@ pub struct Tilemap {
     /// persisted as the `tiles_grid` resource instead.
     #[serde(skip)]
     pub data: Vec<u32>,
-    /// Per-tile height data (vertex grid, `(size_x+1) * (size_y+1)` elements).
-    /// Not serialized — persisted as the `heights_grid` resource instead.
+    /// Per-vertex height data (vertex grid, `(size_x+1) * (size_y+1)` elements),
+    /// in **metres** (the exporter's unit).  Not serialized — persisted as the
+    /// `heights_grid` resource instead.
     #[serde(skip)]
     pub height_data: Vec<f32>,
+    /// Pixels per metre — the conversion from `height_data` metres to screen
+    /// pixels (`z_px = height_data · height_scale`).  Metre-authored scenes use
+    /// [`PPM_TARGET`](crate::tilemap::PPM_TARGET) (64 px/m).
     #[serde(default)]
     pub height_scale: f32,
     /// Pixels-per-tile-row in the tileset image.

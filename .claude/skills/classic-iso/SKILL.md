@@ -110,9 +110,10 @@ clip z via `d * 2.0 - 1.0` so the fixed-function clip→window mapping round-tri
 The canonical formula (one definition, in `classic-core::tilemap`):
 
 ```
-iso_depth(tx, ty, z) = (tx - ty) / HORIZONTAL_DEPTH_SCALE + 0.5 + z / HEIGHT_DEPTH_SCALE_PX
-  HORIZONTAL_DEPTH_SCALE  = 400.0    (tiles per 1.0 iso-depth)
-  HEIGHT_DEPTH_SCALE_PX   = 22045.4  (z in tileset px, = 344.46 · PPM_TARGET)
+iso_depth(tx, ty, z) = (tx - ty) / horizontal_depth_scale + 0.5 + (z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
+  horizontal_depth_scale  = 2 · max(size_x, size_y)  (tiles per 1.0 iso-depth)
+  HEIGHT_DEPTH_SCALE_M    = 344.46  (z in metres; the metre-space height divisor)
+  PPM_TARGET              = 64.0    (px/m; converts the px mesh/sprite z back to metres)
 ```
 
 The height term is **`+ z / D`**: the camera basis `back.z = +0.5` means taller
@@ -120,9 +121,13 @@ terrain is *farther* (larger depth).  An earlier sign error (`- z / D`) made
 taller terrain appear *closer*, breaking ghosting at slope corners in a
 camera-position-dependent way.
 
-The constants are shared with the shaders via a `depth_scale` uniform
-(`vec2(HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX)`), so there are no GLSL
-literals to keep in sync.
+The height axis is re-expressed in **metres** (the exporter's unit): `height_data`
+is metres and `height_scale` is px/m (`PPM_TARGET` = 64).  The mesh/sprite `z`
+is carried in tileset pixels (`z_px = height_data · height_scale`); the depth
+formula converts it back to metres via `/ PPM_TARGET` before dividing by the
+metre divisor.  The constants are shared with the shaders via the `depth_scale`
+(`vec2(horizontal_depth_scale, HEIGHT_DEPTH_SCALE_M)`) and `ppm`
+(`PPM_TARGET`) uniforms, so there are no GLSL literals to keep in sync.
 
 ### Tilemap vertex shader (`iso_tilemap.vert`)
 
@@ -130,7 +135,7 @@ literals to keep in sync.
 vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
 worldPos.y -= vertex_pos.z;
 
-highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + vertex_pos.z / depth_scale.y;
+highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
 clipPos.z = isoDepth * 2.0 - 1.0;
 ```
 
@@ -145,8 +150,10 @@ Key aspects:
 3. **Window space, no clamp:**  the value is `depth_scale`-derived window depth;
    geometry beyond `[0, 1]` is clipped by the fixed function (`z_clip ∉ [-1, 1]`).
    `+0.5` centres the range.
-4. The height divisor is `HEIGHT_DEPTH_SCALE_PX = 344.46 · 64` (`344.46` is the
-   metre-space divisor `iso_depth_factor / back.z`; `64` is `PPM_TARGET` px/m).
+4. The height divisor is `HEIGHT_DEPTH_SCALE_M = 344.46` in metres (`344.46` is
+   `iso_depth_factor / back.z`).  The mesh `vertex_pos.z` is pixels, so the
+   shader converts `z_m = z_px / ppm` (`ppm = PPM_TARGET = 64` px/m) before the
+   division — numerically `z_px / 22045.4`.
 5. `isoDepth` is computed in `highp` (not the shader's `mediump float` default)
    to match the highp sprite/depth-map path and the 24-bit depth buffer.
 
@@ -157,7 +164,7 @@ The IsoSprite renderer needs depth values for each of the 4 footprint corners
 `compute_iso_base_depth`), in **window space**, with **no** `-0.005` bias:
 
 ```rust
-let d = (pos.x + pt.x - pos.y - pt.y) / HORIZONTAL_DEPTH_SCALE + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX;
+let d = (pos.x + pt.x - pos.y - pt.y) / h_depth + 0.5 + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
 ```
 
 The old `-0.005` sprite-only bias was removed during depth-scale unification

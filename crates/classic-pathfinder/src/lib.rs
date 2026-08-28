@@ -379,7 +379,8 @@ pub struct VehicleNavSnapshot {
     pub structural: Vec<i32>,
     /// Vertex height grid `(size_x + 1) × (size_y + 1)`, row-major.
     pub heights: Vec<f32>,
-    /// Vertical world units per height unit (the tilemap `height_scale`).
+    /// Pixels per metre — the tilemap `height_scale`, converting the metre
+    /// `heights` grid to screen pixels for slope/fall comparisons.
     pub height_scale: f32,
     /// World size of a tile edge (the tilemap `scale.x`), used to convert the
     /// pixel wheelbase/track back into tile units for slope sampling.

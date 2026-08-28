@@ -325,7 +325,7 @@ pub fn init_iso_coord_overlay(engine: &mut Engine, state: &DemoStateRef) {
 
         let mx = tm.mouse_iso_pos.x;
         let my = tm.mouse_iso_pos.y;
-        let h = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, mx, my);
+        let mz = tm.mouse_iso_pos.z;
 
         if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(coord_x) {
             sdf.text = format!("X: {:.1}", mx);
@@ -334,7 +334,7 @@ pub fn init_iso_coord_overlay(engine: &mut Engine, state: &DemoStateRef) {
             sdf.text = format!("Y: {:.1}", my);
         }
         if let Ok(mut sdf) = engine.world.get::<&mut SdfTextRender>(coord_z) {
-            sdf.text = format!("Z: {:.0}", h * tm.height_scale);
+            sdf.text = format!("Z: {:.2}", mz);
         }
 
         let cx: f32 = 100.0;

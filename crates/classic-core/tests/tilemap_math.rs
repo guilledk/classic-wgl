@@ -8,7 +8,7 @@ fn horizontal_depth_scale_covers_map_diagonal() {
     assert_eq!(horizontal_depth_scale(400, 400), 800.0);
 
     // The full tile diagonal must stay within window depth [0, 1]:
-    //   iso_depth(tx, ty, z) = (tx - ty) / scale + 0.5 + z / HEIGHT_DEPTH_SCALE_PX
+    //   iso_depth(tx, ty, z) = (tx - ty) / scale + 0.5 + (z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
     for &(sx, sy) in &[(200, 200), (400, 400), (600, 600), (400, 200)] {
         let scale = horizontal_depth_scale(sx, sy);
         let ne = (sx as f32) / scale + 0.5;
