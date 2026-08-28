@@ -208,6 +208,61 @@ code).  Combine with `CLASSIC_UI_DEBUG=1` to dump UI entity positions for the
 first 120 frames.  Use `CLASSIC_LOG=Test,golden` for per-frame test output and
 golden comparison details.
 
+## 5b. The scene / golden matrix
+
+There are four committed golden baselines.  Pick the right one — and when
+changing anything about lighting, **use `basetest-lit`**.
+
+| `CLASSIC_GOLDEN_DIR` | Scene | Distinguishing flags | Guards |
+|---|---|---|---|
+| `tests/golden/baseline` | demo | `CLASSIC_TEST=all` | e2e assertions + demo render |
+| `tests/golden/lunar` | lunar | `CLASSIC_ROM=rom:lunar CLASSIC_FIXED_DT=0.016666668` | procedural terrain, rocket anim |
+| `tests/golden/basetest` | basetest | `CLASSIC_ROM=rom:basetest CLASSIC_TEST=all` | e2e assertions on a small map |
+| **`tests/golden/basetest-lit`** | **basetest** | **`CLASSIC_ROM=rom:basetest CLASSIC_NO_UI=1`, no `CLASSIC_TEST`** | **lighting, shadows, normals** |
+
+`basetest-lit` is the lighting reference because it is the only capture that is
+*just the lit scene*: `CLASSIC_NO_UI=1` drops the editor/HUD layer (which
+otherwise occludes ~40% of the frame) and omitting `CLASSIC_TEST` means the e2e
+never mutates the terrain.  Its scene also pins the sun at **30° elevation**,
+low enough that shadows are long; `demo`/`lrvtest` sit at 60° and `lunar` at
+~49°, where a shadow regression is easy to miss.
+
+```bash
+# re-baseline the lighting reference
+CLASSIC_ROM=rom:basetest CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 \
+CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
+CLASSIC_NO_UI=1 CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=tests/golden/basetest-lit \
+CLASSIC_GOLDEN_PNG=1 LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 \
+cargo run -p classic-desktop
+```
+
+`LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0` are required for goldens (llvmpipe's
+multithreaded rasteriser races on the sprite ghost-pass depth rendering) and
+must **not** be used for interactive runs.
+
+## 5c. Writing assertions that can actually fail
+
+A cautionary tale worth generalising: the directional shadow map shipped
+completely non-functional while five unit tests and every golden passed.
+
+- **The tests asserted a weak invariant.**  They checked that the light-space
+  box corners "land inside NDC `[-1,1]`" — which is also true of a fully
+  degenerate projection.  The tests that caught the bug assert *physical*
+  contracts: the sun's elevation as the shadow map sees it (2.7° vs the
+  authored 30°), and that a caster lands within one shadow-map texel of the
+  ground it shadows (73.7 texels vs <1).
+- **Beware assertions that are true by construction.**  The first attempt built
+  the receiver as `caster - light_dir * t`; an orthographic projection along
+  `light_dir` maps any such pair to a single texel *regardless of the bug*.
+  Both endpoints must go through the real vertex transform.
+- **Expect existing tests to encode the bug.**  Three tests had asserted the
+  buggy behaviour as correct and had to be rewritten.  When a test fails after
+  a fix, check whether it was testing the defect before "fixing" the fix.
+- **Goldens do not protect an effect you cannot see.**  A partial-strength
+  effect (shadow strength `0.65`) makes "broken" and "subtle" numerically
+  similar.  Turn the effect to full strength during bring-up, and use a debug
+  view (`CLASSIC_SHADOW_DEBUG=1`) that isolates it.
+
 ## 6. Golden Trace Harness
 
 The golden trace harness captures a deterministic, frame-by-frame record
@@ -233,8 +288,8 @@ column-major), `camera_ignored` (bool), and optional `texture`, `frame`,
 - **CLASSIC_GOLDEN=check**: after rendering the capture frame, the trace is
   serialized and compared line-by-line against
   `{CLASSIC_GOLDEN_DIR}/baseline.trace.jsonl` (default
-  `tests/golden/baseline`; the lunar scene sets
-  `CLASSIC_GOLDEN_DIR=tests/golden/lunar`).  On mismatch, the actual trace is
+  `tests/golden/baseline`; see the scene/golden matrix in §5b for the four
+  committed baselines).  On mismatch, the actual trace is
   written to `target/classic-test/baseline.actual.trace.jsonl` for CI artifact
   upload.
 - **CLASSIC_GOLDEN=update**: overwrites the reference file with the current

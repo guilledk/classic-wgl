@@ -145,11 +145,16 @@ metre divisor.  The constants are shared with the shaders via the `depth_scale`
 ### Tilemap vertex shader (`iso_tilemap.vert`)
 
 ```glsl
-vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
+// Light space (+Z up): what all lighting and the shadow map use.
+vec4 lightPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
+// Screen space: the isometric shear, for rasterisation only.
+vec4 worldPos = lightPos;
 worldPos.y -= vertex_pos.z;
 
 highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
 clipPos.z = isoDepth * 2.0 - 1.0;
+
+vLightPos = lightPos.xyz;   // the only position varying emitted
 ```
 
 Key aspects:
@@ -157,6 +162,11 @@ Key aspects:
 1. **Height offset on Y:** `worldPos.y -= vertex_pos.z` — height (Z) is subtracted
    from the screen-space Y coordinate.  This produces the correct vertical
    displacement for elevated tiles.
+   **⚠️ This shear is for rasterisation only.**  It leaves height in *both* y
+   and z, so the resulting space has up axis `(0,-1,1)/√2`.  Never use it for
+   lighting, normals, light positions or the shadow map — those all live in the
+   unsheared **light space** (`lightPos`, +Z up), which is why `vLightPos` is
+   the only position varying the shader emits.  See `classic-gfx` §17.
 2. **Depth axis is `tx - ty`:**  The map's depth direction runs along the
    `(1, -1)` diagonal in iso space.  Tiles with larger `tx - ty` are farther
    from the camera.
