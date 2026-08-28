@@ -40,8 +40,12 @@ const LOCK_PATH: &str = "tests/golden/roms.lock.json";
 /// The ROMs shipped by `classic-roms`.  (`moon` is a resolve-time alias for
 /// `lunar` only — the desktop/web `rom_lookup`/`static_lookup` handle it — so it
 /// is not fetched here.)
-const ROMS: &[(&str, &str)] =
-    &[("demo", "demo.rom"), ("lunar", "lunar.rom"), ("lrvtest", "lrvtest.rom")];
+const ROMS: &[(&str, &str)] = &[
+    ("demo", "demo.rom"),
+    ("lunar", "lunar.rom"),
+    ("lrvtest", "lrvtest.rom"),
+    ("basetest", "basetest.rom"),
+];
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();

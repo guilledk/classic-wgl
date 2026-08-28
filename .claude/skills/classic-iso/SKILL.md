@@ -780,26 +780,22 @@ skill (§16 "Dynamic lights") for the buffer layout and the `classic-ecs` skill
 for the `Light` component.  Only two points matter for iso placement:
 
 - **`Engine::iso_to_world(x, y, elevation)`** is the single conversion from an
-  iso tile to the light-space world position: `p_xy =
+  iso tile to a **light-space** position: `p_xy =
   iso_to_cartesian_4() * S(tilemap.scale) * (x,y,0) + tilemap.position`, then
-  `p.y -= (h+elevation)·height_scale` and `p.z = (h+elevation)·height_scale`.
-  `elevation` is metres above the terrain (same units as `height_data`);
-  `height_scale` is px/metre.  **`p.z` must be set** — the tilemap shader's
-  `worldPos.z` is the terrain height in px, so a `z=0` light lands below elevated
-  terrain and is attenuated to nothing.
+  `p.z = (h+elevation)·height_scale`.  `elevation` is metres above the terrain
+  (same units as `height_data`); `height_scale` is px/metre.
+  **Height goes in `z` alone.**  Light space is +Z up — the same space
+  `light_dir` and `vNormal` live in.  This function used to also apply the
+  renderer's isometric shear (`p.y -= z_px`), which put lights in screen space
+  while the normals they are dotted against stayed in light space; `dot(n, L)`
+  then mixed spaces.  See `classic-gfx` §17.
 - The conversion is safe only when `tilemap.scale.x == tilemap.scale.y`
   (the two scenes use `[45,45,1]`); `iso_to_cartesian_4() * S(scale)` and
   `S(scale) * iso_to_cartesian_4()` differ for non-uniform x/y scale.
 
 Point lights are **unoccluded** (no point-light shadows).  A bare point light on
 terrain reads as a symmetric "sphere"; that's expected until point-light shadows
-(M5).
-
-> ⚠️ Two known space bugs here (see `plans/opencode/iso-shadows-dynamic-lights.md`
-> → "SESSION-2 AUDIT"): (a) `iso_to_world` returns **hybrid** space (`y -= z_px`)
-> while `vNormal` is **cartesian** space, so `dot(n, L)` for point lights mixes
-> spaces; (b) the directional sun shadow map (M2, `classic-gfx` §17) is wired but
-> **casts no shadow** for the same reason.  Both are pending a fix.
+(M5).  The sun *does* cast a directional shadow map — see `classic-gfx` §17.
 
 ---
 

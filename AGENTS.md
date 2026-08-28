@@ -133,12 +133,30 @@ plans/
   (`Engine.light_pool`, `classic-engine/src/light.rs`) uploaded each frame to a `std140`
   `LightBlock` UBO consumed by `sheet.frag`/`iso_tilemap.frag` (shared
   `evaluateLight`).  `Engine::iso_to_world(x, y, elevation)` is the single iso-tile →
-  light-world-space conversion.  The **sun casts a directional shadow map**
+  light-space conversion.  The **sun casts a directional shadow map**
   (`classic-engine/src/shadow.rs` + a depth-only `DepthFramebuffer` in
   `classic-gfx`), sampled in both lit shaders to shadow the sun diffuse term
-  (terrain self-shadowing + sprite receive); point lights stay unoccluded.
-  Disable via `CLASSIC_SHADOWS=0`.  See `classic-gfx` §16–17, `classic-ecs`
-  ("Dynamic lights"), `classic-iso` §13.
+  (terrain self-shadowing, terrain→sprite, sprite→terrain); ambient and point
+  lights stay unoccluded.  Disable via `CLASSIC_SHADOWS=0`.
+  See `classic-gfx` §16–17, `classic-ecs` ("Dynamic lights"), `classic-iso` §13.
+- **⚠️ Two spaces: light space vs screen space.**  This is the single most
+  dangerous thing in the renderer; conflating them produced a shadow map that
+  compiled, ran, passed its tests and cast nothing.
+  - **Light space** — `model * iso_matrix * vertex`, **+Z is up**.  `light_dir`,
+    `vNormal`, `Light::position`, `iso_to_world`, the shadow map and the
+    `vLightPos` varying all live here.  All lighting maths happens here.
+  - **Screen space** — the above, then `y -= vertex.z`.  This isometric shear is
+    what makes height read as height on screen.  It carries height in **both**
+    y and z, so its up axis is `(0,-1,1)/√2`; projecting it along a +Z-up
+    `light_dir` presents the sun at ~2.7° instead of 30°.  It is used for
+    rasterisation only and is deliberately **not** exposed as a varying.
+  - Sprite billboards are screen-aligned quads, so shadow code unprojects them
+    about their ground anchor (screen up → world +Z) via the `sprite_anchor`
+    uniform.  `shadow_sprite.vert`, `direct_tex.vert` and
+    `shadow.rs::sprite_billboard_corners` must agree exactly.
+  - Bring-up aids: `CLASSIC_SHADOW_DEBUG=1` (render raw sun visibility, white
+    lit / black occluded) and `CLASSIC_NO_UI=1` (drop the editor/HUD layer).
+    Set `SHADOW_STRENGTH = 0.0` while changing shadow geometry.
 - **UI layer** (`crates/classic-engine/src/ui.rs`) is a retained-mode layout system with
   anchor-based positioning.  `UIManager` holds a root container and provides factory methods
   (`spawn_container`, `spawn_sdf_text`, `spawn_array`, `spawn_padding`, `spawn_sprite`,
@@ -274,6 +292,8 @@ plans/
 | `CLASSIC_GOLDEN_TOL` | Pixel channel tolerance | 2 |
 | `CLASSIC_GOLDEN_DIR` | Golden baseline directory (per-scene) | `tests/golden/baseline` |
 | `CLASSIC_SHADOWS` | `0` disables the directional shadow map | on |
+| `CLASSIC_SHADOW_DEBUG` | Render raw sun visibility (white lit / black occluded) | off |
+| `CLASSIC_NO_UI` | Skip the demo editor/HUD/overlay layer (clean lit scene) | off |
 | `CLASSIC_DUMP_DIR` | Native dump output dir | `./dump/` |
 | `CLASSIC_LOG` | Channel-gated logging (see `classic-debugging` skill) | off |
 | `CLASSIC_UI_DEBUG` | Per-frame UI entity dump (first 120 frames) | off |
