@@ -133,8 +133,12 @@ plans/
   (`Engine.light_pool`, `classic-engine/src/light.rs`) uploaded each frame to a `std140`
   `LightBlock` UBO consumed by `sheet.frag`/`iso_tilemap.frag` (shared
   `evaluateLight`).  `Engine::iso_to_world(x, y, elevation)` is the single iso-tile →
-  light-world-space conversion.  Point lights are currently **unoccluded** (no shadows).
-  See `classic-gfx` §16, `classic-ecs` ("Dynamic lights"), `classic-iso` §13.
+  light-world-space conversion.  The **sun casts a directional shadow map**
+  (`classic-engine/src/shadow.rs` + a depth-only `DepthFramebuffer` in
+  `classic-gfx`), sampled in both lit shaders to shadow the sun diffuse term
+  (terrain self-shadowing + sprite receive); point lights stay unoccluded.
+  Disable via `CLASSIC_SHADOWS=0`.  See `classic-gfx` §16–17, `classic-ecs`
+  ("Dynamic lights"), `classic-iso` §13.
 - **UI layer** (`crates/classic-engine/src/ui.rs`) is a retained-mode layout system with
   anchor-based positioning.  `UIManager` holds a root container and provides factory methods
   (`spawn_container`, `spawn_sdf_text`, `spawn_array`, `spawn_padding`, `spawn_sprite`,
@@ -269,6 +273,7 @@ plans/
 | `CLASSIC_GOLDEN_PNG` | Enable pixel PNG capture | off |
 | `CLASSIC_GOLDEN_TOL` | Pixel channel tolerance | 2 |
 | `CLASSIC_GOLDEN_DIR` | Golden baseline directory (per-scene) | `tests/golden/baseline` |
+| `CLASSIC_SHADOWS` | `0` disables the directional shadow map | on |
 | `CLASSIC_DUMP_DIR` | Native dump output dir | `./dump/` |
 | `CLASSIC_LOG` | Channel-gated logging (see `classic-debugging` skill) | off |
 | `CLASSIC_UI_DEBUG` | Per-frame UI entity dump (first 120 frames) | off |

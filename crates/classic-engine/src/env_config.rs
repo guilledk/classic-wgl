@@ -39,6 +39,8 @@ pub struct EnvConfig {
     /// CLASSIC_GOLDEN_DIR: directory holding the golden trace + PNG baseline.
     /// Per-scene so a second scene can have its own reference output.
     pub golden_dir: String,
+    /// CLASSIC_SHADOWS: `0` disables the directional shadow map (default on).
+    pub shadows: bool,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -81,6 +83,7 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
             }
         },
         rom: read("CLASSIC_ROM"),
+        shadows: read("CLASSIC_SHADOWS") != "0",
         test,
     }
 });

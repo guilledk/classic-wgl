@@ -19,6 +19,7 @@ pub mod inventory;
 pub mod inventory_ui;
 pub mod light;
 pub mod selection;
+pub mod shadow;
 pub mod ui;
 pub mod vehicle;
 
@@ -2646,33 +2647,6 @@ impl Engine {
         self.light_pool.decay(delta);
         let lights = self.light_pool.gather();
 
-        let Some(gfx) = self.gfx.as_mut() else { return };
-        let vp = gfx.viewport_w;
-        let vh2 = gfx.viewport_h;
-        self.camera.size = Vec3::new(vp, vh2, 0.0);
-
-        // begin_frame sets depthFunc/depthMask but does NOT glEnable(DEPTH_TEST).
-        // draw_tilemap/draw_iso_sprite toggle it locally. UI/SDF runs without it.
-        // Enabling it globally depth-rejects all UI under ortho projection.
-        gfx.begin_frame();
-        // Upload the dynamic light block once per frame (consumed by the lit
-        // tilemap + sprite shaders).
-        gfx.upload_lights(&lights);
-        let cam = self.camera.matrix();
-
-        // Create trace collector when golden mode is active and we're on the capture frame.
-        let golden_active = !config.golden_mode.is_empty();
-        if golden_active && self.debug_frame == self.golden_capture_frame {
-            self.trace = Some(golden::TraceCollector::new(
-                "baseline",
-                vp,
-                vh2,
-                &cam,
-                self.camera.position,
-                self.camera.scale,
-            ));
-        }
-
         // Model matrix z MUST stay inside [-10000, 10000] — the orthographic
         // projection clips everything outside. The sort key can differ from
         // the model z. Cursor uses sort_z=-20000 but model_z=-10000.
@@ -2697,8 +2671,9 @@ impl Engine {
             }
         }
 
-        // Precompute isometric-sprite draw params once, shared by the normal
-        // and ghost passes below.
+        // Precompute isometric-sprite draw params once, shared by the shadow
+        // casters, the normal pass, and the ghost pass below.  Built before the
+        // `gfx` mutable borrow so the shadow pass can reuse the same params.
         let mut iso_draws: Vec<IsoDraw> = Vec::new();
         for (order, entity) in &iso_items {
             let Ok(tf) = self.world.get::<&Transform>(*entity) else {
@@ -2744,7 +2719,9 @@ impl Engine {
                     )
                 }
                 None => {
-                    let Some(tex) = gfx.textures.get(&iso_sprite.texture) else {
+                    let Some(tex) =
+                        self.gfx.as_ref().and_then(|g| g.textures.get(&iso_sprite.texture))
+                    else {
                         continue;
                     };
                     let td = (
@@ -2796,6 +2773,121 @@ impl Engine {
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
             });
+        }
+
+        // Fit the directional shadow matrix to the primary tilemap's extents
+        // plus the sprite casters' billboards (so their shadows aren't clipped
+        // at the light box's near plane).  Still before the `gfx` mutable borrow.
+        let shadow_pass: Option<shadow::LightMatrix> = if config.shadows {
+            self.entity_by_role(RoleKind::Tilemap).and_then(|e| {
+                let tm = self.world.get::<&Tilemap>(e).ok()?;
+                let tf = self.world.get::<&Transform>(e).ok()?;
+                let iso = cartesian_to_iso_4().inverse();
+                let iso_matrix = Mat4::from_scale(tf.scale) * iso;
+                let model = Mat4::from_translation(tf.position);
+                let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max) * tm.height_scale;
+                let casters: Vec<Mat4> = iso_draws.iter().map(|d| d.model).collect();
+                Some(shadow::fit_directional_light_matrix(
+                    &model,
+                    &iso_matrix,
+                    tm.size_x as f32,
+                    tm.size_y as f32,
+                    z_max,
+                    Vec3::from_array(self.light_dir),
+                    shadow::SHADOW_PADDING,
+                    &casters,
+                ))
+            })
+        } else {
+            None
+        };
+
+        let Some(gfx) = self.gfx.as_mut() else { return };
+        let vp = gfx.viewport_w;
+        let vh2 = gfx.viewport_h;
+        self.camera.size = Vec3::new(vp, vh2, 0.0);
+
+        // begin_frame sets depthFunc/depthMask but does NOT glEnable(DEPTH_TEST).
+        // draw_tilemap/draw_iso_sprite toggle it locally. UI/SDF runs without it.
+        // Enabling it globally depth-rejects all UI under ortho projection.
+        gfx.begin_frame();
+        // Upload the dynamic light block once per frame (consumed by the lit
+        // tilemap + sprite shaders).
+        gfx.upload_lights(&lights);
+        let cam = self.camera.matrix();
+
+        // Directional shadow pass (terrain casters) — before Phase 1.  Renders
+        // every non-nav tilemap into the depth texture from the sun's view.
+        let shadow_settings: Option<classic_gfx::ShadowSettings> = match &shadow_pass {
+            Some(m) => {
+                let tex = gfx.shadow_map_texture();
+                if let Some(tex) = tex {
+                    gfx.begin_shadow_pass();
+                    for (_, entity, kind) in &items {
+                        if !matches!(kind, DrawKind::Tilemap) {
+                            continue;
+                        }
+                        let is_nav = self
+                            .world
+                            .get::<&Role>(*entity)
+                            .is_ok_and(|r| r.value == RoleKind::NavMesh);
+                        if is_nav {
+                            continue;
+                        }
+                        let Ok(tf) = self.world.get::<&Transform>(*entity) else {
+                            continue;
+                        };
+                        let iso = cartesian_to_iso_4().inverse();
+                        let im = Mat4::from_scale(tf.scale) * iso;
+                        let mdl = Mat4::from_translation(tf.position);
+                        let name = name_by_entity.get(entity).copied().unwrap_or("");
+                        if let Some(gpu) = self.tilemap_gpu.get(name) {
+                            gfx.draw_shadow_tilemap(
+                                &mdl,
+                                &im,
+                                &m.view_proj,
+                                gpu.vertex_count as i32,
+                                &gpu.mesh_buf,
+                            );
+                        }
+                    }
+                    // Sprite shadow casters: each iso sprite casts its alpha
+                    // silhouette into the shadow map (vehicles, agents, props).
+                    for draw in &iso_draws {
+                        gfx.draw_shadow_sprite(
+                            &draw.model,
+                            &m.view_proj,
+                            &draw.texture,
+                            draw.region(),
+                        );
+                    }
+                    gfx.end_shadow_pass();
+                    let texel = 1.0 / classic_gfx::SHADOW_MAP_SIZE as f32;
+                    Some(classic_gfx::ShadowSettings {
+                        texture: tex,
+                        view_proj: m.view_proj,
+                        bias: shadow::SHADOW_BIAS,
+                        strength: shadow::SHADOW_STRENGTH,
+                        texel: [texel, texel],
+                    })
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        // Create trace collector when golden mode is active and we're on the capture frame.
+        let golden_active = !config.golden_mode.is_empty();
+        if golden_active && self.debug_frame == self.golden_capture_frame {
+            self.trace = Some(golden::TraceCollector::new(
+                "baseline",
+                vp,
+                vh2,
+                &cam,
+                self.camera.position,
+                self.camera.scale,
+            ));
         }
 
         // Phase 1: terrain (tilemap + nav mesh) — writes the depth buffer.
@@ -2861,6 +2953,7 @@ impl Engine {
                                 ],
                                 ppm: PPM_TARGET,
                                 normal_matrix,
+                                shadow: shadow_settings,
                             },
                             false,
                             gpu.vertex_count as i32,
@@ -2933,6 +3026,7 @@ impl Engine {
                         ],
                         ppm: PPM_TARGET,
                         normal_matrix,
+                        shadow: shadow_settings,
                     },
                     self.show_grid,
                     gpu.vertex_count as i32,
@@ -2955,6 +3049,7 @@ impl Engine {
             depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_M],
             ppm: PPM_TARGET,
             normal_matrix: Mat3::from_mat4(iso).inverse().transpose(),
+            shadow: shadow_settings,
         };
         for draw in &iso_draws {
             if let Some(ref mut t) = self.trace {
@@ -3962,6 +4057,10 @@ impl Engine {
             sprite_tf.position.y,
         );
         cart_pos.y -= h * tilemap.height_scale;
+        // Carry the terrain height in world z (matching the tilemap shader's
+        // `worldPos.z = vertex_pos.z`) so sprite fragments share the terrain's
+        // light/shadow space (`vWorldPos`), not just its y-lift.
+        cart_pos.z = h * tilemap.height_scale;
 
         let anchor_delta = Vec3::new(-anchor_px.x, -anchor_px.y, 0.0);
 
