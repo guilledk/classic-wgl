@@ -54,6 +54,10 @@ jobs:
             # bucket (classic-roms.com); fetch the current set instead of
             # building assets/guests from the private submodule.
             - uses: dtolnay/rust-toolchain@stable
+            # Fail fast (before fetching) when the published ROMs drift from
+            # the committed lockfile, so a golden failure is never a confusing
+            # atlas/geometry diff against stale ROMs.
+            - run: cargo xtask check-roms
             - run: cargo xtask fetch-roms
             - name: Install Mesa/EGL system deps
               env:

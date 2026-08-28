@@ -11,6 +11,8 @@
 //!   cargo xtask fetch-roms --skip-verify       # proceed without a roms.json index
 //!   cargo xtask                                # alias for fetch-roms
 //!   cargo xtask build-pathfinder               # compile + stage pathfinder.wasm
+//!   cargo xtask lock-roms [--url <rom-base>]   # pin the published checksums to the lockfile
+//!   cargo xtask check-roms [--url <rom-base>]  # fail fast when the published ROMs drift
 
 use std::fs;
 use std::io::Read;
@@ -25,6 +27,13 @@ use sha2::{Digest, Sha256};
 /// `classic-roms.com`).
 const DEFAULT_ROM_BASE: &str = "https://classic-roms.com";
 
+/// Committed content-hash pin: the exact `roms.json` checksums the golden
+/// baselines under `tests/golden/` were generated against.  `check-roms`
+/// refuses to run against a bucket that has drifted from this lock, so a
+/// golden failure is never a confusing atlas/geometry diff — it is an explicit
+/// "republish or re-pin" signal.
+const LOCK_PATH: &str = "tests/golden/roms.lock.json";
+
 /// The ROMs shipped by `classic-roms`.  (`moon` is a resolve-time alias for
 /// `lunar` only — the desktop/web `rom_lookup`/`static_lookup` handle it — so it
 /// is not fetched here.)
@@ -33,8 +42,14 @@ const ROMS: &[(&str, &str)] =
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("build-pathfinder") {
-        return build_pathfinder();
+    match args.first().map(String::as_str).unwrap_or("fetch-roms") {
+        "build-pathfinder" => return build_pathfinder(),
+        "lock-roms" => return cmd_lock_roms(arg_value(&args, "--url")),
+        "check-roms" => return cmd_check_roms(arg_value(&args, "--url")),
+        "fetch-roms" | "all" => {}
+        other => anyhow::bail!(
+            "unknown command `{other}` (expected fetch-roms, lock-roms, check-roms, or build-pathfinder)"
+        ),
     }
 
     let mut url = DEFAULT_ROM_BASE.to_string();
@@ -155,4 +170,87 @@ fn verify(name: &str, index_json: &[u8], bytes: &[u8]) -> anyhow::Result<()> {
 /// Hex-encode a SHA-256 digest.
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Return the value following `--flag` in `args`, if present.
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// `cargo xtask lock-roms`: pin the currently-published `roms.json` checksums
+/// to `tests/golden/roms.lock.json`.  Run this alongside `CLASSIC_GOLDEN=update`
+/// so the lockfile and the regenerated baselines stay in lockstep.
+fn cmd_lock_roms(url: Option<String>) -> anyhow::Result<()> {
+    let base = url.unwrap_or_else(|| DEFAULT_ROM_BASE.to_string());
+    let index = fetch(&format!("{base}/roms.json")).context("fetch roms.json to lock")?;
+    // Validate the index shape before committing it to the repo.
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&index).context("parse roms.json index")?;
+    for name in ["demo", "lunar", "lrvtest"] {
+        let entry =
+            parsed.get(name).with_context(|| format!("roms.json has no entry for `{name}`"))?;
+        entry
+            .get("size")
+            .and_then(|s| s.as_u64())
+            .with_context(|| format!("`{name}` missing size"))?;
+        entry
+            .get("sha256")
+            .and_then(|s| s.as_str())
+            .with_context(|| format!("`{name}` missing sha256"))?;
+    }
+    fs::write(LOCK_PATH, &index).with_context(|| format!("write {LOCK_PATH}"))?;
+    println!("locked published ROM checksums to {LOCK_PATH}");
+    Ok(())
+}
+
+/// `cargo xtask check-roms`: fail fast when the published ROMs no longer match
+/// the committed lockfile — i.e. the bucket changed since the golden baselines
+/// were generated.  The CI golden job runs this before `fetch-roms` so a drift
+/// is a clear, distinct signal rather than an atlas/geometry golden diff.
+fn cmd_check_roms(url: Option<String>) -> anyhow::Result<()> {
+    let base = url.unwrap_or_else(|| DEFAULT_ROM_BASE.to_string());
+    let lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(LOCK_PATH).with_context(|| {
+            format!("read {LOCK_PATH} (run `cargo xtask lock-roms` to create it)")
+        })?)
+        .context("parse lockfile")?;
+    let published: serde_json::Value = serde_json::from_slice(
+        &fetch(&format!("{base}/roms.json")).context("fetch published roms.json")?,
+    )
+    .context("parse published roms.json")?;
+
+    let mut drifted = false;
+    for name in ["demo", "lunar", "lrvtest"] {
+        let expected = lock.get(name).with_context(|| format!("lockfile has no `{name}` entry"))?;
+        let actual = published
+            .get(name)
+            .with_context(|| format!("published roms.json has no `{name}` entry"))?;
+        let (esha, asha) = (sha(expected), sha(actual));
+        let (esize, asize) = (size(expected), size(actual));
+        if esha != asha || esize != asize {
+            drifted = true;
+            eprintln!(
+                "ROM drift: `{name}` sha256={asha} size={asize} (lock: sha256={esha} size={esize})"
+            );
+        }
+    }
+    if drifted {
+        anyhow::bail!(
+            "published ROMs drifted from {LOCK_PATH}: the bucket changed since the golden \
+             baselines were generated.  Republish the correct ROMs, or run \
+             `CLASSIC_GOLDEN=update` together with `cargo xtask lock-roms` to re-pin."
+        );
+    }
+    println!("roms match lockfile {LOCK_PATH}");
+    Ok(())
+}
+
+/// `sha256` field of a `roms.json` entry, or a sentinel when absent.
+fn sha(entry: &serde_json::Value) -> String {
+    entry.get("sha256").and_then(|s| s.as_str()).unwrap_or("<none>").to_string()
+}
+
+/// `size` field of a `roms.json` entry, or 0 when absent.
+fn size(entry: &serde_json::Value) -> u64 {
+    entry.get("size").and_then(|s| s.as_u64()).unwrap_or(0)
 }
