@@ -792,8 +792,14 @@ for the `Light` component.  Only two points matter for iso placement:
   `S(scale) * iso_to_cartesian_4()` differ for non-uniform x/y scale.
 
 Point lights are **unoccluded** (no point-light shadows).  A bare point light on
-terrain reads as a symmetric "sphere"; that's expected until M2/M3 shadow
-mapping.
+terrain reads as a symmetric "sphere"; that's expected until point-light shadows
+(M5).
+
+> ⚠️ Two known space bugs here (see `plans/opencode/iso-shadows-dynamic-lights.md`
+> → "SESSION-2 AUDIT"): (a) `iso_to_world` returns **hybrid** space (`y -= z_px`)
+> while `vNormal` is **cartesian** space, so `dot(n, L)` for point lights mixes
+> spaces; (b) the directional sun shadow map (M2, `classic-gfx` §17) is wired but
+> **casts no shadow** for the same reason.  Both are pending a fix.
 
 ---
 

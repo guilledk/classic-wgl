@@ -591,3 +591,99 @@ plan `iso-shadows-dynamic-lights.md` (M2/M3).
 - The falloff `saturate(1-(d/r)²)²` is a symmetric plateau and reads as a
   "sphere" on flat terrain; an inverse-square hot core would soften it, but real
   grounding needs shadows.
+
+---
+
+## 17. Directional shadow map (sun) — ⚠️ CURRENTLY NON-FUNCTIONAL
+
+> **The shadow map is wired end-to-end but casts essentially no shadow.** It
+> projects **hybrid-space** positions (`vWorldPos`, which has `y -= z` baked in)
+> along a **cartesian-space** `light_dir`, so the sun effectively sits at ~2.7°
+> elevation instead of 30°; `polygon_offset(2.0, 4.0)` at that grazing angle then
+> suppresses what little remains.  Read
+> `plans/opencode/iso-shadows-dynamic-lights.md` → "SESSION-2 AUDIT" before
+> changing anything here.  The description below documents the *intended* design,
+> not verified behaviour.
+
+A directional (sun) shadow map shadows the **sun diffuse term only** — ambient
+and the UBO point lights stay unshadowed.
+
+### Host side (`classic-gfx/src/lib.rs`)
+
+- `SHADOW_MAP_SIZE = 2048` (square), `SHADOW_MAP_UNIT = 3` (the texture unit the
+  depth texture binds to in the lit shaders — free for both tilemap 0/1 and
+  sprite 0/1/2 layouts).
+- `DepthFramebuffer { fbo, depth_tex, width, height }` — a depth-only FBO:
+  `DEPTH_COMPONENT24` texture on `DEPTH_ATTACHMENT`, `draw_buffers([NONE])`,
+  NEAREST + CLAMP_TO_EDGE.  Stored as `Gfx::shadow_map` (lazily created).
+- `Gfx::begin_shadow_pass()` (bind FBO, viewport to shadow size, clear depth 1.0,
+  disable blend/stencil, enable depth test) / `draw_shadow_tilemap(model,
+  iso_matrix, view_proj, vertex_count, buffer)` / `end_shadow_pass()` (restore
+  depth state + main FBO/viewport).  `Gfx::shadow_map_texture()` returns the raw
+  depth-texture handle.
+- `ShadowSettings { texture, view_proj, bias }` is carried in
+  `RenderSettings.shadow: Option<ShadowSettings>`; `draw_tilemap` and
+  `bind_iso_sprite` bind it via `Gfx::bind_shadow` (sets `shadow_map`,
+  `light_view_proj`, `shadow_bias`, `use_shadow`; `use_shadow = 0` when `None`).
+
+### Engine side (`classic-engine/src/shadow.rs`)
+
+- `LightMatrix { view, proj, view_proj }` + `fit_directional_light_matrix(...)`:
+  the 8 corners of the tilemap world AABB (replicating the shader's
+  `worldPos = model * iso_matrix * vertex; worldPos.y -= vertex.z`), a
+  `look_at_rh(center + light_dir·r, center, robust_up)`, and an ortho box from
+  the light-space extents.  `SHADOW_PADDING` (world-space margin),
+  `SHADOW_BIAS` (NDC depth bias, kept tiny) and `SHADOW_STRENGTH` (diffuse
+  fraction a fully-shadowed pixel keeps, default `0.65`) are constants there.
+- The pass runs in `Engine::frame` **before Phase 1**, renders every non-nav
+  tilemap, and attaches the resulting `ShadowSettings` to all three
+  `RenderSettings` (nav, tilemap, sprite).  `CLASSIC_SHADOWS=0` disables it.
+
+### Shader (`iso_tilemap.frag`, `sheet.frag`)
+
+```glsl
+uniform sampler2D shadow_map;
+uniform mat4 light_view_proj;
+uniform float shadow_bias;
+uniform float shadow_strength;   // diffuse kept in full shadow (0..1)
+uniform vec2 shadow_texel;       // 1/SHADOW_MAP_SIZE, for PCF
+uniform float use_shadow;
+
+float shadowSample(vec2 suv, float fragDepth) {
+    float stored = texture(shadow_map, suv).r;
+    return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
+}
+float shadowFactor(vec3 worldPos) {
+    vec4 lp = light_view_proj * vec4(worldPos, 1.0);
+    vec3 ndc = lp.xyz / lp.w;
+    vec2 suv = ndc.xy * 0.5 + 0.5;
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) return 1.0;
+    float fragDepth = ndc.z * 0.5 + 0.5;
+    float acc = 0.0;
+    for (int x = -1; x <= 1; x++)
+        for (int y = -1; y <= 1; y++)
+            acc += shadowSample(suv + vec2(float(x), float(y)) * shadow_texel, fragDepth);
+    return mix(shadow_strength, 1.0, acc / 9.0);   // 3x3 PCF + floor
+}
+// ... then: diff = max(dot(n, light_direction), 0.0);
+//           if (use_shadow > 0.5) diff *= shadowFactor(vWorldPos);
+```
+
+The cast shadow is **soft and floored** so it stays a subtle complement to the
+Lambertian self-shading (the "light one side / shadow the other" slope look),
+rather than an opaque black overlay.  Polygon offset (`factor 2, units 4`) is
+enabled during the shadow pass to suppress self-shadow acne.
+
+### Gotchas
+
+- Sprite `vWorldPos.z` must equal its ground height or sprite fragments sample
+  the shadow map at the wrong depth — `compute_iso_sprite_model` sets
+  `cart_pos.z = h * height_scale` for this reason (also corrects point-light
+  falloff on sprites).
+- The `shadowDepth` vertex shader must reproduce the terrain world transform
+  exactly (`model * iso_matrix * vertex; y -= z`); the shadow FBO has no color
+  attachment, so its fragment shader output is masked by `draw_buffers([NONE])`.
+- `draw_sprite` (2D/baked-lit path) sets `use_shadow = 0` — only `draw_iso_sprite`
+  and `draw_tilemap` (normal-mapped / terrain) sample the shadow map.
+- `begin_shadow_pass`/`end_shadow_pass` toggle `POLYGON_OFFSET_FILL`; leave it
+  enabled only during the shadow pass or the main terrain draw depth-shifts.

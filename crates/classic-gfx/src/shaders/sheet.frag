@@ -35,6 +35,13 @@ uniform float selected;
 uniform vec3 selection_color;
 uniform vec2 outline_delta;
 
+uniform sampler2D shadow_map;
+uniform mat4 light_view_proj;
+uniform float shadow_bias;
+uniform float shadow_strength;
+uniform vec2 shadow_texel;
+uniform float use_shadow;
+
 #define MAX_LIGHTS 256
 
 struct Light {
@@ -85,6 +92,31 @@ vec3 evaluateLights(vec3 n, vec3 p) {
         acc += evaluateLight(u_lights.lights[i], n, p);
     }
     return acc;
+}
+
+// Manual directional-shadow compare (see iso_tilemap.frag for the derivation).
+// PCF (3x3) softens the texel edges; `shadow_strength` floors the result.
+float shadowSample(vec2 suv, float fragDepth) {
+    float stored = texture(shadow_map, suv).r;
+    return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
+}
+
+float shadowFactor(vec3 worldPos) {
+    vec4 lp = light_view_proj * vec4(worldPos, 1.0);
+    vec3 ndc = lp.xyz / lp.w;
+    vec2 suv = ndc.xy * 0.5 + 0.5;
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
+        return 1.0;
+    }
+    float fragDepth = ndc.z * 0.5 + 0.5;
+    float acc = 0.0;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            acc += shadowSample(suv + vec2(float(x), float(y)) * shadow_texel, fragDepth);
+        }
+    }
+    float shadow = acc / 9.0;
+    return mix(shadow_strength, 1.0, shadow);
 }
 
 vec2 tileUv(float tile_id_flat, vec2 tex_coord) {
@@ -160,6 +192,9 @@ void main(void ) {
         if (dot(n, n) > 0.001) {
             n = normalize(n);
             float diff = max(dot(n, light_direction), 0.0);
+            if (use_shadow > 0.5) {
+                diff *= shadowFactor(vWorldPos);
+            }
             color.rgb *= ambient_color + diff * light_color;
             color.rgb += evaluateLights(n, vWorldPos);
         }

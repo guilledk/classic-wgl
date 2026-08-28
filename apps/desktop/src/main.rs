@@ -18,6 +18,7 @@ fn rom_lookup(dir: String) -> impl Fn(&str) -> Option<String> {
             "demo" => "demo.rom".into(),
             "lunar" | "moon" => "lunar.rom".into(),
             "lrvtest" => "lrvtest.rom".into(),
+            "basetest" => "basetest.rom".into(),
             _ => return None,
         };
         Some(format!("{dir}/{file}"))
