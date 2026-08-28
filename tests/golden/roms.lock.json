@@ -1,0 +1,14 @@
+{
+  "demo": {
+    "size": 2243525,
+    "sha256": "0acae76f8c4ff1e40400cd7ae4218b003a3f5fcc9d62cc80a900b10a5587d7ed"
+  },
+  "lunar": {
+    "size": 47184984,
+    "sha256": "85fdfee7b4a8de8912569858c3d5ce9c2ace60a1a5407c1225d4a80f1ce863e5"
+  },
+  "lrvtest": {
+    "size": 7789644,
+    "sha256": "0bffc3d71d9ebe064aa11915b0e304ea05c76bb5bc29e70447547af8f77a5357"
+  }
+}
