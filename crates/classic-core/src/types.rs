@@ -128,6 +128,13 @@ pub struct FrameTable {
     pub sheets: Vec<SpriteSheetEntry>,
     /// Name-keyed frames.
     pub frames: std::collections::BTreeMap<String, AtlasFrame>,
+    /// Precomputed per-sheet companion GL texture names, indexed by sheet.
+    /// Each entry is `(normal_tex_name, depth_tex_name)`; `None` when the
+    /// sheet has no companion.  Built once at load via
+    /// [`FrameTable::precompute_companions`] so the draw path clones instead
+    /// of re-formatting `"{sheet}-normal"` / `"{sheet}-depth"` every frame.
+    #[serde(skip)]
+    pub companions: Vec<(Option<String>, Option<String>)>,
 }
 
 fn default_frame_table_version() -> u32 {
@@ -145,6 +152,20 @@ impl FrameTable {
         let [x, y, fw, fh] = frame.rect;
         let (x, y, fw, fh) = (x as f32, y as f32, fw as f32, fh as f32);
         Some([x / w, y / h, (x + fw) / w, (y + fh) / h])
+    }
+
+    /// Precompute the per-sheet companion texture names (`companions`).  Called
+    /// once after deserialization; a no-op if already populated.
+    pub fn precompute_companions(&mut self) {
+        self.companions = self
+            .sheets
+            .iter()
+            .map(|s| {
+                let normal = s.normal.as_ref().map(|_| format!("{}-normal", s.name));
+                let depth = s.depth.as_ref().map(|_| format!("{}-depth", s.name));
+                (normal, depth)
+            })
+            .collect();
     }
 }
 
