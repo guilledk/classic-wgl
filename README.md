@@ -8,8 +8,7 @@ Rust.  Two targets: **native** (winit + glutin, desktop GL) and **web**
 Game content ships as self-contained **ROMs**: a zip archive bundling a
 per-scene manifest, entity state, resources (textures, fonts, animations, and
 binary tile/nav/height grids), and a compiled WASM guest module.  See
-`AGENTS.md` for the full architecture and `docs/TS-PARITY.md` for the
-TypeScript parity notes.
+`AGENTS.md` for the full architecture.
 
 ## Develop (nix)
 

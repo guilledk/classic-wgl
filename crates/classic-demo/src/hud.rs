@@ -169,11 +169,6 @@ pub fn init_text_showcase(engine: &mut Engine, state: &DemoStateRef) {
                     sdf.outline_width = 0.25;
                     sdf.outline_color = [0.8, 0.3, 0.0, 1.0];
                 }
-                "Drop shadow" => {
-                    sdf.shadow_offset = [3.0, 3.0];
-                    sdf.shadow_color = [0.0, 0.0, 0.0, 0.6];
-                    sdf.shadow_blur = 0.05;
-                }
                 _ => {}
             }
         }
@@ -259,12 +254,8 @@ pub fn init_iso_coord_overlay(engine: &mut Engine, state: &DemoStateRef) {
                 justify: TextJustify::Left,
                 weight: 0.0,
                 gamma: 1.0,
-                bgcolor: [0.0; 4],
                 outline_color: [0.0; 4],
                 outline_width: 0.0,
-                shadow_offset: [1.0, 1.0],
-                shadow_color: [0.0, 0.0, 0.0, 0.5],
-                shadow_blur: 0.0,
             },
             DebugName(format!("iso_debug_{}", text.replace([':', ' '], ""))),
         ))

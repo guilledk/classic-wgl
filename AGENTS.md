@@ -5,13 +5,10 @@ Guidance for AI coding agents (and humans) working on `classic-wgl`.
 ## What this is
 
 `classic-wgl` is a small isometric game engine with a retained-mode UI/layout
-layer, ported from TypeScript to Rust.  Two targets: **native** (winit+glutin,
+layer, written in Rust.  Two targets: **native** (winit+glutin,
 desktop GL) and **web** (web-sys+trunk, WebGL 2).  There is no framework — the
 whole app is a single `<canvas>` / winit window.  The main dependencies are
 `hecs`, `glam`, `glow`, `winit`, and `glutin`.
-
-The TypeScript original was deleted (`remove TypeScript engine and tooling`).
-A parity reference lives at `docs/TS-PARITY.md`.
 
 ## Commands
 
@@ -44,7 +41,7 @@ cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm t
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
-`headless golden test` on every push to `master` / `rust-port` and every PR.  Run
+`headless golden test` on every push to `master` and every PR.  Run
 `cargo fmt -- --check`, `cargo clippy`, and `cargo test`
 before considering a task done.  The CI golden job calls `cargo xtask fetch-roms`
 instead of the old `cargo xtask all` — the ROMs come from the published
@@ -91,7 +88,7 @@ roms/
   out/                    GENERATED (gitignored) staged ROMs — populated by `cargo xtask fetch-roms`
 xtask/                    Rust build tool: `cargo xtask fetch-roms` (stages published demo/lunar ROMs)
 docs/
-  TS-PARITY.md            formulas, LIGHT_PRESETS, dump key ordering, TS↔Rust divergence list
+  picom-nixos-i3.md       dev-env notes (picom + nixos + i3 compositor setup)
 plans/
   opencode/               per-session plans and audit notes
 ```
@@ -265,7 +262,7 @@ plans/
 
 ## Git / PR notes
 
-- Default branch is `master` (CI triggers on push to `master` / `rust-port` and all PRs).
+- Default branch is `master` (CI triggers on push to `master` and all PRs).
 - Commit messages are short, lowercase, imperative (`fix nav walkability transpose`).
 - No git submodules remain; the `assets/` submodule and its `GH_PAT` checkout token were removed.
 

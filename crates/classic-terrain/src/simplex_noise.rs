@@ -1,6 +1,5 @@
-//! Simplex noise (2D, 3D, 4D) — seedable.
-//!
-//! Port of `src/lib/simplex-noise.ts` (Jonas Wagner / Stefan Gustavson algorithm).
+//! Simplex noise (2D, 3D, 4D) — seedable (Jonas Wagner / Stefan Gustavson
+//! algorithm).
 
 /// Fast PRNG with seed support. Simple xoshiro128**-like generator.
 #[derive(Clone, Debug)]
@@ -108,8 +107,6 @@ fn build_perm(random: &mut Random) -> [u8; 512] {
 }
 
 /// Seedable simplex noise generator.
-///
-/// Matches the TS `SimplexNoise` class output for the same seed.
 #[derive(Clone, Debug)]
 pub struct SimplexNoise {
     perm: [u8; 512],
@@ -409,7 +406,6 @@ pub fn hash_string(s: &str) -> u32 {
 }
 
 /// Get a noise value mapped to a specific range.
-/// Port of `getNoiseRange` from `utils.ts:626-628`.
 pub fn noise_range(noise: &SimplexNoise, x: f32, y: f32, from: f32, to: f32) -> f32 {
     let n = noise.noise_2d(x as f64 / 50.0, y as f64 / 50.0);
     let t = ((n + 1.0) / 2.0) as f32; // normalize from [-1,1] to [0,1]

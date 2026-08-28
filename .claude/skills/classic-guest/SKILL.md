@@ -227,10 +227,11 @@ confined to `GuestHost::engine`/`engine_mut`.
 - `init_engine` reads `rom.resources.code().get("main")` and builds limits from
   `rom.manifest.trusted`; runs the guest on every frame (not gated by
   `host_features`).
-- `cargo xtask guests` compiles the `guest/*` `#![no_std]` cdylib crates to
-  `roms/out/code/demo.wasm` / `lunar.wasm`; `cargo xtask roms` injects
-  `code: [{name:"main", src:"/code/<scene>.wasm"}]` + `trusted: true` and
-  bundles the per-scene guest into each ROM (zip).
+- The guest `#![no_std]` cdylib crates are compiled and bundled into each ROM by
+  the `classic-roms` repo (its `xtask`), which injects
+  `code: [{name:"main", src:"/code/<scene>.wasm"}]` + `trusted: true`; the
+  resulting ROMs are published and staged locally by `cargo xtask fetch-roms`
+  into `roms/out/code/`.
 - Shipped guests link `dlmalloc` (`global` feature) as `#[global_allocator]`,
   so `alloc::String`/`Vec`/`format!` are available from guest code (memory
   still bounded by the wasmi memory cap).
@@ -259,8 +260,9 @@ guest-driven test runs against **both** `WasmiRuntime` and (on native)
 `WasmtimeRuntime` — no-op run, spawn + move, fuel-exhaustion trap, memory-cap
 trap, and the full SDK surface.  Fixtures are inline WAT (`wat::parse_str`) — no
 committed binaries needed for tests.  The shipped ROM guests live as Rust
-sources under `guest/` and are compiled to `roms/out/code/*.wasm` by
-`cargo xtask guests` (`cargo xtask all`).  The web backends
+sources in the `classic-roms` repo (`guest/`) and are compiled to
+`roms/out/code/*.wasm` by that repo's `xtask`, then fetched by
+`cargo xtask fetch-roms`.  The web backends
 (`WebWasmRuntime`, `WorkerWasmRuntime`) are wasm-only and have no unit test —
 they're compile-verified via
 `cargo check --target wasm32-unknown-unknown -p classic-web` and `trunk build`.

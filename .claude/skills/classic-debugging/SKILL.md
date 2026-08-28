@@ -363,8 +363,7 @@ CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check \
 3. Confirm no parent entity has `Disabled` (disabled propagates down the
    hierarchy).
 4. Verify `consumesClick` — if a higher-priority entity consumed the click,
-   lower ones never see it. The prescan (TS parity: pre-scan is a no-op in
-   Rust) and the `ui_consumed_click` flag gate dispatch.
+   lower ones never see it.  The `ui_consumed_click` flag gates dispatch.
 5. Check that the mouse position correctly maps to iso coordinates (use
    `iso=trace` channel; verify `mouseIsoPos` is within expected tile range).
 6. Confirm the entity is in the quadtree — disabled colliders are skipped
@@ -440,20 +439,20 @@ CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check \
 
 ## 9. Known-Divergent / Non-Functional
 
-Items below are deliberately incomplete or differ from the TypeScript
-original and will produce no diagnostics when broken:
+Items below are deliberately incomplete and will produce no diagnostics when
+broken:
 
 | Item | Status |
 |---|---|
-| **SDF shadow/glow passes** | Fields (`outline`, `shadow`) in UISdfText are stored but not rendered. Rust only runs a single SDF draw; TS ran secondary passes for shadow, glow, and outline. |
-| **Bitmap `UIText`** | Not ported. The TS engine used a traditional glyph-map text renderer for dev UI. All text in Rust is SDF. |
-| **`consumesClick` prescan** | TS ran a two-pass dispatch: first pass set a `uiConsumedClick` flag, second pass checked it. Rust collapses this, using `consumed_click` on the dispatch path directly. No equivalent of the TS prescan exists. |
+| **SDF shadow/glow passes** | Only a single SDF draw runs (main + outline); there is no shadow/glow pass. |
+| **No bitmap text** | All text is SDF; there is no glyph-map text renderer. |
+| **`consumes_click` dispatch** | `consumed_click` is set directly on the dispatch path; there is no separate pre-scan. |
 | **Entity destruction** | `world.despawn` is called via `Engine::despawn_named`, exposed to ROM guests through the `despawn` SDK import. Entities are also soft-disabled with a `Disabled` component in the UI layer. |
-| **Collider in quadtree (disabled)** | TS inserted all colliders (including disabled) into the quadtree and filtered them at query time. Rust skips disabled colliders at insertion time in `begin_frame()`. This is a deliberate optimisation and can affect click dispatch when toggling collider enabled state within a frame. |
-| **Camera matrix order** | TS does `S(scale) * T(-fix)`; Rust does `T(-fix) * S(scale)`. Both look correct because the fix-point formula compensates, but the raw model matrices differ. Golden traces will show this divergence in `model` fields. |
-| **heightData stride** | TS uses `sizeX * sizeY` (tile grid, one height per tile). Rust uses `(size_x + 1) * (size_y + 1)` (vertex grid, one height per vertex). The `height_data` grid is a binary sidecar resource (`ResourceKind::Grid`), not inlined in `state.json`. |
-| **Root UI tree** | TS attached all UI elements to a single root container and walked the full tree for layout. Rust only attaches the top bar to root; other panels position themselves independently. `CLASSIC_UI_DEBUG` will show fewer elements in the layout tree walk. |
-| **Web Worker pathfinder** | TS ran A* on a Web Worker for non-blocking path computation. Rust runs A* on a host `PathfinderWorker` (native thread / web `Worker`) via async `request_path`/`poll_path`, with a synchronous fallback under the deterministic harness. |
+| **Collider in quadtree (disabled)** | Disabled colliders are skipped at insertion time in `begin_frame()`. This can affect click dispatch when toggling collider enabled state within a frame. |
+| **Camera matrix order** | `T(-fix) * S(scale)`. The fix-point formula compensates so the visible area stays centred. |
+| **heightData stride** | `(size_x + 1) * (size_y + 1)` (vertex grid, one height per vertex). The `height_data` grid is a binary sidecar resource (`ResourceKind::Grid`), not inlined in `state.json`. |
+| **Root UI tree** | Only the top bar is attached to root; other panels position themselves independently. `CLASSIC_UI_DEBUG` shows fewer elements in the layout tree walk. |
+| **Web Worker pathfinder** | A* runs on a host `PathfinderWorker` (native thread / web `Worker`) via async `request_path`/`poll_path`, with a synchronous fallback under the deterministic harness. |
 | **`classic_log` hot-reload** | Channels are parsed once at startup. There is no runtime reload or live toggle — changing channels requires a process restart (or page reload on web). |
 
 ---

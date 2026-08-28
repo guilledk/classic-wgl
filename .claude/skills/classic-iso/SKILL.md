@@ -180,9 +180,9 @@ Defined in `classic-core::tilemap::bilinear_height`.
 ### Data layout
 
 Height data is stored as a **vertex grid** of size `(size_x + 1) × (size_y + 1)`.
-The index is `ty * (size_x + 1) + tx`.  This is a deliberate divergence from the
-TypeScript original (which uses a tile grid of `size_x × size_y`).  The vertex
-grid avoids off-by-one interpolation edge cases at the right/bottom map boundary.
+The index is `ty * (size_x + 1) + tx`.  The vertex grid (rather than a per-tile
+grid of `size_x × size_y`) avoids off-by-one interpolation edge cases at the
+right/bottom map boundary.
 
 ### Formula
 
@@ -535,7 +535,7 @@ creates both an `IsoAgent` and an `IsoSprite`).  It adds `speed`, `anim_speed`,
 and `anim_prefix` over `IsoSprite`.
 
 The agent's *behaviour* — click-to-move, path-following, idle/walk animation,
-terrain-z following — lives in the **ROM guest** (`guest/demo-guest`), not in
+terrain-z following — lives in the **ROM guest** (`classic-roms/guest/demo-guest`), not in
 Rust.  The retired `init_agent_system` (and the engine's click-to-move wiring)
 were replaced by the guest driving the entity through the `classic-guest` SDK:
 `request_path`/`poll_path` (async binary waypoints), `set_pos`/`get_pos` (3D),
@@ -720,26 +720,20 @@ This corrects normals for the non-uniform 2:1 scale of the isometric transform.
 
 ## 14. Known-Divergent / Non-Functional
 
-### Height data format divergence
+### Height data layout
 
-- **TS:**  height data is `sizeX * sizeY` (per-tile grid).
-- **Rust:**  height data is `(size_x + 1) * (size_y + 1)` (per-vertex grid).
-- **Impact:**  The vertex grid avoids an off-by-one interpolation boundary
-  condition.  For flat height data (all 1.0) both produce identical results.
-  The vertex grid naturally supports per-vertex heights from `build_mesh`.
+- Height data is `(size_x + 1) * (size_y + 1)` (per-vertex grid, not per-tile).
+- The vertex grid avoids an off-by-one interpolation boundary condition and
+  naturally supports per-vertex heights from `build_mesh`.
 
 ### Camera matrix order
 
-- **TS:** `S(scale) * T(-fix)` (scale first).
-- **Rust:** `T(-fix) * S(scale)` (translate first).
-- **Impact:**  Both produce visually plausible results because the fix formula
-  compensates.  At very high zoom levels the difference becomes more apparent
-  (see `classic-rust-camera` skill for details).
+`T(-fix) * S(scale)` (translate first, then scale).  The fix-point formula
+compensates for the translation so the visible area stays centred.
 
 ### IsoSprite ghost alpha not configurable
 
-The ghost pass uses a hardcoded `ghostAlpha = 0.4`.  The TS engine exposed
-this as a per-sprite parameter.  In Rust it is fixed.  Adjust
+The ghost pass uses a hardcoded `ghostAlpha = 0.4`.  Adjust
 `draw_iso_sprite_ghost` in `classic-gfx` if needed.
 
 ### Per-pixel depth maps (per-sheet)
@@ -785,13 +779,13 @@ albedo instead of being shaded.
 ### SDF shadow/glow not rendered
 
 The `SdfTextRender` component stores `outline_color` and `outline_width`
-fields, but secondary draw passes for shadow and glow (as in TS) are not
-implemented.  Only the main text pass is drawn.
+fields, but secondary draw passes for shadow and glow are not implemented.
+Only the main text pass is drawn.
 
-### TS bitmap text not ported
+### No bitmap text
 
-The TS engine's `UIText` (traditional glyph-map bitmap text used for dev UI)
-was not ported.  All text in the Rust port uses SDF rendering via `SdfTextRender`.
+All text uses SDF rendering via `SdfTextRender`; there is no bitmap/glyph-map
+text renderer.
 
 ### IsoAgent does not write depth independently
 
@@ -807,11 +801,10 @@ edges).  Interior cliffs (height changes between adjacent tiles) do **not**
 generate wall faces.  The walls that exist use a twisted-quad geometry (6 vertices,
 two triangles) with a shared midpoint hedge.
 
-### Collider quadtree divergence
+### Collider quadtree
 
-- **TS:**  All colliders (including disabled ones) are inserted into the quadtree.
-- **Rust:**  Disabled colliders are skipped in `begin_frame`.  This avoids clicks
-  landing on invisible/disabled elements but differs from TS behaviour.
+Disabled colliders are skipped in `begin_frame`, so they are not inserted into
+the quadtree.  This avoids clicks landing on invisible/disabled elements.
 
 ### Selection rectangle rendering
 
@@ -821,10 +814,7 @@ in the tilemap fragment shader.  Modes are:
 - `0` = invert colour (placeholder for fill).
 - `1` = desaturate-to-selection-colour (place-paint preview).
 
-### `order()` formula divergence
+### `order()` formula
 
-- **TS:** `position.x - position.y - tilemap.sizeX - tilemap.sizeY`.
-- **Rust:** `position.x - position.y` (no size subtraction).
-- **Impact:**  The subtraction term in TS acts as a global bias to lower all
-  sprite orders relative to the tilemap.  In Rust, the tilemap is pinned at
-  `20000.0` z-order, making the bias unnecessary.
+`position.x - position.y` (no size subtraction).  The tilemap is pinned at
+`20000.0` z-order, so no global bias is needed.

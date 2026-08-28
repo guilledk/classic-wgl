@@ -312,10 +312,9 @@ Fragment shader: smoothstep around edge (0.5 - weight) with `fwidth`-based pixel
 range calculation.  Outline rendered when `|outlineWidth| > 0.001` by offsetting
 the edge threshold by `outlineWidth / (2 * spread)`.
 
-**Single-pass only** — unlike the TS version which called `draw_sdf` 1–3 times
-per text element, the Rust port does one draw per `DrawKind::SdfText`.
-Multi-pass effects (shadow/glow) require separate draw-list entries with distinct
-`SdfTextRender` components. `softEdge` is hardcoded to 0.08.
+**Single-pass only** — one draw per `DrawKind::SdfText`.  Shadow/glow effects
+would require separate draw-list entries with distinct `SdfTextRender`
+components; `softEdge` is hardcoded to 0.08.
 
 ---
 
@@ -401,8 +400,8 @@ Uniform setters (`uniform_mat4`, `uniform_vec4`, `uniform_1f`, `uniform_1i`,
 `uniform_bool`) silently skip if the uniform is not found.  Attribute lookups
 via `s.attr(name)` panic on missing attributes.
 
-All shader sources are embedded at compile time (GLSL 300 es, ported from the
-TS GLSL 100 `attribute`/`varying` syntax).  A standalone `ShaderSourceRegistry`
+All shader sources are embedded at compile time (GLSL 300 es).  A standalone
+`ShaderSourceRegistry`
 (`resolve_vertex` / `resolve_fragment`) maps manifest URL strings to embedded
 sources by the filename's last `/`-segment (via `shader_filename`), not a
 substring match.
@@ -497,15 +496,13 @@ the depth-corner interpolation and the `GREATER`/stencil ghost-group test).
 
 ## 15. Known-divergent / non-functional
 
-- **GLSL version divergence**: TS used GLSL 100 (`attribute`, `varying`, `texture2D`).
-  Ported to GLSL 300 es (`in`, `out`, `texture`).  All shader logic is functionally
-  equivalent but the syntax is incompatible with GLSL 100.
+- **GLSL 300 es**: shaders are written in GLSL 300 es (`in`, `out`, `texture`),
+  which is incompatible with the older GLSL 100 (`attribute`, `varying`,
+  `texture2D`) syntax.
 
-- **Single-pass SDF text**: The TS `draw_sdf` was called 1–3 times per text element
-  (shadow/glow/main passes in the same draw call).  The Rust port does a single
-  draw per `DrawKind::SdfText`.  Multi-pass effects require separate draw-list
-  entries with distinct `SdfTextRender` components.  The `softEdge` uniform is
-  hardcoded to 0.08 in the Rust `draw_sdf` (the TS version let callers set it).
+- **Single-pass SDF text**: one draw per `DrawKind::SdfText`.  Shadow/glow
+  effects require separate draw-list entries with distinct `SdfTextRender`
+  components.  The `softEdge` uniform is hardcoded to 0.08 in `draw_sdf`.
 
 - **Missing `draw_image_colorized`**: The `imageColorize` program (from the
   `image_colorized.frag` file) is compiled but there is no public `draw_*`

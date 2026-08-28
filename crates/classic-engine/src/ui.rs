@@ -4,7 +4,6 @@
 //!
 //! Retained-mode UI layout manager.
 //!
-//! Port of `UIManager` + `UIContainer` from `src/classic/ui.ts`.
 //! UI elements are regular ECS entities with `Transform` + a render component
 //! (`RectRender` / `SdfTextRender`) + a `UiNode` layout component.
 
@@ -168,12 +167,8 @@ impl UIManager {
             SdfTextRender {
                 atlas_name: classic_core::components::DEFAULT_SDF_FONT.into(),
                 color,
-                bgcolor: [0.0, 0.0, 0.0, 0.0],
                 outline_color: [0.0, 0.0, 0.0, 0.0],
                 outline_width: 0.0,
-                shadow_offset: [1.0, 1.0],
-                shadow_color: [0.0, 0.0, 0.0, 0.5],
-                shadow_blur: 0.0,
                 ignore_cam: true,
                 text: text.to_string(),
                 justify,
