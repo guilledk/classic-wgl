@@ -335,6 +335,11 @@ pub struct IsoVehicle {
     /// Wheel entity names, in `[front_left, front_right, rear_left, rear_right]`
     /// order.
     pub wheel_entities: [String; 4],
+    /// Steering-tire entity names, in `[front_left, front_right, …]` order,
+    /// matched to the wheels by index (a tire is the rotating disk over its
+    /// wheel's static suspension arm).  Empty entries = no tire for that wheel.
+    #[serde(default)]
+    pub tire_entities: [String; 2],
     /// Body ground-origin anchor per direction, `[ax, ay]` normalized to the
     /// sprite frame (x from left, y from top).
     pub body_anchors: [[f32; 2]; 8],
@@ -421,6 +426,18 @@ pub struct IsoVehicle {
     /// quantization at spawn.
     #[serde(skip)]
     pub tilt_dead_zone: f32,
+    /// Quantized steering frame (0..`steer_levels`), centre = straight, written
+    /// into the front-tire sprite frames each update.
+    #[serde(skip)]
+    pub steer_index: u32,
+    /// Number of steering frames per direction (copied from the vehicle def at
+    /// spawn).
+    #[serde(skip)]
+    pub steer_levels: u32,
+    /// Max steering angle (radians) the frames span (copied from the vehicle def
+    /// at spawn).
+    #[serde(skip)]
+    pub steer_max: f32,
 
     // -- transient simulation state (not serialized) ----------------------
     /// Per-wheel, per-direction tile-space offset from the body, derived from
@@ -470,6 +487,7 @@ impl Default for IsoVehicle {
         Self {
             tilemap: String::new(),
             wheel_entities: [String::new(), String::new(), String::new(), String::new()],
+            tire_entities: [String::new(), String::new()],
             body_anchors: [[0.5, 0.5]; 8],
             wheel_anchors: [[[0.5, 0.5]; 8]; 4],
             speed: 2.6,
@@ -492,6 +510,9 @@ impl Default for IsoVehicle {
             wheel_travel_up: 10.0,
             wheel_travel_down: 20.0,
             tilt_dead_zone: 0.0,
+            steer_index: 0,
+            steer_levels: 1,
+            steer_max: 30.0f32.to_radians(),
             wheel_tile_offsets: [[[0.0, 0.0]; 8]; 4],
             altitude: 0.0,
             vel_z: 0.0,
