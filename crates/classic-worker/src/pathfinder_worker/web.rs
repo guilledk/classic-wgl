@@ -201,6 +201,7 @@ impl PathfinderWorker {
         track_px: f32,
         safe_fall_px: f32,
         jump_cost: f32,
+        turn_cost: f32,
     ) {
         let from = js_sys::Array::of2(&JsValue::from(from.0), &JsValue::from(from.1));
         let to = js_sys::Array::of2(&JsValue::from(to.0), &JsValue::from(to.1));
@@ -248,6 +249,11 @@ impl PathfinderWorker {
             &msg,
             &JsValue::from_str("jumpCost"),
             &JsValue::from_f64(jump_cost as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &msg,
+            &JsValue::from_str("turnCost"),
+            &JsValue::from_f64(turn_cost as f64),
         );
         let _ = self.worker.post_message(&msg);
     }

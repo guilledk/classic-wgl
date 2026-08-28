@@ -40,9 +40,11 @@ impl Ord for Key {
 /// A single cell coordinate on the nav grid.
 pub type GridCell = (i32, i32);
 
-/// Core 8-directional A* over a `size_x × size_y` grid.  `step_cost(current,
-/// neighbor)` returns `Some(cost)` when the move is allowed and `None` when
-/// blocked.  Neighbours are the 8 surrounding cells (bounds-checked here).
+/// Core 8-directional A* over a `size_x × size_y` grid.  `step_cost(prev,
+/// current, neighbor)` returns `Some(cost)` when the move is allowed and `None`
+/// when blocked.  `prev` is the cell before `current` on the best known path
+/// (or `None` for the start), so callers can charge a turn penalty.  Neighbours
+/// are the 8 surrounding cells (bounds-checked here).
 ///
 /// Returns the full path (including `from` and `to`) or `None` when no route
 /// exists.  The heuristic is admissible for 8-directional grids with cardinal
@@ -56,7 +58,7 @@ fn a_star<F>(
     mut step_cost: F,
 ) -> Option<Vec<GridCell>>
 where
-    F: FnMut(GridCell, GridCell) -> Option<f32>,
+    F: FnMut(Option<GridCell>, GridCell, GridCell) -> Option<f32>,
 {
     let from = (from.0.clamp(0, size_x - 1), from.1.clamp(0, size_y - 1));
     let to = (to.0.clamp(0, size_x - 1), to.1.clamp(0, size_y - 1));
@@ -95,6 +97,9 @@ where
 
         in_open[cur_idx] = false;
 
+        let prev = came_from[cur_idx]
+            .map(|p| ((p % size_x as usize) as i32, (p / size_x as usize) as i32));
+
         for &(dx, dy) in &neighbours {
             let nx = current.0 + dx;
             let ny = current.1 + dy;
@@ -103,7 +108,7 @@ where
                 continue;
             }
             let n_idx = flatten(nx, ny);
-            let Some(step_cost) = step_cost(current, (nx, ny)) else { continue };
+            let Some(step_cost) = step_cost(prev, current, (nx, ny)) else { continue };
 
             let tentative_g = g_cost[cur_idx].min(inf) + step_cost;
 
@@ -135,7 +140,7 @@ pub fn find_path(
     from: GridCell,
     to: GridCell,
 ) -> Option<Vec<GridCell>> {
-    a_star(size_x, size_y, from, to, |current, neighbour| {
+    a_star(size_x, size_y, from, to, |_prev, current, neighbour| {
         let idx = (neighbour.0 + neighbour.1 * size_x) as usize;
         if nav_data[idx] == 0 {
             return None;
@@ -305,6 +310,29 @@ pub fn derive_vehicle_slope_nav(
     out
 }
 
+/// Turn penalty for a step `current -> neighbour` given the incoming cell
+/// `prev` (or `None` at the start): `turn_cost` per 45° of heading change
+/// between the incoming and outgoing direction.  Straight is free, a 90° corner
+/// costs `2 · turn_cost`, a full reversal `4 · turn_cost`.
+fn turn_penalty(
+    prev: Option<GridCell>,
+    current: GridCell,
+    neighbour: GridCell,
+    turn_cost: f32,
+) -> f32 {
+    if turn_cost <= 0.0 {
+        return 0.0;
+    }
+    let Some(prev) = prev else { return 0.0 };
+    let in_ang = libm::atan2f((current.1 - prev.1) as f32, (current.0 - prev.0) as f32);
+    let out_ang = libm::atan2f((neighbour.1 - current.1) as f32, (neighbour.0 - current.0) as f32);
+    let mut diff = (out_ang - in_ang).abs();
+    if diff > core::f32::consts::PI {
+        diff = core::f32::consts::TAU - diff;
+    }
+    turn_cost * (diff / core::f32::consts::FRAC_PI_4)
+}
+
 /// Footprint-, slope- and jump-aware A* for a wheeled vehicle.
 ///
 /// `walkable` is the combined grid (`structural` AND slope-feasible): `1` = a
@@ -316,6 +344,11 @@ pub fn derive_vehicle_slope_nav(
 /// suspension can absorb), provided the target is lower and obstacle-free; its
 /// cost is scaled by `jump_cost` (≥ 1.0 discourages jumps).  `safe_fall_px ≤ 0`
 /// disables jumps.
+///
+/// `turn_cost` (≥ 0) adds a per-step penalty proportional to the heading change
+/// between the incoming and outgoing direction (per 45°), so A* prefers gentle
+/// routes over sharp corners; `0` disables it.  The penalty only raises costs,
+/// so the 8-directional heuristic stays admissible.
 #[allow(clippy::too_many_arguments)]
 pub fn find_path_for_footprint_with_jumps(
     walkable: &[i32],
@@ -329,6 +362,7 @@ pub fn find_path_for_footprint_with_jumps(
     height_scale: f32,
     safe_fall_px: f32,
     jump_cost: f32,
+    turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
     let mut walk_eroded = erode_for_footprint(walkable, size_x, size_y, footprint);
     let struct_eroded = if safe_fall_px > 0.0 {
@@ -349,19 +383,20 @@ pub fn find_path_for_footprint_with_jumps(
         (heights[i] + heights[i + 1] + heights[i + vw] + heights[i + vw + 1]) * 0.25
     };
 
-    a_star(size_x, size_y, from, to, |current, neighbour| {
+    a_star(size_x, size_y, from, to, |prev, current, neighbour| {
         let idx = (neighbour.0 + neighbour.1 * size_x) as usize;
         let diagonal = neighbour.0 != current.0 && neighbour.1 != current.1;
         let base = if diagonal { libm::sqrtf(2.0) } else { 1.0 };
+        let turn_penalty = turn_penalty(prev, current, neighbour, turn_cost);
 
         if walk_eroded[idx] == 1 {
-            return Some(base);
+            return Some(base + turn_penalty);
         }
         if safe_fall_px > 0.0 && struct_eroded[idx] == 1 {
             let drop = (cell_height(current.0, current.1) - cell_height(neighbour.0, neighbour.1))
                 * height_scale;
             if drop > 0.0 && drop <= safe_fall_px {
-                return Some(base * jump_cost);
+                return Some(base * jump_cost + turn_penalty);
             }
         }
         None
@@ -419,6 +454,7 @@ pub fn find_vehicle_path_snapshot(
     track_px: f32,
     safe_fall_px: f32,
     jump_cost: f32,
+    turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
     let slope = derive_vehicle_slope_nav(
         &snapshot.heights,
@@ -431,7 +467,16 @@ pub fn find_vehicle_path_snapshot(
         pitch_max,
         roll_max,
     );
-    find_vehicle_path_with_slope(snapshot, &slope, from, to, footprint, safe_fall_px, jump_cost)
+    find_vehicle_path_with_slope(
+        snapshot,
+        &slope,
+        from,
+        to,
+        footprint,
+        safe_fall_px,
+        jump_cost,
+        turn_cost,
+    )
 }
 
 /// Vehicle A* reusing a pre-derived slope-feasibility grid (`slope`, the output
@@ -446,6 +491,7 @@ pub fn find_vehicle_path_with_slope(
     footprint: &[GridCell],
     safe_fall_px: f32,
     jump_cost: f32,
+    turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
     let walkable: Vec<i32> =
         snapshot.structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
@@ -461,6 +507,7 @@ pub fn find_vehicle_path_with_slope(
         snapshot.height_scale,
         safe_fall_px,
         jump_cost,
+        turn_cost,
     )
 }
 
@@ -589,6 +636,7 @@ impl PathfinderState {
         track_px: f32,
         safe_fall_px: f32,
         jump_cost: f32,
+        turn_cost: f32,
     ) -> Option<Vec<GridCell>> {
         let snap = self.vehicle.as_ref()?;
         let key =
@@ -615,7 +663,16 @@ impl PathfinderState {
                 grid
             }
         };
-        find_vehicle_path_with_slope(snap, &slope, from, to, footprint, safe_fall_px, jump_cost)
+        find_vehicle_path_with_slope(
+            snap,
+            &slope,
+            from,
+            to,
+            footprint,
+            safe_fall_px,
+            jump_cost,
+            turn_cost,
+        )
     }
 }
 
@@ -858,6 +915,7 @@ mod tests {
             32.0,
             64.0,
             1.3,
+            0.0,
         );
         assert!(path.is_some(), "should jump down the small cliff");
     }
@@ -877,6 +935,7 @@ mod tests {
             32.0,
             0.0,
             1.3,
+            0.0,
         );
         assert!(path.is_none(), "safe_fall 0 disables jumps");
     }
@@ -897,6 +956,7 @@ mod tests {
             32.0,
             16.0,
             1.3,
+            0.0,
         );
         assert!(path.is_none(), "drop larger than safe_fall must not jump");
     }
@@ -917,6 +977,7 @@ mod tests {
             32.0,
             64.0,
             1.3,
+            0.0,
         );
         assert!(path.is_none(), "cannot jump uphill");
     }
@@ -955,6 +1016,7 @@ mod tests {
             tr,
             64.0,
             1.3,
+            0.0,
         );
 
         let slope = derive_vehicle_slope_nav(&heights, size, size, 32.0, 45.0, wb, tr, pitch, roll);
@@ -972,6 +1034,7 @@ mod tests {
             32.0,
             64.0,
             1.3,
+            0.0,
         );
         assert_eq!(via_snapshot, manual);
     }
@@ -994,6 +1057,7 @@ mod tests {
             tr,
             0.0,
             1.3,
+            0.0,
         );
         assert!(path.is_some(), "flat ground should route");
     }
@@ -1016,6 +1080,7 @@ mod tests {
             tr,
             0.0,
             1.3,
+            0.0,
         );
         assert!(path.is_none(), "a 1.0/tile ramp exceeds the pitch limit");
     }
@@ -1038,7 +1103,7 @@ mod tests {
             45.0,
         ));
         assert!(state
-            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3)
+            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3, 0.0)
             .is_some());
 
         // Steep terrain (1.0/tile): no path — the slope grid was re-derived.
@@ -1057,7 +1122,45 @@ mod tests {
             45.0,
         ));
         assert!(state
-            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3)
+            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3, 0.0)
             .is_none());
+    }
+
+    #[test]
+    fn turn_penalty_charges_by_heading_change() {
+        // Straight ahead (east -> east) is free.
+        assert_eq!(turn_penalty(Some((0, 0)), (1, 0), (2, 0), 0.5), 0.0);
+        // A 90° corner (east -> south) costs 2 · turn_cost.
+        assert!((turn_penalty(Some((0, 0)), (1, 0), (1, 1), 0.5) - 1.0).abs() < 1e-3);
+        // A full reversal (east -> west) costs 4 · turn_cost.
+        assert!((turn_penalty(Some((0, 0)), (1, 0), (0, 0), 0.5) - 2.0).abs() < 1e-3);
+        // No incoming cell (start) or zero turn_cost is free.
+        assert_eq!(turn_penalty(None, (1, 0), (1, 1), 0.5), 0.0);
+        assert_eq!(turn_penalty(Some((0, 0)), (1, 0), (1, 1), 0.0), 0.0);
+    }
+
+    #[test]
+    fn turn_cost_still_routes_a_straight_line() {
+        // A straight-line route is unaffected by the turn penalty (only turns
+        // cost), so even a large `turn_cost` must still find it.
+        let size = 8;
+        let structural = vec![1_i32; (size * size) as usize];
+        let heights = vec![1.0f32; ((size + 1) * (size + 1)) as usize];
+        let snap = VehicleNavSnapshot::new(size, size, structural, heights, 32.0, 45.0);
+        let (wb, tr, pitch, roll) = slope_params();
+        let path = find_vehicle_path_snapshot(
+            &snap,
+            (0, 4),
+            (7, 4),
+            &[(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            0.0,
+            1.3,
+            100.0,
+        );
+        assert!(path.is_some(), "straight route must ignore a large turn cost");
     }
 }

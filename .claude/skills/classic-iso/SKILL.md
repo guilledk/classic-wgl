@@ -564,6 +564,24 @@ vertically (the exporter renders the body tilted about its ground origin on a
   the plane lifts/tilts to absorb terrain instead.  A soft dead-zone
   (`tilt_dead_zone`) suppresses body tilt on sub-frame slopes.
 
+### Front-wheel steering tires
+
+With front-wheel steering (the `front_wheel_steering` work), each front wheel is
+split into a static **suspension arm** (the wheel `IsoSprite`) plus a rotating
+**steering tire** `IsoSprite` (`tire_entities`, matched by index).  The tire
+sheet stacks `steer_levels` direction blocks vertically, so its
+`tile_set_size = [columns, rows · steer_levels]` and the frame is
+`steer_index · 8 + direction` (`steer_index 0..steer_levels`: 0 = full-right,
+centre = straight, top = full-left — the exporter's steer-major order).
+
+`steer_index` is quantized from the *integrated* steering **state**
+(`IsoVehicle.steer`, rate-limited at `steer_rate`) rather than the raw heading
+error, so the tires sweep through their steer frames instead of snapping.  When
+the vehicle reverses (target ~100° behind, `should_reverse` hysteresis), it
+drives backward along `heading` while the tires steer into the same turn; the
+tire anchor is steer-invariant (the yaw is about the axle's vertical axis), so
+the tire reuses the wheel's ground-origin anchor.
+
 ---
 
 ## 9. IsoAgent

@@ -151,7 +151,8 @@ categories:
 
 - **`IsoVehicle`** — wheeled-vehicle sim.  Lives on the **body** entity (which
   also carries `IsoSprite` + `Transform`) and references four wheel entities by
-  name.  Serialized fields: `tilemap`, `wheel_entities: [String; 4]` (`[fl, fr,
+  name (+ two steering-tire entities by name, `tire_entities: [String; 2]`).
+  Serialized fields: `tilemap`, `wheel_entities: [String; 4]` (`[fl, fr,
   rl, rr]`), `body_anchors`/`wheel_anchors` (per-direction ground-origin
   anchors, `[[f32; 2]; 8]`), `speed`, `direction` (0..7).  Transient
   (`#[serde(skip)]`): `pitch`/`pitch_vel`/`pitch_index` + `roll`/`roll_vel`/
@@ -161,6 +162,19 @@ categories:
   suspension state (`wheel_h`/`wheel_v`), and the `path`/`path_idx` A* waypoints.
   The body sprite's `frame` indexes a pitch×roll×direction sheet — see
   `classic-iso`.
+
+  **Steering / reverse / turn-cost state** (transient, `#[serde(skip)]`):
+  `steer`/`steer_rate` (front-wheel steering *angle* and its max rate, rad and
+  rad/s), `steer_index`/`steer_levels`/`steer_max` (the quantized tire frame +
+  the sheet/ceiling it maps against), `reversing` + `reverse_speed` (whether the
+  vehicle is backing up and how fast), and `turn_cost` (the A\* per-45° turn
+  penalty).  These are **not** serialized — they are set at spawn from
+  `VehicleDef` (`steer_rate_deg_per_sec`, `reverse_speed`, `turn_cost`, `steer_*`)
+  or by the runtime tuning panel, and reset by `vehicle_teleport`.
+  `update_one_vehicle` integrates `steer` toward the pure-pursuit heading error
+  at `steer_rate` (so the tires sweep, not snap) and flips `reversing` via
+  `should_reverse` hysteresis when the target is ~100° behind.  See
+  `classic-physics` (turn-cost A\*) and `classic-iso` (steering tire frames).
 
 ### Collision / UI
 

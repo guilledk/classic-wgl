@@ -36,6 +36,7 @@ enum Command {
         track_px: f32,
         safe_fall_px: f32,
         jump_cost: f32,
+        turn_cost: f32,
     },
     Flush(mpsc::Sender<()>),
     Shutdown,
@@ -77,6 +78,7 @@ impl PathfinderWorker {
                         track_px,
                         safe_fall_px,
                         jump_cost,
+                        turn_cost,
                     } => {
                         let result = state.find_vehicle(
                             from,
@@ -88,6 +90,7 @@ impl PathfinderWorker {
                             track_px,
                             safe_fall_px,
                             jump_cost,
+                            turn_cost,
                         );
                         let _ = worker_tx.send((id, result));
                     }
@@ -146,6 +149,7 @@ impl PathfinderWorker {
         track_px: f32,
         safe_fall_px: f32,
         jump_cost: f32,
+        turn_cost: f32,
     ) {
         let _ = self.tx.send(Command::FindVehicle {
             id,
@@ -158,6 +162,7 @@ impl PathfinderWorker {
             track_px,
             safe_fall_px,
             jump_cost,
+            turn_cost,
         });
     }
 
@@ -319,7 +324,19 @@ mod tests {
         let mut worker = PathfinderWorker::new(open_snapshot(8, 8));
         worker.set_vehicle_snapshot(open_vehicle_snapshot(8, 8));
         let (pitch, roll, wb, tr) = vehicle_params();
-        worker.request_vehicle_path(0, (0, 0), (7, 7), vec![(0, 0)], pitch, roll, wb, tr, 0.0, 1.3);
+        worker.request_vehicle_path(
+            0,
+            (0, 0),
+            (7, 7),
+            vec![(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            0.0,
+            1.3,
+            0.0,
+        );
         match poll_until(&mut worker, 0) {
             PathPoll::Path(path) => {
                 assert_eq!(path.first(), Some(&(0, 0)));
@@ -336,7 +353,19 @@ mod tests {
 
         // Flat terrain: straight diagonal route.
         worker.set_vehicle_snapshot(open_vehicle_snapshot(8, 8));
-        worker.request_vehicle_path(1, (0, 0), (7, 7), vec![(0, 0)], pitch, roll, wb, tr, 0.0, 1.3);
+        worker.request_vehicle_path(
+            1,
+            (0, 0),
+            (7, 7),
+            vec![(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            0.0,
+            1.3,
+            0.0,
+        );
         match poll_until(&mut worker, 1) {
             PathPoll::Path(path) => {
                 assert_eq!(path.first(), Some(&(0, 0)));
@@ -348,7 +377,19 @@ mod tests {
         // Push a steep snapshot (1.0/tile exceeds the 20° pitch limit): the same
         // query must now find no path — the slope grid was re-derived.
         worker.set_vehicle_snapshot(steep_vehicle_snapshot(8, 8));
-        worker.request_vehicle_path(2, (0, 0), (7, 7), vec![(0, 0)], pitch, roll, wb, tr, 0.0, 1.3);
+        worker.request_vehicle_path(
+            2,
+            (0, 0),
+            (7, 7),
+            vec![(0, 0)],
+            pitch,
+            roll,
+            wb,
+            tr,
+            0.0,
+            1.3,
+            0.0,
+        );
         assert_eq!(poll_until(&mut worker, 2), PathPoll::NoPath);
     }
 
@@ -368,6 +409,7 @@ mod tests {
             tr,
             0.0,
             1.3,
+            0.0,
         );
         worker.join();
         assert_ne!(worker.poll_vehicle_path(0), PathPoll::Pending);
