@@ -62,6 +62,12 @@ pub struct RomManifest {
     /// slow path (e.g. browser WebAssembly on web).
     #[serde(default)]
     pub trusted: bool,
+    /// Semantic version of the ROM content, stamped by `classic-roms` (see its
+    /// per-ROM `version` in `scene.json`).  Distinct from `format_version`,
+    /// which is the manifest schema contract.  `None` for ROMs packed before
+    /// per-ROM versioning existed.
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 fn default_format_version() -> u32 {
@@ -103,5 +109,16 @@ mod tests {
         let m: RomManifest = serde_json::from_str(json).unwrap();
         assert!(!m.host_features);
         assert!(!m.trusted);
+    }
+
+    #[test]
+    fn version_is_optional() {
+        let without = r#"{"shaders": [], "textures": [], "animations": []}"#;
+        let m: RomManifest = serde_json::from_str(without).unwrap();
+        assert_eq!(m.version, None);
+
+        let with = r#"{"shaders": [], "textures": [], "animations": [], "version": "0.2.0"}"#;
+        let m: RomManifest = serde_json::from_str(with).unwrap();
+        assert_eq!(m.version.as_deref(), Some("0.2.0"));
     }
 }
