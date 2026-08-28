@@ -132,7 +132,10 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
     // guest has committed the map.
     prefabs::init_footprint_colliders(&mut e);
 
-    if rom.manifest.host_features {
+    // `CLASSIC_NO_UI` suppresses the whole editor/HUD/overlay layer so a capture
+    // shows only the lit scene — the reference frame for lighting/shadow work,
+    // where the SDF panel and HUD would otherwise occlude a third of the view.
+    if rom.manifest.host_features && !classic_engine::env_config::EnvConfig::get().no_ui {
         prefabs::init_debug_toggles(&mut e, &state);
         editor::init_ui(&mut e);
         editor::init_tool_buttons(&mut e, &state);

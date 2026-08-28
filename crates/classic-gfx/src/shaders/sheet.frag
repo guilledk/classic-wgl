@@ -41,6 +41,7 @@ uniform float shadow_bias;
 uniform float shadow_strength;
 uniform vec2 shadow_texel;
 uniform float use_shadow;
+uniform float shadow_debug;
 
 #define MAX_LIGHTS 256
 
@@ -184,6 +185,16 @@ void main(void ) {
         // `gl_FragDepth` (also window-space) needs no clip→window remap.
         gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
     }
+
+    // Bring-up diagnostic (CLASSIC_SHADOW_DEBUG): sun visibility only.  The
+    // alpha silhouette and iso depth are kept so the sprite still occludes
+    // correctly and its outline stays readable against the terrain.
+    if (shadow_debug > 0.5) {
+        float vis = use_shadow > 0.5 ? shadowFactor(vWorldPos) : 1.0;
+        fragColor = vec4(vec3(vis), color.a);
+        return;
+    }
+
     if (use_normal_map > 0.5) {
         vec3 n = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).rgb * 2.0 - 1.0;
         // Unlit sentinel: a (0.5,0.5,0.5) texel decodes to (0,0,0) and skips the
