@@ -45,12 +45,16 @@ pub const SHADOW_NORMAL_OFFSET: f32 = 1.5;
 /// Diffuse fraction a fully-shadowed pixel keeps (`0..=1`).  Lit pixels keep
 /// `1.0`.
 ///
-/// **Currently pinned to `0.0` (hard black) for shadow bring-up.**  A partial
-/// value makes "the shadow map is broken" and "the shadow is subtle" visually
-/// and numerically indistinguishable — that ambiguity is what made the
-/// session-2 audit necessary.  Restore to a tuned value (~`0.65`, matching the
-/// old baked terrain darkening) only once cast shadows are confirmed correct.
-pub const SHADOW_STRENGTH: f32 = 0.0;
+/// Tuned against `basetest`: shadowed terrain lands at luma 48 against 73 lit —
+/// dark enough to read as occlusion, light enough that terrain relief stays
+/// visible inside the shadow.
+///
+/// **When changing the shadow geometry, set this to `0.0` first.**  A partial
+/// value makes "the shadow map is broken" and "the shadow is subtle"
+/// indistinguishable both by eye and by pixel diff, which is precisely how a
+/// completely non-functional shadow map survived a full session of
+/// verification.  `CLASSIC_SHADOW_DEBUG=1` exists for the same reason.
+pub const SHADOW_STRENGTH: f32 = 0.4;
 
 /// The directional light's view/projection matrices in light space.
 pub struct LightMatrix {

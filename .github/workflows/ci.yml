@@ -112,6 +112,22 @@ jobs:
                   CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
                   CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar
                   RUST_LOG=info ./target/debug/classic-desktop
+            # The lighting/shadow reference: a small deterministic ramp+mound
+            # course with two normal/depth-mapped containers, a fixed sun and a
+            # fixed camera.  CLASSIC_NO_UI drops the editor/HUD layer and no
+            # CLASSIC_TEST runs, so the frame is nothing but lit terrain and
+            # sprites -- any shadow or normal regression shows up directly.
+            - name: basetest scene (lighting + shadow golden)
+              env:
+                  LIBGL_ALWAYS_SOFTWARE: 1
+                  EGL_PLATFORM: surfaceless
+                  LP_NUM_THREADS: 0
+              run: >-
+                  CLASSIC_ROM=rom:basetest CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60
+                  CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
+                  CLASSIC_NO_UI=1
+                  CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/basetest-lit
+                  RUST_LOG=info ./target/debug/classic-desktop
             - uses: actions/upload-artifact@v4
               if: failure()
               with:
