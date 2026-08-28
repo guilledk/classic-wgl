@@ -614,6 +614,7 @@ impl Gfx {
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
+        s.uniform_vec3(gl, "tint", Vec3::from_array([1.0, 1.0, 1.0]));
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -693,6 +694,7 @@ impl Gfx {
         depth_map: Option<(&str, f32)>,
         depth_base: f32,
         normal_map: Option<&str>,
+        tint: &[f32; 3],
         settings: &RenderSettings,
         ghost_alpha: f32,
     ) {
@@ -752,6 +754,7 @@ impl Gfx {
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
+        s.uniform_vec3(gl, "tint", Vec3::from_array(*tint));
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -783,6 +786,7 @@ impl Gfx {
         depth_map: Option<(&str, f32)>,
         depth_base: f32,
         normal_map: Option<&str>,
+        tint: &[f32; 3],
         settings: &RenderSettings,
         ghost_group: u32,
         pass: IsoSpritePass,
@@ -801,6 +805,7 @@ impl Gfx {
             depth_map,
             depth_base,
             normal_map,
+            tint,
             settings,
             ghost_alpha,
         );

@@ -271,7 +271,13 @@ pub const HORIZONTAL_DEPTH_SCALE: f32 = 400.0;
 /// its maximum) and SW (`tx - ty` at its minimum) corners, since window depth
 /// outside `[0, 1]` maps to clip-z outside `[-1, 1]`.
 pub fn horizontal_depth_scale(size_x: i32, size_y: i32) -> f32 {
-    2.0 * size_x.max(size_y).max(1) as f32
+    // Depth-mapped sprites bake their per-pixel grayscale with the legacy
+    // `HORIZONTAL_DEPTH_SCALE` (400) horizontal divisor, so the divisor must
+    // never fall *below* 400 or a small map's sprite depth map misaligns with
+    // the terrain (front corners ghost, rear corners read as nearer).  Keep
+    // `2·max(size)` only when it exceeds 400 (large maps whose `tx−ty` span
+    // would otherwise clip the NE/SW corners).
+    (2.0 * size_x.max(size_y).max(1) as f32).max(HORIZONTAL_DEPTH_SCALE)
 }
 
 /// Pixels per metre: the fixed conversion the render/depth space uses between

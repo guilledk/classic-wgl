@@ -23,6 +23,10 @@ uniform float use_normal_map;
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
+// Per-sprite tint (multiplied onto the albedo before the Lambertian term).
+// Defaults to (1,1,1) — a no-op for every existing asset.  Tintable sprites
+// ship a grayscale albedo and set this at runtime (see IsoSprite.color).
+uniform vec3 tint;
 
 out vec4 fragColor;
 
@@ -62,6 +66,7 @@ vec4 getTilePixel(float tile_id_flat, vec2 tex_coord) {
 void main(void ) {
     vec4 color = getTilePixel(tile_id_flat, vec2(vTexCoord.x, vTexCoord.y));
     if (color.a < 0.01) discard;
+    color.rgb *= tint;
     if (use_depth_map > 0.5) {
         highp float gray = texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r;
         // `depth_base` and `depth_range` are both window-space iso depths, so

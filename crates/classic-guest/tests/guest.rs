@@ -1,7 +1,7 @@
 //! Integration tests for the WASM guest runtime, driving every backend (wasmi
 //! always; wasmtime on native) with small hand-written WAT guest modules.
 
-use classic_core::components::{Animator, ColliderData, NavMesh, Role, Shape, Tilemap};
+use classic_core::components::{Animator, ColliderData, IsoSprite, NavMesh, Role, Shape, Tilemap};
 use classic_core::types::AnimationData;
 use classic_core::RoleKind;
 use classic_engine::Engine;
@@ -65,6 +65,100 @@ fn guest_can_spawn_and_move_entities() {
 
             assert!(engine.has_name("unit"));
             assert_eq!(engine.get_pos("unit"), Some((10.0, 20.0, 3.0)));
+        },
+    );
+}
+
+#[test]
+fn guest_can_set_sprite_frame_and_color() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "set_sprite_frame" (func $set_frame (param i32 i32 f64) (result i32)))
+            (import "env" "set_sprite_color" (func $set_color (param i32 i32 f64 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "unit")
+            (func (export "update") (param f64)
+                (drop (call $set_frame (i32.const 0) (i32.const 4) (f64.const 42.0)))
+                (drop (call $set_color (i32.const 0) (i32.const 4) (f64.const 0.2) (f64.const 0.4) (f64.const 0.6) (f64.const 1.0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.spawn_named("unit");
+            let entity = *engine.names.get("unit").unwrap();
+            engine
+                .world
+                .insert_one(
+                    entity,
+                    IsoSprite {
+                        position: Vec3::ZERO,
+                        scale: Vec3::ONE,
+                        texture: "shippingContainerBody".into(),
+                        tilemap: "tilemap".into(),
+                        frame: 0.0,
+                        frame_name: None,
+                        tile_set_size: glam::Vec2::ONE,
+                        anchor: glam::Vec2::new(0.5, 0.67),
+                        frame_offset: Vec3::ZERO,
+                        footprint: vec![],
+                        ghost_group: 0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                    },
+                )
+                .unwrap();
+
+            rt.update(&mut engine, 0.016).unwrap();
+
+            let sprite = engine.world.get::<&IsoSprite>(entity).unwrap();
+            assert_eq!(sprite.frame, 42.0);
+            assert_eq!(sprite.color, [0.2, 0.4, 0.6, 1.0]);
+        },
+    );
+}
+
+#[test]
+fn guest_can_spawn_sprite_clone() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "spawn_sprite_clone" (func $clone (param i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "template")
+            (data (i32.const 16) "clone")
+            (func (export "update") (param f64)
+                (drop (call $clone (i32.const 0) (i32.const 8) (i32.const 16) (i32.const 5)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.spawn_named("template");
+            let template = *engine.names.get("template").unwrap();
+            engine
+                .world
+                .insert_one(
+                    template,
+                    IsoSprite {
+                        position: Vec3::ZERO,
+                        scale: Vec3::ONE,
+                        texture: "shippingContainerBody".into(),
+                        tilemap: "tilemap".into(),
+                        frame: 7.0,
+                        frame_name: Some("shippingContainerBody_7".into()),
+                        tile_set_size: glam::Vec2::ONE,
+                        anchor: glam::Vec2::new(0.5, 0.67),
+                        frame_offset: Vec3::ZERO,
+                        footprint: vec![],
+                        ghost_group: 0,
+                        color: [0.55, 0.65, 0.95, 1.0],
+                    },
+                )
+                .unwrap();
+
+            rt.update(&mut engine, 0.016).unwrap();
+
+            assert!(engine.has_name("clone"));
+            let clone = *engine.names.get("clone").unwrap();
+            let sprite = engine.world.get::<&IsoSprite>(clone).unwrap();
+            assert_eq!(sprite.texture, "shippingContainerBody");
+            assert_eq!(sprite.frame, 7.0);
+            assert_eq!(sprite.color, [0.55, 0.65, 0.95, 1.0]);
         },
     );
 }

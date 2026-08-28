@@ -125,6 +125,9 @@ const OP_VEHICLE_GOTO: i32 = 73;
 const OP_VEHICLE_STOP: i32 = 74;
 const OP_VEHICLE_SPAWN: i32 = 75;
 const OP_POLL_PATH: i32 = 76;
+const OP_SET_SPRITE_FRAME: i32 = 77;
+const OP_SET_SPRITE_COLOR: i32 = 78;
+const OP_SPAWN_SPRITE_CLONE: i32 = 79;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -285,6 +288,11 @@ impl WorkerWasmRuntime {
             OP_VEHICLE_GOTO => (host.vehicle_goto(&strs[0], ni(0), ni(1)) as f64, None),
             OP_VEHICLE_STOP => (host.vehicle_stop(&strs[0]) as f64, None),
             OP_VEHICLE_SPAWN => (host.vehicle_spawn(&strs[0], &strs[1], nf(0), nf(1)) as f64, None),
+            OP_SET_SPRITE_FRAME => (host.set_sprite_frame(&strs[0], nf(0)) as f64, None),
+            OP_SET_SPRITE_COLOR => {
+                (host.set_sprite_color(&strs[0], nf(0), nf(1), nf(2), nf(3)) as f64, None)
+            }
+            OP_SPAWN_SPRITE_CLONE => (host.spawn_sprite_clone(&strs[0], &strs[1]) as f64, None),
             OP_GET_CAMERA => {
                 let (x, y, s) = host.get_camera();
                 (1.0, Some(enc_f64s(&[x, y, s])))

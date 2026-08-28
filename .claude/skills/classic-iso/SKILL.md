@@ -111,10 +111,23 @@ The canonical formula (one definition, in `classic-core::tilemap`):
 
 ```
 iso_depth(tx, ty, z) = (tx - ty) / horizontal_depth_scale + 0.5 + (z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
-  horizontal_depth_scale  = 2 · max(size_x, size_y)  (tiles per 1.0 iso-depth)
-  HEIGHT_DEPTH_SCALE_M    = 344.46  (z in metres; the metre-space height divisor)
-  PPM_TARGET              = 64.0    (px/m; converts the px mesh/sprite z back to metres)
+  horizontal_depth_scale  = max(HORIZONTAL_DEPTH_SCALE, 2 · max(size_x, size_y))
+                            (tiles per 1.0 iso-depth)
+  HORIZONTAL_DEPTH_SCALE  = 400.0 (legacy fixed divisor; == horizontal_depth_scale for a 200×200 map)
+  HEIGHT_DEPTH_SCALE_M    = 344.46 (z in metres; the metre-space height divisor)
+  PPM_TARGET              = 64.0   (px/m; converts the px mesh/sprite z back to metres)
 ```
+
+**`horizontal_depth_scale` must never fall below 400.**  Depth-mapped sprites
+bake their per-pixel grayscale with the legacy fixed `HORIZONTAL_DEPTH_SCALE`
+(400) horizontal divisor — `classic-assets` `render/materials.py::proxy_axis`
+uses `1/(tile_m · 400)` — so a smaller divisor (e.g. `2·48 = 96` on the
+container/lrvtest maps) makes the sprite's horizontal depth component
+`400/smaller` × too small relative to the terrain: the near (front) corners read
+as *deeper* than the terrain (ghosted) and the far corners read as *nearer*
+(solid) — inverted corner occlusion.  Keep `2·max(size)` only when it exceeds
+400 (large maps whose `tx−ty` span would clip the NE/SW corners, e.g. the lunar
+400×400 → 800).  This is the bug the `shipping-container-cargo` session fixed.
 
 The height term is **`+ z / D`**: the camera basis `back.z = +0.5` means taller
 terrain is *farther* (larger depth).  An earlier sign error (`- z / D`) made
@@ -473,20 +486,32 @@ float cornerDepth = mix(topDepth, bottomDepth, vertexPos.y);
 gl_Position.z = cornerDepth * 2.0 - 1.0;
 ```
 
-### Ghost pass (`draw_iso_sprite`)
+### Two-pass draw (`draw_iso_sprite`, engine order: all normals, then all ghosts)
 
-IsoSprites are drawn with two draw calls:
+The engine drives isometric sprites in **two phases** (all `Normal` passes first,
+then all `Ghost` passes) so sprite-vs-sprite occlusion is resolved by the depth
+buffer, not draw order:
 
-1. **Ghost pass:** `ghostAlpha = 0.4`, `depthFunc(ALWAYS)`, `depthMask(false)`.
-   Renders a translucent silhouette that is visible through occluding terrain.
-   This lets the player see units behind walls.
-
-2. **Normal pass:** `ghostAlpha = 0.0`, `depthFunc(LEQUAL)`, `depthMask(false)`.
+1. **Normal pass:** `ghostAlpha = 0.0`, `depthFunc(LEQUAL)`,
+   `depthMask(depth_map.is_some())` (depth-mapped sprites **write** depth),
+   stencil `ALWAYS` / `REPLACE ghost_group`, `stencilMask(0xFF)`.
    Renders the full-colour sprite on top of terrain, respecting depth occlusion.
 
-Both passes leave `depthMask(false)` to avoid writing to the depth buffer and
-interfering with subsequent draw calls.  `DEPTH_TEST` is enabled only for the
-scope of these two passes, then disabled before returning.
+2. **Ghost pass:** `ghostAlpha = 0.4`, `depthFunc(GREATER)`, `depthMask(false)`,
+   stencil `NOTEQUAL ghost_group` (`ALWAYS` when `ghost_group == 0`),
+   `stencilMask(0x00)`.  Draws the 40%-alpha silhouette **only where the sprite
+   is behind the depth buffer** (occluded by terrain or another sprite), letting
+   the player see units through walls.  The stencil skips pixels the sprite's
+   own group already occluded (a vehicle's body + wheels share a `ghost_group`
+   id so they never ghost through each other).
+
+Both passes restore `depthMask(true)` + `depthFunc(LEQUAL)` and disable
+`DEPTH_TEST`/`STENCIL_TEST` on exit.  The stencil buffer records the per-instance
+`ghost_group` id during the normal pass (`REPLACE`); the ghost pass reads it
+(`NOTEQUAL`).  Sprites with no depth map (`depth_map == None`) do **not** write
+depth in the normal pass (`depthMask(false)`) — occlusion is then draw-order
+only, and the ghost pass uses the same `GREATER` test against whatever the
+terrain/other sprites wrote.
 
 ### Sheet fragment shader (`sheet.frag`)
 
@@ -762,6 +787,14 @@ other (stencil `NOTEQUAL`).  Depth maps are emitted by the Blender exporter
 (gray `0.5` == the ground anchor == `depth_base`), and packed by the ROM
 `xtask`.  All depth maps share one global `DEPTH_RANGE` (classic-assets
 `presets.DEPTH_RANGE`) so several assets can pack into a single depth sheet.
+
+**The depth map's horizontal component is baked with the fixed
+`HORIZONTAL_DEPTH_SCALE` = 400** (`proxy_axis` returns `1/(tile_m · 400)` for
+x/y), so the engine's `horizontal_depth_scale(map)` must be ≥ 400 (see §3) or
+the sprite's near/far corner occlusion inverts.  `gray = 0.5 − dot/0.05`, where
+`dot = axis · (position − anchor)` equals the iso-depth offset of the pixel
+relative to the anchor; the shader decodes
+`gl_FragDepth = depth_base + (0.5 − gray) · depth_range`.
 
 ### Per-pixel normal maps (per-sheet)
 

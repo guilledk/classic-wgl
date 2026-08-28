@@ -86,6 +86,46 @@ macro_rules! install_host_imports {
             },
         )?;
 
+        $linker.func_wrap(
+            m,
+            "set_sprite_frame",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, frame: f64| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().set_sprite_frame(&name, frame)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "set_sprite_color",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             r: f64,
+             g: f64,
+             b: f64,
+             a: f64|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().set_sprite_color(&name, r, g, b, a)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "spawn_sprite_clone",
+            |mut caller: Caller<'_, $host>,
+             t_ptr: i32,
+             t_len: i32,
+             n_ptr: i32,
+             n_len: i32|
+             -> i32 {
+                let template = $read_str(&mut caller, t_ptr, t_len);
+                let name = $read_str(&mut caller, n_ptr, n_len);
+                caller.data_mut().guest_mut().spawn_sprite_clone(&template, &name)
+            },
+        )?;
+
         $linker.func_wrap(m, "mouse", |mut caller: Caller<'_, $host>, out_ptr: i32| -> i32 {
             let (x, y) = caller.data_mut().guest_mut().mouse();
             $write_f64_pair(&mut caller, out_ptr, x, y);

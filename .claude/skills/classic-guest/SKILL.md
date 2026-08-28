@@ -73,6 +73,9 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `names` | `(out_ptr, out_cap) -> i32` | JSON array of names |
 | `set_pos` | `(name_ptr, name_len, x: f64, y: f64, z: f64) -> i32` | write 3D position |
 | `get_pos` | `(name_ptr, name_len, out_ptr) -> i32` | writes `[x, y, z]` as three f64 |
+| `set_sprite_frame` | `(name_ptr, name_len, frame: f64) -> i32` | set a named entity's `IsoSprite` frame index (resolves `frame_name` for packed-atlas textures) |
+| `set_sprite_color` | `(name_ptr, name_len, r: f64, g: f64, b: f64, a: f64) -> i32` | set a named entity's `IsoSprite` tint colour (RGBA `0..=1`) |
+| `spawn_sprite_clone` | `(template_ptr, template_len, name_ptr, name_len) -> i32` | spawn a new `IsoSprite` entity cloned from a template entity's `IsoSprite` + `Transform` |
 | `mouse` | `(out_ptr) -> i32` | screen mouse pos `[x, y]` |
 | `mouse_iso` | `(out_ptr) -> i32` | iso tile coords under cursor `[x, y]` |
 | `iso_to_screen` | `(x: f64, y: f64, out_ptr) -> i32` | project an iso tile coord to screen space `[sx, sy]` (two f64; `0` if no Tilemap) |

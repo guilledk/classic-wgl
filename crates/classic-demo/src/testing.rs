@@ -53,6 +53,12 @@ pub enum TestAction {
     Wait { frames: u64 },
     #[serde(rename = "setCameraIso")]
     SetCameraIso { tx: f32, ty: f32, scale: f32 },
+    #[serde(rename = "setMouseIso")]
+    SetMouseIso { tx: f32, ty: f32 },
+    #[serde(rename = "setEntityPos")]
+    SetEntityPos { name: String, x: f32, y: f32, z: f32 },
+    #[serde(rename = "setSpriteFrame")]
+    SetSpriteFrame { name: String, frame: f32 },
 }
 
 /// Kinds of assertions the test runner supports.
@@ -86,6 +92,9 @@ pub struct TileAssertion {
     /// Expected RGBA (normalized `[0, 1]`) for `PixelAtEntity`.
     #[serde(default)]
     pub color: Option<[f32; 4]>,
+    /// Tile-space `(dx, dy)` offset from the entity anchor for `PixelAtEntity`.
+    #[serde(default)]
+    pub offset: (f32, f32),
 }
 
 /// A scheduled test step: at the given frame, execute actions then run assertions.
@@ -105,6 +114,8 @@ struct TestRunner {
     drag_state: Option<(glam::Vec2, glam::Vec2, u64, u64)>,
     editor_state: Option<(String, i32, String, u32)>,
     complete_reported: bool,
+    pos_override: Option<(String, glam::Vec3)>,
+    frame_override: Option<(String, f32)>,
 }
 
 /// Register the CLASSIC_TEST runner on the engine's test hook (no-op unless
@@ -150,6 +161,21 @@ fn run_frame(
     steps: &[TestStep],
 ) {
     let frame = engine.frame_number();
+
+    // Re-apply any persistent entity-position override (a `setEntityPos`
+    // action) before step processing, so the entity stays put even though the
+    // guest's update closure (which runs earlier in the frame) follows the
+    // mouse every frame.
+    if let Some((ref name, pos)) = runner.pos_override {
+        if let Some(&e) = engine.names.get(name) {
+            if let Ok(mut tf) = engine.world.get::<&mut Transform>(e) {
+                tf.position = pos;
+            }
+        }
+    }
+    if let Some((ref name, frame)) = runner.frame_override {
+        engine.set_sprite_frame(name, frame);
+    }
 
     // Re-apply editor state before step processing so assertions
     // on this frame see the corrected state (tool_buttons on_update
@@ -241,6 +267,34 @@ fn run_frame(
                     if let Some((cx, cy)) = engine.iso_to_screen(*tx, *ty) {
                         engine.set_camera(cx, cy, *scale);
                     }
+                }
+                TestAction::SetMouseIso { tx, ty } => {
+                    if let Some((sx, sy)) = crate::render_order::iso_to_screen_px(engine, *tx, *ty)
+                    {
+                        let (vw, vh) = engine.viewport_size();
+                        engine.input.mouse_pos = glam::Vec2::new(sx, sy);
+                        engine.input.mouse_axis.x = ((sx / vw) - 0.5) * 2.0;
+                        engine.input.mouse_axis.y = ((sy / vh) - 0.5) * 2.0;
+                    }
+                }
+                TestAction::SetEntityPos { name, x, y, z } => {
+                    runner.pos_override = Some((name.clone(), glam::Vec3::new(*x, *y, *z)));
+                    let ok = engine
+                        .names
+                        .get(name)
+                        .and_then(|&e| engine.world.get::<&mut Transform>(e).ok())
+                        .map(|mut tf| {
+                            tf.position = glam::Vec3::new(*x, *y, *z);
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !ok {
+                        classic_core::cl_info!(Chan::Test, "  [SetEntityPos] no entity '{name}'");
+                    }
+                }
+                TestAction::SetSpriteFrame { name, frame } => {
+                    runner.frame_override = Some((name.clone(), *frame));
+                    engine.set_sprite_frame(name, *frame);
                 }
             }
         }
@@ -345,7 +399,9 @@ fn run_frame(
                 AssertKind::PixelAtEntity => {
                     let name = if a.log.is_empty() { "entity" } else { &a.log };
                     let tol = if a.expected <= 0.0 { 0.02 } else { a.expected };
-                    crate::render_order::assert_pixel_at_entity(engine, name, a.color, tol)
+                    crate::render_order::assert_pixel_at_entity(
+                        engine, name, a.color, tol, a.offset,
+                    )
                 }
             };
             let result = format!(

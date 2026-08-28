@@ -113,6 +113,9 @@ var OP_VEHICLE_GOTO = 73;
 var OP_VEHICLE_STOP = 74;
 var OP_VEHICLE_SPAWN = 75;
 var OP_POLL_PATH = 76;
+var OP_SET_SPRITE_FRAME = 77;
+var OP_SET_SPRITE_COLOR = 78;
+var OP_SPAWN_SPRITE_CLONE = 79;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -200,6 +203,15 @@ function envImports() {
         },
         set_pos: function (ptr, len, x, y, z) {
             return hostCall(OP_SET_POS, [readStr(ptr, len)], [x, y, z]).ret | 0;
+        },
+        set_sprite_frame: function (ptr, len, frame) {
+            return hostCall(OP_SET_SPRITE_FRAME, [readStr(ptr, len)], [frame]).ret | 0;
+        },
+        set_sprite_color: function (ptr, len, r, g, b, a) {
+            return hostCall(OP_SET_SPRITE_COLOR, [readStr(ptr, len)], [r, g, b, a]).ret | 0;
+        },
+        spawn_sprite_clone: function (tPtr, tLen, nPtr, nLen) {
+            return hostCall(OP_SPAWN_SPRITE_CLONE, [readStr(tPtr, tLen), readStr(nPtr, nLen)], []).ret | 0;
         },
         get_pos: function (ptr, len, outPtr) {
             var r = hostCall(OP_GET_POS, [readStr(ptr, len)], [outPtr]);
