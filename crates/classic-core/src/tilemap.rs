@@ -257,7 +257,24 @@ pub use classic_pathfinder::bilinear_height;
 /// Horizontal depth divisor in the canonical iso-depth formula
 /// `iso_depth(tx, ty, z) = (tx - ty) / HORIZONTAL_DEPTH_SCALE + 0.5 + z / D`.
 /// One unit of `tx - ty` spans this many iso-depth steps.
+///
+/// Legacy fixed value (== [`horizontal_depth_scale`] for a 200×200 map).
+/// Prefer [`horizontal_depth_scale`] so larger maps are not clipped at the
+/// NE/SW corners.
 pub const HORIZONTAL_DEPTH_SCALE: f32 = 400.0;
+
+/// Horizontal depth divisor for a tilemap of `size_x × size_y`, in the
+/// canonical iso-depth formula
+/// `iso_depth(tx, ty, z) = (tx - ty) / scale + 0.5 + z / D`.
+///
+/// `tx - ty` spans `[-size_y, size_x]`, so `scale = 2 · max(size_x, size_y)`
+/// keeps the horizontal term within `[-0.5, +0.5]` (window depth `[0, 1]`)
+/// for every tile.  A fixed scale smaller than this clips the NE (`tx - ty` at
+/// its maximum) and SW (`tx - ty` at its minimum) corners, since window depth
+/// outside `[0, 1]` maps to clip-z outside `[-1, 1]`.
+pub fn horizontal_depth_scale(size_x: i32, size_y: i32) -> f32 {
+    2.0 * size_x.max(size_y).max(1) as f32
+}
 
 /// Height depth divisor in the canonical iso-depth formula, for `z` in
 /// **tileset pixels** (`height_data · height_scale`).

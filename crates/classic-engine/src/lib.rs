@@ -34,8 +34,8 @@ use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{
-    bilinear_height, build_mesh, build_tile_texture, sample_height_mesh, HEIGHT_DEPTH_SCALE_PX,
-    HORIZONTAL_DEPTH_SCALE,
+    bilinear_height, build_mesh, build_tile_texture, horizontal_depth_scale, sample_height_mesh,
+    HEIGHT_DEPTH_SCALE_PX, HORIZONTAL_DEPTH_SCALE,
 };
 use classic_core::types::AnimationData;
 use classic_core::types::FrameTable;
@@ -2011,17 +2011,22 @@ impl Engine {
         for f in pre.iter_mut() {
             f(self);
         }
+        pre.append(&mut self.pre_update_hooks);
         self.pre_update_hooks = pre;
 
         // Take-restore dance: closures fire with &mut Engine, but the Vec
         // is owned by Engine. Taking means closures can call on_update()
         // without borrow conflicts. Restoring preserves them for next frame.
+        // Closures registered *during* the loop (e.g. the tilemap's mouse-iso
+        // solve, installed lazily by `commit_terrain`) land in the emptied
+        // `self.update_fns`; append them before restoring so they survive.
         // Handlers use iter_mut(), NOT std::mem::take — they must survive
         // across frames (click, enter, exit, selection).
         let mut fns = std::mem::take(&mut self.update_fns);
         for f in fns.iter_mut() {
             f(self);
         }
+        fns.append(&mut self.update_fns);
         self.update_fns = fns;
 
         // Wheeled-vehicle simulation runs after the guest update closures
@@ -2289,7 +2294,9 @@ impl Engine {
                 tex_dim,
                 anchor_px,
             );
-            let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
+            let h_depth = horizontal_depth_scale(tilemap.size_x, tilemap.size_y);
+            let depth_corners =
+                Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint, h_depth);
             // Per-sheet normal/depth companions (from the resolved frame's
             // sheet) win; fall back to the per-texture `entry.normal`/`depth`
             // manifest fields for assets not on a shared atlas.
@@ -2312,7 +2319,7 @@ impl Engine {
                 uv,
                 depth_corners,
                 depth_map,
-                depth_base: Self::compute_iso_base_depth(tf.position),
+                depth_base: Self::compute_iso_base_depth(tf.position, h_depth),
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,
             });
@@ -2375,7 +2382,10 @@ impl Engine {
                                 ambient: self.light_ambient,
                                 light_dir: self.light_dir,
                                 light_color: self.light_color,
-                                depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+                                depth_scale: [
+                                    horizontal_depth_scale(nav.size_x, nav.size_y),
+                                    HEIGHT_DEPTH_SCALE_PX,
+                                ],
                                 normal_matrix,
                             },
                             false,
@@ -2443,7 +2453,10 @@ impl Engine {
                         ambient: self.light_ambient,
                         light_dir: self.light_dir,
                         light_color: self.light_color,
-                        depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_PX],
+                        depth_scale: [
+                            horizontal_depth_scale(tm.size_x, tm.size_y),
+                            HEIGHT_DEPTH_SCALE_PX,
+                        ],
                         normal_matrix,
                     },
                     self.show_grid,
@@ -3424,14 +3437,18 @@ impl Engine {
     /// Compute the anchor-plane iso depth for a sprite position (the depth a
     /// depth map's 0.5 grayscale corresponds to), in **window space** `[0, 1]`.
     /// Matches the `base_depth` term in [`Self::compute_iso_depth_corners`].
-    fn compute_iso_base_depth(pos: Vec3) -> f32 {
-        (pos.x - pos.y) / HORIZONTAL_DEPTH_SCALE + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX
+    /// `h_depth` is the tilemap's horizontal depth scale (see
+    /// [`classic_core::tilemap::horizontal_depth_scale`]).
+    fn compute_iso_base_depth(pos: Vec3, h_depth: f32) -> f32 {
+        (pos.x - pos.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX
     }
 
     /// Compute iso depth corners for the footprint (matches TS `IsoSprite.rawDraw()`),
-    /// in **window space** `[0, 1]`.
-    fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2]) -> [f32; 4] {
-        let base_depth = Self::compute_iso_base_depth(pos);
+    /// in **window space** `[0, 1]`.  `h_depth` is the tilemap's horizontal depth
+    /// scale, kept identical to the terrain's `depth_scale.x` uniform so sprite
+    /// occlusion matches the tilemap.
+    fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2], h_depth: f32) -> [f32; 4] {
+        let base_depth = Self::compute_iso_base_depth(pos, h_depth);
         let default_footprint = [
             glam::Vec2::new(0.5, -0.5),
             glam::Vec2::new(0.5, 0.5),
@@ -3443,9 +3460,7 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / HORIZONTAL_DEPTH_SCALE
-                + 0.5
-                + pos.z / HEIGHT_DEPTH_SCALE_PX;
+            let d = (pos.x + pt.x - pos.y - pt.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_PX;
             raw_depths[i] = d.min(base_depth);
         }
 
@@ -3600,6 +3615,8 @@ mod tests {
     fn compute_iso_base_depth_matches_anchor_plane_formula() {
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
         let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE + 0.5 + 64.0 / HEIGHT_DEPTH_SCALE_PX;
-        assert!((Engine::compute_iso_base_depth(pos) - expected).abs() < 1e-9);
+        assert!(
+            (Engine::compute_iso_base_depth(pos, HORIZONTAL_DEPTH_SCALE) - expected).abs() < 1e-9
+        );
     }
 }
