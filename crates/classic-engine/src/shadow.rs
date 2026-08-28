@@ -1,9 +1,23 @@
 //! Directional (sun) shadow-mapping math: fit an orthographic light-space box
-//! around the tilemap world AABB and build the `view * proj` matrix that maps
-//! world space (the lit shaders' `worldPos`) to light clip space.
+//! around the tilemap AABB and build the `view * proj` matrix that maps
+//! **light space** (the lit shaders' `vLightPos`) to light clip space.
 //!
-//! The box is derived from the exact world transform used by the terrain vertex
-//! shader: `worldPos = model * iso_matrix * vertex; worldPos.y -= vertex.z`.
+//! # The two spaces
+//!
+//! The renderer carries terrain positions in two different spaces, and mixing
+//! them silently produces a shadow map that compiles, runs, and casts nothing:
+//!
+//! | Space | Transform | Up axis | Used by |
+//! |---|---|---|---|
+//! | **light** | `model * iso_matrix * vertex` | `+Z` | `light_dir`, `vNormal`, `vLightPos`, this module |
+//! | **screen** | the above, then `y -= vertex.z` | `(0,-1,1)/√2` | `vWorldPos`, rasterised geometry |
+//!
+//! The `y -= vertex.z` shear is what makes height read as height in an
+//! isometric view, but it leaves the result carrying height in *both* y and z.
+//! `light_dir` is authored with +Z up (`classic-demo/src/lighting.rs` sets
+//! `d.z = sin(elevation)`) and `normal_matrix` is `(mat3(iso))⁻ᵀ`, so both live
+//! in light space. The shadow map must too.
+//!
 //! `model` is the tilemap translation and `iso_matrix` is `S(scale) * iso`, the
 //! same matrices `draw_tilemap` feeds the shader.
 
@@ -13,10 +27,20 @@ use glam::{Mat4, Vec3, Vec4};
 /// (protects map edges and the near/far planes).
 pub const SHADOW_PADDING: f32 = 64.0;
 
-/// Depth bias (light NDC units) added to the stored depth before the manual
-/// shadow compare in the shaders.  Kept small: the shadow pass's polygon offset
-/// now carries the acne suppression.
-pub const SHADOW_BIAS: f32 = 0.0002;
+/// Constant depth bias (light NDC units) added to the stored depth before the
+/// manual shadow compare.  Deliberately small — it only mops up depth
+/// quantisation; [`SHADOW_NORMAL_OFFSET`] does the real acne suppression.
+///
+/// A large depth bias cannot fix acne without also detaching shadows from their
+/// casters ("peter-panning"), because the depth error it must cover scales with
+/// the surface's slope relative to the light and is unbounded at grazing
+/// angles.  Offsetting along the normal is bounded and geometry-relative.
+pub const SHADOW_BIAS: f32 = 0.00025;
+
+/// Normal-offset bias, in shadow-map texels.  Before sampling, the receiver is
+/// pushed along its surface normal by this many texel widths, so a surface
+/// never samples the texel it itself wrote.
+pub const SHADOW_NORMAL_OFFSET: f32 = 1.5;
 
 /// Diffuse fraction a fully-shadowed pixel keeps (`0..=1`).  Lit pixels keep
 /// `1.0`.
@@ -28,21 +52,35 @@ pub const SHADOW_BIAS: f32 = 0.0002;
 /// old baked terrain darkening) only once cast shadows are confirmed correct.
 pub const SHADOW_STRENGTH: f32 = 0.0;
 
-/// The directional light's view/projection matrices in world space.
+/// The directional light's view/projection matrices in light space.
 pub struct LightMatrix {
     pub view: Mat4,
     pub proj: Mat4,
-    /// `proj * view` — maps world space to light clip space.
+    /// `proj * view` — maps light space to light clip space.
     pub view_proj: Mat4,
+    /// Width of one shadow-map texel, in world units.  Normal-offset bias
+    /// scales with this: the receiver is nudged along its normal by roughly a
+    /// texel, which is exactly the distance over which the stored depth is
+    /// ambiguous.
+    pub world_texel: f32,
 }
 
-/// Compute the world-space position of a tile-grid point `(x, y, z)` (z in px),
-/// replicating the terrain vertex shader's world transform.
+/// Compute the **light-space** position of a tile-grid point `(x, y, z)`
+/// (z in px): `model * iso_matrix * vertex`, with +Z up.
+///
+/// This is deliberately *not* the position the terrain rasterises at.  The
+/// vertex shader additionally applies `worldPos.y -= vertex_pos.z`, an
+/// isometric shear that makes height visible on screen by pushing tall geometry
+/// up the y axis.  That sheared space carries height in **both** y and z, so
+/// "up" in it is `(0,-1,1)/√2` — and projecting it along a `light_dir` authored
+/// with +Z up presents the sun at ~2.7° instead of 30°, which casts no usable
+/// shadow.  See `shadow_space_sees_the_sun_at_its_authored_elevation`.
+///
+/// `light_dir`, `vNormal` and this function must all agree on +Z up; only the
+/// rasterised `vWorldPos` carries the shear.
 fn world_corner(model: &Mat4, iso_matrix: &Mat4, p: Vec3) -> Vec3 {
     let v = *model * (*iso_matrix * Vec4::new(p.x, p.y, p.z, 1.0));
-    let mut out = Vec3::new(v.x, v.y, v.z);
-    out.y -= p.z;
-    out
+    Vec3::new(v.x, v.y, v.z)
 }
 
 /// The four world-space corners of a sprite billboard (a unit quad in the
@@ -73,9 +111,11 @@ fn sprite_billboard_corners(model: &Mat4) -> [Vec3; 4] {
 ///   `light_direction`); normalized internally.
 /// * `padding` — world-space margin added around the box (protects the map
 ///   edges and reduces clamp artifacts).
-/// * `casters` — world-space model matrices of the sprite shadow casters, whose
+/// * `casters` — light-space model matrices of the sprite shadow casters, whose
 ///   billboards extend "up" out of the terrain plane and must fit inside the
 ///   box or their shadows clip at the near plane.
+/// * `shadow_map_size` — resolution of the depth target, used to report
+///   [`LightMatrix::world_texel`].
 #[allow(clippy::too_many_arguments)]
 pub fn fit_directional_light_matrix(
     model: &Mat4,
@@ -86,6 +126,7 @@ pub fn fit_directional_light_matrix(
     light_dir: Vec3,
     padding: f32,
     casters: &[Mat4],
+    shadow_map_size: f32,
 ) -> LightMatrix {
     let light_dir = {
         let d = light_dir.normalize_or_zero();
@@ -147,8 +188,9 @@ pub fn fit_directional_light_matrix(
 
     let proj = Mat4::orthographic_rh(left, right, bottom, top, near, far);
     let view_proj = proj * view;
+    let world_texel = (right - left).max(top - bottom) / shadow_map_size.max(1.0);
 
-    LightMatrix { view, proj, view_proj }
+    LightMatrix { view, proj, view_proj, world_texel }
 }
 
 #[cfg(test)]
@@ -191,6 +233,7 @@ mod tests {
             Vec3::new(0.45, -0.35, 0.82),
             10.0,
             &[],
+            SHADOW_MAP_SIZE_F,
         );
         assert_corners_inside(&m, &model, &iso, 200.0, 0.0);
     }
@@ -208,6 +251,7 @@ mod tests {
             Vec3::new(0.45, -0.35, 0.82),
             50.0,
             &[],
+            SHADOW_MAP_SIZE_F,
         );
         assert_corners_inside(&m, &model, &iso, 400.0, zmax);
     }
@@ -215,7 +259,17 @@ mod tests {
     #[test]
     fn vertical_light_uses_alternate_up() {
         let (model, iso) = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
-        let m = fit_directional_light_matrix(&model, &iso, 100.0, 100.0, 500.0, Vec3::Z, 10.0, &[]);
+        let m = fit_directional_light_matrix(
+            &model,
+            &iso,
+            100.0,
+            100.0,
+            500.0,
+            Vec3::Z,
+            10.0,
+            &[],
+            SHADOW_MAP_SIZE_F,
+        );
         assert_corners_inside(&m, &model, &iso, 100.0, 500.0);
     }
 
@@ -238,6 +292,7 @@ mod tests {
             Vec3::new(0.45, -0.35, 0.82),
             64.0,
             &[caster],
+            SHADOW_MAP_SIZE_F,
         );
         for c in sprite_billboard_corners(&caster) {
             let clip = m.view_proj * Vec4::new(c.x, c.y, c.z, 1.0);
@@ -251,9 +306,8 @@ mod tests {
     /// The basetest sun: azimuth 120°, elevation 30°, already unit length.
     const SUN: Vec3 = Vec3::new(0.75, 0.433_012_7, 0.5);
 
-    /// `classic_gfx::SHADOW_MAP_SIZE` as a float (classic-engine does not
-    /// depend on classic-gfx for pure math).
-    const SHADOW_MAP_SIZE_F: f32 = 2048.0;
+    /// The real depth-target resolution, so the tests cannot drift from it.
+    const SHADOW_MAP_SIZE_F: f32 = classic_gfx::SHADOW_MAP_SIZE as f32;
 
     /// **Space contract.**  `light_dir` is authored in the unsheared cartesian
     /// space where +Z is up (`classic-demo/src/lighting.rs` sets
@@ -293,7 +347,17 @@ mod tests {
     #[test]
     fn caster_and_the_ground_it_shadows_share_a_shadow_texel() {
         let (model, iso) = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
-        let m = fit_directional_light_matrix(&model, &iso, 200.0, 200.0, 0.0, SUN, 64.0, &[]);
+        let m = fit_directional_light_matrix(
+            &model,
+            &iso,
+            200.0,
+            200.0,
+            0.0,
+            SUN,
+            64.0,
+            &[],
+            SHADOW_MAP_SIZE_F,
+        );
 
         // A terrain vertex at tile (100,100) standing `h` px proud of the map.
         let caster_tile = Vec3::new(100.0, 100.0, 0.0);
@@ -328,9 +392,14 @@ mod tests {
         );
     }
 
+    /// The light-space transform must carry height in **z alone**.
+    ///
+    /// This test previously asserted the opposite — that raising a tile also
+    /// shifted world y down, replicating the vertex shader's isometric shear.
+    /// That shear belongs to the rasterised `vWorldPos` only; applying it here
+    /// is what made the sun read as 2.7° elevation and the shadow map useless.
     #[test]
-    fn corner_world_transform_matches_shader_convention() {
-        // The world transform must reproduce the shader's `y -= z` height lift.
+    fn light_space_carries_height_in_z_only() {
         let iso = cartesian_to_iso_4().inverse();
         let iso_matrix = Mat4::from_scale(Vec3::new(45.0, 45.0, 1.0)) * iso;
         let model = Mat4::from_translation(Vec3::new(10.0, 20.0, 0.0));
@@ -338,9 +407,9 @@ mod tests {
         let flat = world_corner(&model, &iso_matrix, Vec3::new(3.0, 4.0, 0.0));
         let raised = world_corner(&model, &iso_matrix, Vec3::new(3.0, 4.0, 500.0));
 
-        // Raising the tile by 500 px shifts world y down by 500 and z up by 500.
-        assert!((raised.y - flat.y + 500.0).abs() < 1e-3);
-        assert!((raised.x - flat.x).abs() < 1e-3);
-        assert!((raised.z - flat.z - 500.0).abs() < 1e-3);
+        // Raising the tile by 500 px moves it 500 px along +Z and nowhere else.
+        assert!((raised.x - flat.x).abs() < 1e-3, "height leaked into x");
+        assert!((raised.y - flat.y).abs() < 1e-3, "height leaked into y (the iso shear)");
+        assert!((raised.z - flat.z - 500.0).abs() < 1e-3, "height did not land in z");
     }
 }

@@ -4,6 +4,7 @@ precision mediump float;
 
 in highp vec2 vTexCoord;
 in highp vec3 vWorldPos;
+in highp vec3 vLightPos;
 
 uniform sampler2D tex_sampler;
 uniform sampler2D depth_sampler;
@@ -42,6 +43,7 @@ uniform float shadow_strength;
 uniform vec2 shadow_texel;
 uniform float use_shadow;
 uniform float shadow_debug;
+uniform float shadow_normal_offset;
 
 #define MAX_LIGHTS 256
 
@@ -102,8 +104,12 @@ float shadowSample(vec2 suv, float fragDepth) {
     return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
 }
 
-float shadowFactor(vec3 worldPos) {
-    vec4 lp = light_view_proj * vec4(worldPos, 1.0);
+// `n` is the receiver's surface normal in light space.  Nudging the sample
+// point along it by ~a texel keeps a surface from sampling the very texel it
+// wrote, which is what causes shadow acne, without detaching the shadow from
+// its caster the way a large depth bias would.
+float shadowFactor(vec3 lightPos, vec3 n) {
+    vec4 lp = light_view_proj * vec4(lightPos + n * shadow_normal_offset, 1.0);
     vec3 ndc = lp.xyz / lp.w;
     vec2 suv = ndc.xy * 0.5 + 0.5;
     if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
@@ -186,29 +192,34 @@ void main(void ) {
         gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
     }
 
+    // World-space normal from the sheet's normal-map companion.  A
+    // (0.5,0.5,0.5) texel decodes to (0,0,0) and marks an *unlit* region (e.g.
+    // the rocket flame), which keeps flat albedo and skips shading entirely.
+    vec3 rawNormal = vec3(0.0);
+    if (use_normal_map > 0.5) {
+        rawNormal = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).rgb * 2.0 - 1.0;
+    }
+    bool lit = dot(rawNormal, rawNormal) > 0.001;
+    // Normal-offset bias needs a direction even where the sprite is unlit or
+    // has no normal map; away from the terrain (+Z) is the safe default.
+    vec3 n = lit ? normalize(rawNormal) : vec3(0.0, 0.0, 1.0);
+
     // Bring-up diagnostic (CLASSIC_SHADOW_DEBUG): sun visibility only.  The
     // alpha silhouette and iso depth are kept so the sprite still occludes
     // correctly and its outline stays readable against the terrain.
     if (shadow_debug > 0.5) {
-        float vis = use_shadow > 0.5 ? shadowFactor(vWorldPos) : 1.0;
+        float vis = use_shadow > 0.5 ? shadowFactor(vLightPos, n) : 1.0;
         fragColor = vec4(vec3(vis), color.a);
         return;
     }
 
-    if (use_normal_map > 0.5) {
-        vec3 n = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).rgb * 2.0 - 1.0;
-        // Unlit sentinel: a (0.5,0.5,0.5) texel decodes to (0,0,0) and skips the
-        // Lambertian term, so emissive sprite regions (e.g. the rocket flame)
-        // stay flat albedo instead of being shaded.
-        if (dot(n, n) > 0.001) {
-            n = normalize(n);
-            float diff = max(dot(n, light_direction), 0.0);
-            if (use_shadow > 0.5) {
-                diff *= shadowFactor(vWorldPos);
-            }
-            color.rgb *= ambient_color + diff * light_color;
-            color.rgb += evaluateLights(n, vWorldPos);
+    if (lit) {
+        float diff = max(dot(n, light_direction), 0.0);
+        if (use_shadow > 0.5) {
+            diff *= shadowFactor(vLightPos, n);
         }
+        color.rgb *= ambient_color + diff * light_color;
+        color.rgb += evaluateLights(n, vWorldPos);
     }
     if (ghost_alpha > 0.0) {
         color.a = ghost_alpha;
