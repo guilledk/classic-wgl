@@ -149,8 +149,9 @@ Interleaved vertex attribs (36 bytes/vertex): `vertexPos`(3f, offset 0),
 `mapCoord`(2f, offset 12), `tileId`(1f, offset 20, >0.5 = wall), `normal`(3f, offset 24).
 
 Vertex shader: `projectionMatrix * cameraMatrix * modelMatrix * isoMatrix * vertexPos`,
-then `worldPos.y -= vertexPos.z` for height correction, then the canonical
-iso-depth formula sets `gl_Position.z` in window space:
+then `worldPos.y -= vertexPos.z` for height correction (**rasterisation only** —
+this shear must never reach lighting or the shadow map, see §17), then the
+canonical iso-depth formula sets `gl_Position.z` in window space:
 
 ```glsl
 highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
@@ -651,7 +652,7 @@ Three places must agree exactly, or a sprite falls in its own shadow:
   `bind_iso_sprite` bind it via `Gfx::bind_shadow` (`use_shadow = 0` when
   `None`).
 
-### Bias — two different mechanisms, on purpose
+### Bias — three different mechanisms, on purpose
 
 - **Terrain casters**: constant polygon offset `(0.0, 1.0)` only.  A
   slope-scaled factor is unbounded as the depth slope grows; the old

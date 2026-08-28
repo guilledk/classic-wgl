@@ -170,7 +170,15 @@ CLASSIC_LOG=path=trace,nav=debug,-frame
 
 # Texture missing / black screen: trace asset + GFX
 CLASSIC_LOG=asset=debug,gfx=trace,glstate=trace,-frame
+
+# Shadows/lighting wrong: isolate sun visibility, drop the UI, A/B the pass
+CLASSIC_SHADOW_DEBUG=1 CLASSIC_NO_UI=1        # white = lit, black = occluded
+CLASSIC_SHADOWS=0                              # disable the shadow pass entirely
 ```
+
+`CLASSIC_SHADOW_DEBUG` / `CLASSIC_NO_UI` / `CLASSIC_SHADOWS` are not
+`CLASSIC_LOG` channels — they change what is rendered.  See the shadow bring-up
+playbook in §8.
 
 ---
 
@@ -434,6 +442,54 @@ CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check \
 4. Common root causes: sort order formula change (affects `order` field
    for every item), camera matrix order change (affects all `model`
    matrices), entity count change in render list.
+
+### Shadows / lighting look wrong (bring-up playbook)
+
+This is a distinct workflow because a partial-strength lighting effect can be
+**completely broken and still look plausible**.  A non-functional shadow map
+survived a full session of "verification" this way.
+
+1. **Turn the effect to full strength.**  Set
+   `SHADOW_STRENGTH = 0.0` (`classic-engine/src/shadow.rs`) so a shadowed pixel
+   is hard black.  At the shipped `0.4` — and especially the old `0.65` —
+   "broken" and "subtle" are indistinguishable by eye *and* by pixel diff.
+2. **Isolate the term.**  `CLASSIC_SHADOW_DEBUG=1` renders the raw sun
+   visibility factor (white = lit, black = occluded) with no albedo, ambient,
+   Lambert term or point lights to hide behind.  Add `CLASSIC_NO_UI=1` to drop
+   the editor/HUD layer.
+3. **Render to a scratch dir and look at the PNG.**  Aggregate metrics cannot
+   distinguish "subtle" from "absent":
+   ```bash
+   CLASSIC_ROM=rom:basetest CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 \
+   CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
+   CLASSIC_NO_UI=1 CLASSIC_SHADOW_DEBUG=1 \
+   CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=/tmp/shot CLASSIC_GOLDEN_PNG=1 \
+   LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 cargo run -p classic-desktop
+   ```
+4. **A/B against `CLASSIC_SHADOWS=0`** and count changed pixels.  Use
+   `-alpha off`, or ImageMagick silently under-reports:
+   ```bash
+   magick a.png b.png -alpha off -compose difference -composite -colorspace Gray \
+     -threshold 2% -format "%[fx:int(mean*w*h)] px changed\n" info:
+   ```
+   Healthy `basetest` is ~110k px (12%).  Under ~5k means it is not working.
+5. **Verify impressions numerically.**  Simultaneous contrast is real: adding a
+   large shadow makes unchanged ground *look* darker.  Probe exact pixels with
+   `magick f.png -format '%[pixel:p{X,Y}]' info:` before believing your eyes.
+6. **Sweep the sun.**  Use the light widget's elevation `-` buttons
+   interactively.  Low sun angles are the regime that was previously
+   degenerate; bugs that hide at 60° are obvious at 20°.
+
+Read `classic-gfx` §17 first — the light-space vs screen-space distinction is
+the root cause of every shadow bug found so far.  Regression signatures:
+
+| Symptom | Cause |
+|---|---|
+| Speckled / diagonally-striped ground | acne; receiver normal-offset bias regressed |
+| Sprites stippled in the debug view | billboard self-shadowing; sprite slope-scaled offset regressed |
+| Shadows detached from caster bases | peter-panning; bias too large |
+| Shadows vanish as sun elevation drops | positions are being projected in screen space again |
+| Sprite shadows collapse to a puddle at their feet | billboard unprojection broke |
 
 ---
 
