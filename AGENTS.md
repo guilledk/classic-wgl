@@ -126,8 +126,15 @@ plans/
   Each binds a named shader, sets projection/camera/model uniforms, and draws.
   **Important**: `begin_frame` does NOT enable `DEPTH_TEST` globally — tilemap/iso_sprite
   toggle it within their scopes.  The UI/SDF phase runs with depth test off; layering is
-  purely draw-order (z-sort).  Enabling it globally depth-rejects UI under ortho projection.
-  See `classic-gfx` skill.
+   purely draw-order (z-sort).  Enabling it globally depth-rejects UI under ortho projection.
+   See `classic-gfx` skill.
+- **Dynamic lights (UBO)**: beyond the Lambertian sun (`light_ambient`/`light_dir`/
+  `light_color`), the engine maintains a pooled set of point lights
+  (`Engine.light_pool`, `classic-engine/src/light.rs`) uploaded each frame to a `std140`
+  `LightBlock` UBO consumed by `sheet.frag`/`iso_tilemap.frag` (shared
+  `evaluateLight`).  `Engine::iso_to_world(x, y, elevation)` is the single iso-tile →
+  light-world-space conversion.  Point lights are currently **unoccluded** (no shadows).
+  See `classic-gfx` §16, `classic-ecs` ("Dynamic lights"), `classic-iso` §13.
 - **UI layer** (`crates/classic-engine/src/ui.rs`) is a retained-mode layout system with
   anchor-based positioning.  `UIManager` holds a root container and provides factory methods
   (`spawn_container`, `spawn_sdf_text`, `spawn_array`, `spawn_padding`, `spawn_sprite`,

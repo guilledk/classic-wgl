@@ -4,7 +4,8 @@ precision mediump float;
 
 in mediump vec2 vMapCoord;
 in mediump float vTileId;
-in mediump vec3 vNormal;
+in highp vec3 vNormal;
+in highp vec3 vWorldPos;
 
 uniform sampler2D map_data;
 uniform vec2 map_size;
@@ -27,7 +28,57 @@ uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
 
+#define MAX_LIGHTS 256
+
+struct Light {
+    vec4 pos_radius;
+    vec4 color_intensity;
+    vec4 dir_cone;
+};
+
+layout(std140) uniform LightBlock {
+    vec4 count;
+    Light lights[MAX_LIGHTS];
+} u_lights;
+
 out vec4 fragColor;
+
+vec3 evaluateLight(Light l, vec3 n, vec3 p) {
+    vec3 toLight = l.pos_radius.xyz - p;
+    float dist = length(toLight);
+    vec3 L = toLight / max(dist, 0.0001);
+    float radius = l.pos_radius.w;
+    // Soft windowed falloff: `saturate(1 - (d/r)^2)^2` gives a smooth, natural
+    // gradient with no hard circular edge (vs a linear `1 - d/r` blob).
+    float attenuation;
+    if (radius <= 0.0) {
+        attenuation = 1.0;
+    } else {
+        float d = dist / radius;
+        attenuation = clamp(1.0 - d * d, 0.0, 1.0);
+        attenuation *= attenuation;
+    }
+    float cone = 1.0;
+    if (l.dir_cone.w > 0.0) {
+        float cosAngle = cos(l.dir_cone.w);
+        float cosTheta = dot(L, normalize(l.dir_cone.xyz));
+        cone = smoothstep(cosAngle * 0.6, cosAngle, cosTheta);
+    }
+    float diff = max(dot(n, L), 0.0);
+    return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;
+}
+
+vec3 evaluateLights(vec3 n, vec3 p) {
+    vec3 acc = vec3(0.0);
+    int cnt = int(u_lights.count.x + 0.5);
+    for (int i = 0; i < MAX_LIGHTS; i++) {
+        if (i >= cnt) {
+            break;
+        }
+        acc += evaluateLight(u_lights.lights[i], n, p);
+    }
+    return acc;
+}
 
 float getMapData(vec2 pos) {
     vec4 rawData = texture(map_data, pos);
@@ -79,8 +130,10 @@ void main(void ) {
 
     if (color.a < 0.01) discard;
 
-    float diff = max(dot(normalize(vNormal), light_direction), 0.0);
+    vec3 n = normalize(vNormal);
+    float diff = max(dot(n, light_direction), 0.0);
     color.rgb *= ambient_color + diff * light_color;
+    color.rgb += evaluateLights(n, vWorldPos);
 
     if (show_grid > 0 && selection_mode == -1 && vTileId <= 0.5) {
         vec2 tileCoord = vMapCoord * map_size;

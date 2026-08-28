@@ -139,6 +139,13 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
         editor::init_height_widget(&mut e, &state);
         editor::init_vehicle_widget(&mut e);
         lighting::init_light_widget(&mut e, &state);
+        // The test-light widget is interactive-only (it spawns a pooled light
+        // at the mouse), so it stays out of the deterministic headless/golden
+        // render path.
+        let env = classic_engine::env_config::EnvConfig::get();
+        if !env.headless && !env.test_active() && !env.golden_active() {
+            lighting::init_test_light_widget(&mut e, &state);
+        }
         editor::init_tile_palette(&mut e, &state);
         editor::init_nav_palette(&mut e, &state);
         e.init_nav_mesh_render();

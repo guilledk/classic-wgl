@@ -10,6 +10,7 @@ uniform float use_iso_depth;
 uniform vec4 iso_depth_corners;
 
 out highp vec2 vTexCoord;
+out highp vec3 vWorldPos;
 
 void main(void ) {
     gl_Position = projection_matrix * camera_matrix * model_matrix * vertex_pos;
@@ -21,4 +22,5 @@ void main(void ) {
         gl_Position.z = cornerDepth * 2.0 - 1.0;
     }
     vTexCoord = tex_coord;
+    vWorldPos = (model_matrix * vertex_pos).xyz;
 }

@@ -3,6 +3,7 @@
 precision mediump float;
 
 in highp vec2 vTexCoord;
+in highp vec3 vWorldPos;
 
 uniform sampler2D tex_sampler;
 uniform sampler2D depth_sampler;
@@ -34,7 +35,57 @@ uniform float selected;
 uniform vec3 selection_color;
 uniform vec2 outline_delta;
 
+#define MAX_LIGHTS 256
+
+struct Light {
+    vec4 pos_radius;
+    vec4 color_intensity;
+    vec4 dir_cone;
+};
+
+layout(std140) uniform LightBlock {
+    vec4 count;
+    Light lights[MAX_LIGHTS];
+} u_lights;
+
 out vec4 fragColor;
+
+vec3 evaluateLight(Light l, vec3 n, vec3 p) {
+    vec3 toLight = l.pos_radius.xyz - p;
+    float dist = length(toLight);
+    vec3 L = toLight / max(dist, 0.0001);
+    float radius = l.pos_radius.w;
+    // Soft windowed falloff: `saturate(1 - (d/r)^2)^2` gives a smooth, natural
+    // gradient with no hard circular edge (vs a linear `1 - d/r` blob).
+    float attenuation;
+    if (radius <= 0.0) {
+        attenuation = 1.0;
+    } else {
+        float d = dist / radius;
+        attenuation = clamp(1.0 - d * d, 0.0, 1.0);
+        attenuation *= attenuation;
+    }
+    float cone = 1.0;
+    if (l.dir_cone.w > 0.0) {
+        float cosAngle = cos(l.dir_cone.w);
+        float cosTheta = dot(L, normalize(l.dir_cone.xyz));
+        cone = smoothstep(cosAngle * 0.6, cosAngle, cosTheta);
+    }
+    float diff = max(dot(n, L), 0.0);
+    return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;
+}
+
+vec3 evaluateLights(vec3 n, vec3 p) {
+    vec3 acc = vec3(0.0);
+    int cnt = int(u_lights.count.x + 0.5);
+    for (int i = 0; i < MAX_LIGHTS; i++) {
+        if (i >= cnt) {
+            break;
+        }
+        acc += evaluateLight(u_lights.lights[i], n, p);
+    }
+    return acc;
+}
 
 vec2 tileUv(float tile_id_flat, vec2 tex_coord) {
     vec2 tile_id = vec2(floor(mod(tile_id_flat, tile_set_size.x)), floor(tile_id_flat / tile_set_size.x));
@@ -110,6 +161,7 @@ void main(void ) {
             n = normalize(n);
             float diff = max(dot(n, light_direction), 0.0);
             color.rgb *= ambient_color + diff * light_color;
+            color.rgb += evaluateLights(n, vWorldPos);
         }
     }
     if (ghost_alpha > 0.0) {

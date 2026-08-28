@@ -747,3 +747,65 @@ impl UiAnchor {
         }
     }
 }
+
+/// Kind of a dynamic light.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightKind {
+    #[default]
+    Point,
+    Spot,
+}
+
+/// A dynamic point/spot light in the shared world space consumed by the lit
+/// shaders (`sheet.frag`, `iso_tilemap.frag`).
+///
+/// `kind` selects point (omnidirectional) vs spot (directional cone).  Point
+/// lights ignore the spot fields (`dir`, `cone_angle`); the GPU `std140`
+/// representation encodes the kind as a `cone_angle <= 0` sentinel so both
+/// kinds share one layout.  Spotlights are future-proofed here but not yet
+/// emitted by any system.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct Light {
+    #[serde(default)]
+    pub kind: LightKind,
+    /// World-space position (cartesian pixel space, shared with the tilemap and
+    /// sprite `worldPos` varyings).
+    pub position: Vec3,
+    /// Linear RGB colour.
+    pub color: [f32; 3],
+    /// Scalar multiplier applied to `color`.
+    #[serde(default = "default_light_intensity")]
+    pub intensity: f32,
+    /// Attenuation radius in world units; `<= 0` disables distance falloff.
+    #[serde(default = "default_light_radius")]
+    pub radius: f32,
+    /// Spot direction (world space); ignored by point lights.
+    #[serde(default)]
+    pub dir: Vec3,
+    /// Spot half-angle in radians; `<= 0` encodes a point (omnidirectional) light.
+    #[serde(default)]
+    pub cone_angle: f32,
+}
+
+fn default_light_intensity() -> f32 {
+    1.0
+}
+
+fn default_light_radius() -> f32 {
+    200.0
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Self {
+            kind: LightKind::Point,
+            position: Vec3::ZERO,
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            radius: 200.0,
+            dir: Vec3::ZERO,
+            cone_angle: 0.0,
+        }
+    }
+}

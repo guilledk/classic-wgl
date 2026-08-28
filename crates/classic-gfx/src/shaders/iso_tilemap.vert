@@ -20,7 +20,8 @@ uniform float ppm;
 
 out mediump vec2 vMapCoord;
 out mediump float vTileId;
-out mediump vec3 vNormal;
+out highp vec3 vNormal;
+out highp vec3 vWorldPos;
 
 void main(void ) {
     vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
@@ -40,4 +41,5 @@ void main(void ) {
     vMapCoord = map_coord;
     vTileId = tile_id;
     vNormal = normalize(normal_matrix * normal);
+    vWorldPos = worldPos.xyz;
 }

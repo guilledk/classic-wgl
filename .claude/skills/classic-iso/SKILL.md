@@ -772,6 +772,29 @@ let normal_matrix = iso3.inverse().transpose();
 
 This corrects normals for the non-uniform 2:1 scale of the isometric transform.
 
+### Dynamic point lights (UBO)
+
+In addition to the sun (above), `Engine` maintains a pooled set of **dynamic
+point lights** uploaded to a `std140` UBO once per frame.  See the `classic-gfx`
+skill (§16 "Dynamic lights") for the buffer layout and the `classic-ecs` skill
+for the `Light` component.  Only two points matter for iso placement:
+
+- **`Engine::iso_to_world(x, y, elevation)`** is the single conversion from an
+  iso tile to the light-space world position: `p_xy =
+  iso_to_cartesian_4() * S(tilemap.scale) * (x,y,0) + tilemap.position`, then
+  `p.y -= (h+elevation)·height_scale` and `p.z = (h+elevation)·height_scale`.
+  `elevation` is metres above the terrain (same units as `height_data`);
+  `height_scale` is px/metre.  **`p.z` must be set** — the tilemap shader's
+  `worldPos.z` is the terrain height in px, so a `z=0` light lands below elevated
+  terrain and is attenuated to nothing.
+- The conversion is safe only when `tilemap.scale.x == tilemap.scale.y`
+  (the two scenes use `[45,45,1]`); `iso_to_cartesian_4() * S(scale)` and
+  `S(scale) * iso_to_cartesian_4()` differ for non-uniform x/y scale.
+
+Point lights are **unoccluded** (no point-light shadows).  A bare point light on
+terrain reads as a symmetric "sphere"; that's expected until M2/M3 shadow
+mapping.
+
 ---
 
 ## 14. Known-Divergent / Non-Functional
