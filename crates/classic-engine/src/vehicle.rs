@@ -11,7 +11,9 @@
 //! runs each frame (after the guest update closures) and pushes
 //! positions/frames/anchors/offsets into the five sprites.
 
-use classic_core::components::{DebugName, IsoSprite, IsoVehicle, RoleKind, Tilemap, Transform};
+use classic_core::components::{
+    DebugName, IsoSprite, IsoVehicle, RoleKind, Selectable, Tilemap, Transform,
+};
 use classic_core::math::cartesian_to_iso_4;
 use classic_core::pathfinder::PathPoll;
 use classic_core::tilemap::sample_height_mesh;
@@ -84,6 +86,24 @@ pub enum VehicleGotoPoll {
     Accepted(Vec<[i32; 2]>),
     /// No route exists (drop the request).
     NoPath,
+}
+
+/// The state of the single in-flight (or cached) non-mutating reachability
+/// probe tracked by [`Engine::vehicle_probe`].  The result is cached per target
+/// so an unchanged probe target doesn't re-run A* every frame.
+pub struct PreviewProbe {
+    pub name: String,
+    pub target: (i32, i32),
+    pub state: PreviewProbeState,
+}
+
+/// The in-flight/cached phase of a [`PreviewProbe`].
+#[derive(Clone, Copy)]
+pub enum PreviewProbeState {
+    /// Search running on the worker; poll `id` via `poll_vehicle_path`.
+    Pending { id: u64 },
+    /// Search finished; `reachable` is the cached answer.
+    Done { reachable: bool },
 }
 
 /// A terrain-height sampler snapshot, cloned once per frame so the mutation
@@ -608,6 +628,7 @@ impl Engine {
             body_sprite,
             vehicle,
             Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE),
+            Selectable { priority: 1, group: 0 },
         ));
         let _ = self.world.insert_one(be, DebugName(entity_name.to_string()));
         self.names.insert(entity_name.to_string(), be);
@@ -1095,6 +1116,200 @@ impl Engine {
             return true;
         }
         false
+    }
+
+    /// Set a vehicle's speed (tiles per second), mutating its `IsoVehicle.speed`
+    /// (e.g. slow a loaded LRV).  Returns `false` for an unknown vehicle.
+    pub fn vehicle_set_speed(&mut self, name: &str, speed: f32) -> bool {
+        let Some(&ve) = self.names.get(name) else { return false };
+        if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
+            v.speed = speed;
+            return true;
+        }
+        false
+    }
+
+    /// Non-mutating vehicle reachability probe: run the same footprint-, slope-
+    /// and jump-aware A* as [`Engine::vehicle_goto`] to `(tx, ty)` but do **not**
+    /// install the route on the vehicle.  On success the waypoints are stored in
+    /// `Engine::preview_paths[name]` for the demo overlay to draw.
+    ///
+    /// Return codes: `1` reachable, `-1` no path, `0` pending (search still
+    /// running — call again), `-2` unknown vehicle.  Results are cached per
+    /// target: a repeated call with the same `(name, tx, ty)` returns the cached
+    /// answer without re-running A*, and a target change resubmits.
+    pub fn vehicle_probe(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
+        let Some(&ve) = self.names.get(name) else { return -2 };
+        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px, turn_cost) = {
+            let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return -2 };
+            (
+                v.path_footprint.clone(),
+                v.pitch_max,
+                v.roll_max,
+                v.wheelbase_px,
+                v.track_px,
+                v.safe_fall_px,
+                v.turn_cost,
+            )
+        };
+        let from = {
+            let Ok(tf) = self.world.get::<&Transform>(ve) else { return -2 };
+            (tf.position.x.floor() as i32, tf.position.y.floor() as i32)
+        };
+        let target = (tx, ty);
+
+        // Same target: return the cached answer, or poll the in-flight request.
+        if let Some(p) = &self.preview_probe {
+            if p.name == name && p.target == target {
+                return match p.state {
+                    PreviewProbeState::Done { reachable } => {
+                        if reachable {
+                            1
+                        } else {
+                            -1
+                        }
+                    }
+                    PreviewProbeState::Pending { id } => self.poll_preview_probe(id),
+                };
+            }
+        }
+
+        // Different target (or none): drain any in-flight probe before
+        // submitting a fresh one, so at most one worker result is outstanding at
+        // a time (no orphaned results accumulate on rapid target changes).
+        if let Some(id) = self.preview_probe.as_ref().and_then(|p| match p.state {
+            PreviewProbeState::Pending { id } => Some(id),
+            PreviewProbeState::Done { .. } => None,
+        }) {
+            if self.poll_preview_probe(id) == 0 {
+                return 0; // old probe still running; defer the new target
+            }
+        }
+        self.preview_paths.remove(name);
+
+        // New target (or first call): submit a fresh probe.
+        let id = self.next_path_id;
+        self.next_path_id = self.next_path_id.wrapping_add(1);
+        if self.synchronous_workers {
+            let path = self.find_vehicle_path(
+                from,
+                target,
+                &footprint,
+                pitch_max,
+                roll_max,
+                wheelbase_px,
+                track_px,
+                safe_fall_px,
+                JUMP_COST,
+                turn_cost,
+            );
+            let found = path.is_some();
+            self.preview_probe = Some(PreviewProbe {
+                name: name.to_string(),
+                target,
+                state: PreviewProbeState::Done { reachable: found },
+            });
+            if let Some(path) = path {
+                self.preview_paths
+                    .insert(name.to_string(), path.into_iter().map(|(x, y)| [x, y]).collect());
+                return 1;
+            }
+            self.preview_paths.remove(name);
+            return -1;
+        }
+
+        self.ensure_pathfinder();
+        if let Some(worker) = self.pathfinder.as_mut() {
+            worker.request_vehicle_path(
+                id,
+                from,
+                target,
+                footprint,
+                pitch_max,
+                roll_max,
+                wheelbase_px,
+                track_px,
+                safe_fall_px,
+                JUMP_COST,
+                turn_cost,
+            );
+        }
+        self.preview_probe = Some(PreviewProbe {
+            name: name.to_string(),
+            target,
+            state: PreviewProbeState::Pending { id },
+        });
+        0
+    }
+
+    /// Poll an in-flight preview probe by id, finalising `preview_probe` (and
+    /// `preview_paths`) when the worker resolves it.  The resolved outcome is
+    /// cached as `Done { reachable }` so a repeated identical call returns the
+    /// answer without re-running A* (see `vehicle_probe`'s per-target cache).
+    fn poll_preview_probe(&mut self, id: u64) -> i32 {
+        let poll = if let Some(worker) = self.pathfinder.as_mut() {
+            worker.poll_vehicle_path(id)
+        } else {
+            PathPoll::Pending
+        };
+        let (name, target) = match self.preview_probe.as_ref() {
+            Some(p) => (p.name.clone(), p.target),
+            None => (String::new(), (0, 0)),
+        };
+        match poll {
+            PathPoll::Pending => 0,
+            PathPoll::NoPath => {
+                classic_core::cl_debug!(
+                    classic_core::instrument::Chan::Path,
+                    "vehicle_probe {name} -> {target:?}: no path"
+                );
+                self.preview_paths.remove(&name);
+                self.preview_probe = Some(PreviewProbe {
+                    name,
+                    target,
+                    state: PreviewProbeState::Done { reachable: false },
+                });
+                -1
+            }
+            PathPoll::Path(cells) => {
+                classic_core::cl_debug!(
+                    classic_core::instrument::Chan::Path,
+                    "vehicle_probe {name} -> {target:?}: {} waypoints",
+                    cells.len()
+                );
+                let path: Vec<[i32; 2]> = cells.into_iter().map(|(x, y)| [x, y]).collect();
+                self.preview_paths.insert(name.clone(), path);
+                self.preview_probe = Some(PreviewProbe {
+                    name,
+                    target,
+                    state: PreviewProbeState::Done { reachable: true },
+                });
+                1
+            }
+        }
+    }
+
+    /// Clear a vehicle's drop-preview state (candidate path + cached/in-flight
+    /// probe), e.g. when the guest leaves preview mode.  Returns `true` when
+    /// anything was cleared.  An in-flight probe is best-effort drained first so
+    /// a ready result doesn't linger.
+    pub fn vehicle_probe_clear(&mut self, name: &str) -> bool {
+        let pending_id = match self.preview_probe.as_ref() {
+            Some(p) if p.name == name => match p.state {
+                PreviewProbeState::Pending { id } => Some(id),
+                PreviewProbeState::Done { .. } => None,
+            },
+            _ => None,
+        };
+        let had_probe = self.preview_probe.as_ref().map(|p| p.name == name).unwrap_or(false);
+        if let Some(id) = pending_id {
+            let _ = self.poll_preview_probe(id);
+        }
+        if self.preview_probe.as_ref().map(|p| p.name == name).unwrap_or(false) {
+            self.preview_probe = None;
+        }
+        let had_path = self.preview_paths.remove(name).is_some();
+        had_probe || had_path
     }
 }
 
@@ -2072,6 +2287,36 @@ mod tests {
         );
         // pitch_levels = 5 for the real def, so the dead-zone is non-zero.
         assert!(v.tilt_dead_zone > 0.0, "dead-zone must be derived from frame quantization");
+    }
+
+    #[test]
+    fn vehicle_probe_reports_reachability_and_caches_result() {
+        let mut engine = engine_with_lrvtest_like_map(None);
+        engine.vehicles.insert("lrv".into(), lrv_def_real());
+        assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
+        engine.set_synchronous_workers(true);
+
+        // A reachable target stores its waypoints and reports 1.
+        assert_eq!(engine.vehicle_probe("lrv", 24, 24), 1);
+        assert!(engine.preview_paths.contains_key("lrv"));
+
+        // The resolved result is cached as `Done { reachable: true }` (not
+        // cleared), so a repeat identical call returns the cached answer and
+        // keeps the path (previously it cleared the probe and re-ran A*, which
+        // made the preview line vanish and flicker every frame).
+        assert!(matches!(
+            engine.preview_probe.as_ref().map(|p| p.state),
+            Some(PreviewProbeState::Done { reachable: true })
+        ));
+        assert_eq!(engine.vehicle_probe("lrv", 24, 24), 1);
+        assert!(engine.preview_paths.contains_key("lrv"));
+        assert!(matches!(
+            engine.preview_probe.as_ref().map(|p| p.state),
+            Some(PreviewProbeState::Done { reachable: true })
+        ));
+
+        // An unknown vehicle is reported distinctly.
+        assert_eq!(engine.vehicle_probe("nope", 5, 5), -2);
     }
 
     #[test]
