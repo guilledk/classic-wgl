@@ -9,7 +9,7 @@
 //! results (collider pid → name → entity) and gates on the [`Selectable`]
 //! component.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use classic_core::collision::polygon_from_verts;
 use classic_core::components::{
@@ -263,12 +263,27 @@ impl Engine {
         }
 
         // Phase 2: register or update colliders in place.
+        let mut active: HashSet<String> = HashSet::new();
         for (name, shape) in updates {
+            active.insert(name.clone());
             if let Some(&pid) = self.collider_pids.get(&name) {
                 self.physics.update_world_shape(pid, shape);
+                self.physics.set_collider_enabled(pid, true);
             } else {
                 self.register_named_collider(&name, ColliderData::world(shape));
             }
+            self.selectable_colliders.insert(name);
+        }
+
+        // Phase 3: disable stale selectable colliders (their entity became
+        // disabled or lost its Selectable), so point_query/pick_at skip them.
+        let stale: Vec<String> =
+            self.selectable_colliders.iter().filter(|n| !active.contains(*n)).cloned().collect();
+        for name in stale {
+            if let Some(&pid) = self.collider_pids.get(&name) {
+                self.physics.set_collider_enabled(pid, false);
+            }
+            self.selectable_colliders.remove(&name);
         }
     }
 }

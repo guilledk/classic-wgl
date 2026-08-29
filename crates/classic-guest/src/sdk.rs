@@ -329,6 +329,14 @@ impl GuestHost {
         self.engine_mut().vehicle_probe_clear(name) as i32
     }
 
+    /// The max tile radius of a vehicle's collision footprint (`max(|dx|,|dy|)`
+    /// over its `path_footprint` cells), `-1.0` when unknown.  Lets a guest
+    /// derive pick-up/drop clearance from the real footprint instead of a magic
+    /// constant.
+    pub fn vehicle_footprint_radius(&mut self, name: &str) -> f64 {
+        self.engine().vehicle_footprint_radius(name)
+    }
+
     /// The JSON array of currently RTS-selected entity names.
     pub fn selected_names(&mut self) -> String {
         serde_json::to_string(&self.engine().selected_names()).unwrap_or_else(|_| "[]".into())
@@ -382,6 +390,13 @@ impl GuestHost {
         self.engine().item_def(name).unwrap_or_default()
     }
 
+    /// Show the container-inventory hover tooltip for a named entity, or hide
+    /// it when `name` is empty.  Returns 1.
+    pub fn inventory_ui_show(&mut self, name: &str) -> i32 {
+        self.engine_mut().inventory_ui_show(name);
+        1
+    }
+
     /// Read the camera position (x, y) and uniform scale.
     pub fn get_camera(&mut self) -> (f64, f64, f64) {
         let (x, y, s) = self.engine().get_camera();
@@ -400,9 +415,15 @@ impl GuestHost {
         1
     }
 
-    /// The name of the top gameplay entity under a screen point (empty if none).
-    pub fn pick_at(&mut self, x: f64, y: f64) -> String {
-        self.engine().pick_at(x as f32, y as f32).unwrap_or_default()
+    /// The name of the top gameplay entity under a screen point, optionally
+    /// filtered to entities carrying `filter`'s component (empty filter = any).
+    pub fn pick_at(&mut self, x: f64, y: f64, filter: &str) -> String {
+        self.engine().pick_at(x as f32, y as f32, filter).unwrap_or_default()
+    }
+
+    /// Mark (or clear) a named entity's collider as a navigation obstacle.
+    pub fn set_collider_blocks_nav(&mut self, name: &str, blocks: i32) -> i32 {
+        self.engine_mut().set_collider_blocks_nav(name, blocks != 0) as i32
     }
 
     /// Whether a mouse button is held (0 = left, 1 = right, 2 = middle).

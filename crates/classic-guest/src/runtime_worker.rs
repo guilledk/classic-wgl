@@ -142,6 +142,9 @@ const OP_GET_SPRITE_FRAME: i32 = 90;
 const OP_INVENTORY_CAPACITY: i32 = 91;
 const OP_VEHICLE_PROBE: i32 = 92;
 const OP_VEHICLE_PROBE_CLEAR: i32 = 93;
+const OP_INVENTORY_UI_SHOW: i32 = 94;
+const OP_SET_COLLIDER_BLOCKS_NAV: i32 = 95;
+const OP_VEHICLE_FOOTPRINT_RADIUS: i32 = 96;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -315,6 +318,7 @@ impl WorkerWasmRuntime {
             OP_VEHICLE_SET_SPEED => (host.vehicle_set_speed(&strs[0], nf(0)) as f64, None),
             OP_VEHICLE_PROBE => (host.vehicle_probe(&strs[0], ni(0), ni(1)) as f64, None),
             OP_VEHICLE_PROBE_CLEAR => (host.vehicle_probe_clear(&strs[0]) as f64, None),
+            OP_VEHICLE_FOOTPRINT_RADIUS => (host.vehicle_footprint_radius(&strs[0]), None),
             OP_SELECTED_NAMES => {
                 let json = host.selected_names();
                 if ni(1) < json.len() as i32 || json.len() as u32 > OUT_BYTES {
@@ -346,6 +350,7 @@ impl WorkerWasmRuntime {
                     (json.len() as f64, Some(json.into_bytes()))
                 }
             }
+            OP_INVENTORY_UI_SHOW => (host.inventory_ui_show(&strs[0]) as f64, None),
             OP_GET_CAMERA => {
                 let (x, y, s) = host.get_camera();
                 (1.0, Some(enc_f64s(&[x, y, s])))
@@ -356,12 +361,15 @@ impl WorkerWasmRuntime {
             }
             OP_SET_GRID => (host.set_grid(ni(0)) as f64, None),
             OP_PICK_AT => {
-                let name = host.pick_at(nf(0), nf(1));
+                let name = host.pick_at(nf(0), nf(1), &strs[0]);
                 if ni(3) < name.len() as i32 || name.len() as u32 > OUT_BYTES {
                     (-1.0, None)
                 } else {
                     (name.len() as f64, Some(name.into_bytes()))
                 }
+            }
+            OP_SET_COLLIDER_BLOCKS_NAV => {
+                (host.set_collider_blocks_nav(&strs[0], ni(0)) as f64, None)
             }
             OP_MOUSE_DOWN => (host.mouse_down(ni(0)) as f64, None),
             OP_MOUSE_RELEASED => (host.mouse_released(ni(0)) as f64, None),

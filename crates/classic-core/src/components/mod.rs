@@ -616,6 +616,12 @@ pub struct ColliderData {
     /// Coordinate space of `shape`/`position`/`scale`.
     #[serde(default)]
     pub space: ColliderSpace,
+    /// Whether this collider's footprint blocks navigation (human + vehicle
+    /// pathfinding).  Toggled at runtime by guests via
+    /// `set_collider_blocks_nav`; the engine rasterizes blocking footprints
+    /// into the nav grid.
+    #[serde(default)]
+    pub blocks_nav: bool,
 }
 
 impl ColliderData {
@@ -629,6 +635,7 @@ impl ColliderData {
             consumes_click: false,
             click_priority: 0,
             space: ColliderSpace::Screen,
+            blocks_nav: false,
         }
     }
 

@@ -1090,6 +1090,22 @@ impl WebWasmRuntime {
             );
         }
 
+        // vehicle_footprint_radius
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_footprint_radius",
+                Box::new(move |ptr: i32, len: i32| -> f64 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().vehicle_footprint_radius(&name)
+                }) as Box<dyn FnMut(i32, i32) -> f64>
+            );
+        }
+
         // selected_names
         {
             let host = host.clone();
@@ -1239,6 +1255,22 @@ impl WebWasmRuntime {
             );
         }
 
+        // inventory_ui_show
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "inventory_ui_show",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().inventory_ui_show(&name)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
         // get_camera
         {
             let host = host.clone();
@@ -1281,14 +1313,42 @@ impl WebWasmRuntime {
             let mem = mem.clone();
             set_import!(
                 "pick_at",
-                Box::new(move |x: f64, y: f64, out_ptr: i32, out_cap: i32| -> i32 {
-                    let name = host.borrow_mut().pick_at(x, y);
-                    if out_cap < name.len() as i32 {
-                        return -1;
-                    }
-                    let mem = mem.borrow();
-                    write_str(mem.as_ref().unwrap(), out_ptr, &name)
-                }) as Box<dyn FnMut(f64, f64, i32, i32) -> i32>
+                Box::new(
+                    move |x: f64,
+                          y: f64,
+                          filter_ptr: i32,
+                          filter_len: i32,
+                          out_ptr: i32,
+                          out_cap: i32|
+                          -> i32 {
+                        let filter = {
+                            let mem = mem.borrow();
+                            read_str(mem.as_ref().unwrap(), filter_ptr, filter_len)
+                        };
+                        let name = host.borrow_mut().pick_at(x, y, &filter);
+                        if out_cap < name.len() as i32 {
+                            return -1;
+                        }
+                        let mem = mem.borrow();
+                        write_str(mem.as_ref().unwrap(), out_ptr, &name)
+                    },
+                ) as Box<dyn FnMut(f64, f64, i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // set_collider_blocks_nav
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_collider_blocks_nav",
+                Box::new(move |ptr: i32, len: i32, blocks: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().set_collider_blocks_nav(&name, blocks)
+                }) as Box<dyn FnMut(i32, i32, i32) -> i32>
             );
         }
 
