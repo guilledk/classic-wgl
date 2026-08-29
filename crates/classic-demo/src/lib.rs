@@ -160,6 +160,9 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
             let s = state.clone();
             e.add_overlay(move |engine| hud::draw_debug_overlay(engine, &s));
         }
+        {
+            e.add_overlay(hud::draw_rts_rubber_band);
+        }
     }
     testing::install(&mut e, &state);
 

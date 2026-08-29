@@ -347,6 +347,11 @@ pub fn init_tool_buttons(engine: &mut Engine, state: &DemoStateRef) {
                 s.editor.agent_selected = es.agent_selected;
             }
             engine.set_guest_flag("agent_selected", es.agent_selected);
+            // RTS selection runs whenever a terrain-paint tool (tile/height/nav)
+            // is NOT active; when one is, the editor brush owns the drag and the
+            // RTS selection is disabled.
+            let rts = !matches!(es.target.as_str(), "tilemap" | "height" | "navMesh");
+            engine.set_guest_flag("rts_selection", rts);
             let open = es.panel_menu_open;
             drop(es);
             engine.set_enabled(menu_panel, open);

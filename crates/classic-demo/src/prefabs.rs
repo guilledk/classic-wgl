@@ -285,7 +285,7 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
         };
 
         let Some((name, shape, terrain_z)) = result else { continue };
-        engine.register_named_collider(&name, ColliderData::new(shape));
+        engine.register_named_collider(&name, ColliderData::world(shape));
         log::debug!("registered footprint collider for sprite '{name}'");
 
         if let Ok(mut tf) = engine.world.get::<&mut Transform>(entity) {
@@ -305,10 +305,6 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
                 s.editor.debug_footprints = !s.editor.debug_footprints;
                 engine.show_grid = s.editor.debug_footprints;
             }
-        }
-        if engine.input.was_key_pressed("KeyV") {
-            let mut s = state.borrow_mut();
-            s.debug_vehicle_paths = !s.debug_vehicle_paths;
         }
         // F9: dump state.json (tile/nav/height data is inlined).
         if engine.input.was_key_pressed("F9") {

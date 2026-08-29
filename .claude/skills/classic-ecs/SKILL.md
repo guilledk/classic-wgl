@@ -102,6 +102,18 @@ categories:
   demo find the tilemap/nav/agent/cursor entities — via
   `Engine::entity_by_role(RoleKind::…)`, **not** by name.
 
+- **`Selectable { priority: i32, group: u32 }`** — advertises an entity to the
+  host-owned RTS selection system (`classic-engine/src/selection.rs`).  `group`
+  buckets selectables: `0 = unit` (vehicles/characters), `1 = building/structure`
+  (e.g. a shipping container).  `priority` breaks click-hit ties (higher wins).
+  Plain-click selection semantics are group-aware: clicking a unit replaces the
+  set with it, while clicking a building or empty ground *keeps* any selected
+  unit (a command target, not a re-selection) and only replaces/clears when no
+  unit is selected — so "select unit, click target/ground" survives as a command
+  without deselecting.  Shift-click toggles membership; drag box-selects.
+  `spawn_vehicle` tags vehicle bodies `group: 0`; scene JSON tags buildings
+  `group: 1`.
+
 - **`Camera`** — 2D orthographic camera (`position`, `scale`, runtime-only
   `size`).  Registered as a component so it round-trips through `state.json`.
 
