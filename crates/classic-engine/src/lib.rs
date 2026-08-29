@@ -15,6 +15,8 @@
 
 pub mod env_config;
 pub mod golden;
+pub mod inventory;
+pub mod selection;
 pub mod ui;
 pub mod vehicle;
 
@@ -26,8 +28,8 @@ use std::sync::Arc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    Animator, ColliderData, DebugName, IsoSprite, NavMesh, RectRender, Role, SdfTextRender,
-    TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
+    Animator, ColliderData, DebugName, IsoSprite, IsoVehicle, NavMesh, RectRender, Role,
+    SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -48,6 +50,15 @@ use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
+
+/// Screen-space drag distance below which a selection gesture is a click
+/// (point-select) rather than a drag box.
+const RTS_DRAG_THRESHOLD_PX: f32 = 4.0;
+
+/// The RTS selection silhouette colour (bright green) and its outline width in
+/// content pixels.
+const SELECTION_COLOR: [f32; 3] = [0.25, 1.0, 0.35];
+const OUTLINE_RADIUS_PX: f32 = 1.0;
 
 /// An interaction event queued for a ROM guest.
 #[derive(Clone, Debug)]
@@ -96,6 +107,8 @@ struct IsoDraw {
     normal_map: Option<String>,
     ghost_group: u32,
     color: [f32; 4],
+    /// Whether the sprite is currently RTS-selected (draws a silhouette edge).
+    selected: bool,
 }
 
 impl IsoDraw {
@@ -155,6 +168,15 @@ pub struct Engine {
     /// Collider pid → entity name, populated by `register_named_collider` so the
     /// guest `pick_at` can resolve a screen point to a gameplay entity.
     collider_names: HashMap<u32, String>,
+    /// Entity name → collider pid (the reverse of `collider_names`), so the
+    /// engine can update a named entity's collider in place instead of
+    /// re-registering it every frame.
+    collider_pids: HashMap<String, u32>,
+    /// The host-owned RTS selection set (see `selection.rs`).
+    pub selection: selection::SelectionSet,
+    /// Active RTS drag-box rubber band, `Some((begin, end))` in screen space
+    /// while dragging, `None` otherwise.
+    pub rts_box: Option<(Vec2, Vec2)>,
     /// Entity names the guest has subscribed to for interaction events.
     subscribed: HashSet<String>,
     /// Events queued for the guest, drained via `poll_event`.
@@ -188,6 +210,9 @@ pub struct Engine {
     /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
     /// `vehicles` resources at boot.
     pub vehicles: HashMap<String, classic_core::types::VehicleDef>,
+    /// The ROM-namespaced item catalog, interned once at `load_rom`.  Read-only
+    /// after load; the inventory mechanics look items up by [`ItemId`].
+    pub items: classic_core::inventory::ItemRegistry,
     /// Next per-instance stencil ghost-group id handed out by `spawn_vehicle`
     /// (1..=255; 0 is reserved for ungrouped sprites).
     next_ghost_group: u32,
@@ -232,6 +257,11 @@ pub struct Engine {
     sync_vehicle_paths: HashMap<u64, vehicle::VehicleGotoPoll>,
     /// Vehicle entity for each in-flight vehicle path request id.
     vehicle_path_entities: HashMap<u64, hecs::Entity>,
+    /// Candidate vehicle path waypoints, keyed by vehicle name, computed by the
+    /// non-mutating `vehicle_probe` and drawn by the demo overlay as a preview.
+    pub preview_paths: HashMap<String, Vec<[i32; 2]>>,
+    /// The single in-flight (or cached) vehicle reachability probe, if any.
+    preview_probe: Option<vehicle::PreviewProbe>,
     /// Next background-task id handed to a guest.
     next_task_id: u64,
     /// Background guest worker (Tier 3): a second `.wasm` instance running pure
@@ -309,6 +339,7 @@ impl Engine {
             namespace: String::new(),
             physics: PhysicsProvider::new(),
             collider_names: HashMap::new(),
+            collider_pids: HashMap::new(),
             subscribed: HashSet::new(),
             guest_events: VecDeque::new(),
             guest_hover: None,
@@ -325,11 +356,14 @@ impl Engine {
             texture_depths: HashMap::new(),
             texture_normals: HashMap::new(),
             vehicles: HashMap::new(),
+            items: classic_core::inventory::ItemRegistry::default(),
             next_ghost_group: 1,
             rom_manifest_json: None,
             rom_manifest: None,
             rom_resources: None,
             ui: None,
+            selection: selection::SelectionSet::default(),
+            rts_box: None,
             selection_mode: -1,
             selection_begin_screen: glam::Vec3::new(-1.0, -1.0, -1.0),
             base_height_scale: 32.0,
@@ -350,6 +384,8 @@ impl Engine {
             )),
             sync_vehicle_paths: HashMap::new(),
             vehicle_path_entities: HashMap::new(),
+            preview_paths: HashMap::new(),
+            preview_probe: None,
             next_task_id: 0,
             guest_worker: None,
             fields: fields::FieldRegistry::default(),
@@ -535,6 +571,10 @@ impl Engine {
         self.init_gfx(gl, &rom.manifest, &rom.resources);
         self.load_state(&rom.state).expect("load ROM state");
         self.load_grids(&rom.resources);
+        self.items = classic_core::inventory::ItemRegistry::build(
+            &rom.manifest.items,
+            &rom.manifest.inventory_types,
+        );
         self.rom_manifest_json = Some(rom.manifest_json.clone());
         self.rom_manifest = Some(rom.manifest.clone());
         self.rom_resources = Some(rom.resources.clone());
@@ -1079,6 +1119,12 @@ impl Engine {
         true
     }
 
+    /// Read a named entity's `IsoSprite` frame index.
+    pub fn get_sprite_frame(&self, name: &str) -> Option<f32> {
+        let entity = *self.names.get(name)?;
+        self.world.get::<&IsoSprite>(entity).ok().map(|s| s.frame)
+    }
+
     /// Set a named entity's `IsoSprite` tint colour (RGBA).
     pub fn set_sprite_color(&mut self, name: &str, color: [f32; 4]) -> bool {
         let Some(&entity) = self.names.get(name) else { return false };
@@ -1087,13 +1133,26 @@ impl Engine {
         true
     }
 
+    /// Set a named entity's `IsoSprite` visual offset (`frame_offset`, in world
+    /// pixels; negative Y lifts the sprite on screen).  Lets guests elevate a
+    /// runtime sprite (e.g. a container sliding out of a rocket).  Only valid
+    /// for sprites without an animator or vehicle sim that overwrites
+    /// `frame_offset` each frame.
+    pub fn set_sprite_offset(&mut self, name: &str, dx: f32, dy: f32, dz: f32) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        let Ok(mut sprite) = self.world.get::<&mut IsoSprite>(entity) else { return false };
+        sprite.frame_offset = glam::Vec3::new(dx, dy, dz);
+        true
+    }
+
     /// Spawn a new `IsoSprite` entity cloned from a template entity (e.g. a
     /// mouse-follow placement ghost), so a guest can drop copies at runtime.
     /// Copies the template's `IsoSprite` and `Transform` (the latter carries the
-    /// live position written by `set_pos`); the caller then adjusts the clone
-    /// with `set_pos`/`set_sprite_frame`/`set_sprite_color` as usual.  Returns
-    /// `false` when the name is taken, the template is unknown, or the template
-    /// has no `IsoSprite`.
+    /// live position written by `set_pos`), plus any gameplay markers
+    /// (`Selectable`, `Inventory`) the template carries; the caller then adjusts
+    /// the clone with `set_pos`/`set_sprite_frame`/`set_sprite_color` as usual.
+    /// Returns `false` when the name is taken, the template is unknown, or the
+    /// template has no `IsoSprite`.
     pub fn spawn_sprite_clone(&mut self, template: &str, name: &str) -> bool {
         if self.names.contains_key(name) {
             return false;
@@ -1109,7 +1168,23 @@ impl Engine {
             .ok()
             .map(|t| (*t).clone())
             .unwrap_or_else(|| Transform::new(sprite.position, sprite.scale));
-        let entity = self.world.spawn((sprite, transform));
+        let selectable = self.world.get::<&Selectable>(template_entity).ok().map(|s| *s);
+        let inventory = self
+            .world
+            .get::<&classic_core::inventory::Inventory>(template_entity)
+            .ok()
+            .map(|i| (*i).clone());
+
+        let mut builder = hecs::EntityBuilder::new();
+        builder.add(sprite);
+        builder.add(transform);
+        if let Some(s) = selectable {
+            builder.add(s);
+        }
+        if let Some(inv) = inventory {
+            builder.add(inv);
+        }
+        let entity = self.world.spawn(builder.build());
         self.register_named_entity(name, entity);
         true
     }
@@ -1129,6 +1204,33 @@ impl Engine {
         let iso = Mat4::from_scale(tm.scale) * cartesian_to_iso_4().inverse();
         let p = iso.transform_point3(Vec3::new(x, y, 0.0));
         Some((p.x, p.y))
+    }
+
+    /// The world → screen transform for the current frame, derived from the
+    /// camera (`T(-fix) · S(scale)`), matching the sprite/terrain projection.
+    fn world_to_screen_matrix(&self, vw: f32, vh: f32) -> Mat4 {
+        let size = Vec3::new(vw, vh, 0.0);
+        let fix = self.camera.position * self.camera.scale - size / Vec3::new(2.0, 2.0, 1.0);
+        Mat4::from_translation(-fix) * Mat4::from_scale(self.camera.scale)
+    }
+
+    /// Project an iso tile coordinate (at terrain height) to screen pixels
+    /// (top-left origin), matching the engine's sprite model + camera math.
+    pub fn iso_to_screen_px(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+        let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
+
+        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale);
+        let mut world = iso_to_cart_world.transform_point3(Vec3::new(x, y, 0.0));
+        world += tm_tf.position;
+        let h = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y);
+        world.y -= h * tm.height_scale;
+
+        let (vw, vh) = self.viewport_size();
+        let cam = self.world_to_screen_matrix(vw, vh);
+        let screen = cam.transform_point3(world);
+        Some((screen.x, screen.y))
     }
 
     /// Terrain height (in world z units) at the given iso tile coordinate.
@@ -1591,6 +1693,7 @@ impl Engine {
     pub fn register_named_collider(&mut self, name: &str, collider: ColliderData) -> u32 {
         let pid = self.physics.register_collider(collider);
         self.collider_names.insert(pid, name.to_string());
+        self.collider_pids.insert(name.to_string(), pid);
         pid
     }
 
@@ -2083,6 +2186,10 @@ impl Engine {
             }
         }
 
+        // Sync world-space colliders for selectable entities, then project them
+        // (and any other World colliders) to screen before rebuilding the tree.
+        self.sync_selectable_colliders();
+        self.physics.set_world_to_screen(self.world_to_screen_matrix(vw, vh));
         self.physics.begin_frame();
         classic_core::cl_debug!(classic_core::instrument::Chan::Collision, "begin_frame");
         self.physics.mouse.position = Vec3::new(mp.x, mp.y, 0.0);
@@ -2135,10 +2242,27 @@ impl Engine {
             self.physics.begin_selection(Vec3::new(mp.x, mp.y, 0.0));
         }
 
+        // Right-click clears the RTS selection (and, via the guest's
+        // `selected_names`, any in-progress drop preview).
+        if self.input.was_mouse_pressed(1) && !self.guest_flag("ui_consumed_click") {
+            self.selection_clear();
+        }
+
         // Stretch selection rect every frame while dragging.
         if self.selection_mode == 1 {
             self.physics.update_selection(self.selection_begin_screen, Vec3::new(mp.x, mp.y, 0.0));
         }
+
+        // RTS rubber band (screen-space rectangle), shown only while dragging and
+        // a terrain-paint tool is not active.
+        self.rts_box = if self.selection_mode == 1 && self.guest_flag("rts_selection") {
+            Some((
+                Vec2::new(self.selection_begin_screen.x, self.selection_begin_screen.y),
+                Vec2::new(mp.x, mp.y),
+            ))
+        } else {
+            None
+        };
 
         // Frame ordering: demo pre-update hooks run BEFORE on_update closures.
         // The camera's on_update runs first in registration order and would
@@ -2246,6 +2370,22 @@ impl Engine {
             }
             self.physics.end_selection();
 
+            // RTS selection (host-owned): click = point-select, drag = box-select,
+            // shift = additive.  Gated on `rts_selection` (cleared while a
+            // terrain-paint tool owns the drag gesture).
+            if just_finished_selection && self.guest_flag("rts_selection") {
+                let begin = Vec2::new(self.selection_begin_screen.x, self.selection_begin_screen.y);
+                let end = Vec2::new(mp.x, mp.y);
+                let additive =
+                    self.input.is_key_down("ShiftLeft") || self.input.is_key_down("ShiftRight");
+                if (end - begin).length() < RTS_DRAG_THRESHOLD_PX {
+                    self.select_at(end.x, end.y, additive);
+                } else {
+                    self.select_box((begin.x, begin.y), (end.x, end.y), additive);
+                }
+            }
+            self.rts_box = None;
+
             // Editor paint on selection-end (registered by the demo).
             if just_finished_selection {
                 let mut hooks = std::mem::take(&mut self.selection_end_hooks);
@@ -2334,6 +2474,10 @@ impl Engine {
         let name_by_entity: HashMap<hecs::Entity, &str> =
             entity_names.iter().map(|(e, n)| (*e, n.as_str())).collect();
 
+        // The tilemap's paint highlight only shows when a terrain tool owns the
+        // drag; under RTS selection the tilemap selection is off.
+        let paint_mode = if self.guest_flag("rts_selection") { -1 } else { self.selection_mode };
+
         let Some(gfx) = self.gfx.as_mut() else { return };
         let vp = gfx.viewport_w;
         let vh2 = gfx.viewport_h;
@@ -2361,6 +2505,27 @@ impl Engine {
         // Model matrix z MUST stay inside [-10000, 10000] — the orthographic
         // projection clips everything outside. The sort key can differ from
         // the model z. Cursor uses sort_z=-20000 but model_z=-10000.
+        // Expand the selection set to include a selected vehicle's wheels and
+        // steering tires, so the silhouette outlines the whole vehicle, not
+        // just its body.
+        let mut visual_selected: HashSet<hecs::Entity> =
+            self.selection.selected.iter().copied().collect();
+        {
+            let selected: Vec<hecs::Entity> = self.selection.selected.iter().copied().collect();
+            for entity in selected {
+                if let Ok(veh) = self.world.get::<&IsoVehicle>(entity) {
+                    for name in veh.wheel_entities.iter().chain(veh.tire_entities.iter()) {
+                        if name.is_empty() {
+                            continue;
+                        }
+                        if let Some(&part) = self.names.get(name) {
+                            visual_selected.insert(part);
+                        }
+                    }
+                }
+            }
+        }
+
         // Precompute isometric-sprite draw params once, shared by the normal
         // and ghost passes below.
         let mut iso_draws: Vec<IsoDraw> = Vec::new();
@@ -2458,6 +2623,7 @@ impl Engine {
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
+                selected: visual_selected.contains(entity),
             });
         }
 
@@ -2584,7 +2750,7 @@ impl Engine {
                     &[tm.size_x as f32, tm.size_y as f32],
                     &[tm.mouse_iso_pos.x, tm.mouse_iso_pos.y],
                     &[tm.selection_iso_begin.x, tm.selection_iso_begin.y],
-                    self.selection_mode,
+                    paint_mode,
                     &[0.0, 1.0, 1.0, 1.0],
                     &RenderSettings {
                         ambient: self.light_ambient,
@@ -2648,6 +2814,9 @@ impl Engine {
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Normal,
+                draw.selected,
+                &SELECTION_COLOR,
+                OUTLINE_RADIUS_PX,
             );
         }
 
@@ -2667,6 +2836,9 @@ impl Engine {
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Ghost,
+                draw.selected,
+                &SELECTION_COLOR,
+                OUTLINE_RADIUS_PX,
             );
         }
 

@@ -646,6 +646,11 @@ impl Gfx {
         s.uniform_1f(gl, "use_iso_depth", 0.0);
         s.uniform_vec4(gl, "iso_depth_corners", &[0.0, 0.0, 0.0, 0.0]);
         s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
+        // Non-iso sprites never show the RTS silhouette; reset the uniforms so a
+        // previously-selected iso sprite doesn't leak into the UI/Sprite phase.
+        s.uniform_1f(gl, "selected", 0.0);
+        s.uniform_vec3(gl, "selection_color", Vec3::from_array([0.0, 0.0, 0.0]));
+        s.uniform_vec2(gl, "outline_delta", &[0.0, 0.0]);
         s.uniform_1f(gl, "use_normal_map", 0.0);
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
@@ -733,6 +738,9 @@ impl Gfx {
         tint: &[f32; 3],
         settings: &RenderSettings,
         ghost_alpha: f32,
+        selected: bool,
+        selection_color: &[f32; 3],
+        outline_radius: f32,
     ) {
         let gl = &self.gl;
         let s = self.shader("imageSheet");
@@ -743,6 +751,24 @@ impl Gfx {
 
         s.uniform_1i(gl, "tex_sampler", 0);
         self.bind_view(s, camera, model, false);
+
+        // Silhouette outline: the sheet-UV offset of `outline_radius` content
+        // pixels, so a selected sprite's transparent edge samples its own cell's
+        // opaque neighbours without cross-frame bleed.
+        let outline_delta: [f32; 2] = match &region {
+            SpriteRegion::Grid { .. } => {
+                [outline_radius / t.size.0.max(1) as f32, outline_radius / t.size.1.max(1) as f32]
+            }
+            SpriteRegion::Uv { uv_rect, content_size, .. } => {
+                let ext_x = (uv_rect[2] - uv_rect[0]).abs().max(1e-6);
+                let ext_y = (uv_rect[3] - uv_rect[1]).abs().max(1e-6);
+                [
+                    outline_radius * ext_x / content_size[0].max(1.0),
+                    outline_radius * ext_y / content_size[1].max(1.0),
+                ]
+            }
+        };
+
         match region {
             SpriteRegion::Grid { frame, tile_set_size } => {
                 s.uniform_1f(gl, "tile_id_flat", frame);
@@ -763,6 +789,9 @@ impl Gfx {
         s.uniform_1f(gl, "use_iso_depth", 1.0);
         s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
         s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
+        s.uniform_1f(gl, "selected", if selected { 1.0 } else { 0.0 });
+        s.uniform_vec3(gl, "selection_color", Vec3::from_array(*selection_color));
+        s.uniform_vec2(gl, "outline_delta", &outline_delta);
 
         if let Some((depth_tex, depth_range)) = depth_map {
             if let Some(dt) = self.textures.get(depth_tex) {
@@ -826,6 +855,9 @@ impl Gfx {
         settings: &RenderSettings,
         ghost_group: u32,
         pass: IsoSpritePass,
+        selected: bool,
+        selection_color: &[f32; 3],
+        outline_radius: f32,
     ) {
         let gl = &self.gl;
         let ghost_alpha = match pass {
@@ -844,6 +876,9 @@ impl Gfx {
             tint,
             settings,
             ghost_alpha,
+            selected,
+            selection_color,
+            outline_radius,
         );
 
         unsafe {
