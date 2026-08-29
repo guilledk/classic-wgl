@@ -11,7 +11,7 @@
 //! native (`fs::read` / blocking `ureq`), [`resolve_rom_async`] on web
 //! (async `fetch`).
 
-use classic_rom::{AssetBytes, RomSource};
+use classic_rom::{AssetBytes, Rom, RomSource};
 
 /// Build a lookup closure from a static `name -> URL/path` table.
 ///
@@ -73,6 +73,58 @@ pub fn resolve_rom(
     load_rom_bytes(&source)
 }
 
+/// Resolve a ROM selector to a multi-ROM dependency DAG on native.
+///
+/// The root selector may be a named ROM (`rom:<name>`), whose `deps` are
+/// recursively resolved through `index`, or a direct URL/path/data source
+/// whose manifest `deps` are then resolved the same way.  ROMs are
+/// cycle-checked, de-duplicated, and returned in topological order (deps
+/// before dependents).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve_roms(
+    spec: &str,
+    index: &dyn Fn(&str) -> Option<String>,
+) -> anyhow::Result<classic_rom::LoadedRoms> {
+    let named_load = |name: &str| {
+        let source = resolve_rom_source(&format!("rom:{name}"), index)?;
+        let bytes = load_rom_bytes(&source)?;
+        rom_from_bytes(&bytes)
+    };
+
+    match classic_rom::parse_rom_spec(spec) {
+        RomSource::Embedded(name) => classic_rom::LoadedRoms::resolve(&name, named_load),
+        other => {
+            let root_rom = rom_from_bytes(&load_rom_bytes(&other)?)?;
+            let root_name = rom_name(&root_rom);
+            let mut root_loaded = false;
+            classic_rom::LoadedRoms::resolve(&root_name, |name| {
+                if name == root_name && !root_loaded {
+                    root_loaded = true;
+                    Ok(root_rom.clone())
+                } else {
+                    named_load(name)
+                }
+            })
+        }
+    }
+}
+
+/// Parse a fully-loaded [`Rom`] from archive bytes.
+fn rom_from_bytes(bytes: &[u8]) -> anyhow::Result<Rom> {
+    let archive = classic_rom::RomArchive::from_bytes(bytes)?;
+    Rom::load(&archive)
+}
+
+/// The resolver name for a directly-loaded (non-`rom:`) root ROM: its
+/// manifest entrypoint, falling back to `"root"`.
+fn rom_name(rom: &Rom) -> String {
+    if rom.manifest.entrypoint.is_empty() {
+        "root".to_string()
+    } else {
+        rom.manifest.entrypoint.clone()
+    }
+}
+
 /// Fetch a URL as raw bytes (blocking `ureq`, native).
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_url(url: &str) -> anyhow::Result<Vec<u8>> {
@@ -110,6 +162,58 @@ pub async fn resolve_rom_async(
 ) -> anyhow::Result<AssetBytes> {
     let source = resolve_rom_source(spec, index)?;
     load_rom_bytes_async(source).await
+}
+
+/// Load a named ROM to a parsed [`Rom`] via the name -> location index (web).
+#[cfg(target_arch = "wasm32")]
+async fn load_named_rom_async(
+    name: &str,
+    index: &dyn Fn(&str) -> Option<String>,
+) -> anyhow::Result<Rom> {
+    let source = resolve_rom_source(&format!("rom:{name}"), index)?;
+    let bytes = load_rom_bytes_async(source).await?;
+    rom_from_bytes(&bytes)
+}
+
+/// Resolve a ROM selector to a multi-ROM dependency DAG on web.
+///
+/// Mirrors the native [`resolve_roms`]: named roots resolve their `deps`
+/// recursively through `index` (each ROM fetched independently), direct
+/// URL/path roots contribute their manifest `deps`.  Cycle-checked,
+/// de-duplicated, topologically ordered.
+#[cfg(target_arch = "wasm32")]
+pub async fn resolve_roms_async(
+    spec: &str,
+    index: &dyn Fn(&str) -> Option<String>,
+) -> anyhow::Result<classic_rom::LoadedRoms> {
+    match classic_rom::parse_rom_spec(spec) {
+        RomSource::Embedded(name) => {
+            classic_rom::LoadedRoms::resolve_async(&name, |n| async move {
+                load_named_rom_async(&n, index).await
+            })
+            .await
+        }
+        other => {
+            let root_rom = rom_from_bytes(&load_rom_bytes_async(other).await?)?;
+            let root_name = rom_name(&root_rom);
+            let mut root_loaded = false;
+            classic_rom::LoadedRoms::resolve_async(&root_name, |name| {
+                let is_root = name == root_name && !root_loaded;
+                if is_root {
+                    root_loaded = true;
+                }
+                let root_rom = root_rom.clone();
+                async move {
+                    if is_root {
+                        Ok(root_rom)
+                    } else {
+                        load_named_rom_async(&name, index).await
+                    }
+                }
+            })
+            .await
+        }
+    }
 }
 
 /// Fetch a URL as raw bytes via the async `fetch` API (web).

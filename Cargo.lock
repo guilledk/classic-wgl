@@ -487,6 +487,7 @@ dependencies = [
  "base64",
  "classic-core",
  "flate2",
+ "pollster",
  "ruzstd",
  "serde",
  "serde_json",
