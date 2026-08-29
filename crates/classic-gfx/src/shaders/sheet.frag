@@ -20,7 +20,20 @@ uniform highp vec2 content_size;
 uniform float use_depth_map;
 uniform highp float depth_base;
 uniform highp float depth_range;
+// Whether this draw participates in scene lighting at all.  The 2D/baked
+// `draw_sprite` path (cursor, HUD, UI) sets 0: it has no `sprite_anchor`, so
+// its `vLightPos` is meaningless.  This used to be implied by
+// `use_normal_map == 0`, which also silently unlit every *world* sprite that
+// happens to ship without a normal map.
+uniform float use_lighting;
 uniform float use_normal_map;
+// Blender world space -> light space, `Rz(-45deg) * diag(1,-1,1)`.  Sprite
+// normal maps are baked in Blender world space (`render/materials.py` emits
+// `Geometry.Normal` with no view transform), which is metric and axis-aligned
+// to the tile grid — NOT to light space.  Consuming them raw, as this shader
+// did, is exact only for up-facing normals and is ~153 degrees wrong for
+// normals along the tile axes: tall sprites came out lit on the wrong side.
+uniform mat3 sprite_normal_matrix;
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
@@ -59,20 +72,33 @@ layout(std140) uniform LightBlock {
 
 out vec4 fragColor;
 
+// --- BEGIN SHARED LIGHTING (must stay byte-identical to iso_tilemap.frag;
+// --- pinned by `lit_shaders_share_the_lighting_block`) ---
+//
+// `p` and `l.pos_radius.xyz` are both **metric light space** (+Z up, `ppm` px
+// per metre on every axis — see `classic_core::math::iso_to_light_4`), so
+// `length` is a true distance and `dot(n, L)` a true cosine.  They previously
+// lived in the isometric space, which compresses y by 2x; every point light
+// was therefore an ellipsoid evaluated as if it were a sphere.
 vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     vec3 toLight = l.pos_radius.xyz - p;
     float dist = length(toLight);
     vec3 L = toLight / max(dist, 0.0001);
     float radius = l.pos_radius.w;
-    // Soft windowed falloff: `saturate(1 - (d/r)^2)^2` gives a smooth, natural
-    // gradient with no hard circular edge (vs a linear `1 - d/r` blob).
-    float attenuation;
-    if (radius <= 0.0) {
-        attenuation = 1.0;
-    } else {
+    // Smooth windowed falloff: `w(d)^2 / (1 + d^2)`, `w = saturate(1 - d^2)`,
+    // `d = dist / radius`.  Softer than the previous `w = saturate(1 - d^4)` /
+    // `1 + 8 d^2` form, whose quartic window + 8x inverse-square term made the
+    // light read as a hot core with a sharp cutoff at roughly a tenth of the
+    // radius (nearly invisible for a low light like the rocket's flame, whose
+    // Lambertian grazing angle already shrinks the ground pool).  The quadratic
+    // window + unit inverse-square term keeps a bounded, C0 edge while letting
+    // the light actually span the authored `radius`.
+    float attenuation = 1.0;
+    if (radius > 0.0) {
         float d = dist / radius;
-        attenuation = clamp(1.0 - d * d, 0.0, 1.0);
-        attenuation *= attenuation;
+        float d2 = d * d;
+        float window = clamp(1.0 - d2, 0.0, 1.0);
+        attenuation = window * window / (1.0 + d2);
     }
     float cone = 1.0;
     if (l.dir_cone.w > 0.0) {
@@ -95,6 +121,7 @@ vec3 evaluateLights(vec3 n, vec3 p) {
     }
     return acc;
 }
+// --- END SHARED LIGHTING ---
 
 // Manual directional-shadow compare (see iso_tilemap.frag for the derivation).
 // PCF (3x3) softens the texel edges; `shadow_strength` floors the result.
@@ -191,17 +218,26 @@ void main(void ) {
         gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
     }
 
-    // World-space normal from the sheet's normal-map companion.  A
-    // (0.5,0.5,0.5) texel decodes to (0,0,0) and marks an *unlit* region (e.g.
-    // the rocket flame), which keeps flat albedo and skips shading entirely.
+    // Normal from the sheet's normal-map companion, rotated from the Blender
+    // world space it was baked in into light space.  A (0.5,0.5,0.5) texel
+    // decodes to (0,0,0) and marks an *emissive* region (e.g. the rocket
+    // flame), which keeps flat albedo and skips shading entirely.
+    //
+    // `emissive` is that sentinel and nothing else.  It used to also swallow
+    // "this sprite has no normal map at all", which left such sprites with no
+    // ambient, no sun and no point lights — raw albedo floating in the scene.
+    // Those now shade off a flat +Z normal like a decal on the ground.
     vec3 rawNormal = vec3(0.0);
+    bool emissive = false;
     if (use_normal_map > 0.5) {
         rawNormal = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).rgb * 2.0 - 1.0;
+        emissive = dot(rawNormal, rawNormal) <= 0.001;
     }
-    bool lit = dot(rawNormal, rawNormal) > 0.001;
-    // Normal-offset bias needs a direction even where the sprite is unlit or
+    // Normal-offset bias needs a direction even where the sprite is emissive or
     // has no normal map; away from the terrain (+Z) is the safe default.
-    vec3 n = lit ? normalize(rawNormal) : vec3(0.0, 0.0, 1.0);
+    vec3 n = dot(rawNormal, rawNormal) > 0.001
+        ? normalize(sprite_normal_matrix * rawNormal)
+        : vec3(0.0, 0.0, 1.0);
 
     // Bring-up diagnostic (CLASSIC_SHADOW_DEBUG): sun visibility only.  The
     // alpha silhouette and iso depth are kept so the sprite still occludes
@@ -212,13 +248,16 @@ void main(void ) {
         return;
     }
 
-    if (lit) {
+    if (use_lighting > 0.5 && !emissive) {
         float diff = max(dot(n, light_direction), 0.0);
         if (use_shadow > 0.5) {
             diff *= shadowFactor(vLightPos, n);
         }
-        color.rgb *= ambient_color + diff * light_color;
-        color.rgb += evaluateLights(n, vLightPos);
+        // Point lights are modulated by albedo, exactly like the sun.  They
+        // used to be added *after* the albedo multiply, so a point light
+        // washed every surface toward its own colour regardless of texture —
+        // which is what made it read as a glowing decal rather than as light.
+        color.rgb *= ambient_color + diff * light_color + evaluateLights(n, vLightPos);
     }
     if (ghost_alpha > 0.0) {
         color.a = ghost_alpha;

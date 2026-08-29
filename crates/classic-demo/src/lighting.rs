@@ -112,6 +112,7 @@ pub fn init_test_light_widget(engine: &mut Engine, state: &DemoStateRef) {
                             radius: 300.0,
                             dir: glam::Vec3::ZERO,
                             cone_angle: 0.0,
+                            parent: None,
                         },
                         None,
                     )
@@ -138,6 +139,7 @@ pub fn init_test_light_widget(engine: &mut Engine, state: &DemoStateRef) {
                             radius: 300.0,
                             dir: glam::Vec3::ZERO,
                             cone_angle: 0.0,
+                            parent: None,
                         },
                     );
                 }

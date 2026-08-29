@@ -2,7 +2,7 @@
 //! always; wasmtime on native) with small hand-written WAT guest modules.
 
 use classic_core::components::{
-    Animator, ColliderData, Disabled, IsoSprite, NavMesh, Role, Shape, Tilemap,
+    Animator, ColliderData, Disabled, IsoSprite, Light, NavMesh, Role, Shape, Tilemap,
 };
 use classic_core::types::AnimationData;
 use classic_core::RoleKind;
@@ -700,20 +700,23 @@ fn guest_light_pool_spawn_set_release() {
         &GuestLimits::default(),
         |rt| {
             let mut engine = Engine::new_for_test();
+            let lights = |engine: &Engine| {
+                engine.world.query::<&Light>().iter().map(|(_, l)| l.clone()).collect::<Vec<_>>()
+            };
             rt.update(&mut engine, 0.016).unwrap();
-            assert_eq!(engine.light_pool.active_count(), 1);
-            assert_eq!(engine.light_pool.gather()[0].position.x, 10.0);
-            assert_eq!(engine.light_pool.gather()[0].color, [1.0, 0.5, 0.25]);
-            assert_eq!(engine.light_pool.gather()[0].intensity, 2.0);
+            assert_eq!(lights(&engine).len(), 1);
+            assert_eq!(lights(&engine)[0].position.x, 10.0);
+            assert_eq!(lights(&engine)[0].color, [1.0, 0.5, 0.25]);
+            assert_eq!(lights(&engine)[0].intensity, 2.0);
 
             rt.update(&mut engine, 0.016).unwrap();
-            let lights = engine.light_pool.gather();
-            assert_eq!(lights[0].position.x, 30.0);
-            assert_eq!(lights[0].color, [0.0, 0.0, 1.0]);
-            assert_eq!(lights[0].intensity, 3.0);
+            let active = lights(&engine);
+            assert_eq!(active[0].position.x, 30.0);
+            assert_eq!(active[0].color, [0.0, 0.0, 1.0]);
+            assert_eq!(active[0].intensity, 3.0);
 
             rt.update(&mut engine, 0.016).unwrap();
-            assert_eq!(engine.light_pool.active_count(), 0);
+            assert_eq!(lights(&engine).len(), 0);
         },
     );
 }
@@ -1205,6 +1208,7 @@ fn install_test_resources(engine: &mut Engine) {
             sequence: vec![],
             offsets: vec![],
             offset_keyframes: vec![],
+            channels: vec![],
             metadata: None,
         },
     );

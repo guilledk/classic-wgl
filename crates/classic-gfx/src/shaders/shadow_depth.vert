@@ -4,16 +4,17 @@ precision mediump float;
 
 in vec3 vertex_pos;
 
-uniform mat4 model_matrix;
-uniform mat4 iso_matrix;
+// Tile -> light space: `T(origin) * S(tile_scale) * Rz(-45deg)`.
+uniform mat4 light_matrix;
 uniform mat4 light_view_proj;
 
-// Casters are rendered in *light space* (+Z up), not the sheared screen space
-// the main pass rasterises in.  Applying the isometric `y -= vertex_pos.z`
-// shear here would carry height in both y and z, presenting the sun at a
-// near-degenerate grazing angle.  Must stay in step with `vLightPos` in
-// `iso_tilemap.vert` and with `world_corner` in `classic-engine/src/shadow.rs`.
+// Casters are rendered in *light space* (+Z up, metric), not the sheared screen
+// space the main pass rasterises in.  Two distortions must stay out of it:
+// the `y -= vertex_pos.z` shear (which carries height in both y and z and
+// presents the sun at a near-degenerate grazing angle) and the isometric
+// `diag(1, 0.5, 1)` squash (which halves y and makes the space non-metric).
+// Must stay in step with `vLightPos` in `iso_tilemap.vert` and with
+// `world_corner` in `classic-engine/src/shadow.rs`.
 void main(void ) {
-    vec4 lightPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
-    gl_Position = light_view_proj * lightPos;
+    gl_Position = light_view_proj * light_matrix * vec4(vertex_pos, 1.0);
 }

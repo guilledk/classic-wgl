@@ -52,20 +52,33 @@ layout(std140) uniform LightBlock {
 
 out vec4 fragColor;
 
+// --- BEGIN SHARED LIGHTING (must stay byte-identical to iso_tilemap.frag;
+// --- pinned by `lit_shaders_share_the_lighting_block`) ---
+//
+// `p` and `l.pos_radius.xyz` are both **metric light space** (+Z up, `ppm` px
+// per metre on every axis — see `classic_core::math::iso_to_light_4`), so
+// `length` is a true distance and `dot(n, L)` a true cosine.  They previously
+// lived in the isometric space, which compresses y by 2x; every point light
+// was therefore an ellipsoid evaluated as if it were a sphere.
 vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     vec3 toLight = l.pos_radius.xyz - p;
     float dist = length(toLight);
     vec3 L = toLight / max(dist, 0.0001);
     float radius = l.pos_radius.w;
-    // Soft windowed falloff: `saturate(1 - (d/r)^2)^2` gives a smooth, natural
-    // gradient with no hard circular edge (vs a linear `1 - d/r` blob).
-    float attenuation;
-    if (radius <= 0.0) {
-        attenuation = 1.0;
-    } else {
+    // Smooth windowed falloff: `w(d)^2 / (1 + d^2)`, `w = saturate(1 - d^2)`,
+    // `d = dist / radius`.  Softer than the previous `w = saturate(1 - d^4)` /
+    // `1 + 8 d^2` form, whose quartic window + 8x inverse-square term made the
+    // light read as a hot core with a sharp cutoff at roughly a tenth of the
+    // radius (nearly invisible for a low light like the rocket's flame, whose
+    // Lambertian grazing angle already shrinks the ground pool).  The quadratic
+    // window + unit inverse-square term keeps a bounded, C0 edge while letting
+    // the light actually span the authored `radius`.
+    float attenuation = 1.0;
+    if (radius > 0.0) {
         float d = dist / radius;
-        attenuation = clamp(1.0 - d * d, 0.0, 1.0);
-        attenuation *= attenuation;
+        float d2 = d * d;
+        float window = clamp(1.0 - d2, 0.0, 1.0);
+        attenuation = window * window / (1.0 + d2);
     }
     float cone = 1.0;
     if (l.dir_cone.w > 0.0) {
@@ -88,6 +101,7 @@ vec3 evaluateLights(vec3 n, vec3 p) {
     }
     return acc;
 }
+// --- END SHARED LIGHTING ---
 
 // Manual directional-shadow compare.  `worldPos` is projected into light clip
 // space, remapped to `[0,1]` UVs, and compared against the stored depth.  A
@@ -187,8 +201,11 @@ void main(void ) {
     if (use_shadow > 0.5) {
         diff *= shadowFactor(vLightPos, n);
     }
-    color.rgb *= ambient_color + diff * light_color;
-    color.rgb += evaluateLights(n, vLightPos);
+    // Point lights are modulated by albedo, exactly like the sun.  They used to
+    // be added *after* the albedo multiply, so a point light washed the terrain
+    // toward its own colour regardless of the tile texture — which is what made
+    // it read as a glowing decal rather than as light.
+    color.rgb *= ambient_color + diff * light_color + evaluateLights(n, vLightPos);
 
     if (show_grid > 0 && selection_mode == -1 && vTileId <= 0.5) {
         vec2 tileCoord = vMapCoord * map_size;

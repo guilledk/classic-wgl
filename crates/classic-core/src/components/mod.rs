@@ -765,12 +765,17 @@ pub enum LightKind {
 /// representation encodes the kind as a `cone_angle <= 0` sentinel so both
 /// kinds share one layout.  Spotlights are future-proofed here but not yet
 /// emitted by any system.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Light {
     #[serde(default)]
     pub kind: LightKind,
-    /// World-space position (cartesian pixel space, shared with the tilemap and
-    /// sprite `worldPos` varyings).
+    /// Light-space position (metric, +Z up).  This is the frame every lighting
+    /// quantity lives in — `classic_core::math::iso_to_light_4`, i.e. the
+    /// isometric yaw *without* the `diag(1, 0.5, 1)` isometric squash.  It is
+    /// **not** the sheared screen space (`vWorldPos`) and not the squashed
+    /// `iso_to_cartesian` space — those make `length`/`normalize`/`dot` mean
+    /// something different along y.  The tilemap and sprite shaders derive
+    /// `vLightPos` in this same frame.
     pub position: Vec3,
     /// Linear RGB colour.
     pub color: [f32; 3],
@@ -786,6 +791,12 @@ pub struct Light {
     /// Spot half-angle in radians; `<= 0` encodes a point (omnidirectional) light.
     #[serde(default)]
     pub cone_angle: f32,
+    /// Optional parent entity name.  When set, `position` is interpreted as a
+    /// light-space offset **relative to the parent's ground point** and the
+    /// light follows the parent each frame; when `None`, `position` is an
+    /// absolute light-space position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 fn default_light_intensity() -> f32 {
@@ -806,6 +817,7 @@ impl Default for Light {
             radius: 200.0,
             dir: Vec3::ZERO,
             cone_angle: 0.0,
+            parent: None,
         }
     }
 }
