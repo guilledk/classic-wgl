@@ -9,6 +9,7 @@
 //! pure graph logic over already-loaded [`Rom`]s.
 
 use std::collections::BTreeSet;
+use std::future::Future;
 
 use anyhow::Context;
 
@@ -54,6 +55,22 @@ impl LoadedRoms {
         Ok(Self { root: root_name.to_string(), order })
     }
 
+    /// Async counterpart to [`LoadedRoms::resolve`] for platforms whose ROM
+    /// bytes are fetched (web).  `load` maps a ROM name to a future that
+    /// resolves to a fully-loaded [`Rom`]; the same cycle / dedup / topological
+    /// guarantees apply.
+    pub async fn resolve_async<F, Fut>(root_name: &str, mut load: F) -> anyhow::Result<Self>
+    where
+        F: FnMut(String) -> Fut,
+        Fut: Future<Output = anyhow::Result<Rom>>,
+    {
+        let mut order = Vec::new();
+        let mut done = BTreeSet::new();
+        let mut visiting = Vec::new();
+        visit_async(root_name.to_string(), &mut load, &mut done, &mut visiting, &mut order).await?;
+        Ok(Self { root: root_name.to_string(), order })
+    }
+
     /// Iterate the ROMs in topological order (deps before dependents).
     pub fn iter(&self) -> impl Iterator<Item = &LoadedRom> {
         self.order.iter()
@@ -89,6 +106,39 @@ fn visit(
     visiting.pop();
     done.insert(name.to_string());
     order.push(LoadedRom { name: name.to_string(), namespace, rom });
+    Ok(())
+}
+
+async fn visit_async<F, Fut>(
+    name: String,
+    load: &mut F,
+    done: &mut BTreeSet<String>,
+    visiting: &mut Vec<String>,
+    order: &mut Vec<LoadedRom>,
+) -> anyhow::Result<()>
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = anyhow::Result<Rom>>,
+{
+    if done.contains(&name) {
+        return Ok(());
+    }
+    if let Some(pos) = visiting.iter().position(|n| *n == name) {
+        let cycle = visiting[pos..].iter().cloned().collect::<Vec<_>>().join(" -> ");
+        anyhow::bail!("ROM dependency cycle: {cycle} -> {name}");
+    }
+
+    visiting.push(name.clone());
+    let rom = load(name.clone()).await?;
+    let namespace = rom.manifest.namespace.clone();
+    let deps = rom.manifest.deps.clone();
+    for dep in deps {
+        // Box the recursive future so async recursion type-checks.
+        Box::pin(visit_async(dep, &mut *load, done, visiting, order)).await?;
+    }
+    visiting.pop();
+    done.insert(name.clone());
+    order.push(LoadedRom { name, namespace, rom });
     Ok(())
 }
 
@@ -221,5 +271,48 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("missing"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn resolve_async_matches_sync_topological_order() {
+        let roms = HashMap::from([
+            ("scene", rom_with("scene", "scene", &["vehicles"])),
+            ("vehicles", rom_with("vehicles", "vehicles", &["common"])),
+            ("common", rom_with("common", "common", &[])),
+        ]);
+        let mut loader = {
+            let roms = roms.clone();
+            move |name: String| {
+                let roms = roms.clone();
+                async move {
+                    roms.get(name.as_str())
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("unknown ROM `{name}`"))
+                }
+            }
+        };
+        let loaded = pollster::block_on(LoadedRoms::resolve_async("scene", &mut loader)).unwrap();
+        assert_eq!(names(&loaded), vec!["common", "vehicles", "scene"]);
+    }
+
+    #[test]
+    fn resolve_async_rejects_cycle() {
+        let roms = HashMap::from([
+            ("a", rom_with("a", "a", &["b"])),
+            ("b", rom_with("b", "b", &["a"])),
+        ]);
+        let mut loader = {
+            let roms = roms.clone();
+            move |name: String| {
+                let roms = roms.clone();
+                async move {
+                    roms.get(name.as_str())
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("unknown ROM `{name}`"))
+                }
+            }
+        };
+        let err = pollster::block_on(LoadedRoms::resolve_async("a", &mut loader)).unwrap_err();
+        assert!(err.to_string().contains("cycle"), "unexpected error: {err}");
     }
 }
