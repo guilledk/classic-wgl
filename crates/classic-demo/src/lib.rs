@@ -34,25 +34,33 @@ use classic_core::cl_info;
 use classic_core::instrument::Chan;
 use classic_engine::Engine;
 use classic_guest::{create_runtime, GuestLimits, GuestRuntime};
-use classic_rom::Rom;
+use classic_rom::{LoadedRoms, Rom};
 
 use crate::state::{DemoState, DemoStateRef};
 
-/// Install the ROM guest runtime: instantiate the ROM's compiled guest module,
-/// run its optional one-shot `init` hook synchronously (before the first
-/// frame), and register a per-frame `on_update` closure that runs `update(dt)`
-/// and — once, after the first update — the optional `start` hook.
-pub fn init_guest(e: &mut Engine, state: &DemoStateRef, wasm: &[u8], limits: &GuestLimits) {
+/// Install a single ROM guest runtime: instantiate the ROM's compiled guest
+/// module against the given namespace, run its optional one-shot `init` hook
+/// synchronously (before the first frame), and register a per-frame `on_update`
+/// closure that runs `update(dt)` and — once, after the first update — the
+/// optional `start` hook.
+pub fn init_guest(
+    e: &mut Engine,
+    state: &DemoStateRef,
+    wasm: &[u8],
+    limits: &GuestLimits,
+    namespace: &str,
+) {
     // The deterministic harness forces synchronous workers so frame output is
     // independent of background-thread scheduling.
     e.set_synchronous_workers(limits.synchronous_workers);
     match create_runtime(wasm, limits) {
         Ok(mut rt) => {
+            rt.set_namespace(namespace);
             if let Err(err) = rt.init(e) {
                 cl_error!(Chan::Guest, "guest init failed: {err}");
             }
             let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(rt));
-            state.borrow_mut().guest = Some(rt.clone());
+            state.borrow_mut().guests.push(rt.clone());
             let mut started = false;
             e.on_update(move |engine| {
                 let dt = engine.time.delta as f64;
@@ -72,15 +80,36 @@ pub fn init_guest(e: &mut Engine, state: &DemoStateRef, wasm: &[u8], limits: &Gu
     }
 }
 
-/// Full demo engine bootstrap for a loaded ROM.
+/// Install a guest for every ROM in the DAG that ships a `main` code module, in
+/// topological order (deps first), so a dependent scene's guest `init` can
+/// reference dependency entities at init and per-frame `update`s run deps
+/// before dependents.
+pub fn init_guests(e: &mut Engine, state: &DemoStateRef, loaded: &LoadedRoms) {
+    let env = classic_engine::env_config::EnvConfig::get();
+    for entry in &loaded.order {
+        let Some(wasm) = entry.rom.resources.code().get("main") else { continue };
+        let ns = e.rom_namespace(&entry.name);
+        let limits = GuestLimits {
+            trusted: entry.rom.manifest.trusted,
+            // The deterministic harness (CLASSIC_TEST) and golden capture both
+            // force synchronous workers so frame output is independent of
+            // background-thread scheduling.
+            synchronous_workers: env.test_active() || env.golden_active(),
+            ..GuestLimits::default()
+        };
+        init_guest(e, state, wasm, &limits, &ns);
+    }
+}
+
+/// Full demo engine bootstrap for a loaded multi-ROM dependency DAG.
 ///
-/// `load_rom` hydrates shaders, resources and the entity graph; the ROM guest
-/// owns the scene look (terrain hydration/generation, camera framing, light,
-/// grid), and the shared host layer (editor HUD, widgets, lighting default,
-/// hooks, test runner) is installed on top.
-pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
+/// `load_roms` hydrates shaders, resources and the entity graph (deps before
+/// dependents); each ROM's guest owns its own scene look, and the shared host
+/// layer (editor HUD, widgets, lighting default, hooks, test runner) is
+/// installed on top.
+pub fn init_engine_multi(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
     let mut e = Engine::new();
-    e.load_rom(gl, rom);
+    e.load_roms(gl, loaded);
 
     let state: DemoStateRef = Rc::new(RefCell::new(DemoState::default()));
 
@@ -93,34 +122,28 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
     lighting::init_lighting(&mut e, &state);
 
     // Install the background guest worker (Tier 3) *before* the foreground
-    // guest runs its `init` hook, so the lunar guest can submit generation work
-    // from `init` (and apply it synchronously under the golden harness).
-    if let Some(worker_wasm) = rom.resources.code().get("worker") {
-        let env = classic_engine::env_config::EnvConfig::get();
-        if let Err(err) =
-            e.install_guest_worker(worker_wasm, env.test_active() || env.golden_active())
-        {
-            cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
+    // guests run their `init` hook, so a generating guest can submit work from
+    // `init`.  Worker code stays root-only for now (per-ROM workers deferred).
+    if let Some(root) = loaded.root_rom() {
+        if let Some(worker_wasm) = root.resources.code().get("worker") {
+            let env = classic_engine::env_config::EnvConfig::get();
+            if let Err(err) =
+                e.install_guest_worker(worker_wasm, env.test_active() || env.golden_active())
+            {
+                cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
+            }
         }
     }
 
-    // ROM guest code.  Each guest owns its terrain — the lunar guest generates
-    // + bulk-uploads the grids, the demo guest commits its hand-authored inline
-    // state — and then owns its own view setup.
-    if let Some(wasm) = rom.resources.code().get("main") {
-        let env = classic_engine::env_config::EnvConfig::get();
-        let limits = GuestLimits {
-            trusted: rom.manifest.trusted,
-            // The deterministic harness (CLASSIC_TEST) and golden capture both
-            // force synchronous workers so frame output is independent of
-            // background-thread scheduling.
-            synchronous_workers: env.test_active() || env.golden_active(),
-            ..GuestLimits::default()
-        };
-        init_guest(&mut e, &state, wasm, &limits);
-    } else {
-        // Static scene (no guest): commit the ROM-authored grids so the
-        // tilemap renders without a guest driving `commit_terrain`.
+    // ROM guest code.  Each guest owns its terrain — a generating guest
+    // bulk-uploads the grids, a hand-authored guest commits its inline state —
+    // and then owns its own view setup.
+    init_guests(&mut e, &state, loaded);
+
+    // Static scene (no guest): commit the ROM-authored grids so the tilemap
+    // renders without a guest driving `commit_terrain`.
+    let has_main = loaded.order.iter().any(|entry| entry.rom.resources.code().contains_key("main"));
+    if !has_main {
         let height_scale = e
             .entity_by_role(classic_core::RoleKind::Tilemap)
             .and_then(|te| e.world.get::<&classic_core::components::Tilemap>(te).ok())
@@ -135,7 +158,8 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
     // `CLASSIC_NO_UI` suppresses the whole editor/HUD/overlay layer so a capture
     // shows only the lit scene — the reference frame for lighting/shadow work,
     // where the SDF panel and HUD would otherwise occlude a third of the view.
-    if rom.manifest.host_features && !classic_engine::env_config::EnvConfig::get().no_ui {
+    let host_features = loaded.root_rom().map(|r| r.manifest.host_features).unwrap_or(false);
+    if host_features && !classic_engine::env_config::EnvConfig::get().no_ui {
         prefabs::init_debug_toggles(&mut e, &state);
         editor::init_ui(&mut e);
         editor::init_tool_buttons(&mut e, &state);
@@ -176,6 +200,27 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
     }
     testing::install(&mut e, &state);
 
-    cl_info!(Chan::Frame, "classic-demo initialized (entrypoint={})", rom.manifest.entrypoint);
+    let entrypoint = loaded.root_rom().map(|r| r.manifest.entrypoint.clone()).unwrap_or_default();
+    cl_info!(Chan::Frame, "classic-demo initialized (entrypoint={})", entrypoint);
     e
+}
+
+/// Full demo engine bootstrap for a single loaded ROM (the legacy path).  Wraps
+/// the ROM in a one-entry [`LoadedRoms`] and delegates to
+/// [`init_engine_multi`], so both paths share one boot sequence.
+pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
+    let name = if rom.manifest.entrypoint.is_empty() {
+        "root".to_string()
+    } else {
+        rom.manifest.entrypoint.clone()
+    };
+    let loaded = LoadedRoms {
+        root: name.clone(),
+        order: vec![classic_rom::LoadedRom {
+            name,
+            namespace: rom.manifest.namespace.clone(),
+            rom: rom.clone(),
+        }],
+    };
+    init_engine_multi(gl, &loaded)
 }
