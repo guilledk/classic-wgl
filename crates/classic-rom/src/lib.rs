@@ -10,6 +10,7 @@
 
 pub mod archive;
 pub mod format;
+pub mod loaded;
 pub mod loader;
 pub mod manifest;
 pub mod resource;
@@ -18,6 +19,7 @@ pub mod source;
 
 pub use archive::RomArchive;
 pub use format::{detect_format, RomFormat};
+pub use loaded::{LoadedRom, LoadedRoms};
 #[cfg(not(target_arch = "wasm32"))]
 pub use loader::FsAssetLoader;
 pub use loader::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
