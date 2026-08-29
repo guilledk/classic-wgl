@@ -68,6 +68,14 @@ pub struct RomManifest {
     /// per-ROM versioning existed.
     #[serde(default)]
     pub version: Option<String>,
+    /// Item catalog: ROM-namespaced item definitions, interned by the host
+    /// into a per-ROM [`classic_core::inventory::ItemRegistry`] at load.
+    #[serde(default)]
+    pub items: Vec<classic_core::inventory::ItemDef>,
+    /// Inventory types: named per-class capacity multipliers used by the host
+    /// inventory mechanics.
+    #[serde(default)]
+    pub inventory_types: Vec<classic_core::inventory::InventoryType>,
 }
 
 fn default_format_version() -> u32 {
@@ -120,5 +128,32 @@ mod tests {
         let with = r#"{"shaders": [], "textures": [], "animations": [], "version": "0.2.0"}"#;
         let m: RomManifest = serde_json::from_str(with).unwrap();
         assert_eq!(m.version.as_deref(), Some("0.2.0"));
+    }
+
+    #[test]
+    fn items_and_inventory_types_deserialize_and_default_empty() {
+        let json = r#"{
+            "shaders": [],
+            "textures": [],
+            "animations": [],
+            "items": [
+                {"name": "shipping_container", "class": "container",
+                 "stack_rule": {"rule": "unit", "max_per_stack": 1}}
+            ],
+            "inventory_types": [
+                {"name": "cargo_bay", "capacity_mult": [["container", 1.0]]}
+            ]
+        }"#;
+        let m: RomManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(m.items.len(), 1);
+        assert_eq!(m.items[0].name, "shipping_container");
+        assert_eq!(m.inventory_types.len(), 1);
+        assert_eq!(m.inventory_types[0].name, "cargo_bay");
+
+        // Absent items/inventory_types default to empty.
+        let empty: RomManifest =
+            serde_json::from_str(r#"{"shaders":[],"textures":[],"animations":[]}"#).unwrap();
+        assert!(empty.items.is_empty());
+        assert!(empty.inventory_types.is_empty());
     }
 }
