@@ -695,6 +695,7 @@ pub enum UiAnchor {
 pub enum UiKind {
     Container,
     Array { vertical: bool, align: UiAlign, spacing: f32 },
+    Grid { columns: u32, col_gap: f32, row_gap: f32, row_align: UiAlign },
     Padding { top: f32, right: f32, bottom: f32, left: f32 },
     Text,
     SdfText,
@@ -706,6 +707,7 @@ impl UiKind {
         match self {
             UiKind::Container => "container",
             UiKind::Array { .. } => "array",
+            UiKind::Grid { .. } => "grid",
             UiKind::Padding { .. } => "padding",
             UiKind::Text => "text",
             UiKind::SdfText => "sdfText",

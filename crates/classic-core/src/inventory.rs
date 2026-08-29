@@ -75,6 +75,19 @@ pub struct ItemDef {
     /// Volume per unit item.  Informational for v1.
     #[serde(default)]
     pub volume: f32,
+    /// Icon frame name (resolved through the `icons` packed-atlas frame table).
+    /// `None` means the icon frame == the item `name` (they match by
+    /// convention).  A ROM may set an explicit override for future divergence.
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+impl ItemDef {
+    /// The packed-atlas frame name to use for this item's icon, defaulting to
+    /// the item name when no explicit `icon` override is set.
+    pub fn icon_frame_name(&self) -> &str {
+        self.icon.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// A named inventory type (ROM manifest `inventory_types[]`).  `capacity_mult`
@@ -195,6 +208,7 @@ mod tests {
             stack_rule: StackRule::Bulk { max_per_stack: 100 },
             mass: 1.0,
             volume: 0.5,
+            icon: None,
         }
     }
 
@@ -212,6 +226,7 @@ mod tests {
             stack_rule: StackRule::Gaseous { pressure_factor: 2.0, max_per_stack: 500 },
             mass: 1.1,
             volume: 1.0,
+            icon: None,
         });
         assert_eq!(fuel, 1);
 
@@ -259,6 +274,28 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(def.stack_rule.max_per_stack(), 1);
+    }
+
+    #[test]
+    fn item_def_icon_defaults_to_name() {
+        let def: ItemDef = serde_json::from_value(serde_json::json!({
+            "name": "regolith",
+            "class": "ore",
+            "stack_rule": {"rule": "bulk", "max_per_stack": 50}
+        }))
+        .unwrap();
+        assert_eq!(def.icon, None);
+        assert_eq!(def.icon_frame_name(), "regolith");
+
+        let overridden: ItemDef = serde_json::from_value(serde_json::json!({
+            "name": "regolith",
+            "class": "ore",
+            "stack_rule": {"rule": "bulk", "max_per_stack": 50},
+            "icon": "regolith_alt"
+        }))
+        .unwrap();
+        assert_eq!(overridden.icon.as_deref(), Some("regolith_alt"));
+        assert_eq!(overridden.icon_frame_name(), "regolith_alt");
     }
 
     #[test]

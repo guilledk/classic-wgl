@@ -16,6 +16,7 @@
 pub mod env_config;
 pub mod golden;
 pub mod inventory;
+pub mod inventory_ui;
 pub mod selection;
 pub mod ui;
 pub mod vehicle;
@@ -134,23 +135,23 @@ struct SdfTextGpu {
 }
 
 /// A frame resolved through a packed-atlas frame table.
-struct ResolvedFrame {
-    sheet_name: String,
-    uv_rect: [f32; 4],
+pub(crate) struct ResolvedFrame {
+    pub(crate) sheet_name: String,
+    pub(crate) uv_rect: [f32; 4],
     /// Content pixel size (frame rect w/h).
-    size: [f32; 2],
+    pub(crate) size: [f32; 2],
     /// Untrimmed source cell size (0 = unknown).
-    source_size: [u32; 2],
+    pub(crate) source_size: [u32; 2],
     /// Offset of the trimmed content within the source cell.
-    trim_offset: [i32; 2],
+    pub(crate) trim_offset: [i32; 2],
     /// Optional packer-provided anchor, already in trimmed-frame `[0..1]`.
-    anchor: Option<[f32; 2]>,
+    pub(crate) anchor: Option<[f32; 2]>,
     /// Per-sheet normal-map GL texture name (`"{sheet_name}-normal"`), set when
     /// the frame's sheet declares a `normal` companion.
-    normal_tex: Option<String>,
+    pub(crate) normal_tex: Option<String>,
     /// Per-sheet depth-map GL texture name + depth range, set when the frame's
     /// sheet declares a `depth` companion.
-    depth_tex: Option<(String, f32)>,
+    pub(crate) depth_tex: Option<(String, f32)>,
 }
 
 pub struct Engine {
@@ -270,6 +271,9 @@ pub struct Engine {
     guest_worker: Option<classic_worker::GuestWorker>,
     /// Host-owned named-field registry (grid kernels operate over these).
     pub fields: fields::FieldRegistry,
+    /// Host-owned container-inventory tooltip renderer (hover target + icon/
+    /// amount overlay).  Drives the overlay drawn each frame in `frame()`.
+    pub inventory_ui: inventory_ui::InventoryUi,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
     pre_update_hooks: Vec<UpdateFn>,
@@ -389,6 +393,7 @@ impl Engine {
             next_task_id: 0,
             guest_worker: None,
             fields: fields::FieldRegistry::default(),
+            inventory_ui: inventory_ui::InventoryUi::default(),
             nav_gpu: None,
             debug_frame: 0,
             pre_update_hooks: Vec::new(),
@@ -2396,6 +2401,14 @@ impl Engine {
             }
         }
 
+        // Container-inventory hover tooltip (host-owned).  Reconcile it before
+        // the render list is built so show/hide, content, and position are
+        // atomic with this frame's render — no one-frame lag on hover changes
+        // or camera pan/zoom.  Take-and-restore so `sync` can re-borrow `self`.
+        let mut inventory_ui = std::mem::take(&mut self.inventory_ui);
+        inventory_ui.sync(self);
+        self.inventory_ui = inventory_ui;
+
         // Render-list: sprites + tilemaps + iso sprites
         let mut items: Vec<(f32, hecs::Entity, DrawKind)> = Vec::new();
         for (e, (tf, sprite)) in self.world.query::<(&Transform, &SpriteRender)>().iter() {
@@ -2966,8 +2979,55 @@ impl Engine {
                         .get::<&classic_core::components::UiNode>(*entity)
                         .map(|n| (n.size.x, n.size.y))
                         .unwrap_or((tf.scale.x, tf.scale.y));
-                    let model = Mat4::from_translation(tf.position)
-                        * Mat4::from_scale(Vec3::new(w, h, 1.0));
+                    let frame_ref = sprite
+                        .frame_name
+                        .as_deref()
+                        .and_then(|n| Self::resolve_frame(&self.frame_tables, &sprite.texture, n));
+                    let mut uv: Option<IsoUv> = None;
+                    let model = match &frame_ref {
+                        Some(fr) => {
+                            let sw = if fr.source_size[0] > 0 {
+                                fr.source_size[0] as f32
+                            } else {
+                                fr.size[0]
+                            };
+                            let sh = if fr.source_size[1] > 0 {
+                                fr.source_size[1] as f32
+                            } else {
+                                fr.size[1]
+                            };
+                            let (cw, ch) = (fr.size[0], fr.size[1]);
+                            // Fit the trimmed content into the `(w, h)` box,
+                            // preserving aspect and centered.  The trim offset
+                            // is compensated so the content (not the source
+                            // cell) lands in the middle of the box — icon
+                            // frames are trimmed out of a larger source cell.
+                            let scale =
+                                if cw > 0.0 && ch > 0.0 { (w / cw).min(h / ch) } else { 1.0 };
+                            let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
+                            let off_x = (w - cw * scale) / 2.0 - bx * scale;
+                            let off_y = (h - ch * scale) / 2.0 - by * scale;
+                            uv = Some((fr.uv_rect, [bx, by], [sw, sh], [cw, ch]));
+                            Mat4::from_translation(Vec3::new(
+                                tf.position.x + off_x,
+                                tf.position.y + off_y,
+                                tf.position.z,
+                            )) * Mat4::from_scale(Vec3::new(sw * scale, sh * scale, 1.0))
+                        }
+                        None => {
+                            Mat4::from_translation(tf.position)
+                                * Mat4::from_scale(Vec3::new(w, h, 1.0))
+                        }
+                    };
+                    let region = match &uv {
+                        Some((uv_rect, trim_offset, source_size, content_size)) => {
+                            SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size }
+                        }
+                        None => {
+                            let ts = [sprite.tile_set_size.x, sprite.tile_set_size.y];
+                            SpriteRegion::Grid { frame: sprite.frame, tile_set_size: ts }
+                        }
+                    };
                     if let Some(ref mut t) = self.trace {
                         let name = name_by_entity.get(entity).copied().unwrap_or("");
                         t.push(golden::TraceItemParams {
@@ -2984,12 +3044,11 @@ impl Engine {
                             normal: None,
                         });
                     }
-                    let ts = [sprite.tile_set_size.x, sprite.tile_set_size.y];
                     gfx.draw_sprite(
                         &model,
                         &Mat4::IDENTITY,
                         &sprite.texture,
-                        SpriteRegion::Grid { frame: sprite.frame, tile_set_size: ts },
+                        region,
                         true,
                         1.0,
                         &sprite_settings,
@@ -3674,7 +3733,7 @@ impl Engine {
     /// the frame's content pixel size, its trim/anchor metadata, and any
     /// per-sheet normal/depth companion GL texture names.  Returns `None` if
     /// the texture has no frame table or the name is unknown.
-    fn resolve_frame(
+    pub(crate) fn resolve_frame(
         tables: &HashMap<String, FrameTable>,
         texture: &str,
         frame_name: &str,
