@@ -655,10 +655,13 @@ impl Engine {
     /// grid hydration in topological order, plus DAG bookkeeping.  Split out so
     /// the multi-ROM logic is unit-testable without a GL context.
     fn hydrate_roms(&mut self, loaded: &classic_rom::LoadedRoms) {
+        let multi = loaded.order.len() > 1;
         for entry in &loaded.order {
-            self.namespace = entry.namespace.clone();
+            let ns = Self::effective_namespace(entry, multi);
+            self.namespace = ns.clone();
             self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources);
-            self.load_state(&entry.rom.state).expect("load ROM state");
+            let keys = self.load_state_in(&ns, &entry.rom.state).expect("load ROM state");
+            self.rewrite_cross_refs(&ns, &keys);
             self.load_grids(&entry.rom.resources);
         }
 
@@ -682,10 +685,147 @@ impl Engine {
     /// be applied: `names`/`name_order` and every name lookup route through this
     /// once several ROMs can load concurrently.
     pub fn entity_key(&self, name: &str) -> String {
-        if self.namespace.is_empty() {
+        self.entity_key_ns(&self.namespace, name)
+    }
+
+    /// Qualify a name under an explicit namespace (a no-op for the global/empty
+    /// namespace or an already-qualified `ns::name`).  The per-guest counterpart
+    /// of [`Engine::entity_key`]: guest SDK name routing uses this so a ROM's
+    /// entities are keyed by its own namespace rather than the last ROM loaded.
+    pub fn entity_key_ns(&self, ns: &str, name: &str) -> String {
+        if ns.is_empty() || name.contains("::") {
             name.to_string()
         } else {
-            format!("{}::{name}", self.namespace)
+            format!("{ns}::{name}")
+        }
+    }
+
+    /// The effective namespace a ROM was hydrated under: its declared
+    /// `namespace`, or its entrypoint/name when it participates in a multi-ROM
+    /// DAG (empty = global).  The demo layer uses this to scope a ROM's guest.
+    pub fn rom_namespace(&self, name: &str) -> String {
+        let multi = self.loaded_roms.len() > 1;
+        if let Some(entry) = self.loaded_roms.iter().find(|e| e.name == name) {
+            return Self::effective_namespace(entry, multi);
+        }
+        String::new()
+    }
+
+    /// Derive a ROM's effective namespace for the multi-ROM model: its declared
+    /// `namespace` when set, else its entrypoint (falling back to the resolver
+    /// name) when it participates in a multi-ROM DAG.  The legacy single-ROM
+    /// boot (one ROM, empty namespace) stays on the global (`""`) namespace so
+    /// shipped scenes and their golden traces are unchanged.
+    fn effective_namespace(entry: &classic_rom::LoadedRom, multi: bool) -> String {
+        if !entry.namespace.is_empty() {
+            return entry.namespace.clone();
+        }
+        if multi {
+            if entry.rom.manifest.entrypoint.is_empty() {
+                entry.name.clone()
+            } else {
+                entry.rom.manifest.entrypoint.clone()
+            }
+        } else {
+            String::new()
+        }
+    }
+
+    /// Rewrite the cross-entity references stored on a ROM's components into
+    /// namespace-qualified keys, using the ROM's namespace as the referring
+    /// namespace.  Covered: `NavMesh.map_entity`, `IsoSprite.tilemap` /
+    /// `IsoAgent.tilemap`, `Animator.target` (the `entity.component` entity
+    /// segment), and `IsoVehicle.tilemap` / `wheel_entities` / `tire_entities`.
+    /// A bare reference resolves in the referring namespace first, then the
+    /// global namespace (see [`Engine::resolve_entity_name`]); a dangling
+    /// reference is left untouched (the draw path reports it as missing).
+    fn rewrite_cross_refs(&mut self, ns: &str, keys: &[String]) {
+        for key in keys {
+            let Some(&entity) = self.names.get(key) else { continue };
+
+            if let Some(map_entity) =
+                self.world.get::<&NavMesh>(entity).ok().map(|n| n.map_entity.clone())
+            {
+                if !map_entity.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &map_entity) {
+                        if let Ok(mut n) = self.world.get::<&mut NavMesh>(entity) {
+                            n.map_entity = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(tilemap) =
+                self.world.get::<&IsoSprite>(entity).ok().map(|s| s.tilemap.clone())
+            {
+                if !tilemap.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
+                        if let Ok(mut s) = self.world.get::<&mut IsoSprite>(entity) {
+                            s.tilemap = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(tilemap) =
+                self.world.get::<&IsoAgent>(entity).ok().map(|a| a.tilemap.clone())
+            {
+                if !tilemap.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
+                        if let Ok(mut a) = self.world.get::<&mut IsoAgent>(entity) {
+                            a.tilemap = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(target) = self.world.get::<&Animator>(entity).ok().map(|a| a.target.clone())
+            {
+                let parts: Vec<&str> = target.splitn(2, '.').collect();
+                if let Some(entity_name) = parts.first() {
+                    if !entity_name.is_empty() {
+                        if let Some(resolved) = self.resolve_entity_name(ns, entity_name) {
+                            let new_target = if parts.len() == 2 {
+                                format!("{resolved}.{}", parts[1])
+                            } else {
+                                resolved
+                            };
+                            if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
+                                a.target = new_target;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some((tilemap, wheels, tires)) = self
+                .world
+                .get::<&IsoVehicle>(entity)
+                .ok()
+                .map(|v| (v.tilemap.clone(), v.wheel_entities.clone(), v.tire_entities.clone()))
+            {
+                if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(entity) {
+                    if !tilemap.is_empty() {
+                        if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
+                            v.tilemap = resolved;
+                        }
+                    }
+                    for w in wheels.iter().zip(v.wheel_entities.iter_mut()) {
+                        if !w.0.is_empty() {
+                            if let Some(resolved) = self.resolve_entity_name(ns, w.0) {
+                                *w.1 = resolved;
+                            }
+                        }
+                    }
+                    for t in tires.iter().zip(v.tire_entities.iter_mut()) {
+                        if !t.0.is_empty() {
+                            if let Some(resolved) = self.resolve_entity_name(ns, t.0) {
+                                *t.1 = resolved;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1171,6 +1311,15 @@ impl Engine {
     }
 
     pub fn load_state(&mut self, json: &str) -> Result<(), anyhow::Error> {
+        let ns = self.namespace.clone();
+        self.load_state_in(&ns, json).map(|_| ())
+    }
+
+    /// Load the entity graph into the world under an explicit namespace,
+    /// returning the (qualified) keys of the entities added.  The multi-ROM
+    /// hydration path uses this so cross-entity references can be rewritten
+    /// with the *referring* ROM's namespace rather than the last one loaded.
+    fn load_state_in(&mut self, ns: &str, json: &str) -> Result<Vec<String>, anyhow::Error> {
         // Parse via raw Value to preserve JSON key order (serde_json Map is ordered
         // under `preserve_order`). The typed HashMap on StateData drops ordering.
         let root: serde_json::Value = serde_json::from_str(json)?;
@@ -1179,6 +1328,7 @@ impl Engine {
             .and_then(|v| v.as_object())
             .ok_or_else(|| anyhow::anyhow!("state.json missing 'entities' key"))?;
 
+        let mut inserted = Vec::new();
         for (name, val) in entities_obj {
             let ed: classic_core::types::EntityData = serde_json::from_value(val.clone())?;
             let mut builder = hecs::EntityBuilder::new();
@@ -1191,12 +1341,13 @@ impl Engine {
                 builder.add(());
             }
             let entity = self.world.spawn(builder.build());
-            let key = self.entity_key(name);
+            let key = self.entity_key_ns(ns, name);
             self.world.insert_one(entity, DebugName(key.clone())).ok();
             self.names.insert(key.clone(), entity);
-            self.name_order.push(key);
+            self.name_order.push(key.clone());
+            inserted.push(key);
         }
-        Ok(())
+        Ok(inserted)
     }
 
     pub fn debug_name(&self, entity: hecs::Entity) -> String {
@@ -5114,5 +5265,66 @@ mod tests {
         assert_eq!(e.resolve_entity_name("lunar", "globalEnt"), Some("globalEnt".into()));
         // Unknown names fail.
         assert_eq!(e.resolve_entity_name("lunar", "missing"), None);
+    }
+
+    #[test]
+    fn rewrite_cross_refs_qualifies_entity_references() {
+        // A dependency ROM that did not declare a namespace defaults to its
+        // entrypoint when it participates in a multi-ROM DAG.
+        let scene_state = r#"{
+            "entities": {
+                "rocket": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "rocket", "tilemap": "common::tilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.98] } ] },
+                "selfsprite": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "x", "tilemap": "localTilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.5] } ] },
+                "nav": { "components": [ { "type": "IsometricNavMesh", "position": [0,0,0],
+                    "scale": [1,1,1], "map_entity": "common::tilemap", "size_x": 10, "size_y": 10 } ] },
+                "anim": { "components": [ { "type": "Animator", "target": "rocket.IsoSprite",
+                    "speed": 1.0 } ] },
+                "localTilemap": { "components": [] }
+            }
+        }"#;
+
+        let mut e = Engine::new_for_test();
+        let loaded = classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: String::new(),
+                    rom: test_rom("common", "", r#"{"entities":{"tilemap":{"components":[]}}}"#),
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom("scene", "scene", scene_state),
+                },
+            ],
+        };
+
+        e.hydrate_roms(&loaded);
+
+        // The undeclared dependency ROM defaulted to its entrypoint namespace.
+        assert_eq!(e.rom_namespace("common"), "common");
+        assert_eq!(e.rom_namespace("scene"), "scene");
+        assert!(e.names.contains_key("common::tilemap"));
+
+        // A qualified cross-ROM reference resolves exactly (left untouched).
+        let rocket = *e.names.get("scene::rocket").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(rocket).unwrap().tilemap, "common::tilemap");
+
+        // A bare reference to a same-ROM entity is qualified with the referring ns.
+        let selfsprite = *e.names.get("scene::selfsprite").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(selfsprite).unwrap().tilemap, "scene::localTilemap");
+
+        // NavMesh.map_entity is rewritten.
+        let nav = *e.names.get("scene::nav").unwrap();
+        assert_eq!(e.world.get::<&NavMesh>(nav).unwrap().map_entity, "common::tilemap");
+
+        // Animator.target qualifies its entity segment and keeps the component name.
+        let anim = *e.names.get("scene::anim").unwrap();
+        assert_eq!(e.world.get::<&Animator>(anim).unwrap().target, "scene::rocket.IsoSprite");
     }
 }
