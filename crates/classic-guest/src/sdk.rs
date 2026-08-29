@@ -139,9 +139,21 @@ impl GuestHost {
         self.engine_mut().set_sprite_frame(name, frame as f32) as i32
     }
 
+    /// Read a named entity's `IsoSprite` frame index (`-1.0` when it has none).
+    pub fn get_sprite_frame(&mut self, name: &str) -> f64 {
+        self.engine().get_sprite_frame(name).map(|f| f as f64).unwrap_or(-1.0)
+    }
+
     /// Set a named entity's `IsoSprite` tint colour (RGBA, `0..=1`).
     pub fn set_sprite_color(&mut self, name: &str, r: f64, g: f64, b: f64, a: f64) -> i32 {
         self.engine_mut().set_sprite_color(name, [r as f32, g as f32, b as f32, a as f32]) as i32
+    }
+
+    /// Set a named entity's `IsoSprite` visual offset (`frame_offset`; negative
+    /// Y lifts the sprite).  Used to elevate runtime sprites (e.g. the
+    /// unloading container).
+    pub fn set_sprite_offset(&mut self, name: &str, dx: f64, dy: f64, dz: f64) -> i32 {
+        self.engine_mut().set_sprite_offset(name, dx as f32, dy as f32, dz as f32) as i32
     }
 
     /// Spawn a new `IsoSprite` entity cloned from a template entity's
@@ -295,6 +307,79 @@ impl GuestHost {
     /// Stop a wheeled vehicle, clearing its movement path.
     pub fn vehicle_stop(&mut self, name: &str) -> i32 {
         self.engine_mut().vehicle_stop(name) as i32
+    }
+
+    /// Set a wheeled vehicle's speed (tiles per second), mutating its
+    /// `IsoVehicle.speed` (e.g. slow a loaded LRV).
+    pub fn vehicle_set_speed(&mut self, name: &str, speed: f64) -> i32 {
+        self.engine_mut().vehicle_set_speed(name, speed as f32) as i32
+    }
+
+    /// Non-mutating vehicle reachability probe: run the vehicle's A* to
+    /// `(tx, ty)` without driving it.  Returns `1` reachable, `-1` no path,
+    /// `0` pending (call again), `-2` unknown vehicle.  On success the waypoints
+    /// are stored in `Engine::preview_paths` for the demo overlay.
+    pub fn vehicle_probe(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
+        self.engine_mut().vehicle_probe(name, tx, ty)
+    }
+
+    /// Clear a vehicle's drop-preview state (candidate path + probe).  Returns
+    /// `1` when anything was cleared, else `0`.
+    pub fn vehicle_probe_clear(&mut self, name: &str) -> i32 {
+        self.engine_mut().vehicle_probe_clear(name) as i32
+    }
+
+    /// The JSON array of currently RTS-selected entity names.
+    pub fn selected_names(&mut self) -> String {
+        serde_json::to_string(&self.engine().selected_names()).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Clear the RTS selection set.
+    pub fn selection_clear(&mut self) -> i32 {
+        self.engine_mut().selection_clear();
+        1
+    }
+
+    /// Serialize a named entity's inventory to JSON (`"null"` when it has none).
+    pub fn inventory_dump(&mut self, name: &str) -> String {
+        self.engine().inventory_dump(name).unwrap_or_else(|| "null".into())
+    }
+
+    /// Read a named entity's raw `Inventory.capacity` (`-1` when it has none).
+    pub fn inventory_capacity(&mut self, name: &str) -> i32 {
+        self.engine().inventory_capacity(name).map(|c| c as i32).unwrap_or(-1)
+    }
+
+    /// Add `n` units of an item (by name) to a named entity's inventory,
+    /// returning the amount actually added.
+    pub fn inventory_add(&mut self, name: &str, item: &str, n: i32) -> i32 {
+        if n < 0 {
+            return 0;
+        }
+        self.engine_mut().inventory_add(name, item, n as u32) as i32
+    }
+
+    /// Remove `n` units of an item (by name) from a named entity's inventory,
+    /// returning the amount actually removed.
+    pub fn inventory_remove(&mut self, name: &str, item: &str, n: i32) -> i32 {
+        if n < 0 {
+            return 0;
+        }
+        self.engine_mut().inventory_remove(name, item, n as u32) as i32
+    }
+
+    /// Transfer up to `n` units of an item (by name) between two named
+    /// entities' inventories, returning the amount actually transferred.
+    pub fn inventory_transfer(&mut self, from: &str, to: &str, item: &str, n: i32) -> i32 {
+        if n < 0 {
+            return 0;
+        }
+        self.engine_mut().inventory_transfer(from, to, item, n as u32) as i32
+    }
+
+    /// Serialize an item definition to JSON (empty string when unknown).
+    pub fn item_def(&mut self, name: &str) -> String {
+        self.engine().item_def(name).unwrap_or_default()
     }
 
     /// Read the camera position (x, y) and uniform scale.

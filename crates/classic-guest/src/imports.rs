@@ -97,6 +97,15 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
+            "get_sprite_frame",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> f64 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().get_sprite_frame(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
             "set_sprite_color",
             |mut caller: Caller<'_, $host>,
              ptr: i32,
@@ -108,6 +117,15 @@ macro_rules! install_host_imports {
              -> i32 {
                 let name = $read_str(&mut caller, ptr, len);
                 caller.data_mut().guest_mut().set_sprite_color(&name, r, g, b, a)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "set_sprite_offset",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, dx: f64, dy: f64, dz: f64| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().set_sprite_offset(&name, dx, dy, dz)
             },
         )?;
 
@@ -375,6 +393,145 @@ macro_rules! install_host_imports {
             |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
                 let name = $read_str(&mut caller, ptr, len);
                 caller.data_mut().guest_mut().vehicle_stop(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "vehicle_set_speed",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, speed: f64| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().vehicle_set_speed(&name, speed)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "vehicle_probe",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, tx: i32, ty: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().vehicle_probe(&name, tx, ty)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "vehicle_probe_clear",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().vehicle_probe_clear(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "selected_names",
+            |mut caller: Caller<'_, $host>, out_ptr: i32, out_cap: i32| -> i32 {
+                let json = caller.data_mut().guest_mut().selected_names();
+                if out_cap < json.len() as i32 {
+                    return -1;
+                }
+                $write_str(&mut caller, out_ptr, &json)
+            },
+        )?;
+
+        $linker.func_wrap(m, "selection_clear", |mut caller: Caller<'_, $host>| -> i32 {
+            caller.data_mut().guest_mut().selection_clear()
+        })?;
+
+        $linker.func_wrap(
+            m,
+            "inventory_dump",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let json = caller.data_mut().guest_mut().inventory_dump(&name);
+                if out_cap < json.len() as i32 {
+                    return -1;
+                }
+                $write_str(&mut caller, out_ptr, &json)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "inventory_capacity",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().inventory_capacity(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "inventory_add",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             item_ptr: i32,
+             item_len: i32,
+             n: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let item = $read_str(&mut caller, item_ptr, item_len);
+                caller.data_mut().guest_mut().inventory_add(&name, &item, n)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "inventory_remove",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             item_ptr: i32,
+             item_len: i32,
+             n: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let item = $read_str(&mut caller, item_ptr, item_len);
+                caller.data_mut().guest_mut().inventory_remove(&name, &item, n)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "inventory_transfer",
+            |mut caller: Caller<'_, $host>,
+             from_ptr: i32,
+             from_len: i32,
+             to_ptr: i32,
+             to_len: i32,
+             item_ptr: i32,
+             item_len: i32,
+             n: i32|
+             -> i32 {
+                let from = $read_str(&mut caller, from_ptr, from_len);
+                let to = $read_str(&mut caller, to_ptr, to_len);
+                let item = $read_str(&mut caller, item_ptr, item_len);
+                caller.data_mut().guest_mut().inventory_transfer(&from, &to, &item, n)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "item_def",
+            |mut caller: Caller<'_, $host>,
+             ptr: i32,
+             len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                let json = caller.data_mut().guest_mut().item_def(&name);
+                if out_cap < json.len() as i32 {
+                    return -1;
+                }
+                $write_str(&mut caller, out_ptr, &json)
             },
         )?;
 
