@@ -510,6 +510,7 @@ impl GuestHost {
             radius: radius as f32,
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
+            parent: None,
         };
         let ttl = if ttl <= 0.0 { None } else { Some(ttl as f32) };
         self.engine_mut().spawn_light(light, ttl).map(|h| h as i32).unwrap_or(-1)
@@ -530,22 +531,38 @@ impl GuestHost {
         intensity: f64,
         radius: f64,
     ) -> i32 {
-        let light = Light {
+        // `light_set` only updates the transform/radiance fields; it must not
+        // demote a spot light or detach a parented light.  A negative handle is
+        // invalid (the host treats handles as unsigned slot indices, so `-1`
+        // must not silently alias slot 0).
+        if handle < 0 {
+            return 0;
+        }
+        let handle = handle as u32;
+        let mut light = self.engine().light_by_handle(handle).unwrap_or(Light {
             kind: LightKind::Point,
-            position: glam::Vec3::new(x as f32, y as f32, z as f32),
-            color: [r as f32, g as f32, b as f32],
-            intensity: intensity as f32,
-            radius: radius as f32,
+            position: glam::Vec3::ZERO,
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            radius: 200.0,
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
-        };
-        self.engine_mut().update_light(handle.max(0) as u32, light) as i32
+            parent: None,
+        });
+        light.position = glam::Vec3::new(x as f32, y as f32, z as f32);
+        light.color = [r as f32, g as f32, b as f32];
+        light.intensity = intensity as f32;
+        light.radius = radius as f32;
+        self.engine_mut().update_light(handle, light) as i32
     }
 
     /// Release a pooled light back to the free-list.  Returns `1` on success,
     /// `0` for an unknown/inactive handle.
     pub fn light_release(&mut self, handle: i32) -> i32 {
-        self.engine_mut().release_light(handle.max(0) as u32) as i32
+        if handle < 0 {
+            return 0;
+        }
+        self.engine_mut().release_light(handle as u32) as i32
     }
 
     /// Spawn a named screen-space solid-color rectangle.

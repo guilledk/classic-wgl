@@ -7,8 +7,8 @@ in vec2 tex_coord;
 
 uniform mat4 model_matrix;
 uniform mat4 light_view_proj;
-// The sprite's ground anchor as `(sheared y, light-space height)`.
-uniform vec2 sprite_anchor;
+// See `direct_tex.vert` — (sheared screen y, light-space height, light-space y).
+uniform vec3 sprite_anchor;
 
 out highp vec2 vTexCoord;
 
@@ -25,7 +25,7 @@ void main(void ) {
     highp float upFromAnchor = sprite_anchor.x - screenPos.y;
     highp vec3 lightPos = vec3(
         screenPos.x,
-        sprite_anchor.x + sprite_anchor.y,
+        sprite_anchor.z,
         sprite_anchor.y + upFromAnchor
     );
     gl_Position = light_view_proj * vec4(lightPos, 1.0);

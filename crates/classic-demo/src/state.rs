@@ -71,6 +71,9 @@ pub struct DemoState {
     /// Handle of the demo's persistent test point light (spawned by the
     /// light-widget test toggle), so it can be released/updated on toggle off.
     pub test_light_handle: Option<u32>,
+    /// Draw each active light as an X marker + a vertical Z line from the
+    /// terrain surface to the light (KeyL).
+    pub debug_lights: bool,
     /// The ROM guest runtime (installed by `init_guest`).
     pub guest: Option<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
 }
@@ -91,6 +94,7 @@ impl Default for DemoState {
             iso_coord_y_e: None,
             iso_coord_z_e: None,
             test_light_handle: None,
+            debug_lights: false,
             guest: None,
         }
     }

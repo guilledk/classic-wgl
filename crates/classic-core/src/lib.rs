@@ -311,5 +311,5 @@ fn dumper_role(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::
 
 fn dumper_light(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let l = world.get::<&Light>(entity).ok()?;
-    serde_json::to_value(*l).ok().map(|v| component_value("Light", v))
+    serde_json::to_value((*l).clone()).ok().map(|v| component_value("Light", v))
 }

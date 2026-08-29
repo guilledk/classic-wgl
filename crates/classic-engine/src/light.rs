@@ -1,108 +1,124 @@
-//! Dynamic light pool: a fixed-capacity free-list of [`Light`]s with optional
-//! per-light TTL decay for transient effects (flashes, explosions, rocket
-//! booster burns).
+//! Dynamic light handles + TTL: pooled lights are first-class ECS entities.
+//!
+//! A stable [`LightHandle`] (a slot index) maps to a spawned `Light` entity so
+//! the guest ABI (`light_spawn`/`light_set`/`light_release`) stays stable while
+//! lights become attachable world objects — declared in `state.json`, parented
+//! to sprites, and driven by animation channels like any other component.
 
 use classic_core::components::Light;
 
-/// Handle to a pooled light (a slot index into the pool).
+/// Handle to a dynamic light (a slot index into the handle table).
 pub type LightHandle = u32;
 
-struct LightSlot {
-    active: bool,
-    light: Light,
-    /// Remaining lifetime in seconds; `None` = persistent (no auto-release).
-    ttl: Option<f32>,
+/// Transient-light lifetime marker.  Present on guest-spawned lights with a
+/// finite TTL; the engine decays it each frame and despawns expired lights.
+pub struct LightTtl {
+    /// Remaining lifetime in seconds.
+    pub remaining: f32,
+    /// Handle of the light entity, freed on expiry.
+    pub handle: LightHandle,
 }
 
-/// A fixed-capacity pool of dynamic lights with a free-list allocator.
+/// A fixed-capacity handle→entity table with a free-list allocator.
 ///
 /// Capacity is bounded by `classic_gfx::MAX_LIGHTS` (the UBO block size); a
 /// spawn beyond capacity returns `None` rather than reallocating.
-pub struct LightPool {
-    slots: Vec<LightSlot>,
+pub struct LightHandles {
+    slots: Vec<Option<hecs::Entity>>,
     free: Vec<LightHandle>,
 }
 
-impl LightPool {
+impl LightHandles {
     pub fn new() -> Self {
         Self { slots: Vec::new(), free: Vec::new() }
     }
 
-    /// Allocate a light slot, returning its handle (or `None` when full).
-    pub fn spawn(&mut self, light: Light, ttl: Option<f32>) -> Option<LightHandle> {
-        if let Some(idx) = self.free.pop() {
-            let slot = &mut self.slots[idx as usize];
-            slot.active = true;
-            slot.light = light;
-            slot.ttl = ttl;
-            return Some(idx);
-        }
-        if self.slots.len() >= classic_gfx::MAX_LIGHTS {
+    /// Spawn a light entity, returning its handle (or `None` when full).
+    pub fn spawn(
+        &mut self,
+        world: &mut hecs::World,
+        light: Light,
+        ttl: Option<f32>,
+    ) -> Option<LightHandle> {
+        let handle = if let Some(h) = self.free.pop() {
+            h
+        } else if self.slots.len() >= classic_gfx::MAX_LIGHTS {
             return None;
+        } else {
+            let h = self.slots.len() as LightHandle;
+            self.slots.push(None);
+            h
+        };
+        let mut builder = hecs::EntityBuilder::new();
+        builder.add(light);
+        if let Some(ttl) = ttl {
+            builder.add(LightTtl { remaining: ttl, handle });
         }
-        let idx = self.slots.len() as u32;
-        self.slots.push(LightSlot { active: true, light, ttl });
-        Some(idx)
+        let entity = world.spawn(builder.build());
+        self.slots[handle as usize] = Some(entity);
+        Some(handle)
     }
 
     /// Overwrite an active light's parameters by handle.
-    pub fn set(&mut self, handle: LightHandle, light: Light) -> bool {
-        match self.slots.get_mut(handle as usize) {
-            Some(slot) if slot.active => {
-                slot.light = light;
-                true
-            }
+    pub fn set(&mut self, world: &mut hecs::World, handle: LightHandle, light: Light) -> bool {
+        match self.slots.get(handle as usize) {
+            Some(Some(e)) => world.insert(*e, (light,)).is_ok(),
             _ => false,
         }
     }
 
-    /// Release a light back to the free-list.
-    pub fn release(&mut self, handle: LightHandle) -> bool {
-        match self.slots.get_mut(handle as usize) {
-            Some(slot) if slot.active => {
-                slot.active = false;
-                slot.ttl = None;
+    /// Read an active light's parameters by handle.
+    pub fn get(&self, world: &hecs::World, handle: LightHandle) -> Option<Light> {
+        match self.slots.get(handle as usize) {
+            Some(Some(e)) => world.get::<&Light>(*e).ok().map(|r| (*r).clone()),
+            _ => None,
+        }
+    }
+
+    /// Despawn a light entity and release its handle back to the free-list.
+    pub fn release(&mut self, world: &mut hecs::World, handle: LightHandle) -> bool {
+        if let Some(slot) = self.slots.get_mut(handle as usize) {
+            if let Some(e) = slot.take() {
+                let _ = world.despawn(e);
                 self.free.push(handle);
-                true
+                return true;
             }
-            _ => false,
+        }
+        false
+    }
+
+    /// Mark a handle as freed after its entity was despawned elsewhere (e.g. by
+    /// TTL decay).
+    fn free_handle(&mut self, handle: LightHandle) {
+        if let Some(slot) = self.slots.get_mut(handle as usize) {
+            if slot.is_some() {
+                *slot = None;
+                self.free.push(handle);
+            }
         }
     }
 
-    /// Advance transient-light TTLs by `dt` seconds, releasing expired lights.
-    pub fn decay(&mut self, dt: f32) {
+    /// Advance transient-light TTLs by `dt` seconds, despawning expired lights
+    /// and freeing their handles.
+    pub fn decay(&mut self, world: &mut hecs::World, dt: f32) {
         if dt <= 0.0 {
             return;
         }
         let mut expired = Vec::new();
-        for (i, slot) in self.slots.iter_mut().enumerate() {
-            if !slot.active {
-                continue;
-            }
-            if let Some(ttl) = slot.ttl.as_mut() {
-                *ttl -= dt;
-                if *ttl <= 0.0 {
-                    slot.active = false;
-                    slot.ttl = None;
-                    expired.push(i as LightHandle);
-                }
+        for (e, ttl) in world.query::<&mut LightTtl>().iter() {
+            ttl.remaining -= dt;
+            if ttl.remaining <= 0.0 {
+                expired.push((e, ttl.handle));
             }
         }
-        self.free.extend(expired);
-    }
-
-    /// Collect the active lights in stable slot order (matches the UBO order).
-    pub fn gather(&self) -> Vec<Light> {
-        self.slots.iter().filter(|s| s.active).map(|s| s.light).collect()
-    }
-
-    /// Number of currently active lights.
-    pub fn active_count(&self) -> usize {
-        self.slots.iter().filter(|s| s.active).count()
+        for (e, handle) in expired {
+            let _ = world.despawn(e);
+            self.free_handle(handle);
+        }
     }
 }
 
-impl Default for LightPool {
+impl Default for LightHandles {
     fn default() -> Self {
         Self::new()
     }
@@ -122,81 +138,68 @@ mod tests {
             radius: 100.0,
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
+            parent: None,
         }
+    }
+
+    fn active(world: &hecs::World) -> usize {
+        world.query::<&Light>().iter().count()
     }
 
     #[test]
     fn spawn_reuse_and_capacity() {
-        let mut pool = LightPool::new();
-        assert_eq!(pool.active_count(), 0);
+        let mut world = hecs::World::new();
+        let mut table = LightHandles::new();
+        assert_eq!(active(&world), 0);
 
-        let h0 = pool.spawn(light(), None).unwrap();
-        let h1 = pool.spawn(light(), None).unwrap();
+        let h0 = table.spawn(&mut world, light(), None).unwrap();
+        let h1 = table.spawn(&mut world, light(), None).unwrap();
         assert_ne!(h0, h1);
-        assert_eq!(pool.active_count(), 2);
+        assert_eq!(active(&world), 2);
 
-        // Set on an active handle succeeds.
-        assert!(pool.set(h1, light()));
+        assert!(table.set(&mut world, h1, light()));
 
-        // Release h0; a released handle rejects further set/release.
-        assert!(pool.release(h0));
-        assert_eq!(pool.active_count(), 1);
-        assert!(!pool.set(h0, light()));
-        assert!(!pool.release(h0));
+        assert!(table.release(&mut world, h0));
+        assert_eq!(active(&world), 1);
+        assert!(!table.set(&mut world, h0, light()));
+        assert!(!table.release(&mut world, h0));
 
-        // Re-spawn reuses the freed slot.
-        let h2 = pool.spawn(light(), None).unwrap();
+        let h2 = table.spawn(&mut world, light(), None).unwrap();
         assert_eq!(h2, h0);
 
-        assert!(pool.release(h1));
-        assert!(pool.release(h2));
+        assert!(table.release(&mut world, h1));
+        assert!(table.release(&mut world, h2));
     }
 
     #[test]
     fn ttl_decay_releases_transient_lights() {
-        let mut pool = LightPool::new();
-        let persistent = pool.spawn(light(), None).unwrap();
-        let transient = pool.spawn(light(), Some(1.0)).unwrap();
+        let mut world = hecs::World::new();
+        let mut table = LightHandles::new();
+        let persistent = table.spawn(&mut world, light(), None).unwrap();
+        let transient = table.spawn(&mut world, light(), Some(1.0)).unwrap();
 
-        pool.decay(0.6);
-        assert_eq!(pool.active_count(), 2);
+        table.decay(&mut world, 0.6);
+        assert_eq!(active(&world), 2);
 
-        pool.decay(0.5);
-        assert_eq!(pool.active_count(), 1);
+        table.decay(&mut world, 0.5);
+        assert_eq!(active(&world), 1);
 
-        // The freed slot is reusable.
-        let reused = pool.spawn(light(), None).unwrap();
+        let reused = table.spawn(&mut world, light(), None).unwrap();
         assert_eq!(reused, transient);
-        assert!(pool.release(persistent));
-        assert!(pool.release(reused));
-    }
-
-    #[test]
-    fn gather_matches_slot_order() {
-        let mut pool = LightPool::new();
-        let mut a = light();
-        let mut b = light();
-        a.position.x = 1.0;
-        b.position.x = 2.0;
-        pool.spawn(a, None);
-        pool.spawn(b, None);
-
-        let gathered = pool.gather();
-        assert_eq!(gathered.len(), 2);
-        assert_eq!(gathered[0].position.x, 1.0);
-        assert_eq!(gathered[1].position.x, 2.0);
+        assert!(table.release(&mut world, persistent));
+        assert!(table.release(&mut world, reused));
     }
 
     #[test]
     fn capacity_is_bounded() {
-        let mut pool = LightPool::new();
+        let mut world = hecs::World::new();
+        let mut table = LightHandles::new();
         let mut handles = Vec::new();
         for _ in 0..classic_gfx::MAX_LIGHTS {
-            handles.push(pool.spawn(light(), None).unwrap());
+            handles.push(table.spawn(&mut world, light(), None).unwrap());
         }
-        assert_eq!(pool.spawn(light(), None), None);
-        // Releasing one frees capacity for another.
-        pool.release(handles[0]);
-        assert!(pool.spawn(light(), None).is_some());
+        assert_eq!(table.spawn(&mut world, light(), None), None);
+        table.release(&mut world, handles[0]);
+        assert!(table.spawn(&mut world, light(), None).is_some());
     }
 }

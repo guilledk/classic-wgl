@@ -337,6 +337,22 @@ pub struct OffsetKeyframe {
     pub offset: [f32; 3],
 }
 
+/// A named, typed, sparse keyframe channel in an animation's unified curves
+/// blob (`animation.bin`).  One animation carries several channels — sprite
+/// motion (`offset`) alongside light configuration (`light.position`,
+/// `light.color`, `light.intensity`, `light.radius`, `light.dir`,
+/// `light.cone`) — each linearly interpolated between keyframes by the
+/// animator, so frame + motion + light stay in lockstep.
+#[derive(Clone, Debug)]
+pub struct AnimChannel {
+    /// Channel name (`offset`, `light.position`, `light.color`, ...).
+    pub name: String,
+    /// Floats per keyframe: `1` (scalar), `3` (vec3), or `4` (vec4).
+    pub component: u8,
+    /// Sparse `(frame, value)` keyframes, sorted by frame.
+    pub keys: Vec<(u32, Vec<f32>)>,
+}
+
 /// A manifest entry for an animation.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct AnimationData {
@@ -354,11 +370,46 @@ pub struct AnimationData {
     /// `animations/` metadata at boot.
     #[serde(skip)]
     pub offset_keyframes: Vec<OffsetKeyframe>,
+    /// Unified typed channels loaded from the ROM's animation metadata blob
+    /// (`animation.bin`).  Carries sprite motion (`offset`) and every light
+    /// channel; never present in the JSON manifest.
+    #[serde(skip)]
+    pub channels: Vec<AnimChannel>,
     /// Optional path to a ROM resource with per-frame renderer metadata (e.g.
     /// Blender `rig_location` offsets), loaded into [`Self::offsets`] /
     /// [`Self::offset_keyframes`] at boot.
     #[serde(default)]
     pub metadata: Option<String>,
+}
+
+impl AnimationData {
+    /// Sample a named channel at a fractional timeline position, linearly
+    /// interpolating between the surrounding keyframes (clamping beyond the
+    /// ends).  Returns `None` when the channel is absent or empty.
+    pub fn channel_sample(&self, name: &str, counter: f32) -> Option<Vec<f32>> {
+        let ch = self.channels.iter().find(|c| c.name == name)?;
+        if ch.keys.is_empty() {
+            return None;
+        }
+        let first = &ch.keys[0];
+        if counter <= first.0 as f32 {
+            return Some(first.1.clone());
+        }
+        let last = &ch.keys[ch.keys.len() - 1];
+        if counter >= last.0 as f32 {
+            return Some(last.1.clone());
+        }
+        for i in 0..ch.keys.len() - 1 {
+            let (f0, v0) = &ch.keys[i];
+            let (f1, v1) = &ch.keys[i + 1];
+            let (f0, f1) = (*f0 as f32, *f1 as f32);
+            if counter >= f0 && counter <= f1 {
+                let t = if f1 > f0 { (counter - f0) / (f1 - f0) } else { 0.0 };
+                return Some(v0.iter().zip(v1).map(|(a, b)| a + (b - a) * t).collect());
+            }
+        }
+        Some(last.1.clone())
+    }
 }
 
 /// The resource manifest (matches `public/manifest.json`).

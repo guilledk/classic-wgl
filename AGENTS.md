@@ -129,11 +129,19 @@ plans/
    purely draw-order (z-sort).  Enabling it globally depth-rejects UI under ortho projection.
    See `classic-gfx` skill.
 - **Dynamic lights (UBO)**: beyond the Lambertian sun (`light_ambient`/`light_dir`/
-  `light_color`), the engine maintains a pooled set of point lights
-  (`Engine.light_pool`, `classic-engine/src/light.rs`) uploaded each frame to a `std140`
-  `LightBlock` UBO consumed by `sheet.frag`/`iso_tilemap.frag` (shared
-  `evaluateLight`).  `Engine::iso_to_world(x, y, elevation)` is the single iso-tile →
-  light-space conversion.  The **sun casts a directional shadow map**
+  `light_color`), dynamic point/spot lights are **first-class ECS entities** — a
+  `Light` component (registered + dumpable, declarable in `state.json`) gathered
+  from the world each frame and uploaded to a `std140` `LightBlock` UBO consumed
+  by `sheet.frag`/`iso_tilemap.frag` (shared `evaluateLight`).  The guest
+  `light_spawn`/`light_set`/`light_release` API returns a stable handle backed by
+  a `LightHandles` entity table (`classic-engine/src/light.rs`) with optional TTL
+  decay.  A `Light` may set `parent` (an entity name): its `position` is then a
+  **light-space offset from the parent's ground point** (`iso_to_world` of the
+  parent's tile position), so lights follow moving objects.  `Engine::iso_to_world(x, y,
+  elevation)` is the single iso-tile → light-space conversion.  An animation may
+  carry typed `light.*` channels (see `AnimationData::channels`); an `Animator`
+  targeting `"<entity>.Light"` samples them and drives the light in lockstep with
+  the sprite.  The **sun casts a directional shadow map**
   (`classic-engine/src/shadow.rs` + a depth-only `DepthFramebuffer` in
   `classic-gfx`), sampled in both lit shaders to shadow the sun diffuse term
   (terrain self-shadowing, terrain→sprite, sprite→terrain); ambient and point
