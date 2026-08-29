@@ -82,6 +82,11 @@ pub trait GuestRuntime {
     fn start(&mut self, _engine: &mut Engine) -> Result<(), GuestError> {
         Ok(())
     }
+
+    /// Set the owning ROM's namespace (empty = global).  Guest-supplied entity
+    /// names are scoped to it for the multi-ROM model; the default is a no-op
+    /// for runtimes that don't isolate namespaces.
+    fn set_namespace(&mut self, _namespace: &str) {}
 }
 
 /// wasmi store data: the shared [`GuestHost`] engine bridge plus wasmi's
@@ -186,6 +191,10 @@ impl GuestRuntime for WasmiRuntime {
         self.store.data_mut().guest_mut().set_engine(engine);
         self.set_fuel_budget()?;
         start.call(&mut self.store, ()).map_err(Self::map_call_error)
+    }
+
+    fn set_namespace(&mut self, namespace: &str) {
+        self.store.data_mut().guest_mut().set_namespace(namespace);
     }
 }
 
