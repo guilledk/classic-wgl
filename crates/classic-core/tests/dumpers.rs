@@ -308,3 +308,61 @@ fn role_dumper_round_trips() {
         classic_core::RoleKind::Tilemap
     );
 }
+
+#[test]
+fn selectable_dumper_round_trips() {
+    register_all_components();
+
+    let sel = classic_core::components::Selectable { priority: 5, group: 1 };
+    let mut world = hecs::World::new();
+    let e = world.spawn((sel,));
+
+    let regs = classic_core::registry::ordered_regs();
+    let reg = regs.iter().find(|r| r.name == "Selectable").unwrap();
+    let val = reg.dump.unwrap()(&world, e).unwrap();
+    assert_eq!(val["type"], "Selectable");
+    assert_eq!(val["priority"], 5);
+    assert_eq!(val["group"], 1);
+
+    let mut fields = val.as_object().unwrap().clone();
+    fields.remove("type");
+    let mut builder = hecs::EntityBuilder::new();
+    (reg.spawn)(&mut builder, serde_json::Value::Object(fields)).unwrap();
+    let spawned = world.spawn(builder.build());
+    let back = world.get::<&classic_core::components::Selectable>(spawned).unwrap();
+    assert_eq!((back.priority, back.group), (5, 1));
+}
+
+#[test]
+fn inventory_dumper_round_trips() {
+    register_all_components();
+
+    let inv = classic_core::inventory::Inventory {
+        capacity: 100,
+        kind: "cargo_bay".into(),
+        accepts: vec![classic_core::inventory::ItemClass::Container],
+        provides: vec![],
+        stacks: vec![(0, 1), (1, 4)],
+    };
+    let mut world = hecs::World::new();
+    let e = world.spawn((inv,));
+
+    let regs = classic_core::registry::ordered_regs();
+    let reg = regs.iter().find(|r| r.name == "Inventory").unwrap();
+    let val = reg.dump.unwrap()(&world, e).unwrap();
+    assert_eq!(val["type"], "Inventory");
+    assert_eq!(val["capacity"], 100);
+    assert_eq!(val["kind"], "cargo_bay");
+    assert_eq!(val["accepts"], serde_json::json!(["container"]));
+    assert_eq!(val["stacks"], serde_json::json!([[0, 1], [1, 4]]));
+
+    let mut fields = val.as_object().unwrap().clone();
+    fields.remove("type");
+    let mut builder = hecs::EntityBuilder::new();
+    (reg.spawn)(&mut builder, serde_json::Value::Object(fields)).unwrap();
+    let spawned = world.spawn(builder.build());
+    let back = world.get::<&classic_core::inventory::Inventory>(spawned).unwrap();
+    assert_eq!(back.capacity, 100);
+    assert_eq!(back.kind, "cargo_bay");
+    assert_eq!(back.stacks, vec![(0, 1), (1, 4)]);
+}
