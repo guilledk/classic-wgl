@@ -117,6 +117,19 @@ var OP_SET_SPRITE_FRAME = 77;
 var OP_SET_SPRITE_COLOR = 78;
 var OP_SPAWN_SPRITE_CLONE = 79;
 var OP_SET_ENABLED = 80;
+var OP_VEHICLE_SET_SPEED = 81;
+var OP_SELECTED_NAMES = 82;
+var OP_SELECTION_CLEAR = 83;
+var OP_INVENTORY_DUMP = 84;
+var OP_INVENTORY_ADD = 85;
+var OP_INVENTORY_REMOVE = 86;
+var OP_INVENTORY_TRANSFER = 87;
+var OP_ITEM_DEF = 88;
+var OP_SET_SPRITE_OFFSET = 89;
+var OP_GET_SPRITE_FRAME = 90;
+var OP_INVENTORY_CAPACITY = 91;
+var OP_VEHICLE_PROBE = 92;
+var OP_VEHICLE_PROBE_CLEAR = 93;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -208,8 +221,14 @@ function envImports() {
         set_sprite_frame: function (ptr, len, frame) {
             return hostCall(OP_SET_SPRITE_FRAME, [readStr(ptr, len)], [frame]).ret | 0;
         },
+        get_sprite_frame: function (ptr, len) {
+            return hostCall(OP_GET_SPRITE_FRAME, [readStr(ptr, len)], []).ret;
+        },
         set_sprite_color: function (ptr, len, r, g, b, a) {
             return hostCall(OP_SET_SPRITE_COLOR, [readStr(ptr, len)], [r, g, b, a]).ret | 0;
+        },
+        set_sprite_offset: function (ptr, len, dx, dy, dz) {
+            return hostCall(OP_SET_SPRITE_OFFSET, [readStr(ptr, len)], [dx, dy, dz]).ret | 0;
         },
         spawn_sprite_clone: function (tPtr, tLen, nPtr, nLen) {
             return hostCall(OP_SPAWN_SPRITE_CLONE, [readStr(tPtr, tLen), readStr(nPtr, nLen)], []).ret | 0;
@@ -303,6 +322,57 @@ function envImports() {
         },
         vehicle_stop: function (ptr, len) {
             return hostCall(OP_VEHICLE_STOP, [readStr(ptr, len)], []).ret | 0;
+        },
+        vehicle_set_speed: function (ptr, len, speed) {
+            return hostCall(OP_VEHICLE_SET_SPEED, [readStr(ptr, len)], [speed]).ret | 0;
+        },
+        vehicle_probe: function (ptr, len, tx, ty) {
+            return hostCall(OP_VEHICLE_PROBE, [readStr(ptr, len)], [tx, ty]).ret | 0;
+        },
+        vehicle_probe_clear: function (ptr, len) {
+            return hostCall(OP_VEHICLE_PROBE_CLEAR, [readStr(ptr, len)], []).ret | 0;
+        },
+        selected_names: function (outPtr, outCap) {
+            var r = hostCall(OP_SELECTED_NAMES, [], [outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
+        selection_clear: function () {
+            return hostCall(OP_SELECTION_CLEAR, [], []).ret | 0;
+        },
+        inventory_dump: function (ptr, len, outPtr, outCap) {
+            var r = hostCall(OP_INVENTORY_DUMP, [readStr(ptr, len)], [outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
+        },
+        inventory_capacity: function (ptr, len) {
+            return hostCall(OP_INVENTORY_CAPACITY, [readStr(ptr, len)], []).ret | 0;
+        },
+        inventory_add: function (ptr, len, itemPtr, itemLen, n) {
+            return hostCall(
+                OP_INVENTORY_ADD,
+                [readStr(ptr, len), readStr(itemPtr, itemLen)],
+                [n],
+            ).ret | 0;
+        },
+        inventory_remove: function (ptr, len, itemPtr, itemLen, n) {
+            return hostCall(
+                OP_INVENTORY_REMOVE,
+                [readStr(ptr, len), readStr(itemPtr, itemLen)],
+                [n],
+            ).ret | 0;
+        },
+        inventory_transfer: function (fromPtr, fromLen, toPtr, toLen, itemPtr, itemLen, n) {
+            return hostCall(
+                OP_INVENTORY_TRANSFER,
+                [readStr(fromPtr, fromLen), readStr(toPtr, toLen), readStr(itemPtr, itemLen)],
+                [n],
+            ).ret | 0;
+        },
+        item_def: function (ptr, len, outPtr, outCap) {
+            var r = hostCall(OP_ITEM_DEF, [readStr(ptr, len)], [outPtr, outCap]);
+            if (r.out.length > 0) writeMem(outPtr, r.out);
+            return r.ret | 0;
         },
         get_camera: function (outPtr) {
             var r = hostCall(OP_GET_CAMERA, [], [outPtr]);

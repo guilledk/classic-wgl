@@ -343,6 +343,131 @@ fn guest_vehicle_imports_are_wired() {
 }
 
 #[test]
+fn guest_selection_and_speed_imports_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_set_speed" (func $vss (param i32 i32 f64) (result i32)))
+            (import "env" "vehicle_probe" (func $vprobe (param i32 i32 i32 i32) (result i32)))
+            (import "env" "vehicle_probe_clear" (func $vclear (param i32 i32) (result i32)))
+            (import "env" "selected_names" (func $sel (param i32 i32) (result i32)))
+            (import "env" "selection_clear" (func $clear (result i32)))
+            (import "env" "set_sprite_offset" (func $soff (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "lrv")
+            (func (export "update") (param f64)
+                (drop (call $vss (i32.const 0) (i32.const 3) (f64.const 1.3)))
+                (drop (call $vprobe (i32.const 0) (i32.const 3) (i32.const 2) (i32.const 0)))
+                (drop (call $vclear (i32.const 0) (i32.const 3)))
+                (drop (call $sel (i32.const 64) (i32.const 64)))
+                (drop (call $clear))
+                (drop (call $soff (i32.const 0) (i32.const 3) (f64.const 0.0) (f64.const -448.0) (f64.const 0.0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
+}
+
+#[test]
+fn guest_inventory_imports_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "inventory_dump" (func $idump (param i32 i32 i32 i32) (result i32)))
+            (import "env" "inventory_add" (func $iadd (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "inventory_remove" (func $irem (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "inventory_transfer" (func $itrf (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "item_def" (func $idef (param i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "lrv")
+            (data (i32.const 16) "ore")
+            (data (i32.const 32) "rocket")
+            (func (export "update") (param f64)
+                (drop (call $iadd (i32.const 0) (i32.const 3) (i32.const 16) (i32.const 3) (i32.const 1)))
+                (drop (call $irem (i32.const 0) (i32.const 3) (i32.const 16) (i32.const 3) (i32.const 1)))
+                (drop (call $itrf (i32.const 32) (i32.const 6) (i32.const 0) (i32.const 3) (i32.const 16) (i32.const 3) (i32.const 1)))
+                (drop (call $idump (i32.const 0) (i32.const 3) (i32.const 64) (i32.const 64)))
+                (drop (call $idef (i32.const 16) (i32.const 3) (i32.const 128) (i32.const 128)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+        },
+    );
+}
+
+#[test]
+fn guest_get_sprite_frame_and_inventory_capacity_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "get_sprite_frame" (func $gsf (param i32 i32) (result f64)))
+            (import "env" "inventory_capacity" (func $icap (param i32 i32) (result i32)))
+            (import "env" "set_sprite_frame" (func $ssf (param i32 i32 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "unit")
+            (data (i32.const 16) "rocket")
+            (data (i32.const 32) "copy_a")
+            (data (i32.const 64) "copy_b")
+            (func (export "update") (param f64)
+                (drop (call $ssf (i32.const 32) (i32.const 6)
+                         (call $gsf (i32.const 0) (i32.const 4))))
+                (drop (call $ssf (i32.const 64) (i32.const 6)
+                         (f64.convert_i32_s (call $icap (i32.const 16) (i32.const 6)))))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            let sprite = IsoSprite {
+                position: Vec3::ZERO,
+                scale: Vec3::ONE,
+                texture: "shippingContainerBody".into(),
+                tilemap: "tilemap".into(),
+                frame: 0.0,
+                frame_name: None,
+                tile_set_size: glam::Vec2::ONE,
+                anchor: glam::Vec2::new(0.5, 0.67),
+                frame_offset: Vec3::ZERO,
+                footprint: vec![],
+                ghost_group: 0,
+                color: [1.0, 1.0, 1.0, 1.0],
+            };
+
+            engine.spawn_named("unit");
+            let unit = *engine.names.get("unit").unwrap();
+            let mut unit_sprite = sprite.clone();
+            unit_sprite.frame = 42.0;
+            engine.world.insert_one(unit, unit_sprite).unwrap();
+
+            engine.spawn_named("copy_a");
+            let copy_a = *engine.names.get("copy_a").unwrap();
+            engine.world.insert_one(copy_a, sprite.clone()).unwrap();
+
+            engine.spawn_named("copy_b");
+            let copy_b = *engine.names.get("copy_b").unwrap();
+            engine.world.insert_one(copy_b, sprite.clone()).unwrap();
+
+            engine.spawn_named("rocket");
+            let rocket = *engine.names.get("rocket").unwrap();
+            engine
+                .world
+                .insert_one(
+                    rocket,
+                    classic_core::inventory::Inventory {
+                        capacity: 7,
+                        kind: "cargo_bay".into(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+
+            rt.update(&mut engine, 0.016).unwrap();
+
+            assert_eq!(engine.world.get::<&IsoSprite>(copy_a).unwrap().frame, 42.0);
+            assert_eq!(engine.world.get::<&IsoSprite>(copy_b).unwrap().frame, 7.0);
+        },
+    );
+}
+
+#[test]
 fn guest_was_key_pressed_triggers_action() {
     with_each_runtime(
         r#"(module

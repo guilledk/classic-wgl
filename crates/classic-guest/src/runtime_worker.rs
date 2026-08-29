@@ -129,6 +129,19 @@ const OP_SET_SPRITE_FRAME: i32 = 77;
 const OP_SET_SPRITE_COLOR: i32 = 78;
 const OP_SPAWN_SPRITE_CLONE: i32 = 79;
 const OP_SET_ENABLED: i32 = 80;
+const OP_VEHICLE_SET_SPEED: i32 = 81;
+const OP_SELECTED_NAMES: i32 = 82;
+const OP_SELECTION_CLEAR: i32 = 83;
+const OP_INVENTORY_DUMP: i32 = 84;
+const OP_INVENTORY_ADD: i32 = 85;
+const OP_INVENTORY_REMOVE: i32 = 86;
+const OP_INVENTORY_TRANSFER: i32 = 87;
+const OP_ITEM_DEF: i32 = 88;
+const OP_SET_SPRITE_OFFSET: i32 = 89;
+const OP_GET_SPRITE_FRAME: i32 = 90;
+const OP_INVENTORY_CAPACITY: i32 = 91;
+const OP_VEHICLE_PROBE: i32 = 92;
+const OP_VEHICLE_PROBE_CLEAR: i32 = 93;
 
 const WORKER_SRC: &str = include_str!("worker.js");
 
@@ -290,11 +303,49 @@ impl WorkerWasmRuntime {
             OP_VEHICLE_STOP => (host.vehicle_stop(&strs[0]) as f64, None),
             OP_VEHICLE_SPAWN => (host.vehicle_spawn(&strs[0], &strs[1], nf(0), nf(1)) as f64, None),
             OP_SET_SPRITE_FRAME => (host.set_sprite_frame(&strs[0], nf(0)) as f64, None),
+            OP_GET_SPRITE_FRAME => (host.get_sprite_frame(&strs[0]), None),
             OP_SET_SPRITE_COLOR => {
                 (host.set_sprite_color(&strs[0], nf(0), nf(1), nf(2), nf(3)) as f64, None)
             }
+            OP_SET_SPRITE_OFFSET => {
+                (host.set_sprite_offset(&strs[0], nf(0), nf(1), nf(2)) as f64, None)
+            }
             OP_SPAWN_SPRITE_CLONE => (host.spawn_sprite_clone(&strs[0], &strs[1]) as f64, None),
             OP_SET_ENABLED => (host.set_enabled(&strs[0], ni(0)) as f64, None),
+            OP_VEHICLE_SET_SPEED => (host.vehicle_set_speed(&strs[0], nf(0)) as f64, None),
+            OP_VEHICLE_PROBE => (host.vehicle_probe(&strs[0], ni(0), ni(1)) as f64, None),
+            OP_VEHICLE_PROBE_CLEAR => (host.vehicle_probe_clear(&strs[0]) as f64, None),
+            OP_SELECTED_NAMES => {
+                let json = host.selected_names();
+                if ni(1) < json.len() as i32 || json.len() as u32 > OUT_BYTES {
+                    (-1.0, None)
+                } else {
+                    (json.len() as f64, Some(json.into_bytes()))
+                }
+            }
+            OP_SELECTION_CLEAR => (host.selection_clear() as f64, None),
+            OP_INVENTORY_DUMP => {
+                let json = host.inventory_dump(&strs[0]);
+                if ni(1) < json.len() as i32 || json.len() as u32 > OUT_BYTES {
+                    (-1.0, None)
+                } else {
+                    (json.len() as f64, Some(json.into_bytes()))
+                }
+            }
+            OP_INVENTORY_CAPACITY => (host.inventory_capacity(&strs[0]) as f64, None),
+            OP_INVENTORY_ADD => (host.inventory_add(&strs[0], &strs[1], ni(0)) as f64, None),
+            OP_INVENTORY_REMOVE => (host.inventory_remove(&strs[0], &strs[1], ni(0)) as f64, None),
+            OP_INVENTORY_TRANSFER => {
+                (host.inventory_transfer(&strs[0], &strs[1], &strs[2], ni(0)) as f64, None)
+            }
+            OP_ITEM_DEF => {
+                let json = host.item_def(&strs[0]);
+                if ni(1) < json.len() as i32 || json.len() as u32 > OUT_BYTES {
+                    (-1.0, None)
+                } else {
+                    (json.len() as f64, Some(json.into_bytes()))
+                }
+            }
             OP_GET_CAMERA => {
                 let (x, y, s) = host.get_camera();
                 (1.0, Some(enc_f64s(&[x, y, s])))
