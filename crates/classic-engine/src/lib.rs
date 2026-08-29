@@ -160,6 +160,17 @@ pub(crate) struct ResolvedFrame {
     pub(crate) depth_tex: Option<(String, f32)>,
 }
 
+/// The namespace-resolvable resource categories, mirroring the guest SDK's
+/// `has_resource` kinds plus the frame-table and vehicle registries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceKind {
+    Texture,
+    Font,
+    Animation,
+    FrameTable,
+    Vehicle,
+}
+
 pub struct Engine {
     pub gfx: Option<Gfx>,
     pub world: hecs::World,
@@ -223,6 +234,10 @@ pub struct Engine {
     /// from the manifest's `normal` field).  Sprites with a normal map are
     /// shaded with a runtime Lambertian term.
     texture_normals: HashMap<String, String>,
+    /// Qualified texture names registered by `load_manifest_resources`, kept
+    /// GL-free so texture existence + namespace resolution work without a
+    /// `Gfx` (the unit-test path).  Union across every loaded ROM.
+    pub texture_names: HashSet<String>,
     /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
     /// `vehicles` resources at boot.
     pub vehicles: HashMap<String, classic_core::types::VehicleDef>,
@@ -380,6 +395,7 @@ impl Engine {
             frame_tables: HashMap::new(),
             texture_depths: HashMap::new(),
             texture_normals: HashMap::new(),
+            texture_names: HashSet::new(),
             vehicles: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),
             next_ghost_group: 1,
@@ -487,12 +503,16 @@ impl Engine {
         // manifest entries may share one `src` — every frame-table texture
         // points at its shared colour sheet — so decode + upload each unique
         // `src` once and alias the rest to the same GL texture (the packed-atlas
-        // draw path binds the sheet name, not the frame-table name).
+        // draw path binds the sheet name, not the frame-table name).  Every key
+        // is namespace-qualified (`{ns}::{name}`) under the ROM's effective
+        // namespace so namespaced ROMs' resources coexist with the global set.
         let atlas_names: std::collections::HashSet<String> =
-            resources.fonts().keys().map(|f| format!("{f}-sdf")).collect();
+            resources.fonts().keys().map(|f| self.entity_key(&format!("{f}-sdf"))).collect();
         let mut uploaded_by_src: HashMap<String, GlTexture> = HashMap::new();
         for entry in &manifest.manifest.textures {
-            if atlas_names.contains(&entry.name) {
+            let key = self.entity_key(&entry.name);
+            self.texture_names.insert(key.clone());
+            if atlas_names.contains(&key) {
                 continue;
             }
             let Some(bytes) = resources.textures().get(&entry.name) else {
@@ -500,7 +520,7 @@ impl Engine {
             };
             if let Some(tex) = uploaded_by_src.get(&entry.src) {
                 if let Some(gfx) = self.gfx.as_mut() {
-                    gfx.textures.insert(entry.name.clone(), tex.clone());
+                    gfx.textures.insert(key, tex.clone());
                 }
                 continue;
             }
@@ -508,13 +528,13 @@ impl Engine {
             // `{sheet}-depth` by the packer; upload them in their native channel
             // count (RGB8 / R8) instead of RGBA8.
             if entry.name.ends_with("-depth") {
-                self.load_texture_luma8(&entry.name, bytes);
+                self.load_texture_luma8(&key, bytes);
             } else if entry.name.ends_with("-normal") {
-                self.load_texture_rgb8(&entry.name, bytes);
+                self.load_texture_rgb8(&key, bytes);
             } else {
-                self.load_texture_png(&entry.name, bytes);
+                self.load_texture_png(&key, bytes);
             }
-            if let Some(tex) = self.gfx.as_ref().and_then(|g| g.textures.get(&entry.name)) {
+            if let Some(tex) = self.gfx.as_ref().and_then(|g| g.textures.get(&key)) {
                 uploaded_by_src.insert(entry.src.clone(), tex.clone());
             }
         }
@@ -525,12 +545,11 @@ impl Engine {
         for entry in &manifest.manifest.textures {
             if entry.depth.is_some() {
                 if let Some(bytes) = resources.depths().get(&entry.name) {
-                    let depth_tex = format!("{}-depth", entry.name);
+                    let key = self.entity_key(&entry.name);
+                    let depth_tex = format!("{key}-depth");
                     self.load_texture_luma8(&depth_tex, bytes);
-                    self.texture_depths.insert(
-                        entry.name.clone(),
-                        TextureDepth { depth_tex, depth_range: entry.depth_range },
-                    );
+                    self.texture_depths
+                        .insert(key, TextureDepth { depth_tex, depth_range: entry.depth_range });
                 }
             }
         }
@@ -542,35 +561,50 @@ impl Engine {
         for entry in &manifest.manifest.textures {
             if entry.normal.is_some() {
                 if let Some(bytes) = resources.normals().get(&entry.name) {
-                    let normal_tex = format!("{}-normal", entry.name);
+                    let key = self.entity_key(&entry.name);
+                    let normal_tex = format!("{key}-normal");
                     self.load_texture_rgb8(&normal_tex, bytes);
-                    self.texture_normals.insert(entry.name.clone(), normal_tex);
+                    self.texture_normals.insert(key, normal_tex);
                 }
             }
         }
 
-        // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf").
+        // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf"), keyed by
+        // the namespace-qualified font name.
         for (font_name, metrics_bytes) in resources.fonts() {
+            let key = self.entity_key(font_name);
             let atlas_name = format!("{font_name}-sdf");
             let metrics_str = std::str::from_utf8(metrics_bytes).expect("SDF metrics UTF-8");
             if let Some(atlas_png) = resources.textures().get(&atlas_name) {
-                self.load_sdf_font(&atlas_name, metrics_str, atlas_png);
+                self.load_sdf_font(&key, metrics_str, atlas_png);
             }
         }
 
         for anim in &manifest.manifest.animations {
-            self.animations.insert(anim.name.clone(), anim.clone());
+            let mut anim = anim.clone();
+            anim.src = self.entity_key(&anim.src);
+            self.animations.insert(self.entity_key(&anim.name), anim);
         }
 
         // Packed-atlas frame tables (`frames.json`) keyed by texture name,
         // loaded from the ROM's `frames` resources.  Companion sheets are
         // uploaded as ordinary textures (declared in the manifest) and are
-        // referenced by name from each frame's `sheet` index.
+        // referenced by name from each frame's `sheet` index.  The table's
+        // sheet + frame keys are qualified so the `{texture}_{frame}` frame-name
+        // convention stays consistent under namespacing.
         for (name, bytes) in resources.frames() {
             match serde_json::from_slice::<FrameTable>(bytes) {
                 Ok(mut table) => {
+                    for sheet in &mut table.sheets {
+                        sheet.name = self.entity_key(&sheet.name);
+                    }
+                    table.frames = table
+                        .frames
+                        .into_iter()
+                        .map(|(fname, fr)| (self.entity_key(&fname), fr))
+                        .collect();
                     table.precompute_companions();
-                    self.frame_tables.insert(name.clone(), table);
+                    self.frame_tables.insert(self.entity_key(name), table);
                 }
                 Err(e) => {
                     classic_core::cl_error!(Chan::Guest, "frame table '{name}' parse failed: {e}");
@@ -582,15 +616,19 @@ impl Engine {
         // manifest is loaded from the ROM's `animations/` resources and folded
         // into the registered `AnimationData`.
         for (name, metadata_bytes) in resources.animations() {
-            self.load_animation_channels(name, metadata_bytes);
+            self.load_animation_channels(&self.entity_key(name), metadata_bytes);
         }
 
         // Wheeled-vehicle definitions (JSON sidecars) from the `vehicles`
-        // resources, keyed by the manifest-declared name.
+        // resources, keyed by the manifest-declared name.  Each part's texture
+        // is qualified so `spawn_vehicle` binds the namespaced sheet.
         for (name, bytes) in resources.vehicles() {
             match serde_json::from_slice::<classic_core::types::VehicleDef>(bytes) {
-                Ok(def) => {
-                    self.vehicles.insert(name.clone(), def);
+                Ok(mut def) => {
+                    for part in def.parts.iter_mut().chain(def.tires.iter_mut()) {
+                        part.texture = self.entity_key(&part.texture);
+                    }
+                    self.vehicles.insert(self.entity_key(name), def);
                 }
                 Err(e) => {
                     classic_core::cl_error!(Chan::Guest, "vehicle '{name}' parse failed: {e}");
@@ -610,6 +648,7 @@ impl Engine {
         manifest: &classic_rom::RomManifest,
         resources: &classic_rom::ResourceSet,
     ) {
+        self.namespace = manifest.namespace.clone();
         self.ensure_gfx(gl, manifest);
         self.load_manifest_resources(manifest, resources);
     }
@@ -662,6 +701,7 @@ impl Engine {
             self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources);
             let keys = self.load_state_in(&ns, &entry.rom.state).expect("load ROM state");
             self.rewrite_cross_refs(&ns, &keys);
+            self.rewrite_resource_refs(&ns, &keys);
             self.load_grids(&entry.rom.resources);
         }
 
@@ -822,6 +862,118 @@ impl Engine {
                             if let Some(resolved) = self.resolve_entity_name(ns, t.0) {
                                 *t.1 = resolved;
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rewrite the resource references stored on a ROM's components into
+    /// namespace-qualified keys, using the ROM's namespace as the referring
+    /// namespace.  Covered: `Tilemap.tile_set`, `NavMesh.tile_set`,
+    /// `IsoSprite.texture`, `IsoAgent.texture`, `SpriteRender.texture` (all
+    /// textures), `SdfTextRender.atlas_name` (font), and `Animator.animation`.
+    /// A bare reference resolves in the referring namespace first, then the
+    /// global namespace (see [`Engine::resolve_resource`]); a dangling
+    /// reference is left untouched (the draw path reports it as missing).
+    fn rewrite_resource_refs(&mut self, ns: &str, keys: &[String]) {
+        for key in keys {
+            let Some(&entity) = self.names.get(key) else { continue };
+
+            if let Some(tile_set) =
+                self.world.get::<&Tilemap>(entity).ok().map(|t| t.tile_set.clone())
+            {
+                if !tile_set.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &tile_set)
+                    {
+                        if let Ok(mut t) = self.world.get::<&mut Tilemap>(entity) {
+                            t.tile_set = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(tile_set) =
+                self.world.get::<&NavMesh>(entity).ok().map(|n| n.tile_set.clone())
+            {
+                if !tile_set.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &tile_set)
+                    {
+                        if let Ok(mut n) = self.world.get::<&mut NavMesh>(entity) {
+                            n.tile_set = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(texture) =
+                self.world.get::<&IsoSprite>(entity).ok().map(|s| s.texture.clone())
+            {
+                if !texture.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &texture)
+                    {
+                        if let Ok(mut s) = self.world.get::<&mut IsoSprite>(entity) {
+                            s.texture = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(texture) =
+                self.world.get::<&IsoAgent>(entity).ok().map(|a| a.texture.clone())
+            {
+                if !texture.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &texture)
+                    {
+                        if let Ok(mut a) = self.world.get::<&mut IsoAgent>(entity) {
+                            a.texture = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(texture) =
+                self.world.get::<&SpriteRender>(entity).ok().map(|s| s.texture.clone())
+            {
+                if !texture.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &texture)
+                    {
+                        if let Ok(mut s) = self.world.get::<&mut SpriteRender>(entity) {
+                            s.texture = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(atlas_name) =
+                self.world.get::<&SdfTextRender>(entity).ok().map(|s| s.atlas_name.clone())
+            {
+                if !atlas_name.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Font, &atlas_name)
+                    {
+                        if let Ok(mut s) = self.world.get::<&mut SdfTextRender>(entity) {
+                            s.atlas_name = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(anim_name) =
+                self.world.get::<&Animator>(entity).ok().and_then(|a| a.animation.clone())
+            {
+                if !anim_name.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Animation, &anim_name)
+                    {
+                        if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
+                            a.animation = Some(resolved);
                         }
                     }
                 }
@@ -1047,6 +1199,48 @@ impl Engine {
         self.names.contains_key(name).then(|| name.to_string())
     }
 
+    /// The namespace prefix of a qualified `ns::name` key (the empty string for
+    /// a bare name).  The inverse of [`Engine::entity_key_ns`]'s qualification.
+    pub fn namespace_of(name: &str) -> String {
+        name.split_once("::").map(|(ns, _)| ns.to_string()).unwrap_or_default()
+    }
+
+    /// Whether a (qualified) name is registered under the given resource kind.
+    fn resource_exists(&self, kind: ResourceKind, name: &str) -> bool {
+        match kind {
+            ResourceKind::Texture => {
+                self.texture_names.contains(name)
+                    || self.gfx.as_ref().map(|g| g.textures.contains_key(name)).unwrap_or(false)
+            }
+            ResourceKind::Font => self.sdf_fonts.contains_key(name),
+            ResourceKind::Animation => self.animations.contains_key(name),
+            ResourceKind::FrameTable => self.frame_tables.contains_key(name),
+            ResourceKind::Vehicle => self.vehicles.contains_key(name),
+        }
+    }
+
+    /// Resolve a bare or `ns::name` resource reference against the loaded ROMs'
+    /// namespaces, mirroring [`Engine::resolve_entity_name`].  A qualified name
+    /// resolves exactly; a bare name resolves in the referring namespace first,
+    /// then the global (empty) namespace, then fails (`None`).
+    pub fn resolve_resource(
+        &self,
+        referring_ns: &str,
+        kind: ResourceKind,
+        name: &str,
+    ) -> Option<String> {
+        if name.contains("::") {
+            return self.resource_exists(kind, name).then(|| name.to_string());
+        }
+        if !referring_ns.is_empty() {
+            let qualified = format!("{referring_ns}::{name}");
+            if self.resource_exists(kind, &qualified) {
+                return Some(qualified);
+            }
+        }
+        self.resource_exists(kind, name).then(|| name.to_string())
+    }
+
     /// Load per-frame visual offsets emitted by the animation renderer.
     ///
     /// Two encodings are accepted, distinguished by a 4-byte magic prefix:
@@ -1154,18 +1348,20 @@ impl Engine {
         }
     }
 
-    /// Load an SDF font from its metrics JSON and atlas PNG.
-    /// The atlas texture is set to LINEAR filtering.
-    pub fn load_sdf_font(&mut self, atlas_name: &str, metrics_json: &str, atlas_png: &[u8]) {
+    /// Load an SDF font from its metrics JSON and atlas PNG, keyed by the
+    /// (namespace-qualified) font name; the atlas texture is uploaded under
+    /// `"{font_name}-sdf"` with LINEAR filtering.
+    pub fn load_sdf_font(&mut self, font_name: &str, metrics_json: &str, atlas_png: &[u8]) {
+        let atlas_name = format!("{font_name}-sdf");
         let metrics: SdfFontMetrics =
             serde_json::from_str(metrics_json).expect("parse SDF font metrics JSON");
-        self.sdf_fonts.insert(metrics.name.clone(), metrics);
+        self.sdf_fonts.insert(font_name.to_string(), metrics);
 
         let img = image::load_from_memory(atlas_png).expect("decode SDF atlas PNG");
         let luma = img.to_luma8();
         if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_r8(atlas_name, &luma, luma.width(), luma.height());
-            if let Some(tex) = gfx.textures.get(atlas_name) {
+            gfx.add_texture_r8(&atlas_name, &luma, luma.width(), luma.height());
+            if let Some(tex) = gfx.textures.get(&atlas_name) {
                 tex.set_linear(&gfx.gl);
             }
         }
@@ -1831,22 +2027,18 @@ impl Engine {
         Some((a.animation.clone().unwrap_or_default(), a.frame))
     }
 
-    /// Whether a named texture is available (declared in the ROM's resources or
-    /// already uploaded to GL).
+    /// Whether a named texture is available (registered from the ROM's
+    /// resources or already uploaded to GL).  The name must already be
+    /// namespace-resolved (see [`Engine::resolve_resource`]).
     pub fn has_texture(&self, name: &str) -> bool {
         let in_gfx = self.gfx.as_ref().map(|g| g.textures.contains_key(name)).unwrap_or(false);
-        let in_rom =
-            self.rom_resources.as_ref().map(|r| r.textures().contains_key(name)).unwrap_or(false);
-        in_gfx || in_rom
+        in_gfx || self.texture_names.contains(name)
     }
 
-    /// Whether a named SDF font is available (declared in the ROM's resources
-    /// or already loaded into `sdf_fonts`).
+    /// Whether a named SDF font is available (loaded into `sdf_fonts`).  The
+    /// name must already be namespace-resolved (see [`Engine::resolve_resource`]).
     pub fn has_font(&self, name: &str) -> bool {
-        let in_metrics = self.sdf_fonts.contains_key(name);
-        let in_rom =
-            self.rom_resources.as_ref().map(|r| r.fonts().contains_key(name)).unwrap_or(false);
-        in_metrics || in_rom
+        self.sdf_fonts.contains_key(name)
     }
 
     /// Whether a named animation is registered.
@@ -5265,6 +5457,145 @@ mod tests {
         assert_eq!(e.resolve_entity_name("lunar", "globalEnt"), Some("globalEnt".into()));
         // Unknown names fail.
         assert_eq!(e.resolve_entity_name("lunar", "missing"), None);
+    }
+
+    #[test]
+    fn resolve_resource_applies_namespace_rule() {
+        let mut e = Engine::new_for_test();
+        // A global texture (empty namespace).
+        e.texture_names.insert("cursor".to_string());
+        // A namespaced ROM's resources.
+        e.texture_names.insert("scene::rocket".to_string());
+        e.animations.insert(
+            "scene::walk".to_string(),
+            AnimationData {
+                name: "walk".to_string(),
+                src: "humanoid".to_string(),
+                rate: 24.0,
+                sequence: vec![0],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                channels: vec![],
+                metadata: None,
+            },
+        );
+        e.sdf_fonts.insert(
+            "scene::dejavusans".to_string(),
+            SdfFontMetrics {
+                name: "dejavusans".to_string(),
+                family: "DejaVu Sans".to_string(),
+                atlas_size: [512.0, 512.0],
+                glyph_size: 32.0,
+                spread: 4.0,
+                baseline: 0.0,
+                line_height: 1.0,
+                glyphs: std::collections::HashMap::new(),
+            },
+        );
+
+        // Qualified names resolve exactly.
+        assert_eq!(
+            e.resolve_resource("x", ResourceKind::Texture, "scene::rocket"),
+            Some("scene::rocket".into())
+        );
+        // Bare names resolve in the referring namespace first.
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Texture, "rocket"),
+            Some("scene::rocket".into())
+        );
+        // ...then fall back to the global namespace.
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Texture, "cursor"),
+            Some("cursor".into())
+        );
+        // Animations and fonts resolve through their own registries.
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Animation, "walk"),
+            Some("scene::walk".into())
+        );
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Font, "dejavusans"),
+            Some("scene::dejavusans".into())
+        );
+        // Unknown names fail.
+        assert_eq!(e.resolve_resource("scene", ResourceKind::Texture, "missing"), None);
+    }
+
+    #[test]
+    fn rewrite_resource_refs_qualifies_resource_references() {
+        let scene_state = r#"{
+            "entities": {
+                "rocket": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "rocket", "tilemap": "tilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.98] } ] },
+                "marker": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "common::tileSet", "tilemap": "common::tilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.5] } ] },
+                "cursorSpr": { "components": [ { "type": "Sprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "cursor", "ignore_cam": true, "frame": 0,
+                    "tile_set_size": [1,1], "anchor": [0.5,0.5] } ] },
+                "label": { "components": [ { "type": "SdfText", "atlas_name": "dejavusans",
+                    "color": [1,1,1,1], "outline_color": [0,0,0,1], "outline_width": 0.0,
+                    "ignore_cam": true, "text": "x", "justify": "Left", "weight": 0.5,
+                    "gamma": 0.0 } ] },
+                "anim": { "components": [ { "type": "Animator", "target": "rocket.IsoSprite",
+                    "speed": 1.0, "animation": "walk" } ] }
+            }
+        }"#;
+
+        let mut e = Engine::new_for_test();
+        // Populate the resource registries as `load_manifest_resources` would.
+        e.texture_names.insert("scene::rocket".to_string());
+        e.texture_names.insert("common::tileSet".to_string());
+        e.texture_names.insert("cursor".to_string());
+        e.animations.insert(
+            "scene::walk".to_string(),
+            AnimationData {
+                name: "walk".to_string(),
+                src: "humanoid".to_string(),
+                rate: 24.0,
+                sequence: vec![0],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                channels: vec![],
+                metadata: None,
+            },
+        );
+        e.sdf_fonts.insert(
+            "scene::dejavusans".to_string(),
+            SdfFontMetrics {
+                name: "dejavusans".to_string(),
+                family: "DejaVu Sans".to_string(),
+                atlas_size: [512.0, 512.0],
+                glyph_size: 32.0,
+                spread: 4.0,
+                baseline: 0.0,
+                line_height: 1.0,
+                glyphs: std::collections::HashMap::new(),
+            },
+        );
+
+        let keys = e.load_state_in("scene", scene_state).unwrap();
+        e.rewrite_resource_refs("scene", &keys);
+
+        // A bare texture resolves in the referring (own) namespace.
+        let rocket = *e.names.get("scene::rocket").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(rocket).unwrap().texture, "scene::rocket");
+        // A qualified cross-ROM reference resolves exactly (left untouched).
+        let marker = *e.names.get("scene::marker").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(marker).unwrap().texture, "common::tileSet");
+        // A bare name absent from the own namespace falls back to global.
+        let cursor_spr = *e.names.get("scene::cursorSpr").unwrap();
+        assert_eq!(e.world.get::<&SpriteRender>(cursor_spr).unwrap().texture, "cursor");
+        // The SDF font atlas_name resolves as a font.
+        let label = *e.names.get("scene::label").unwrap();
+        assert_eq!(e.world.get::<&SdfTextRender>(label).unwrap().atlas_name, "scene::dejavusans");
+        // The animator's animation name resolves as an animation.
+        let anim = *e.names.get("scene::anim").unwrap();
+        assert_eq!(
+            e.world.get::<&Animator>(anim).unwrap().animation.as_deref(),
+            Some("scene::walk")
+        );
     }
 
     #[test]
