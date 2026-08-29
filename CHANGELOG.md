@@ -8,6 +8,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- `Selectable` component and a host-owned `SelectionSet`
+  (`select_at`/`select_box`/`selected_names`) with unit/building group
+  semantics, plus a per-sprite selection silhouette (#80).
+- Inventory system: item catalog (`ItemId`/`ItemClass`/`StackRule`/`ItemDef`/
+  `InventoryType`/`Inventory`/`ItemRegistry`), host inventory I/O mechanics,
+  and `items`/`inventory_types` in the ROM manifest (#80).
+- Guest SDK surface for selection, inventory and vehicle control
+  (`selected_names`, `selection_clear`, `inventory_*`, `item_def`,
+  `vehicle_set_speed`, `vehicle_probe`, `vehicle_probe_clear`,
+  `get_sprite_frame`, `set_sprite_offset`, `inventory_capacity`) (#80).
+- Drop-preview path overlay and right-click deselect in the demo (#80).
+
 ## [0.1.0-alpha.0] - 2026-08-28
 
 The first recorded release covers the Rust rewrite and everything that landed
