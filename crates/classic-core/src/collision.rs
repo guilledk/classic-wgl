@@ -349,6 +349,18 @@ impl PhysicsProvider {
         }
     }
 
+    /// Mark (or clear) a collider as a navigation obstacle.
+    pub fn set_collider_blocks_nav(&mut self, pid: u32, blocks: bool) {
+        if let Some(entry) = self.entries.get_mut(&pid) {
+            entry.collider.blocks_nav = blocks;
+        }
+    }
+
+    /// Whether a collider is marked as a navigation obstacle.
+    pub fn collider_blocks_nav(&self, pid: u32) -> bool {
+        self.entries.get(&pid).map(|e| e.collider.blocks_nav).unwrap_or(false)
+    }
+
     /// Return the pids of enabled colliders whose bounding rect contains the
     /// given screen point, ordered by click priority (desc) then pid (asc) —
     /// the same ordering click dispatch uses.

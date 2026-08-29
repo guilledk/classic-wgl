@@ -1311,6 +1311,17 @@ impl Engine {
         let had_path = self.preview_paths.remove(name).is_some();
         had_probe || had_path
     }
+
+    /// The max tile radius of a vehicle's collision `path_footprint` (the
+    /// Chebyshev extent `max(|dx|, |dy|)` over its integer cell offsets).
+    /// Guests use it to derive a pick-up/drop clearance from the vehicle's real
+    /// footprint instead of guessing a fixed offset.  Returns `-1.0` when the
+    /// vehicle is unknown.
+    pub fn vehicle_footprint_radius(&self, name: &str) -> f64 {
+        let Some(&ve) = self.names.get(name) else { return -1.0 };
+        let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return -1.0 };
+        v.path_footprint.iter().map(|(dx, dy)| dx.abs().max(dy.abs())).max().unwrap_or(0) as f64
+    }
 }
 
 #[cfg(test)]

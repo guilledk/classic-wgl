@@ -425,6 +425,15 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
+            "vehicle_footprint_radius",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> f64 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().vehicle_footprint_radius(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
             "selected_names",
             |mut caller: Caller<'_, $host>, out_ptr: i32, out_cap: i32| -> i32 {
                 let json = caller.data_mut().guest_mut().selected_names();
@@ -537,6 +546,15 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
+            "inventory_ui_show",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().inventory_ui_show(&name)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
             "get_camera",
             |mut caller: Caller<'_, $host>, out_ptr: i32| -> i32 {
                 let (x, y, s) = caller.data_mut().guest_mut().get_camera();
@@ -560,8 +578,16 @@ macro_rules! install_host_imports {
         $linker.func_wrap(
             m,
             "pick_at",
-            |mut caller: Caller<'_, $host>, x: f64, y: f64, out_ptr: i32, out_cap: i32| -> i32 {
-                let name = caller.data_mut().guest_mut().pick_at(x, y);
+            |mut caller: Caller<'_, $host>,
+             x: f64,
+             y: f64,
+             filter_ptr: i32,
+             filter_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                let filter = $read_str(&mut caller, filter_ptr, filter_len);
+                let name = caller.data_mut().guest_mut().pick_at(x, y, &filter);
                 if out_cap < name.len() as i32 {
                     return -1;
                 }
@@ -572,6 +598,15 @@ macro_rules! install_host_imports {
         $linker.func_wrap(m, "mouse_down", |mut caller: Caller<'_, $host>, btn: i32| -> i32 {
             caller.data_mut().guest_mut().mouse_down(btn)
         })?;
+
+        $linker.func_wrap(
+            m,
+            "set_collider_blocks_nav",
+            |mut caller: Caller<'_, $host>, ptr: i32, len: i32, blocks: i32| -> i32 {
+                let name = $read_str(&mut caller, ptr, len);
+                caller.data_mut().guest_mut().set_collider_blocks_nav(&name, blocks)
+            },
+        )?;
 
         $linker.func_wrap(
             m,
