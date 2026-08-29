@@ -626,6 +626,10 @@ impl GuestRuntime for WorkerWasmRuntime {
     fn start(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
         self.run(engine, CMD_START, 0.0)
     }
+
+    fn set_namespace(&mut self, namespace: &str) {
+        self.host.borrow_mut().set_namespace(namespace);
+    }
 }
 
 /// Decode the length-prefixed string stream the worker wrote to the SAB.
