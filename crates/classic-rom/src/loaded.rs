@@ -93,7 +93,7 @@ fn visit(
         return Ok(());
     }
     if let Some(pos) = visiting.iter().position(|n| n == name) {
-        let cycle = visiting[pos..].iter().cloned().collect::<Vec<_>>().join(" -> ");
+        let cycle = visiting[pos..].to_vec().join(" -> ");
         anyhow::bail!("ROM dependency cycle: {cycle} -> {name}");
     }
 
@@ -124,7 +124,7 @@ where
         return Ok(());
     }
     if let Some(pos) = visiting.iter().position(|n| *n == name) {
-        let cycle = visiting[pos..].iter().cloned().collect::<Vec<_>>().join(" -> ");
+        let cycle = visiting[pos..].to_vec().join(" -> ");
         anyhow::bail!("ROM dependency cycle: {cycle} -> {name}");
     }
 
@@ -172,9 +172,7 @@ mod tests {
 
     fn loader(roms: HashMap<&'static str, Rom>) -> impl FnMut(&str) -> anyhow::Result<Rom> {
         move |name: &str| {
-            roms.get(name)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("unknown ROM `{name}`"))
+            roms.get(name).cloned().ok_or_else(|| anyhow::anyhow!("unknown ROM `{name}`"))
         }
     }
 
@@ -255,11 +253,9 @@ mod tests {
 
     #[test]
     fn rejects_self_cycle() {
-        let err = LoadedRoms::resolve(
-            "a",
-            loader(HashMap::from([("a", rom_with("a", "a", &["a"]))])),
-        )
-        .unwrap_err();
+        let err =
+            LoadedRoms::resolve("a", loader(HashMap::from([("a", rom_with("a", "a", &["a"]))])))
+                .unwrap_err();
         assert!(err.to_string().contains("cycle"), "unexpected error: {err}");
     }
 
@@ -297,10 +293,8 @@ mod tests {
 
     #[test]
     fn resolve_async_rejects_cycle() {
-        let roms = HashMap::from([
-            ("a", rom_with("a", "a", &["b"])),
-            ("b", rom_with("b", "b", &["a"])),
-        ]);
+        let roms =
+            HashMap::from([("a", rom_with("a", "a", &["b"])), ("b", rom_with("b", "b", &["a"]))]);
         let mut loader = {
             let roms = roms.clone();
             move |name: String| {

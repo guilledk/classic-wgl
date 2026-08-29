@@ -237,6 +237,10 @@ pub struct Engine {
     pub rom_manifest_json: Option<String>,
     pub rom_manifest: Option<classic_rom::RomManifest>,
     pub rom_resources: Option<classic_rom::ResourceSet>,
+    /// The full multi-ROM dependency DAG captured by `load_roms` (topological
+    /// order, deps first).  `dump_roms` reconstructs the DAG from this; the
+    /// single-ROM legacy path records exactly one entry.
+    pub loaded_roms: Vec<classic_rom::LoadedRom>,
     pub ui: Option<ui::UIManager>,
     pub selection_mode: i32,
     pub selection_begin_screen: glam::Vec3,
@@ -382,6 +386,7 @@ impl Engine {
             rom_manifest_json: None,
             rom_manifest: None,
             rom_resources: None,
+            loaded_roms: Vec::new(),
             ui: None,
             selection: selection::SelectionSet::default(),
             rts_box: None,
@@ -429,16 +434,13 @@ impl Engine {
         }
     }
 
-    /// Initialise the GL layer from a ROM manifest + resource set: compile the
-    /// manifest's shaders (built-ins, overridable by a ROM via the named
-    /// shader registry), upload every declared texture, load the SDF fonts, and
-    /// register the animations.
-    pub fn init_gfx(
-        &mut self,
-        gl: Rc<glow::Context>,
-        manifest: &classic_rom::RomManifest,
-        resources: &classic_rom::ResourceSet,
-    ) {
+    /// Compile the engine shader catalog (built-ins + any manifest `shaders[]`
+    /// overrides) into a fresh [`Gfx`], exactly once.  Idempotent across a
+    /// multi-ROM load: the first call creates the GL layer, later calls no-op.
+    fn ensure_gfx(&mut self, gl: Rc<glow::Context>, manifest: &classic_rom::RomManifest) {
+        if self.gfx.is_some() {
+            return;
+        }
         self.gfx = Some(Gfx::new(gl));
         let registry = classic_gfx::ShaderSourceRegistry::builtin();
         // The engine owns the shader declarations: compile the full builtin
@@ -469,7 +471,17 @@ impl Engine {
                 .add_shader(builtin.name, &vs, &fs, &attr, &unif)
                 .expect("compile shader");
         }
+    }
 
+    /// Upload/register a ROM's manifest-declared resources (textures, depth +
+    /// normal companions, SDF fonts, animations, frame tables, vehicles) into
+    /// the shared [`Gfx`] + engine registries.  Safe to call with `gfx == None`
+    /// (texture upload is skipped; the non-GL registries still populate).
+    fn load_manifest_resources(
+        &mut self,
+        manifest: &classic_rom::RomManifest,
+        resources: &classic_rom::ResourceSet,
+    ) {
         // Textures from the manifest, skipping the SDF atlas textures (those
         // are uploaded by the SDF font path with LINEAR filtering).  Several
         // manifest entries may share one `src` — every frame-table texture
@@ -487,7 +499,9 @@ impl Engine {
                 continue;
             };
             if let Some(tex) = uploaded_by_src.get(&entry.src) {
-                self.gfx.as_mut().unwrap().textures.insert(entry.name.clone(), tex.clone());
+                if let Some(gfx) = self.gfx.as_mut() {
+                    gfx.textures.insert(entry.name.clone(), tex.clone());
+                }
                 continue;
             }
             // Shared-atlas companion sheets are named `{sheet}-normal` /
@@ -500,7 +514,7 @@ impl Engine {
             } else {
                 self.load_texture_png(&entry.name, bytes);
             }
-            if let Some(tex) = self.gfx.as_ref().unwrap().textures.get(&entry.name) {
+            if let Some(tex) = self.gfx.as_ref().and_then(|g| g.textures.get(&entry.name)) {
                 uploaded_by_src.insert(entry.src.clone(), tex.clone());
             }
         }
@@ -585,21 +599,82 @@ impl Engine {
         }
     }
 
-    /// Hydrate the engine from a ROM: compile shaders, upload resources, and
-    /// spawn the entity graph.  Records the ROM's manifest + resources so
-    /// [`Engine::dump_rom`] can reconstruct it.
+    /// Initialise the GL layer from a ROM manifest + resource set: compile the
+    /// manifest's shaders (built-ins, overridable by a ROM via the named
+    /// shader registry), upload every declared texture, load the SDF fonts, and
+    /// register the animations.  The single-ROM convenience wrapper over
+    /// [`Engine::ensure_gfx`] + [`Engine::load_manifest_resources`].
+    pub fn init_gfx(
+        &mut self,
+        gl: Rc<glow::Context>,
+        manifest: &classic_rom::RomManifest,
+        resources: &classic_rom::ResourceSet,
+    ) {
+        self.ensure_gfx(gl, manifest);
+        self.load_manifest_resources(manifest, resources);
+    }
+
+    /// Hydrate the engine from a single ROM (the legacy path).  Wraps the ROM
+    /// in a one-entry [`classic_rom::LoadedRoms`] (its declared namespace, no
+    /// deps) and delegates to [`Engine::load_roms`].
     pub fn load_rom(&mut self, gl: Rc<glow::Context>, rom: &classic_rom::Rom) {
-        self.namespace = rom.manifest.namespace.clone();
-        self.init_gfx(gl, &rom.manifest, &rom.resources);
-        self.load_state(&rom.state).expect("load ROM state");
-        self.load_grids(&rom.resources);
-        self.items = classic_core::inventory::ItemRegistry::build(
-            &rom.manifest.items,
-            &rom.manifest.inventory_types,
-        );
-        self.rom_manifest_json = Some(rom.manifest_json.clone());
-        self.rom_manifest = Some(rom.manifest.clone());
-        self.rom_resources = Some(rom.resources.clone());
+        let name = if rom.manifest.entrypoint.is_empty() {
+            "root".to_string()
+        } else {
+            rom.manifest.entrypoint.clone()
+        };
+        let loaded = classic_rom::LoadedRoms {
+            root: name.clone(),
+            order: vec![classic_rom::LoadedRom {
+                name,
+                namespace: rom.manifest.namespace.clone(),
+                rom: rom.clone(),
+            }],
+        };
+        self.load_roms(gl, &loaded);
+    }
+
+    /// Hydrate the engine from a resolved multi-ROM dependency DAG.
+    ///
+    /// Shaders are compiled once (honoring the root ROM's `shaders[]`
+    /// overrides); each ROM's resources, entity graph, and grids are then
+    /// hydrated in topological order (deps before dependents).  Entity names
+    /// are namespace-qualified via [`Engine::entity_key`] while a ROM's
+    /// namespace is non-empty.  The full DAG is recorded in
+    /// [`Engine::loaded_roms`] for [`Engine::dump_roms`]; the root ROM's
+    /// manifest/resources are also mirrored into the single-ROM fields for
+    /// backward compatibility (`dump_rom`, `has_texture`, the F10 save path).
+    pub fn load_roms(&mut self, gl: Rc<glow::Context>, loaded: &classic_rom::LoadedRoms) {
+        if let Some(root) = loaded.root_rom() {
+            self.ensure_gfx(gl, &root.manifest);
+        }
+        self.hydrate_roms(loaded);
+    }
+
+    /// The GL-free core of [`Engine::load_roms`]: per-ROM resource + entity +
+    /// grid hydration in topological order, plus DAG bookkeeping.  Split out so
+    /// the multi-ROM logic is unit-testable without a GL context.
+    fn hydrate_roms(&mut self, loaded: &classic_rom::LoadedRoms) {
+        for entry in &loaded.order {
+            self.namespace = entry.namespace.clone();
+            self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources);
+            self.load_state(&entry.rom.state).expect("load ROM state");
+            self.load_grids(&entry.rom.resources);
+        }
+
+        self.loaded_roms = loaded.order.clone();
+
+        // Item catalog: the root ROM's items/inventory_types (per-ROM item
+        // merging across the dep closure is deferred to the multi-guest work).
+        if let Some(root) = loaded.root_rom() {
+            self.items = classic_core::inventory::ItemRegistry::build(
+                &root.manifest.items,
+                &root.manifest.inventory_types,
+            );
+            self.rom_manifest_json = Some(root.manifest_json.clone());
+            self.rom_manifest = Some(root.manifest.clone());
+            self.rom_resources = Some(root.resources.clone());
+        }
     }
 
     /// Qualify an entity name with the active namespace (a no-op when the
@@ -653,7 +728,19 @@ impl Engine {
     /// and the current world state.  Returns `None` if no ROM was loaded.
     pub fn dump_rom(&self) -> Option<classic_rom::Rom> {
         let mut resources = self.rom_resources.clone()?;
+        self.refresh_grids(&mut resources);
+        Some(classic_rom::Rom {
+            manifest: self.rom_manifest.clone()?,
+            manifest_json: self.rom_manifest_json.clone()?,
+            resources,
+            state: self.dump_state(),
+        })
+    }
 
+    /// Refresh the tile/nav/height grid resources in `resources` from the
+    /// current world state (the re-hydration `dump_rom`/`dump_roms` do before
+    /// serializing).
+    fn refresh_grids(&self, resources: &mut classic_rom::ResourceSet) {
         if let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) {
             if let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) {
                 if let Some(name) = &tm.tiles_grid {
@@ -683,12 +770,25 @@ impl Engine {
                 }
             }
         }
+    }
 
-        Some(classic_rom::Rom {
-            manifest: self.rom_manifest.clone()?,
-            manifest_json: self.rom_manifest_json.clone()?,
-            resources,
-            state: self.dump_state(),
+    /// Reconstruct the full multi-ROM dependency DAG, mirroring
+    /// [`Engine::dump_rom`]: the root ROM's resources are re-hydrated with the
+    /// current tile/nav/height grids and its `state` refreshed from the current
+    /// world; dependency ROMs keep their boot-time resources.  Returns `None`
+    /// when no ROMs are loaded.
+    pub fn dump_roms(&self) -> Option<classic_rom::LoadedRoms> {
+        if self.loaded_roms.is_empty() {
+            return None;
+        }
+        let mut order = self.loaded_roms.clone();
+        if let Some(root) = order.last_mut() {
+            self.refresh_grids(&mut root.rom.resources);
+            root.rom.state = self.dump_state();
+        }
+        Some(classic_rom::LoadedRoms {
+            root: self.loaded_roms.last().map(|e| e.name.clone()).unwrap_or_default(),
+            order,
         })
     }
 
@@ -787,6 +887,24 @@ impl Engine {
                 })
                 .collect();
         }
+    }
+
+    /// Resolve a bare or `ns::name` entity reference against the loaded ROMs'
+    /// namespaces.  A qualified name resolves exactly; a bare name resolves in
+    /// the referring namespace first, then the global (empty) namespace, then
+    /// fails (`None`).  The single resolution point for the multi-ROM namespace
+    /// model; entity lookups route through it as multi-ROM scenes land.
+    pub fn resolve_entity_name(&self, referring_ns: &str, name: &str) -> Option<String> {
+        if name.contains("::") {
+            return self.names.contains_key(name).then(|| name.to_string());
+        }
+        if !referring_ns.is_empty() {
+            let qualified = format!("{referring_ns}::{name}");
+            if self.names.contains_key(&qualified) {
+                return Some(qualified);
+            }
+        }
+        self.names.contains_key(name).then(|| name.to_string())
     }
 
     /// Load per-frame visual offsets emitted by the animation renderer.
@@ -1073,9 +1191,10 @@ impl Engine {
                 builder.add(());
             }
             let entity = self.world.spawn(builder.build());
-            self.world.insert_one(entity, DebugName(name.clone())).ok();
-            self.names.insert(name.clone(), entity);
-            self.name_order.push(name.clone());
+            let key = self.entity_key(name);
+            self.world.insert_one(entity, DebugName(key.clone())).ok();
+            self.names.insert(key.clone(), entity);
+            self.name_order.push(key);
         }
         Ok(())
     }
@@ -4912,5 +5031,88 @@ mod tests {
             gathered[0].position.z,
             expected.z
         );
+    }
+
+    fn test_rom(name: &str, namespace: &str, state_json: &str) -> classic_rom::Rom {
+        let manifest_json = format!(
+            r#"{{"entrypoint": "{name}", "namespace": "{namespace}",
+                "shaders": [], "textures": [], "animations": []}}"#
+        );
+        let manifest: classic_rom::RomManifest = serde_json::from_str(&manifest_json).unwrap();
+        classic_rom::Rom {
+            manifest,
+            manifest_json,
+            resources: classic_rom::ResourceSet::default(),
+            state: state_json.to_string(),
+        }
+    }
+
+    #[test]
+    fn load_state_qualifies_entity_names_under_namespace() {
+        let mut e = Engine::new_for_test();
+        e.namespace = "lunar".into();
+        e.load_state(r#"{"entities":{"rocket":{"components":[]}}}"#).unwrap();
+        assert!(e.names.contains_key("lunar::rocket"));
+        assert_eq!(e.name_order, vec!["lunar::rocket"]);
+
+        // An empty namespace is a no-op (the legacy single-ROM path).
+        let mut e2 = Engine::new_for_test();
+        e2.load_state(r#"{"entities":{"rocket":{"components":[]}}}"#).unwrap();
+        assert!(e2.names.contains_key("rocket"));
+        assert!(!e2.names.contains_key("::rocket"));
+    }
+
+    #[test]
+    fn hydrate_roms_tracks_dag_in_topological_order() {
+        let mut e = Engine::new_for_test();
+        let loaded = classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: "common".into(),
+                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
+                },
+            ],
+        };
+
+        e.hydrate_roms(&loaded);
+
+        // Entities from both ROMs are hydrated, namespace-qualified.
+        assert!(e.names.contains_key("common::tile"));
+        assert!(e.names.contains_key("scene::rocket"));
+
+        // The DAG is recorded and round-trips through `dump_roms`.
+        assert_eq!(e.loaded_roms.len(), 2);
+        let dumped = e.dump_roms().unwrap();
+        assert_eq!(dumped.root, "scene");
+        assert_eq!(dumped.order.len(), 2);
+        assert_eq!(dumped.order[0].namespace, "common");
+        assert_eq!(dumped.order[1].namespace, "scene");
+
+        // The root ROM is mirrored into the single-ROM fields.
+        assert_eq!(e.rom_manifest.as_ref().unwrap().entrypoint, "scene");
+    }
+
+    #[test]
+    fn resolve_entity_name_applies_namespace_rule() {
+        let mut e = Engine::new_for_test();
+        e.load_state(r#"{"entities":{"globalEnt":{"components":[]}}}"#).unwrap();
+        e.namespace = "lunar".into();
+        e.load_state(r#"{"entities":{"rocket":{"components":[]}}}"#).unwrap();
+
+        // Qualified names resolve exactly.
+        assert_eq!(e.resolve_entity_name("scene", "lunar::rocket"), Some("lunar::rocket".into()));
+        // Bare names resolve in the referring namespace first.
+        assert_eq!(e.resolve_entity_name("lunar", "rocket"), Some("lunar::rocket".into()));
+        // ...then fall back to the global namespace.
+        assert_eq!(e.resolve_entity_name("lunar", "globalEnt"), Some("globalEnt".into()));
+        // Unknown names fail.
+        assert_eq!(e.resolve_entity_name("lunar", "missing"), None);
     }
 }
