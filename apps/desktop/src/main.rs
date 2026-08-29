@@ -1,10 +1,8 @@
-use classic_rom::{Rom, RomArchive};
+use classic_rom::LoadedRoms;
 
-/// Open the resolved ROM archive and hydrate an engine for it.
-fn boot_engine(gl: std::rc::Rc<glow::Context>, rom_bytes: &[u8]) -> classic_engine::Engine {
-    let archive = RomArchive::from_bytes(rom_bytes).expect("open ROM archive");
-    let rom = Rom::load(&archive).expect("load ROM");
-    classic_demo::init_engine(gl, &rom)
+/// Hydrate an engine from a resolved multi-ROM dependency DAG.
+fn boot_engine(gl: std::rc::Rc<glow::Context>, loaded: &LoadedRoms) -> classic_engine::Engine {
+    classic_demo::init_engine_multi(gl, loaded)
 }
 
 /// The known named ROMs and where their archives live on disk.
@@ -19,6 +17,8 @@ fn rom_lookup(dir: String) -> impl Fn(&str) -> Option<String> {
             "lunar" | "moon" => "lunar.rom".into(),
             "lrvtest" => "lrvtest.rom".into(),
             "basetest" => "basetest.rom".into(),
+            "common" => "common.rom".into(),
+            "compose" => "compose.rom".into(),
             _ => return None,
         };
         Some(format!("{dir}/{file}"))
@@ -39,8 +39,8 @@ fn main() {
 
     let config = classic_engine::env_config::EnvConfig::get();
     let rom_dir = std::env::var("CLASSIC_ROM_DIR").unwrap_or_else(|_| "roms/out".to_string());
-    let rom_bytes =
-        classic_platform::resolve_rom(&config.rom, &rom_lookup(rom_dir)).expect("resolve ROM");
+    let loaded =
+        classic_platform::resolve_roms(&config.rom, &rom_lookup(rom_dir)).expect("resolve ROMs");
 
     if config.headless {
         let w = config.forced_width.unwrap_or(1280.0) as u32;
@@ -57,7 +57,7 @@ fn main() {
                     classic_core::instrument::Chan::Platform,
                     "headless: initialising engine"
                 );
-                let mut e = boot_engine(gl, &rom_bytes);
+                let mut e = boot_engine(gl, &loaded);
                 if let Some(gfx) = e.gfx.as_mut() {
                     gfx.set_render_target(vw as u32, vh as u32);
                 }
@@ -92,7 +92,7 @@ fn main() {
 
     platform.run_loop(move |gl, input, vw, vh, _delta, should_close| {
         if engine.is_none() {
-            engine = Some(boot_engine(gl, &rom_bytes));
+            engine = Some(boot_engine(gl, &loaded));
         }
         if let Some(e) = engine.as_mut() {
             if let Some(limit) = max_frames {
