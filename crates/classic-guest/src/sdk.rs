@@ -12,7 +12,7 @@ use classic_core::instrument::Chan;
 use classic_core::pathfinder::PathPoll;
 use classic_core::terrain::kernels::{FieldOp, Reduce};
 use classic_engine::vehicle::{VehicleGotoPoll, VehicleGotoSubmit};
-use classic_engine::Engine;
+use classic_engine::{Engine, ResourceKind};
 
 /// Map an integer to a [`UiAnchor`] (0..=8, TopLeft → BotRight).
 fn anchor(i: i32) -> UiAnchor {
@@ -125,6 +125,19 @@ impl GuestHost {
             .unwrap_or_else(|| self.qualify(name))
     }
 
+    /// Resolve a guest-supplied resource name (texture/font/animation/vehicle)
+    /// against the guest's namespace: a bare name resolves in the referring
+    /// (own) namespace first, then the global namespace, then falls back to the
+    /// qualified key; an already-qualified `ns::name` passes through verbatim.
+    fn resolve_resource(&self, kind: ResourceKind, name: &str) -> String {
+        if name.contains("::") {
+            return name.to_string();
+        }
+        self.engine()
+            .resolve_resource(&self.namespace, kind, name)
+            .unwrap_or_else(|| self.qualify(name))
+    }
+
     /// Log a message through the `guest` CLASSIC_LOG channel.
     pub fn log(&mut self, msg: &str) {
         classic_core::cl_info!(Chan::Guest, "{}", msg);
@@ -217,13 +230,15 @@ impl GuestHost {
     /// Set a named entity's animator to play a looping animation.
     pub fn set_anim(&mut self, name: &str, anim: &str) -> i32 {
         let name = self.resolve(name);
-        self.engine_mut().set_anim(&name, anim) as i32
+        let anim = self.resolve_resource(ResourceKind::Animation, anim);
+        self.engine_mut().set_anim(&name, &anim) as i32
     }
 
     /// Restart a named entity's animator from frame zero (optionally one-shot).
     pub fn start_anim(&mut self, name: &str, anim: &str, repeat: i32) -> i32 {
         let name = self.resolve(name);
-        self.engine_mut().start_anim(&name, anim, repeat != 0) as i32
+        let anim = self.resolve_resource(ResourceKind::Animation, anim);
+        self.engine_mut().start_anim(&name, &anim, repeat != 0) as i32
     }
 
     /// Show/hide a named entity (add/remove the `Disabled` marker).
@@ -315,8 +330,9 @@ impl GuestHost {
 
     /// Spawn a wheeled vehicle of a declared type at `(x, y)`.
     pub fn vehicle_spawn(&mut self, def: &str, name: &str, x: f64, y: f64) -> i32 {
+        let def = self.resolve_resource(ResourceKind::Vehicle, def);
         let name = self.qualify(name);
-        self.engine_mut().spawn_vehicle(def, &name, x as f32, y as f32) as i32
+        self.engine_mut().spawn_vehicle(&def, &name, x as f32, y as f32) as i32
     }
 
     /// Set a wheeled vehicle's destination (integer tile coordinates).  Returns
@@ -870,17 +886,25 @@ impl GuestHost {
 
     /// Whether a named resource exists (0 = texture, 1 = font, 2 = animation).
     pub fn has_resource(&mut self, kind: i32, name: &str) -> i32 {
+        let resource_kind = match kind {
+            0 => ResourceKind::Texture,
+            1 => ResourceKind::Font,
+            2 => ResourceKind::Animation,
+            _ => return 0,
+        };
+        let name = self.resolve_resource(resource_kind, name);
         (match kind {
-            0 => self.engine().has_texture(name),
-            1 => self.engine().has_font(name),
-            2 => self.engine().has_animation(name),
+            0 => self.engine().has_texture(&name),
+            1 => self.engine().has_font(&name),
+            2 => self.engine().has_animation(&name),
             _ => false,
         }) as i32
     }
 
     /// The pixel dimensions of a loaded texture, if any.
     pub fn texture_size(&mut self, name: &str) -> Option<(f64, f64)> {
-        self.engine().texture_size(name).map(|(w, h)| (w as f64, h as f64))
+        let name = self.resolve_resource(ResourceKind::Texture, name);
+        self.engine().texture_size(&name).map(|(w, h)| (w as f64, h as f64))
     }
 
     // ---- Bulk noise fields (host generates, guest composes) ----------------
@@ -1101,5 +1125,42 @@ mod tests {
         // Spawn qualification prefixes the guest namespace.
         assert_eq!(host.qualify("car"), "scene::car");
         assert_eq!(host.qualify("common::tilemap"), "common::tilemap");
+    }
+
+    #[test]
+    fn resolve_resource_scopes_names_to_guest_namespace() {
+        let mut e = Engine::new_for_test();
+        // A global texture (empty namespace) and a namespaced ROM's resources.
+        e.texture_names.insert("cursor".to_string());
+        e.texture_names.insert("scene::rocket".to_string());
+        e.animations.insert(
+            "scene::walk".to_string(),
+            classic_core::types::AnimationData {
+                name: "walk".to_string(),
+                src: "humanoid".to_string(),
+                rate: 24.0,
+                sequence: vec![0],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                channels: vec![],
+                metadata: None,
+            },
+        );
+
+        let mut host = GuestHost::new();
+        host.set_engine(&mut e);
+        host.set_namespace("scene");
+
+        // Bare resource names resolve in the guest's namespace first.
+        assert_eq!(host.resolve_resource(ResourceKind::Texture, "rocket"), "scene::rocket");
+        // ...then fall back to the global namespace.
+        assert_eq!(host.resolve_resource(ResourceKind::Texture, "cursor"), "cursor");
+        // Animations resolve through their registry.
+        assert_eq!(host.resolve_resource(ResourceKind::Animation, "walk"), "scene::walk");
+        // Qualified names pass through verbatim.
+        assert_eq!(
+            host.resolve_resource(ResourceKind::Texture, "common::tileSet"),
+            "common::tileSet"
+        );
     }
 }
