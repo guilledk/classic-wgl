@@ -514,7 +514,10 @@ impl Engine {
         };
 
         let wheel_names: [String; 4] = WHEEL_SUFFIXES.map(|s| format!("{entity_name}Wheel{s}"));
-        let tilemap_name = "tilemap".to_string();
+        // Reference the actual tilemap entity by its (possibly namespace-qualified)
+        // name rather than the hardcoded bare `"tilemap"`, so a vehicle spawned by
+        // a namespaced ROM's guest still resolves its terrain under multi-ROM load.
+        let tilemap_name = self.debug_name(tm_entity);
         // Assign a unique per-instance stencil ghost-group id to the body + all
         // four wheels, so the parts never ghost through each other (but still
         // ghost through terrain and other entities).  Ids live in 1..=255; 0 is
