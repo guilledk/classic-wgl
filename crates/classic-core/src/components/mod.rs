@@ -62,6 +62,17 @@ impl Role {
     }
 }
 
+/// Marks an entity as selectable by the RTS selection system (host-owned).
+///
+/// `group` buckets selectables for set operations (e.g. units vs buildings);
+/// `priority` breaks click-hit ties (higher wins).  The selection set lives on
+/// the `Engine`, not here — this component only advertises selectability.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Selectable {
+    pub priority: i32,
+    pub group: u32,
+}
+
 /// Render a solid-colour rectangle.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RectRender {
@@ -571,6 +582,21 @@ pub enum Shape {
     Polygon { verts: Vec<Vec3>, center: Vec3, min: Vec3, max: Vec3 },
 }
 
+/// The coordinate space a collider's geometry is authored in.
+///
+/// [`ColliderSpace::Screen`] colliders (UI, the mouse, the selection rubber
+/// band) are already in viewport pixel space.  [`ColliderSpace::World`]
+/// colliders (gameplay footprints) are in world/cartesian space and are
+/// projected to screen every frame by the physics system before any query, so
+/// a single screen-space quadtree serves both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColliderSpace {
+    #[default]
+    Screen,
+    World,
+}
+
 /// Collider component — serializable physics data (no runtime handlers).
 ///
 /// Interaction handlers
@@ -587,6 +613,9 @@ pub struct ColliderData {
     pub pid: u32,
     pub consumes_click: bool,
     pub click_priority: i32,
+    /// Coordinate space of `shape`/`position`/`scale`.
+    #[serde(default)]
+    pub space: ColliderSpace,
 }
 
 impl ColliderData {
@@ -599,7 +628,16 @@ impl ColliderData {
             pid: 0,
             consumes_click: false,
             click_priority: 0,
+            space: ColliderSpace::Screen,
         }
+    }
+
+    /// A world-space collider (e.g. a gameplay footprint), projected to screen
+    /// by the physics system before querying.
+    pub fn world(shape: Shape) -> Self {
+        let mut c = Self::new(shape);
+        c.space = ColliderSpace::World;
+        c
     }
 }
 
