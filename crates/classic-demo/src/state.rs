@@ -65,8 +65,6 @@ pub struct DemoState {
     pub iso_coord_x_e: Option<Entity>,
     pub iso_coord_y_e: Option<Entity>,
     pub iso_coord_z_e: Option<Entity>,
-    /// Draw each vehicle's planned A* path as a world-space overlay (KeyV).
-    pub debug_vehicle_paths: bool,
     /// The ROM guest runtime (installed by `init_guest`).
     pub guest: Option<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
 }
@@ -86,7 +84,6 @@ impl Default for DemoState {
             iso_coord_x_e: None,
             iso_coord_y_e: None,
             iso_coord_z_e: None,
-            debug_vehicle_paths: false,
             guest: None,
         }
     }
