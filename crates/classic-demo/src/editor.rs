@@ -196,7 +196,7 @@ pub fn init_tool_buttons(engine: &mut Engine, state: &DemoStateRef) {
                 btn_size,
                 [0.0, 0.0, 0.0, 0.0],
                 ui::ButtonOptions {
-                    sprite: Some("editorIcons".into()),
+                    sprite: Some("common::editorIcons".into()),
                     sprite_frame: 0.0,
                     sprite_tile_set: [4.0, 4.0],
                     hover: true,
@@ -1032,7 +1032,7 @@ pub fn init_nav_palette(engine: &mut Engine, state: &DemoStateRef) {
     let tex_h = engine
         .gfx
         .as_ref()
-        .and_then(|g| g.textures.get("navTileset"))
+        .and_then(|g| g.textures.get("common::navTileset"))
         .map(|t| t.size.1 as f32)
         .unwrap_or(16.0);
     let palette_w = nav_tile_px * tiles_per_row as f32 * ui_scale;
@@ -1041,8 +1041,14 @@ pub fn init_nav_palette(engine: &mut Engine, state: &DemoStateRef) {
 
     let container =
         ui.spawn_container(&mut engine.world, palette_w, palette_h, [0.0, 0.0, 0.0, 0.2]);
-    let sprite =
-        ui.spawn_sprite(&mut engine.world, "navTileset", palette_w, palette_h, 0.0, [1.0, 1.0]);
+    let sprite = ui.spawn_sprite(
+        &mut engine.world,
+        "common::navTileset",
+        palette_w,
+        palette_h,
+        0.0,
+        [1.0, 1.0],
+    );
     ui.container_add_child(
         &mut engine.world,
         container,
