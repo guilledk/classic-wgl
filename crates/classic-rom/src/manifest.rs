@@ -5,6 +5,7 @@
 //! needs: a format version, an entrypoint, and the bundled code module list.
 
 use classic_core::types::Manifest;
+use std::collections::HashMap;
 
 /// A single bundled code (WASM) module in a ROM manifest.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -82,6 +83,14 @@ pub struct RomManifest {
     /// inventory mechanics.
     #[serde(default)]
     pub inventory_types: Vec<classic_core::inventory::InventoryType>,
+    /// Per-scene vehicle tuning, keyed by the (namespace-qualified) vehicle
+    /// name and emitted verbatim by `classic-roms` (`xtask pack_scene`) instead
+    /// of being baked into the shared vehicle def.  The engine merges these
+    /// top-level `VehicleDef` field overrides into `self.vehicles` after the
+    /// dependency closure hydrates.  Values are raw JSON objects so the pinned
+    /// `classic-rom` git rev round-trips them verbatim.
+    #[serde(default)]
+    pub vehicle_overrides: HashMap<String, serde_json::Value>,
 }
 
 fn default_format_version() -> u32 {
@@ -179,5 +188,23 @@ mod tests {
         let empty: RomManifest =
             serde_json::from_str(r#"{"shaders":[],"textures":[],"animations":[]}"#).unwrap();
         assert!(empty.deps.is_empty());
+    }
+
+    #[test]
+    fn vehicle_overrides_deserialize_and_default_empty() {
+        let with = r#"{
+            "shaders": [],
+            "textures": [],
+            "animations": [],
+            "vehicle_overrides": {"lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0}}
+        }"#;
+        let m: RomManifest = serde_json::from_str(with).unwrap();
+        assert_eq!(m.vehicle_overrides.len(), 1);
+        let ov = m.vehicle_overrides.get("lunar-common::lrv").unwrap();
+        assert_eq!(ov["turn_rate_deg_per_sec"], 55.0);
+
+        let empty: RomManifest =
+            serde_json::from_str(r#"{"shaders":[],"textures":[],"animations":[]}"#).unwrap();
+        assert!(empty.vehicle_overrides.is_empty());
     }
 }
