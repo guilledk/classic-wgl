@@ -186,7 +186,7 @@ pub struct VehicleManifestEntry {
 /// A wheeled-vehicle definition: a body plus independent wheel parts, each with
 /// per-direction ground-origin anchors.  Emitted by the Blender exporter and
 /// consumed by `Engine::spawn_vehicle`.
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct VehicleDef {
     pub name: String,
     pub directions: u32,
@@ -317,7 +317,7 @@ fn default_vehicle_steer_max_deg() -> f32 {
 }
 
 /// One part (body or wheel) of a [`VehicleDef`].
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct VehiclePartDef {
     pub name: String,
     pub texture: String,

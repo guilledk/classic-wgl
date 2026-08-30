@@ -718,6 +718,39 @@ impl Engine {
             self.rom_manifest = Some(root.manifest.clone());
             self.rom_resources = Some(root.resources.clone());
         }
+
+        // Per-scene vehicle tuning: the shared vehicle def now lives in a dep
+        // ROM (`lunar-common`), so the root scene's `vehicle_overrides` (emitted
+        // into the manifest by `classic-roms`, keys already namespace-qualified)
+        // are merged onto the hydrated `self.vehicles` *after* the whole dep
+        // closure has loaded.
+        if let Some(root) = loaded.root_rom() {
+            self.apply_vehicle_overrides(&root.manifest.vehicle_overrides);
+        }
+    }
+
+    /// Merge the root manifest's `vehicle_overrides` (qualified vehicle name →
+    /// top-level `VehicleDef` field overrides) into the hydrated vehicle
+    /// registry.  A vehicle not present (or an override with no object shape)
+    /// is skipped; the merge mirrors `classic-roms`' old pack-time bake —
+    /// serialize the loaded def, overlay the override keys, deserialize back.
+    fn apply_vehicle_overrides(
+        &mut self,
+        overrides: &std::collections::HashMap<String, serde_json::Value>,
+    ) {
+        for (name, override_val) in overrides {
+            let Some(def) = self.vehicles.get(name).cloned() else { continue };
+            let Ok(mut val) = serde_json::to_value(&def) else { continue };
+            let Some(obj) = val.as_object_mut() else { continue };
+            if let Some(ov) = override_val.as_object() {
+                for (key, value) in ov {
+                    obj.insert(key.clone(), value.clone());
+                }
+            }
+            if let Ok(merged) = serde_json::from_value::<classic_core::types::VehicleDef>(val) {
+                self.vehicles.insert(name.clone(), merged);
+            }
+        }
     }
 
     /// Qualify an entity name with the active namespace (a no-op when the
@@ -5440,6 +5473,39 @@ mod tests {
 
         // The root ROM is mirrored into the single-ROM fields.
         assert_eq!(e.rom_manifest.as_ref().unwrap().entrypoint, "scene");
+    }
+
+    #[test]
+    fn apply_vehicle_overrides_merges_root_tuning_into_shared_def() {
+        let mut e = Engine::new_for_test();
+        let def: classic_core::types::VehicleDef = serde_json::from_str(
+            r#"{"name":"lrv","directions":8,
+                "parts":[{"name":"body","texture":"lrvBody","anchors":[[0.5,0.5]]}]}"#,
+        )
+        .unwrap();
+        e.vehicles.insert("lunar-common::lrv".into(), def);
+
+        let overrides: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({
+                "lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0, "safe_fall_px": 96.0}
+            }))
+            .unwrap();
+        e.apply_vehicle_overrides(&overrides);
+
+        let merged = &e.vehicles["lunar-common::lrv"];
+        assert_eq!(merged.turn_rate_deg_per_sec, 55.0);
+        assert_eq!(merged.safe_fall_px, 96.0);
+        // Non-overridden fields keep the shared def's values.
+        assert_eq!(merged.name, "lrv");
+        assert_eq!(merged.parts.len(), 1);
+
+        // An override for a vehicle the DAG didn't hydrate is ignored.
+        let unknown: std::collections::HashMap<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"missing::lrv": {"turn_rate_deg_per_sec": 1.0}}),
+        )
+        .unwrap();
+        e.apply_vehicle_overrides(&unknown);
+        assert!(!e.vehicles.contains_key("missing::lrv"));
     }
 
     #[test]
