@@ -3,7 +3,9 @@ use wasm_bindgen::prelude::*;
 /// Where each named ROM (`?rom=<name>`, empty => demo) is served from.
 ///
 /// ROMs are built by the `classic-roms` repo and published to a Cloudflare R2
-/// public bucket served at `classic-roms.com` (CORS-enabled).
+/// public bucket served at `classic-roms.com` (CORS-enabled).  `common` and
+/// `lunar-common` are the shared asset-only dependency ROMs the shipped scenes
+/// resolve at boot.
 #[cfg(target_arch = "wasm32")]
 const ROM_URLS: &[(&str, &str)] = &[
     ("demo", "https://classic-roms.com/demo.rom"),
@@ -11,11 +13,9 @@ const ROM_URLS: &[(&str, &str)] = &[
     ("moon", "https://classic-roms.com/lunar.rom"),
     ("lrvtest", "https://classic-roms.com/lrvtest.rom"),
     ("basetest", "https://classic-roms.com/basetest.rom"),
+    ("common", "https://classic-roms.com/common.rom"),
+    ("lunar-common", "https://classic-roms.com/lunar-common.rom"),
 ];
-
-/// The `roms.json` checksum index, used to content-address cached ROMs.
-#[cfg(target_arch = "wasm32")]
-const ROM_INDEX_URL: &str = "https://classic-roms.com/roms.json";
 
 /// Read a query-string parameter from the page URL.
 #[cfg(target_arch = "wasm32")]
@@ -105,33 +105,14 @@ pub fn main() {
     });
 }
 
-/// Resolve the `?rom=` selector to archive bytes, caching named ROMs in the
-/// browser's Cache API (keyed by their `roms.json` sha256) so repeat loads
-/// don't re-download.  Arbitrary URLs/paths fall back to a plain fetch.
+/// Resolve the `?rom=` selector to a multi-ROM dependency DAG: the named root
+/// plus its `common`/`lunar-common` deps, each fetched from the CDN through the
+/// name -> location registry.  Arbitrary URLs/paths are resolved the same way
+/// (their manifest `deps` are fetched through the registry).
 #[cfg(target_arch = "wasm32")]
-async fn resolve_web_rom(spec: &str) -> anyhow::Result<classic_rom::AssetBytes> {
-    use classic_rom::RomSource;
-
-    match classic_rom::parse_rom_spec(spec) {
-        RomSource::Embedded(name) => {
-            let url = ROM_URLS
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, url)| *url)
-                .ok_or_else(|| anyhow::anyhow!("unknown ROM `{name}`"))?;
-            // `moon` is a legacy alias for the `lunar` scene; its checksum
-            // index entry is `lunar`.
-            let index_key = if name == "moon" { "lunar" } else { &name };
-            classic_platform::rom::resolve_named_rom_cached(index_key, url, ROM_INDEX_URL).await
-        }
-        _ => {
-            classic_platform::resolve_rom_async(
-                spec,
-                &classic_platform::rom::static_lookup(ROM_URLS),
-            )
-            .await
-        }
-    }
+async fn resolve_web_roms(spec: &str) -> anyhow::Result<classic_rom::LoadedRoms> {
+    classic_platform::resolve_roms_async(spec, &classic_platform::rom::static_lookup(ROM_URLS))
+        .await
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -145,17 +126,14 @@ async fn run() -> anyhow::Result<()> {
     let label = query_param("rom").unwrap_or_else(|| "demo".to_string());
     let mut overlay = BootOverlay::new(&format!("downloading scene `{label}`…"));
 
-    let rom_bytes = match resolve_web_rom(&spec).await {
-        Ok(bytes) => bytes,
+    let loaded = match resolve_web_roms(&spec).await {
+        Ok(loaded) => loaded,
         Err(err) => {
             overlay.error(&format!("failed to load scene `{label}`:\n{err}"));
             return Err(err);
         }
     };
     overlay.clear();
-
-    let archive = classic_rom::RomArchive::from_bytes(&rom_bytes).expect("open ROM archive");
-    let rom = classic_rom::Rom::load(&archive).expect("load ROM");
 
     use classic_platform::web::WebPlatform;
     use classic_platform::Platform;
@@ -177,7 +155,7 @@ async fn run() -> anyhow::Result<()> {
                 classic_core::instrument::Chan::Platform,
                 "web: initialising engine"
             );
-            engine = Some(classic_demo::init_engine(gl, &rom));
+            engine = Some(classic_demo::init_engine_multi(gl, &loaded));
         }
         if let Some(e) = engine.as_mut() {
             e.frame(input, vw, vh, delta);
