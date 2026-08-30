@@ -30,6 +30,23 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   rasterize blocking footprints into the nav grid for humanoid and vehicle
   pathfinding; `vehicle_footprint_radius` lets guests derive pickup/drop
   clearance from the real footprints (#80).
+- Dynamic point/spot lights in a `std140` UBO (`MAX_LIGHTS` = 256), evaluated
+  in the lit shaders with a windowed inverse-square falloff modulated by
+  albedo (#83).
+- Directional shadow map: an orthographic light-space box fit around the
+  tilemap and sprite billboards, sampled to shadow the sun diffuse term (#83).
+- Sprite billboards cast and receive shadows as standing geometry via a `vec3`
+  ground anchor, and baked sprite normals rotate into light space via
+  `blender_to_light_3` (#83).
+- Entity-backed `LightHandles` with guest `light_spawn`/`light_set`/
+  `light_release` imports and a `KeyL` light-debug overlay (#83).
+
+### Fixed
+
+- Make lighting metric: `iso_to_light_4` drops the isometric `diag(1, 0.5, 1)`
+  squash so `length`/`normalize`/`dot` are isotropic — point-light pools were
+  circles and sprite normals off by up to 153° (#83).
+- Scale terrain normals by the tile size (issue #77) (#83).
 
 ## [0.1.0-alpha.0] - 2026-08-28
 
