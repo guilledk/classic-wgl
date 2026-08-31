@@ -9,6 +9,8 @@
 
 mod shaders;
 
+mod compressed;
+
 use classic_core::components::Light;
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
@@ -258,6 +260,46 @@ impl GlTexture {
     /// maps (sampled as `.rgb`).
     pub fn from_rgb8(gl: &glow::Context, rgb: &[u8], width: u32, height: u32) -> Self {
         Self::upload(gl, glow::RGB8, glow::RGB, rgb, width, height, 1)
+    }
+
+    /// Upload GPU-compressed block data (e.g. BC7/BC4, from a transcoded Basis
+    /// `.basis` payload) via `compressed_tex_image_2d`.  `width`/`height` are
+    /// the texture's texel dimensions (the block data is implicitly padded).
+    pub fn from_compressed(
+        gl: &glow::Context,
+        internal_format: u32,
+        data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let texture = unsafe { gl.create_texture() }.expect("create texture");
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.compressed_tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                internal_format as i32,
+                width as i32,
+                height as i32,
+                0,
+                data.len() as i32,
+                data,
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+        Self { texture, size: (width, height) }
     }
 
     /// Set LINEAR filtering (used for SDF atlas).
@@ -634,6 +676,53 @@ impl Gfx {
 
     pub fn add_texture_rgb8(&mut self, name: &str, rgb: &[u8], w: u32, h: u32) {
         self.textures.insert(name.to_string(), GlTexture::from_rgb8(&self.gl, rgb, w, h));
+    }
+
+    /// Upload a GPU-compressed texture from raw block data (see
+    /// [`GlTexture::from_compressed`]).
+    pub fn add_texture_compressed(
+        &mut self,
+        name: &str,
+        internal_format: u32,
+        data: &[u8],
+        w: u32,
+        h: u32,
+    ) {
+        self.textures.insert(
+            name.to_string(),
+            GlTexture::from_compressed(&self.gl, internal_format, data, w, h),
+        );
+    }
+
+    /// Upload a Basis Universal `.basis` payload: transcode to the target
+    /// [`compressed::CompressedFormat`] and upload compressed, or fall back to a
+    /// raw RGBA8 transcode.  Returns `false` (and uploads nothing) when the
+    /// payload can't be transcoded — the caller treats the texture as missing.
+    pub fn add_texture_basis(&mut self, name: &str, bytes: &[u8], format: &str) -> bool {
+        if let Some(fmt) = compressed::CompressedFormat::parse(format) {
+            if let Some(decoded) = compressed::transcode(&self.gl, bytes, fmt) {
+                log::debug!(
+                    "texture {name}: basis -> gl 0x{:04X} ({}/{})",
+                    decoded.internal_format,
+                    decoded.width,
+                    decoded.height
+                );
+                self.add_texture_compressed(
+                    name,
+                    decoded.internal_format,
+                    &decoded.data,
+                    decoded.width,
+                    decoded.height,
+                );
+                return true;
+            }
+        }
+        if let Some((w, h, rgba)) = compressed::transcode_rgba8(bytes) {
+            log::debug!("texture {name}: basis -> RGBA8 fallback ({w}/{h})");
+            self.add_texture_rgba8(name, &rgba, w, h);
+            return true;
+        }
+        false
     }
 
     pub fn shader(&self, name: &str) -> &Shader {

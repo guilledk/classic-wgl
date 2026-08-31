@@ -524,10 +524,12 @@ impl Engine {
                 }
                 continue;
             }
-            // Shared-atlas companion sheets are named `{sheet}-normal` /
-            // `{sheet}-depth` by the packer; upload them in their native channel
-            // count (RGB8 / R8) instead of RGBA8.
-            if entry.name.ends_with("-depth") {
+            // GPU-compressed textures (Phase 1) transcode + upload via the
+            // `format`-declared target; uncompressed textures use the native
+            // channel count (RGB8 normal / R8 depth / RGBA8 albedo).
+            if let Some(format) = &entry.format {
+                self.load_texture_basis(&key, bytes, format);
+            } else if entry.name.ends_with("-depth") {
                 self.load_texture_luma8(&key, bytes);
             } else if entry.name.ends_with("-normal") {
                 self.load_texture_rgb8(&key, bytes);
@@ -1378,6 +1380,18 @@ impl Engine {
         let rgb = img.to_rgb8();
         if let Some(gfx) = self.gfx.as_mut() {
             gfx.add_texture_rgb8(name, &rgb, rgb.width(), rgb.height());
+        }
+    }
+
+    /// Upload a Basis Universal `.basis` payload as a GPU-compressed texture
+    /// (transcoding to the `format`-declared target, or raw RGBA8 as fallback).
+    /// A payload that cannot be transcoded is dropped (logged), leaving the
+    /// texture unuploaded — the web transcoder gap (P1.0/R2) surfaces here.
+    pub fn load_texture_basis(&mut self, name: &str, basis_bytes: &[u8], format: &str) {
+        if let Some(gfx) = self.gfx.as_mut() {
+            if !gfx.add_texture_basis(name, basis_bytes, format) {
+                log::warn!("texture {name}: basis transcode unavailable (format {format})");
+            }
         }
     }
 
