@@ -11,12 +11,11 @@
 //!   albedo/normal  → BC7 (BPTC) → BC3 (S3TC DXT5) → ETC2_RGBA
 //!   depth          → BC4 (RGTC) → ETC2_EAC_R11
 //!
-//! with a raw RGBA8 transcode as the final fallback.  The web path needs a
-//! separate precompiled transcoder `.wasm` (three.js-style, loaded like
-//! `pathfinder.wasm`) — that is the P1.0/R2 spike and is not yet wired; until
-//! it lands, the web build returns no transcode (the caller treats the texture
-//! as missing).
+//! with a raw RGBA8 transcode as the final fallback.  The web path uses a
+//! separate precompiled transcoder `.wasm` (three.js `basis_transcoder`) — see
+//! `basis_web`.
 
+#[cfg(not(target_arch = "wasm32"))]
 use glow::HasContext;
 
 /// The GPU transcode target named by a manifest `format` field.
@@ -47,6 +46,7 @@ pub struct Decoded {
 }
 
 /// The compressed-format capabilities a context advertises.
+#[cfg(not(target_arch = "wasm32"))]
 struct Caps {
     bptc: bool,
     rgtc: bool,
@@ -146,15 +146,8 @@ pub fn transcode_rgba8(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     transcode_to(bytes, T::RGBA32)
 }
 
-// Web: the compressed path needs a separate precompiled transcoder `.wasm`
-// (P1.0/R2).  Until it is wired, both transcode entry points are unavailable;
-// the engine treats that as a missing texture rather than uploading garbage.
+// Web: the compressed path uses a separate precompiled transcoder `.wasm`
+// (P1.0/R2) — the vendored three.js `basis_transcoder` build, instantiated
+// synchronously on the main thread (see `basis_web`).
 #[cfg(target_arch = "wasm32")]
-pub fn transcode(_gl: &glow::Context, _bytes: &[u8], _format: CompressedFormat) -> Option<Decoded> {
-    None
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn transcode_rgba8(_bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    None
-}
+pub use crate::basis_web::{transcode, transcode_rgba8};

@@ -8,6 +8,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- Web Basis Universal transcoder: vendor the three.js `basis_transcoder`
+  (MIT/Apache) and transcode `.basis` (ETC1S) sheets to S3TC/ETC2/BC7 on WebGL 2
+  (RGBA8 fallback), so GPU-compressed sheets render on web.
+
 ## [0.1.1] - 2026-09-01
 
 ### Added
@@ -52,6 +58,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   rasterize blocking footprints into the nav grid for humanoid and vehicle
   pathfinding; `vehicle_footprint_radius` lets guests derive pickup/drop
   clearance from the real footprints (#80).
+
 
 ## [0.1.0-alpha.0] - 2026-08-28
 

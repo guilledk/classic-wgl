@@ -1,0 +1,23 @@
+# Vendored third-party code
+
+## `basis_transcoder.js` + `basis_transcoder.wasm`
+
+- Source: three.js r162 — `examples/jsm/libs/basis/`
+  (https://github.com/mrdoob/three.js/tree/r162/examples/jsm/libs/basis)
+- Provenance: precompiled Emscripten build of the Basis Universal transcoder,
+  shipped by the three.js project for its BasisTextureLoader/KTX2Loader.
+- `basis_transcoder.js`: © the three.js authors, MIT License
+  (https://github.com/mrdoob/three.js/blob/r162/LICENSE).
+- `basis_transcoder.wasm`: compiled from Basis Universal
+  (https://github.com/BinomialLLC/basis_universal), © Binomial LLC,
+  Apache License 2.0
+  (https://github.com/BinomialLLC/basis_universal/blob/master/LICENSE).
+
+Vendored verbatim (unmodified).  The wasm exposes the embind `BasisFile` /
+`initializeBasis` API used by `classic-gfx/src/basis_web.rs` to transcode
+`.basis` (ETC1S) payloads to the GPU's native compressed format on WebGL 2.
+
+The transcoder is instantiated synchronously on the main thread (see
+`transcoder/bootstrap.js`) via the Emscripten `instantiateWasm` hook, so the
+synchronous `Gfx::add_texture_basis` load path can call it without an async
+refactor.
