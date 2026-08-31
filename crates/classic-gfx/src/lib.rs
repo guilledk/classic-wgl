@@ -11,6 +11,9 @@ mod shaders;
 
 mod compressed;
 
+#[cfg(target_arch = "wasm32")]
+mod basis_web;
+
 use classic_core::components::Light;
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;

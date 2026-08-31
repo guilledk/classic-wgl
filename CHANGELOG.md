@@ -38,6 +38,9 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `blender_to_light_3` (#83).
 - Entity-backed `LightHandles` with guest `light_spawn`/`light_set`/
   `light_release` imports and a `KeyL` light-debug overlay (#83).
+- Web Basis Universal transcoder: vendor the three.js `basis_transcoder`
+  (MIT/Apache) and transcode `.basis` (ETC1S) sheets to S3TC/ETC2/BC7 on WebGL 2
+  (RGBA8 fallback), so GPU-compressed sheets render on web.
 
 ### Fixed
 
