@@ -107,12 +107,17 @@ pub fn main() {
 
 /// Resolve the `?rom=` selector to a multi-ROM dependency DAG: the named root
 /// plus its `common`/`lunar-common` deps, each fetched from the CDN through the
-/// name -> location registry.  Arbitrary URLs/paths are resolved the same way
+/// name -> location registry and Cache-API-cached keyed by the `sha256`
+/// published in `roms.json`.  Arbitrary URLs/paths are resolved the same way
 /// (their manifest `deps` are fetched through the registry).
 #[cfg(target_arch = "wasm32")]
 async fn resolve_web_roms(spec: &str) -> anyhow::Result<classic_rom::LoadedRoms> {
-    classic_platform::resolve_roms_async(spec, &classic_platform::rom::static_lookup(ROM_URLS))
-        .await
+    classic_platform::resolve_roms_async(
+        spec,
+        &classic_platform::rom::static_lookup(ROM_URLS),
+        "https://classic-roms.com/roms.json",
+    )
+    .await
 }
 
 #[cfg(target_arch = "wasm32")]
