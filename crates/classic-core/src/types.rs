@@ -72,6 +72,11 @@ pub struct TextureManifestEntry {
     /// uniform-grid `tile_set_size` index.
     #[serde(default)]
     pub frames: Option<String>,
+    /// The GPU transcode target when the texture's `src` bytes are a
+    /// GPU-compressed (Basis Universal `.basis`) payload (`"BC7_RGBA"`,
+    /// `"BC4_R"`, `"RGBA8"`, …).  Absent for uncompressed PNG textures.
+    #[serde(default)]
+    pub format: Option<String>,
 }
 
 /// One sheet (texture) referenced by a [`FrameTable`].
