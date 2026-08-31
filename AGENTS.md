@@ -280,7 +280,9 @@ plans/
 - The desktop app reads the ROMs from `roms/out/` at runtime (overridable via
   `CLASSIC_ROM_DIR`); the web app fetches them from `classic-roms.com`.  Both boot
   them with `RomArchive::from_bytes` → `Rom::load` → `classic_demo::init_engine`
-  (see `apps/desktop/src/main.rs` and `apps/web/src/lib.rs`).
+  (see `apps/desktop/src/main.rs` and `apps/web/src/lib.rs`).  The web boot
+  (`resolve_roms_async`) Cache-API-caches each fetched ROM keyed by the `sha256`
+  published in `roms.json`, so repeat page loads serve ROMs locally.
 - CI runs `cargo xtask fetch-roms` before `cargo build`; deploy stages nothing
   (the web app fetches R2 directly).
 

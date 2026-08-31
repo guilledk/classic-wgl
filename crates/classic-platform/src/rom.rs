@@ -164,32 +164,45 @@ pub async fn resolve_rom_async(
     load_rom_bytes_async(source).await
 }
 
-/// Load a named ROM to a parsed [`Rom`] via the name -> location index (web).
+/// Load a named ROM to a parsed [`Rom`] via the name -> location index (web),
+/// caching the archive in the browser Cache API keyed by the `sha256` published
+/// in `index_url` (the `roms.json` checksum index) so repeat page loads serve
+/// the ROM locally.
 #[cfg(target_arch = "wasm32")]
 async fn load_named_rom_async(
     name: &str,
     index: &dyn Fn(&str) -> Option<String>,
+    index_url: &str,
 ) -> anyhow::Result<Rom> {
     let source = resolve_rom_source(&format!("rom:{name}"), index)?;
-    let bytes = load_rom_bytes_async(source).await?;
+    let bytes = match source {
+        RomSource::Url(url) => resolve_named_rom_cached(name, &url, index_url).await?,
+        RomSource::Path(path) => {
+            resolve_named_rom_cached(name, &path.to_string_lossy(), index_url).await?
+        }
+        RomSource::Data(bytes) => AssetBytes::Owned(bytes),
+        RomSource::Embedded(_) => unreachable!("resolve_rom_source resolves names first"),
+    };
     rom_from_bytes(&bytes)
 }
 
 /// Resolve a ROM selector to a multi-ROM dependency DAG on web.
 ///
 /// Mirrors the native [`resolve_roms`]: named roots resolve their `deps`
-/// recursively through `index` (each ROM fetched independently), direct
-/// URL/path roots contribute their manifest `deps`.  Cycle-checked,
-/// de-duplicated, topologically ordered.
+/// recursively through `index` (each ROM fetched + Cache-API-cached keyed by
+/// the `sha256` published in `index_url`), direct URL/path roots contribute
+/// their manifest `deps`.  Cycle-checked, de-duplicated, topologically ordered.
 #[cfg(target_arch = "wasm32")]
 pub async fn resolve_roms_async(
     spec: &str,
     index: &dyn Fn(&str) -> Option<String>,
+    index_url: &str,
 ) -> anyhow::Result<classic_rom::LoadedRoms> {
     match classic_rom::parse_rom_spec(spec) {
         RomSource::Embedded(name) => {
-            classic_rom::LoadedRoms::resolve_async(&name, |n| async move {
-                load_named_rom_async(&n, index).await
+            classic_rom::LoadedRoms::resolve_async(&name, |n| {
+                let index_url = index_url.to_string();
+                async move { load_named_rom_async(&n, index, &index_url).await }
             })
             .await
         }
@@ -203,11 +216,12 @@ pub async fn resolve_roms_async(
                     root_loaded = true;
                 }
                 let root_rom = root_rom.clone();
+                let index_url = index_url.to_string();
                 async move {
                     if is_root {
                         Ok(root_rom)
                     } else {
-                        load_named_rom_async(&name, index).await
+                        load_named_rom_async(&name, index, &index_url).await
                     }
                 }
             })
