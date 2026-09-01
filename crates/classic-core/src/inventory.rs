@@ -1,6 +1,6 @@
 //! # Skill: `classic-ecs`
 //!
-//! **Read `.claude/skills/classic-ecs/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-ecs/SKILL.md` before working on this module.**
 //!
 //! Item catalog + inventory component types for the container-logistics layer.
 //!

@@ -1,6 +1,6 @@
 //! # Skill: `classic-ecs`
 //!
-//! **Read `.claude/skills/classic-ecs/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-ecs/SKILL.md` before working on this module.**
 //!
 //! Generic host-side inventory mechanics over the `classic-core` [`Inventory`]
 //! component and the per-ROM [`ItemRegistry`].  These functions enforce the

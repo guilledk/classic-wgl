@@ -102,7 +102,7 @@ the scene; `?classic_log=` enables channel logging.
 
 ## Engine skills
 
-Detailed, per-subsystem reference docs live as skills under `.claude/skills/`:
+Detailed, per-subsystem reference docs live as skills under `.agents/skills/`:
 
 | Skill | Covers |
 |---|---|

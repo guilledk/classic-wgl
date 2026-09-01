@@ -1,6 +1,6 @@
 //! # Skill: `classic-physics`
 //!
-//! **Read `.claude/skills/classic-physics/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-physics/SKILL.md` before working on this module.**
 //!
 //! Collision detection and interaction dispatch.
 
