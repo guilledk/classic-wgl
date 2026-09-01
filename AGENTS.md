@@ -38,6 +38,10 @@ cargo xtask fetch-roms               # downloads the staged demo/lunar ROMs (and
 # Web pathfinder module (must run before any --target wasm32 build/check;
 # trunk serve/build do it automatically via the `pre_build` hook in `Trunk.toml`)
 cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm to pathfinder.wasm and stages it next to web.rs
+
+# Versioning / releases (see VERSIONING.md)
+cargo xtask check-version            # fail when Cargo.toml/CHANGELOG.md drift
+cargo xtask release patch            # bump version + freeze changelog (prints commit/tag cmds)
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
@@ -267,6 +271,17 @@ plans/
 - Default branch is `master` (CI triggers on push to `master` and all PRs).
 - Commit messages are short, lowercase, imperative (`fix nav walkability transpose`).
 - No git submodules remain; the `assets/` submodule and its `GH_PAT` checkout token were removed.
+
+## Versioning / releases
+
+- Workspace-wide [semver](https://semver.org) (0.x: MINOR = breaking, PATCH =
+  fix/feature), tracked in `[workspace.package.version]` + `CHANGELOG.md`.
+  See `VERSIONING.md` for the full policy; the `classic-release` skill is the
+  runbook.
+- Releases are cut **once per merge window** via `cargo xtask release` — never
+  hand-edit versions on a feature branch; accumulate under `[Unreleased]`.
+- `cargo xtask check-version` (run in CI) fails on any `Cargo.toml` ↔
+  `CHANGELOG.md` drift.
 
 ## Skills
 
