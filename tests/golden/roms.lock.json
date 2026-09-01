@@ -1,14 +1,17 @@
 {
   "demo": {
-    "size": 2243525,
-    "sha256": "0acae76f8c4ff1e40400cd7ae4218b003a3f5fcc9d62cc80a900b10a5587d7ed"
+    "size": 2243007,
+    "sha256": "af27b64731093274bde7c8929da4a4bd12542a06f485aaae6057da61292e2a85",
+    "version": "0.1.0"
   },
   "lunar": {
-    "size": 47184984,
-    "sha256": "85fdfee7b4a8de8912569858c3d5ce9c2ace60a1a5407c1225d4a80f1ce863e5"
+    "size": 47194994,
+    "sha256": "8205d41deea63b173f59a73c49c254135045711c68e45c0b1f9da4e89adb93ae",
+    "version": "0.1.1"
   },
   "lrvtest": {
-    "size": 7789644,
-    "sha256": "0bffc3d71d9ebe064aa11915b0e304ea05c76bb5bc29e70447547af8f77a5357"
+    "size": 7789703,
+    "sha256": "118b9287febf73261a3f97ff2f3cead1a292b7321f46deb66dc30d81c68d9d41",
+    "version": "0.1.0"
   }
 }
