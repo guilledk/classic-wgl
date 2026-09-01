@@ -34,6 +34,9 @@ pub enum ResourceKind {
     Vehicle,
     /// Packed-atlas frame table (`frames.json`) sidecar for a texture.
     Frames,
+    /// Blender-exported data artifact (vehicle anchors, animation offsets, …),
+    /// referenced by name from authored defs.
+    Data,
 }
 
 /// Name-keyed byte blobs, grouped by kind.
@@ -48,6 +51,7 @@ pub struct ResourceSet {
     grids: BTreeMap<String, Vec<u8>>,
     vehicles: BTreeMap<String, Vec<u8>>,
     frames: BTreeMap<String, Vec<u8>>,
+    data: BTreeMap<String, Vec<u8>>,
 }
 
 impl ResourceSet {
@@ -73,6 +77,7 @@ impl ResourceSet {
             + self.grids.len()
             + self.vehicles.len()
             + self.frames.len()
+            + self.data.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -109,6 +114,10 @@ impl ResourceSet {
 
     pub fn vehicles(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.vehicles
+    }
+
+    pub fn data(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.data
     }
 
     pub fn frames(&self) -> &BTreeMap<String, Vec<u8>> {
@@ -164,6 +173,9 @@ impl ResourceSet {
         for entry in &manifest.manifest.vehicles {
             set.vehicles.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
+        for entry in &manifest.manifest.data {
+            set.data.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
+        }
         for entry in &manifest.manifest.textures {
             if let Some(path) = &entry.frames {
                 set.frames.insert(entry.name.clone(), load(crate::rom_path(path))?);
@@ -183,6 +195,7 @@ impl ResourceSet {
             ResourceKind::Grid => &self.grids,
             ResourceKind::Vehicle => &self.vehicles,
             ResourceKind::Frames => &self.frames,
+            ResourceKind::Data => &self.data,
         }
     }
 
@@ -197,6 +210,7 @@ impl ResourceSet {
             ResourceKind::Grid => &mut self.grids,
             ResourceKind::Vehicle => &mut self.vehicles,
             ResourceKind::Frames => &mut self.frames,
+            ResourceKind::Data => &mut self.data,
         }
     }
 }

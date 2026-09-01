@@ -188,6 +188,15 @@ pub struct VehicleManifestEntry {
     pub src: String,
 }
 
+/// A manifest entry for a Blender-exported data artifact (vehicle anchors,
+/// animation offsets, etc.), staged via the catalog's `data[]` and referenced
+/// by name from authored defs.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct DataManifestEntry {
+    pub name: String,
+    pub src: String,
+}
+
 /// A wheeled-vehicle definition: a body plus independent wheel parts, each with
 /// per-direction ground-origin anchors.  Emitted by the Blender exporter and
 /// consumed by `Engine::spawn_vehicle`.
@@ -195,9 +204,13 @@ pub struct VehicleManifestEntry {
 pub struct VehicleDef {
     pub name: String,
     pub directions: u32,
-    #[serde(default = "default_vehicle_columns")]
+    /// Name of the Blender-exported anchors data artifact (staged via the
+    /// catalog's `data[]`).  Empty = no anchors (parts fall back to 0.5/0.5).
+    #[serde(default)]
+    pub anchors: String,
+    #[serde(default)]
     pub columns: u32,
-    #[serde(default = "default_vehicle_rows")]
+    #[serde(default)]
     pub rows: u32,
     /// Pixel size of one frame cell (the sprite's drawn size at scale 1).
     #[serde(default)]
@@ -205,22 +218,22 @@ pub struct VehicleDef {
     /// Number of body pitch frames per direction (1 = flat/level only).  The
     /// body sheet stacks `pitch_levels` direction blocks vertically, so the
     /// body `tile_set_size` is `[columns, rows * pitch_levels]`.
-    #[serde(default = "default_vehicle_pitch_levels")]
+    #[serde(default)]
     pub pitch_levels: u32,
     /// Max body pitch angle (degrees, symmetric ±) the frames span, emitted by
     /// the exporter.  The engine quantizes the simulated pitch angle against
     /// this ceiling.
-    #[serde(default = "default_vehicle_pitch_max_deg")]
+    #[serde(default)]
     pub pitch_max_deg: f32,
     /// Number of body roll frames per (pitch, direction) (1 = no roll).  The
     /// body sheet stacks `pitch_levels · roll_levels` direction blocks
     /// vertically, so the body `tile_set_size` is
     /// `[columns, rows · pitch_levels · roll_levels]`.
-    #[serde(default = "default_vehicle_roll_levels")]
+    #[serde(default)]
     pub roll_levels: u32,
     /// Max body roll angle (degrees, symmetric ±) the frames span, emitted by
     /// the exporter.
-    #[serde(default = "default_vehicle_roll_max_deg")]
+    #[serde(default)]
     pub roll_max_deg: f32,
     /// Collision footprint for pathfinding: integer tile offsets from the body
     /// anchor cell that the vehicle occupies.  `None` auto-derives the
@@ -232,7 +245,7 @@ pub struct VehicleDef {
     /// Max body heading change while driving, in degrees per second.  Drives
     /// the bounded-turn follow controller (issue #35).  Defaults high so the
     /// movement approximates the old instant-turn behaviour for simple defs.
-    #[serde(default = "default_vehicle_turn_rate")]
+    #[serde(default)]
     pub turn_rate_deg_per_sec: f32,
     /// Max drop (in pixels) the suspension absorbs without damage.  The A* may
     /// route a downward "jump" over a small cliff whose drop is within this
@@ -242,27 +255,27 @@ pub struct VehicleDef {
     /// Number of steering angles rendered for the front tires (1 = no steering).
     /// A steering-tire sheet stacks `steer_levels` direction blocks vertically,
     /// so its `tile_set_size` is `[columns, rows · steer_levels]`.
-    #[serde(default = "default_vehicle_steer_levels")]
+    #[serde(default)]
     pub steer_levels: u32,
     /// Max front-wheel steering angle (degrees, symmetric ±) the frames span,
     /// emitted by the exporter.  The engine quantizes the steering demand
     /// against this ceiling.
-    #[serde(default = "default_vehicle_steer_max_deg")]
+    #[serde(default)]
     pub steer_max_deg: f32,
     /// Max front-wheel steering-angle rate while driving, in degrees per second.
     /// The follow controller integrates the steering angle toward its demand at
     /// this rate, so the tires sweep between steer frames instead of snapping.
-    #[serde(default = "default_vehicle_steer_rate")]
+    #[serde(default)]
     pub steer_rate_deg_per_sec: f32,
     /// Reverse speed in tiles per second (used when the vehicle backs up to
     /// recover from a goal/waypoint behind it).  `0` disables reversing.
-    #[serde(default = "default_vehicle_reverse_speed")]
+    #[serde(default)]
     pub reverse_speed: f32,
     /// A* turn penalty: cost added per 45° of heading change between successive
     /// steps (forward is cheapest, a 180° reversal costs the most).  `0`
     /// disables the penalty.  Threaded to the pathfinder so routes prefer
     /// gentle turns.
-    #[serde(default = "default_vehicle_turn_cost")]
+    #[serde(default)]
     pub turn_cost: f32,
     /// Steering-tire parts, in `[fl, fr, …]` order, matched to `parts` wheels by
     /// index (`tires[0]` steers `parts[1]`, the front-left wheel).  Empty = no
@@ -273,62 +286,77 @@ pub struct VehicleDef {
     pub parts: Vec<VehiclePartDef>,
 }
 
-fn default_vehicle_columns() -> u32 {
-    4
-}
-
-fn default_vehicle_rows() -> u32 {
-    2
-}
-
-fn default_vehicle_pitch_levels() -> u32 {
-    1
-}
-
-fn default_vehicle_pitch_max_deg() -> f32 {
-    20.0
-}
-
-fn default_vehicle_roll_levels() -> u32 {
-    1
-}
-
-fn default_vehicle_roll_max_deg() -> f32 {
-    20.0
-}
-
-fn default_vehicle_turn_rate() -> f32 {
-    720.0
-}
-
-fn default_vehicle_steer_levels() -> u32 {
-    1
-}
-
-fn default_vehicle_steer_rate() -> f32 {
-    360.0
-}
-
-fn default_vehicle_reverse_speed() -> f32 {
-    1.3
-}
-
-fn default_vehicle_turn_cost() -> f32 {
-    0.0
-}
-
-fn default_vehicle_steer_max_deg() -> f32 {
-    30.0
-}
-
-/// One part (body or wheel) of a [`VehicleDef`].
+/// One part (body or wheel) of a [`VehicleDef`].  The part's per-direction
+/// ground-origin anchors live in the vehicle's anchors data artifact (see
+/// [`VehicleAnchors`]), referenced by [`VehicleDef::anchors`].
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct VehiclePartDef {
     pub name: String,
     pub texture: String,
-    /// Ground-origin anchor per direction, `[ax, ay]` normalized to the frame
-    /// (x from left, y from top).
+}
+
+/// A vehicle's Blender-exported anchors data artifact: each part's per-direction
+/// ground-origin anchor, `[ax, ay]` normalized to the frame (x from left, y from
+/// top).
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct VehicleAnchors {
+    #[serde(default)]
+    pub version: u32,
+    pub name: String,
+    #[serde(default)]
+    pub directions: u32,
+    #[serde(default)]
+    pub parts: Vec<VehicleAnchorsPart>,
+    #[serde(default)]
+    pub tires: Vec<VehicleAnchorsPart>,
+}
+
+/// One part's anchors within a [`VehicleAnchors`] artifact.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct VehicleAnchorsPart {
+    pub name: String,
+    #[serde(default)]
+    pub texture: String,
     pub anchors: Vec<[f32; 2]>,
+}
+
+/// Per-scene vehicle stat tuning, keyed by (namespace-qualified) vehicle name.
+/// Applied as a typed field merge over the shared [`VehicleDef`] (no JSON
+/// round-trip).
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct VehicleOverrides {
+    #[serde(default)]
+    pub turn_rate_deg_per_sec: Option<f32>,
+    #[serde(default)]
+    pub safe_fall_px: Option<f32>,
+    #[serde(default)]
+    pub steer_rate_deg_per_sec: Option<f32>,
+    #[serde(default)]
+    pub reverse_speed: Option<f32>,
+    #[serde(default)]
+    pub turn_cost: Option<f32>,
+}
+
+impl VehicleOverrides {
+    /// Merge the set (non-`None`) overrides onto `def` by direct field
+    /// assignment.
+    pub fn apply_to(&self, def: &mut VehicleDef) {
+        if let Some(v) = self.turn_rate_deg_per_sec {
+            def.turn_rate_deg_per_sec = v;
+        }
+        if let Some(v) = self.safe_fall_px {
+            def.safe_fall_px = v;
+        }
+        if let Some(v) = self.steer_rate_deg_per_sec {
+            def.steer_rate_deg_per_sec = v;
+        }
+        if let Some(v) = self.reverse_speed {
+            def.reverse_speed = v;
+        }
+        if let Some(v) = self.turn_cost {
+            def.turn_cost = v;
+        }
+    }
 }
 
 /// A sparse, frame-keyed visual offset.  The engine linearly interpolates
@@ -432,6 +460,10 @@ pub struct Manifest {
     pub animations: Vec<AnimationData>,
     #[serde(default)]
     pub vehicles: Vec<VehicleManifestEntry>,
+    /// Blender-exported data artifacts (anchors, offsets, …), referenced by
+    /// name from authored defs.
+    #[serde(default)]
+    pub data: Vec<DataManifestEntry>,
 }
 
 /// One component in a serialized entity from `state.json`.
@@ -531,12 +563,12 @@ impl Viewport {
 mod tests {
     use super::*;
 
-    /// Lock the cross-repo `VehicleDef` sidecar contract: the fields the
-    /// `classic-roms` xtask injects (`turn_rate_deg_per_sec`, `safe_fall_px`)
-    /// plus the exporter's extra `depth_range` (ignored) and an absent
-    /// `path_footprint` (auto-derived at spawn).
+    /// Lock the cross-repo authored `VehicleDef` contract: the fields
+    /// classic-roms authors in `scene.json` `vehicles[]` (geometry + stats +
+    /// an `anchors` data-artifact name) and an absent `path_footprint`
+    /// (auto-derived at spawn).
     #[test]
-    fn vehicle_def_deserializes_lrv_sidecar_shape() {
+    fn vehicle_def_deserializes_authored_shape() {
         let json = serde_json::json!({
             "name": "lrv",
             "directions": 8,
@@ -546,29 +578,77 @@ mod tests {
             "pitch_max_deg": 20.0,
             "roll_levels": 3,
             "roll_max_deg": 20.0,
-            "depth_range": 0.02400137797794352,
             "cell": [331, 331],
             "turn_rate_deg_per_sec": 90.0,
             "safe_fall_px": 96.0,
+            "anchors": "lrv_anchors",
             "parts": [
-                { "name": "body", "texture": "lrvBody", "anchors": [[0.5, 0.6618]] }
+                { "name": "body", "texture": "lrvBody" }
             ]
         });
-        let def: VehicleDef = serde_json::from_value(json).expect("deserialize lrv.json");
+        let def: VehicleDef = serde_json::from_value(json).expect("deserialize authored def");
         assert_eq!(def.name, "lrv");
         assert_eq!(def.turn_rate_deg_per_sec, 90.0);
         assert_eq!(def.safe_fall_px, 96.0);
+        assert_eq!(def.anchors, "lrv_anchors");
         assert!(def.path_footprint.is_none(), "absent path_footprint -> None (auto-derive)");
 
         // An explicit footprint deserializes into Some.
         let json = serde_json::json!({
             "name": "lrv",
             "directions": 8,
-            "parts": [ { "name": "body", "texture": "lrvBody", "anchors": [[0.5, 0.6618]] } ],
+            "parts": [ { "name": "body", "texture": "lrvBody" } ],
             "path_footprint": [[0, 0], [-1, -1]]
         });
         let def: VehicleDef = serde_json::from_value(json).expect("footprint override");
         assert_eq!(def.path_footprint, Some(vec![(0, 0), (-1, -1)]));
+    }
+
+    #[test]
+    fn vehicle_anchors_deserializes_and_overrides_apply() {
+        let json = serde_json::json!({
+            "version": 1,
+            "name": "lrv",
+            "directions": 8,
+            "parts": [ { "name": "body", "texture": "lrvBody", "anchors": [[0.5, 0.6618]] } ],
+            "tires": [ { "name": "tire_fl", "texture": "lrvTireFl", "anchors": [[0.1, 0.2]] } ]
+        });
+        let anchors: VehicleAnchors = serde_json::from_value(json).unwrap();
+        assert_eq!(anchors.parts.len(), 1);
+        assert_eq!(anchors.parts[0].anchors, vec![[0.5, 0.6618]]);
+        assert_eq!(anchors.tires[0].name, "tire_fl");
+
+        let ov: VehicleOverrides = serde_json::from_value(serde_json::json!({
+            "turn_rate_deg_per_sec": 55.0,
+            "safe_fall_px": 96.0
+        }))
+        .unwrap();
+        let mut def = VehicleDef {
+            name: "lrv".into(),
+            directions: 8,
+            anchors: String::new(),
+            columns: 4,
+            rows: 2,
+            cell: [331.0, 331.0],
+            pitch_levels: 5,
+            pitch_max_deg: 20.0,
+            roll_levels: 3,
+            roll_max_deg: 20.0,
+            path_footprint: None,
+            turn_rate_deg_per_sec: 720.0,
+            safe_fall_px: 0.0,
+            steer_levels: 5,
+            steer_max_deg: 30.0,
+            steer_rate_deg_per_sec: 360.0,
+            reverse_speed: 1.3,
+            turn_cost: 0.0,
+            tires: vec![],
+            parts: vec![],
+        };
+        ov.apply_to(&mut def);
+        assert_eq!(def.turn_rate_deg_per_sec, 55.0);
+        assert_eq!(def.safe_fall_px, 96.0);
+        assert_eq!(def.steer_rate_deg_per_sec, 360.0);
     }
 
     /// A texture manifest entry without `frames` leaves it `None` (backward
