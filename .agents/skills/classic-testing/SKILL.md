@@ -324,6 +324,13 @@ wrong textures) even with the tolerance.
   field.  If an entity lacks `DebugName`, the name falls back to a hex
   entity ID string, which is nondeterministic between runs and platforms.
   Always ensure traced entities have deterministic `DebugName` components.
+- **Entity-ID renumbering (expected re-baseline, not a regression)**: when a
+  scene gains or loses entities, the golden mismatch is often *pure* `name` /
+  `e#N` entity-ID renumbering — geometry, color, and model matrices are all
+  unchanged, only the per-entity `name` shifts because hecs reuses entity IDs
+  in spawn order.  This is the expected re-baseline, not a rendering
+  regression.  How to tell: the `expected` vs `actual` lines differ only in
+  the `"name":"e#N"` field (everything else matches byte-for-byte).
 - **Mesa version drift**: pixel golden is sensitive to Mesa version.
   Match your local `LIBGL_ALWAYS_SOFTWARE=1` renderer to CI's llvmpipe
   version.  When updating baselines, always regenerate both trace and

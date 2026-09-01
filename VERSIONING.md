@@ -57,10 +57,12 @@ cargo xtask release --version 0.2.0-alpha.0 # explicit version
 3. Verifies `Cargo.toml` version == top changelog version (`check-version`).
 4. Prints the commit/tag commands to run (it does not mutate git).
 
-Then commit, tag, and push (reviewing the frozen entry first):
+Then commit, tag, and push (reviewing the frozen entry first).  The version
+bump propagates to `Cargo.lock` too — the workspace version appears in every
+crate entry — so include it in the release commit:
 
 ```bash
-git add Cargo.toml CHANGELOG.md
+git add Cargo.toml CHANGELOG.md Cargo.lock
 git commit -m "release v<version>"
 git tag -a v<version> -m "release v<version>"
 git push origin master --tags

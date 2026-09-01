@@ -533,6 +533,7 @@ Diagnosing a "stale" failure:
   newer than this classic-roms; bump the supported version in `xtask` before
   consuming it.
 - **`roms.json` missing / sha256 mismatch** — the R2 bucket was republished
-  without its index, or a stale/partial upload.  Republish via `publish.sh`,
+  without its index, or a stale/partial upload.  Republish the ROMs + `roms.json`
+  via the rclone publish step (see the classic-roms release skill / `AGENTS.md`),
   or (local dev only) pass `--skip-verify`.
 

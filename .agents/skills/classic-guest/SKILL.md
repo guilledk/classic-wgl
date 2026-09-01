@@ -1,4 +1,14 @@
-# Skill: classic-guest
+---
+name: classic-guest
+description: >
+  WASM guest runtime for classic-wgl ROMs.  Covers the `classic-guest` crate
+  (`GuestRuntime`, `create_runtime`, the four backends — Wasmi, Wasmtime,
+  WebWasm, WorkerWasm), the host-import ABI + guest exports, the host-side
+  `GuestHost` SDK, the sandbox (fuel + memory + Worker watchdog), and the
+  background guest worker (Tier 3).  Use when adding a host import, wiring a
+  guest, or auditing the sandbox surface.  Trigger phrases: "guest", "wasm
+  runtime", "host import", "sandbox", "GuestRuntime", "spawn_task", "fuel".
+---
 
 ## Scope
 
