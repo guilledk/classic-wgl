@@ -10,9 +10,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
-- Web Basis Universal transcoder: vendor the three.js `basis_transcoder`
-  (MIT/Apache) and transcode `.basis` (ETC1S) sheets to S3TC/ETC2/BC7 on WebGL 2
-  (RGBA8 fallback), so GPU-compressed sheets render on web.
+- Web Basis Universal transcoder: build our own Emscripten `basis_transcoder`
+  wasm from BinomialLLC's basis_universal (Apache 2.0) and transcode `.basis`
+  (ETC1S) sheets to S3TC/ETC2/BC7 on WebGL 2 (RGBA8 fallback), matching the
+  native codec byte-for-byte.
+- Close the web depth gap: a `BC4_R` depth sheet transcodes to
+  `COMPRESSED_R11_EAC` (`ETC2_EAC_R11`) on a WebGL 2 device without RGTC instead
+  of the RGBA8 fallback.
 
 ## [0.1.1] - 2026-09-01
 

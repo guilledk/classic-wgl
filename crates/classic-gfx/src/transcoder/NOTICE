@@ -1,23 +1,22 @@
 # Vendored third-party code
 
-## `basis_transcoder.js` + `basis_transcoder.wasm`
+## `basis_transcoder.wasm`
 
-- Source: three.js r162 — `examples/jsm/libs/basis/`
-  (https://github.com/mrdoob/three.js/tree/r162/examples/jsm/libs/basis)
-- Provenance: precompiled Emscripten build of the Basis Universal transcoder,
-  shipped by the three.js project for its BasisTextureLoader/KTX2Loader.
-- `basis_transcoder.js`: © the three.js authors, MIT License
-  (https://github.com/mrdoob/three.js/blob/r162/LICENSE).
-- `basis_transcoder.wasm`: compiled from Basis Universal
-  (https://github.com/BinomialLLC/basis_universal), © Binomial LLC,
-  Apache License 2.0
+- Source: Basis Universal transcoder, Binomial LLC
+  (https://github.com/BinomialLLC/basis_universal), Apache License 2.0
   (https://github.com/BinomialLLC/basis_universal/blob/master/LICENSE).
+- Revision: `ad9386a4a1cf2a248f7bbd45f543a7448db15267` (v1.16.4-16-gad9386a).
+  This is the exact tree vendored by the native `basis-universal` 0.3.1 crate,
+  so the web transcoder and the native codec transcode the same payload to the
+  same bytes.
+- Built by classic-wgl (see `build.sh` + `transcoder_wrapper.cpp`): an
+  Emscripten build (6.0.2, via the flake's pinned nixpkgs) of
+  `transcoder/basisu_transcoder.cpp` (transcoder-only, no encoder) plus our
+  `transcoder_wrapper.cpp` C ABI (`classic_initialize` / `classic_transcode`),
+  exposing the full `transcoder_texture_format` set — including
+  `ETC2_EAC_R11` / `ETC2_EAC_RG11` for single-channel depth.
 
-Vendored verbatim (unmodified).  The wasm exposes the embind `BasisFile` /
-`initializeBasis` API used by `classic-gfx/src/basis_web.rs` to transcode
-`.basis` (ETC1S) payloads to the GPU's native compressed format on WebGL 2.
+The wasm is a standalone module (no Emscripten JS runtime); `bootstrap.js` /
+`transcoder_worker.js` are our own glue, not third-party code.
 
-The transcoder is instantiated synchronously on the main thread (see
-`transcoder/bootstrap.js`) via the Emscripten `instantiateWasm` hook, so the
-synchronous `Gfx::add_texture_basis` load path can call it without an async
-refactor.
+© 2019-2021 Binomial LLC. All Rights Reserved.

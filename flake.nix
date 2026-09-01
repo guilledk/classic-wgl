@@ -37,6 +37,7 @@
           binaryen
           trunk
           lld
+          emscripten
         ];
       in
       {

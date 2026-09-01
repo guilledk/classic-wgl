@@ -1,13 +1,15 @@
-//! Web Basis Universal transcoder (P1.0/R2).
+//! Web Basis Universal transcoder (P1.0/R3).
 //!
 //! `basis-universal` (the native codec) cannot link into a
-//! `wasm32-unknown-unknown` crate, so the web path uses a separate precompiled
-//! transcoder: the three.js `basis_transcoder.{js,wasm}` build (vendored under
-//! [`transcoder`], MIT/Apache — see `transcoder/NOTICE`).
+//! `wasm32-unknown-unknown` crate, so the web path uses our own precompiled
+//! transcoder: an Emscripten build of the Basis Universal transcoder (see
+//! [`transcoder`], Apache 2.0 — `transcoder/NOTICE` + `transcoder/build.sh`),
+//! exposing the full `transcoder_texture_format` set (including
+//! `ETC2_EAC_R11`, closing the depth gap).
 //!
-//! The Emscripten module is instantiated **synchronously on the main thread**
-//! via its `instantiateWasm` hook (`WebAssembly.Module` + `WebAssembly.Instance`
-//! are synchronous, unlike `instantiateStreaming`), so the synchronous
+//! The standalone wasm module is instantiated **synchronously on the main
+//! thread** via its `bootstrap.js` glue (`WebAssembly.Module` +
+//! `WebAssembly.Instance`), so the synchronous
 //! [`Gfx::add_texture_basis`](crate::Gfx::add_texture_basis) load path can call
 //! into it without an async refactor.
 
@@ -18,19 +20,23 @@ use wasm_bindgen::JsCast;
 
 use super::compressed::{CompressedFormat, Decoded};
 
-const BASIS_TRANSCODER_JS: &str = include_str!("transcoder/basis_transcoder.js");
 const BOOTSTRAP_JS: &str = include_str!("transcoder/bootstrap.js");
 const BASIS_TRANSCODER_WASM: &[u8] = include_bytes!("transcoder/basis_transcoder.wasm");
 
-/// `basis_universal` `transcoder_texture_format` values (the three.js r162
-/// `TranscoderFormat` enum).  The r162 build exposes 17 targets; notably it
-/// does **not** expose ETC2_EAC_R11, so a depth sheet without RGTC support
-/// falls back to the raw RGBA8 transcode.
+/// `basis_universal` `transcoder_texture_format` values (the C enum from
+/// `basisu_transcoder.h`, matching the native `basis-universal` crate's
+/// `TranscoderTextureFormat` discriminants).  The wasm exposes the full enum
+/// (any of these values); the engine's fallback chain uses the subset below.
 const TF_ETC2_RGBA: u32 = 1;
 const TF_BC3_RGBA: u32 = 3;
 const TF_BC4_R: u32 = 4;
-const TF_BC7_M5: u32 = 7;
+const TF_BC7_RGBA: u32 = 6;
 const TF_RGBA32: u32 = 13;
+const TF_ETC2_EAC_R11: u32 = 20;
+/// Exposed by the wasm for two-channel (tangent-space) normals; not part of the
+/// current engine fallback chain.
+#[allow(dead_code)]
+const TF_ETC2_EAC_RG11: u32 = 21;
 
 /// The compressed-format capabilities a WebGL 2 context advertises.
 struct Caps {
@@ -58,6 +64,23 @@ fn web_caps(gl: &glow::Context) -> Caps {
     caps
 }
 
+/// The compressed-target candidates for a [`CompressedFormat`], mirroring the
+/// native `compressed.rs` chain (BPTC → S3TC → ETC2 for albedo/normal; RGTC →
+/// ETC2_EAC_R11 for depth).
+fn candidates(caps: &Caps, format: CompressedFormat) -> Vec<(bool, u32, u32)> {
+    match format {
+        CompressedFormat::Bc7Rgba => vec![
+            (caps.bptc, TF_BC7_RGBA, glow::COMPRESSED_RGBA_BPTC_UNORM),
+            (caps.s3tc, TF_BC3_RGBA, glow::COMPRESSED_RGBA_S3TC_DXT5_EXT),
+            (caps.etc2, TF_ETC2_RGBA, glow::COMPRESSED_RGBA8_ETC2_EAC),
+        ],
+        CompressedFormat::Bc4R => vec![
+            (caps.rgtc, TF_BC4_R, glow::COMPRESSED_RED_RGTC1),
+            (caps.etc2, TF_ETC2_EAC_R11, glow::COMPRESSED_R11_EAC),
+        ],
+    }
+}
+
 /// A lazily-initialised handle to the synchronous wasm transcoder.
 struct Transcoder {
     transcode_fn: Function,
@@ -65,11 +88,10 @@ struct Transcoder {
 
 impl Transcoder {
     fn new() -> Result<Self, JsValue> {
-        // Evaluate the vendored UMD (defines the top-level `BASIS` factory)
-        // followed by the bootstrap, which instantiates it synchronously and
-        // exposes `__classicBasisTranscoder` on the global object.
-        let glue = format!("{BASIS_TRANSCODER_JS}\n{BOOTSTRAP_JS}");
-        js_sys::eval(&glue)?;
+        // Evaluate our own glue (`bootstrap.js`), which instantiates the
+        // standalone wasm synchronously and exposes `__classicBasisTranscoder`
+        // on the global object.
+        js_sys::eval(BOOTSTRAP_JS)?;
 
         let global = js_sys::global();
         let obj = Reflect::get(&global, &JsValue::from_str("__classicBasisTranscoder"))?;
@@ -111,24 +133,16 @@ fn transcoder() -> Option<&'static Transcoder> {
 
 /// Transcode a `.basis` payload to the best compressed target the context
 /// supports, mirroring the native fallback chain (BPTC → S3TC → ETC2 for
-/// albedo/normal; RGTC → raw for depth, since the r162 wasm lacks ETC2_R11).
+/// albedo/normal; RGTC → ETC2_EAC_R11 for depth).
 pub fn transcode(gl: &glow::Context, bytes: &[u8], format: CompressedFormat) -> Option<Decoded> {
     let caps = web_caps(gl);
-    let candidates: &[(bool, u32, u32)] = match format {
-        CompressedFormat::Bc7Rgba => &[
-            (caps.bptc, TF_BC7_M5, glow::COMPRESSED_RGBA_BPTC_UNORM),
-            (caps.s3tc, TF_BC3_RGBA, glow::COMPRESSED_RGBA_S3TC_DXT5_EXT),
-            (caps.etc2, TF_ETC2_RGBA, glow::COMPRESSED_RGBA8_ETC2_EAC),
-        ],
-        CompressedFormat::Bc4R => &[(caps.rgtc, TF_BC4_R, glow::COMPRESSED_RED_RGTC1)],
-    };
     let tc = transcoder()?;
-    for (supported, target, gl_internal) in candidates {
+    for (supported, target, gl_internal) in candidates(&caps, format) {
         if !supported {
             continue;
         }
-        if let Some((w, h, data)) = tc.transcode(bytes, *target) {
-            return Some(Decoded { internal_format: *gl_internal, width: w, height: h, data });
+        if let Some((w, h, data)) = tc.transcode(bytes, target) {
+            return Some(Decoded { internal_format: gl_internal, width: w, height: h, data });
         }
     }
     None
