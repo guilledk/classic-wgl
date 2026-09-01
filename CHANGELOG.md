@@ -8,6 +8,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-01
+
 ### Added
 
 - Dynamic point/spot lights in a `std140` UBO (`MAX_LIGHTS` = 256), evaluated
