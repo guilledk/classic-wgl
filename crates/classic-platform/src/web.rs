@@ -190,6 +190,11 @@ impl WebPlatform {
 
         Ok(Self { canvas, gl, input })
     }
+
+    /// The WebGL2 context, cloned for async engine bootstrap before `run_loop`.
+    pub fn gl(&self) -> Rc<glow::Context> {
+        self.gl.clone()
+    }
 }
 
 impl Platform for WebPlatform {
