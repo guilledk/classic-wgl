@@ -8,6 +8,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-01
+
 ### Added
 
 - `Selectable` component and a host-owned `SelectionSet`
