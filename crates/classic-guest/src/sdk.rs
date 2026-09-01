@@ -12,7 +12,7 @@ use classic_core::instrument::Chan;
 use classic_core::pathfinder::PathPoll;
 use classic_core::terrain::kernels::{FieldOp, Reduce};
 use classic_engine::vehicle::{VehicleGotoPoll, VehicleGotoSubmit};
-use classic_engine::Engine;
+use classic_engine::{Engine, ResourceKind};
 
 /// Map an integer to a [`UiAnchor`] (0..=8, TopLeft → BotRight).
 fn anchor(i: i32) -> UiAnchor {
@@ -72,16 +72,25 @@ fn reduce_op(i: i32) -> Reduce {
 /// engine, re-pointed for each guest entry point.
 pub struct GuestHost {
     engine: *mut Engine,
+    /// The owning ROM's namespace (empty = global).  Guest-supplied names are
+    /// qualified/resolved against this so several ROMs' guests can coexist.
+    namespace: String,
 }
 
 impl GuestHost {
     pub(crate) fn new() -> Self {
-        Self { engine: std::ptr::null_mut() }
+        Self { engine: std::ptr::null_mut(), namespace: String::new() }
     }
 
     /// Re-point the host at the engine for the current call.
     pub(crate) fn set_engine(&mut self, engine: &mut Engine) {
         self.engine = engine as *mut Engine;
+    }
+
+    /// Set the owning ROM's namespace (empty = global).  Called once by the
+    /// demo layer after `create_runtime`; guest names are then scoped to it.
+    pub(crate) fn set_namespace(&mut self, ns: &str) {
+        self.namespace = ns.to_string();
     }
 
     #[inline]
@@ -97,11 +106,36 @@ impl GuestHost {
         unsafe { &mut *self.engine }
     }
 
-    /// Qualify a guest-supplied entity name with the active ROM namespace.
-    /// Currently a no-op (single ROM, empty namespace); the indirection point
-    /// where multi-ROM name scoping will be applied.
+    /// Qualify a guest-supplied name for *spawning* a new entity: prefix the
+    /// guest's namespace (a no-op for the global namespace or a `ns::name`).
+    pub fn qualify(&self, name: &str) -> String {
+        self.engine().entity_key_ns(&self.namespace, name)
+    }
+
+    /// Resolve a guest-supplied entity name for *lookup*: a bare name resolves
+    /// in the referring (own) namespace first, then the global namespace, then
+    /// falls back to the qualified key; an already-qualified `ns::name` passes
+    /// through verbatim.  The single indirection point for multi-ROM scoping.
     pub fn resolve(&self, name: &str) -> String {
-        self.engine().entity_key(name)
+        if name.contains("::") {
+            return name.to_string();
+        }
+        self.engine()
+            .resolve_entity_name(&self.namespace, name)
+            .unwrap_or_else(|| self.qualify(name))
+    }
+
+    /// Resolve a guest-supplied resource name (texture/font/animation/vehicle)
+    /// against the guest's namespace: a bare name resolves in the referring
+    /// (own) namespace first, then the global namespace, then falls back to the
+    /// qualified key; an already-qualified `ns::name` passes through verbatim.
+    fn resolve_resource(&self, kind: ResourceKind, name: &str) -> String {
+        if name.contains("::") {
+            return name.to_string();
+        }
+        self.engine()
+            .resolve_resource(&self.namespace, kind, name)
+            .unwrap_or_else(|| self.qualify(name))
     }
 
     /// Log a message through the `guest` CLASSIC_LOG channel.
@@ -110,15 +144,18 @@ impl GuestHost {
     }
 
     pub fn spawn(&mut self, name: &str) -> i32 {
-        self.engine_mut().spawn_named(name) as i32
+        let name = self.qualify(name);
+        self.engine_mut().spawn_named(&name) as i32
     }
 
     pub fn despawn(&mut self, name: &str) -> i32 {
-        self.engine_mut().despawn_named(name) as i32
+        let name = self.resolve(name);
+        self.engine_mut().despawn_named(&name) as i32
     }
 
     pub fn has(&mut self, name: &str) -> i32 {
-        self.engine().has_name(name) as i32
+        let name = self.resolve(name);
+        self.engine().has_name(&name) as i32
     }
 
     /// The ordered list of entity names, as a JSON array.
@@ -127,39 +164,47 @@ impl GuestHost {
     }
 
     pub fn set_pos(&mut self, name: &str, x: f64, y: f64, z: f64) -> i32 {
-        self.engine_mut().set_pos(name, x as f32, y as f32, z as f32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().set_pos(&name, x as f32, y as f32, z as f32) as i32
     }
 
     pub fn get_pos(&mut self, name: &str) -> Option<(f64, f64, f64)> {
-        self.engine().get_pos(name).map(|(x, y, z)| (x as f64, y as f64, z as f64))
+        let name = self.resolve(name);
+        self.engine().get_pos(&name).map(|(x, y, z)| (x as f64, y as f64, z as f64))
     }
 
     /// Set a named entity's `IsoSprite` frame index (packed-atlas aware).
     pub fn set_sprite_frame(&mut self, name: &str, frame: f64) -> i32 {
-        self.engine_mut().set_sprite_frame(name, frame as f32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().set_sprite_frame(&name, frame as f32) as i32
     }
 
     /// Read a named entity's `IsoSprite` frame index (`-1.0` when it has none).
     pub fn get_sprite_frame(&mut self, name: &str) -> f64 {
-        self.engine().get_sprite_frame(name).map(|f| f as f64).unwrap_or(-1.0)
+        let name = self.resolve(name);
+        self.engine().get_sprite_frame(&name).map(|f| f as f64).unwrap_or(-1.0)
     }
 
     /// Set a named entity's `IsoSprite` tint colour (RGBA, `0..=1`).
     pub fn set_sprite_color(&mut self, name: &str, r: f64, g: f64, b: f64, a: f64) -> i32 {
-        self.engine_mut().set_sprite_color(name, [r as f32, g as f32, b as f32, a as f32]) as i32
+        let name = self.resolve(name);
+        self.engine_mut().set_sprite_color(&name, [r as f32, g as f32, b as f32, a as f32]) as i32
     }
 
     /// Set a named entity's `IsoSprite` visual offset (`frame_offset`; negative
     /// Y lifts the sprite).  Used to elevate runtime sprites (e.g. the
     /// unloading container).
     pub fn set_sprite_offset(&mut self, name: &str, dx: f64, dy: f64, dz: f64) -> i32 {
-        self.engine_mut().set_sprite_offset(name, dx as f32, dy as f32, dz as f32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().set_sprite_offset(&name, dx as f32, dy as f32, dz as f32) as i32
     }
 
     /// Spawn a new `IsoSprite` entity cloned from a template entity's
     /// `IsoSprite` + `Transform` (e.g. a placement ghost), under a new name.
     pub fn spawn_sprite_clone(&mut self, template: &str, name: &str) -> i32 {
-        self.engine_mut().spawn_sprite_clone(template, name) as i32
+        let template = self.resolve(template);
+        let name = self.qualify(name);
+        self.engine_mut().spawn_sprite_clone(&template, &name) as i32
     }
 
     pub fn mouse(&mut self) -> (f64, f64) {
@@ -184,17 +229,22 @@ impl GuestHost {
 
     /// Set a named entity's animator to play a looping animation.
     pub fn set_anim(&mut self, name: &str, anim: &str) -> i32 {
-        self.engine_mut().set_anim(name, anim) as i32
+        let name = self.resolve(name);
+        let anim = self.resolve_resource(ResourceKind::Animation, anim);
+        self.engine_mut().set_anim(&name, &anim) as i32
     }
 
     /// Restart a named entity's animator from frame zero (optionally one-shot).
     pub fn start_anim(&mut self, name: &str, anim: &str, repeat: i32) -> i32 {
-        self.engine_mut().start_anim(name, anim, repeat != 0) as i32
+        let name = self.resolve(name);
+        let anim = self.resolve_resource(ResourceKind::Animation, anim);
+        self.engine_mut().start_anim(&name, &anim, repeat != 0) as i32
     }
 
     /// Show/hide a named entity (add/remove the `Disabled` marker).
     pub fn set_enabled(&mut self, name: &str, enabled: i32) -> i32 {
-        self.engine_mut().set_enabled_named(name, enabled != 0) as i32
+        let name = self.resolve(name);
+        self.engine_mut().set_enabled_named(&name, enabled != 0) as i32
     }
 
     /// Whether the editor's agent tool is active.
@@ -274,12 +324,15 @@ impl GuestHost {
 
     /// Reposition a wheeled vehicle (body + 4 wheels) and reset its physics.
     pub fn vehicle_teleport(&mut self, name: &str, x: f64, y: f64) -> i32 {
-        self.engine_mut().vehicle_teleport(name, x as f32, y as f32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_teleport(&name, x as f32, y as f32) as i32
     }
 
     /// Spawn a wheeled vehicle of a declared type at `(x, y)`.
     pub fn vehicle_spawn(&mut self, def: &str, name: &str, x: f64, y: f64) -> i32 {
-        self.engine_mut().spawn_vehicle(def, name, x as f32, y as f32) as i32
+        let def = self.resolve_resource(ResourceKind::Vehicle, def);
+        let name = self.qualify(name);
+        self.engine_mut().spawn_vehicle(&def, &name, x as f32, y as f32) as i32
     }
 
     /// Set a wheeled vehicle's destination (integer tile coordinates).  Returns
@@ -287,7 +340,8 @@ impl GuestHost {
     /// the vehicle is airborne (re-issue next frame), or `-1` for an unknown
     /// vehicle.
     pub fn vehicle_goto(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
-        match self.engine_mut().vehicle_goto(name, tx, ty) {
+        let name = self.resolve(name);
+        match self.engine_mut().vehicle_goto(&name, tx, ty) {
             VehicleGotoSubmit::Airborne => 0,
             VehicleGotoSubmit::NoVehicle => -1,
             VehicleGotoSubmit::Submitted(id) => id as i32,
@@ -306,13 +360,15 @@ impl GuestHost {
 
     /// Stop a wheeled vehicle, clearing its movement path.
     pub fn vehicle_stop(&mut self, name: &str) -> i32 {
-        self.engine_mut().vehicle_stop(name) as i32
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_stop(&name) as i32
     }
 
     /// Set a wheeled vehicle's speed (tiles per second), mutating its
     /// `IsoVehicle.speed` (e.g. slow a loaded LRV).
     pub fn vehicle_set_speed(&mut self, name: &str, speed: f64) -> i32 {
-        self.engine_mut().vehicle_set_speed(name, speed as f32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_set_speed(&name, speed as f32) as i32
     }
 
     /// Non-mutating vehicle reachability probe: run the vehicle's A* to
@@ -320,13 +376,15 @@ impl GuestHost {
     /// `0` pending (call again), `-2` unknown vehicle.  On success the waypoints
     /// are stored in `Engine::preview_paths` for the demo overlay.
     pub fn vehicle_probe(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
-        self.engine_mut().vehicle_probe(name, tx, ty)
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_probe(&name, tx, ty)
     }
 
     /// Clear a vehicle's drop-preview state (candidate path + probe).  Returns
     /// `1` when anything was cleared, else `0`.
     pub fn vehicle_probe_clear(&mut self, name: &str) -> i32 {
-        self.engine_mut().vehicle_probe_clear(name) as i32
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_probe_clear(&name) as i32
     }
 
     /// The max tile radius of a vehicle's collision footprint (`max(|dx|,|dy|)`
@@ -350,12 +408,14 @@ impl GuestHost {
 
     /// Serialize a named entity's inventory to JSON (`"null"` when it has none).
     pub fn inventory_dump(&mut self, name: &str) -> String {
-        self.engine().inventory_dump(name).unwrap_or_else(|| "null".into())
+        let name = self.resolve(name);
+        self.engine().inventory_dump(&name).unwrap_or_else(|| "null".into())
     }
 
     /// Read a named entity's raw `Inventory.capacity` (`-1` when it has none).
     pub fn inventory_capacity(&mut self, name: &str) -> i32 {
-        self.engine().inventory_capacity(name).map(|c| c as i32).unwrap_or(-1)
+        let name = self.resolve(name);
+        self.engine().inventory_capacity(&name).map(|c| c as i32).unwrap_or(-1)
     }
 
     /// Add `n` units of an item (by name) to a named entity's inventory,
@@ -364,7 +424,8 @@ impl GuestHost {
         if n < 0 {
             return 0;
         }
-        self.engine_mut().inventory_add(name, item, n as u32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().inventory_add(&name, item, n as u32) as i32
     }
 
     /// Remove `n` units of an item (by name) from a named entity's inventory,
@@ -373,7 +434,8 @@ impl GuestHost {
         if n < 0 {
             return 0;
         }
-        self.engine_mut().inventory_remove(name, item, n as u32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().inventory_remove(&name, item, n as u32) as i32
     }
 
     /// Transfer up to `n` units of an item (by name) between two named
@@ -382,7 +444,9 @@ impl GuestHost {
         if n < 0 {
             return 0;
         }
-        self.engine_mut().inventory_transfer(from, to, item, n as u32) as i32
+        let from = self.resolve(from);
+        let to = self.resolve(to);
+        self.engine_mut().inventory_transfer(&from, &to, item, n as u32) as i32
     }
 
     /// Serialize an item definition to JSON (empty string when unknown).
@@ -579,8 +643,9 @@ impl GuestHost {
         b: f64,
         a: f64,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().spawn_rect(
-            name,
+            &name,
             x as f32,
             y as f32,
             w as f32,
@@ -603,8 +668,9 @@ impl GuestHost {
         b: f64,
         a: f64,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().spawn_text(
-            name,
+            &name,
             x as f32,
             y as f32,
             text,
@@ -615,7 +681,8 @@ impl GuestHost {
 
     /// Update a named SDF text label's string.
     pub fn set_text(&mut self, name: &str, text: &str) -> i32 {
-        self.engine_mut().set_text(name, text) as i32
+        let name = self.resolve(name);
+        self.engine_mut().set_text(&name, text) as i32
     }
 
     // ---- UIManager registration (guest-managed responsive UI) -------------
@@ -631,8 +698,9 @@ impl GuestHost {
         b: f64,
         a: f64,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().ui_container(
-            name,
+            &name,
             w as f32,
             h as f32,
             [r as f32, g as f32, b as f32, a as f32],
@@ -652,8 +720,9 @@ impl GuestHost {
         a: f64,
         justify_idx: i32,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().ui_text(
-            name,
+            &name,
             text,
             scale as f32,
             max_width as f32,
@@ -674,8 +743,9 @@ impl GuestHost {
         b: f64,
         a: f64,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().ui_button(
-            name,
+            &name,
             text,
             w as f32,
             h as f32,
@@ -695,8 +765,9 @@ impl GuestHost {
         b: f64,
         a: f64,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().ui_array(
-            name,
+            &name,
             vertical != 0,
             align(align_idx),
             spacing as f32,
@@ -717,8 +788,9 @@ impl GuestHost {
         b: f64,
         a: f64,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().ui_padding(
-            name,
+            &name,
             top as f32,
             right as f32,
             bottom as f32,
@@ -738,8 +810,9 @@ impl GuestHost {
         tsx: f64,
         tsy: f64,
     ) -> i32 {
+        let name = self.qualify(name);
         self.engine_mut().ui_sprite(
-            name,
+            &name,
             texture,
             w as f32,
             h as f32,
@@ -755,34 +828,42 @@ impl GuestHost {
         self_anchor: i32,
         child_anchor: i32,
     ) -> i32 {
-        self.engine_mut().ui_add_child(parent, child, anchor(self_anchor), anchor(child_anchor))
+        let parent = self.resolve(parent);
+        let child = self.resolve(child);
+        self.engine_mut().ui_add_child(&parent, &child, anchor(self_anchor), anchor(child_anchor))
             as i32
     }
 
     pub fn ui_add_to_root(&mut self, name: &str, self_anchor: i32, child_anchor: i32) -> i32 {
-        self.engine_mut().ui_add_to_root(name, anchor(self_anchor), anchor(child_anchor)) as i32
+        let name = self.resolve(name);
+        self.engine_mut().ui_add_to_root(&name, anchor(self_anchor), anchor(child_anchor)) as i32
     }
 
     pub fn ui_set_size(&mut self, name: &str, w: f64, h: f64) -> i32 {
-        self.engine_mut().ui_set_size(name, w as f32, h as f32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().ui_set_size(&name, w as f32, h as f32) as i32
     }
 
     pub fn ui_set_anchor(&mut self, name: &str, anchor_idx: i32) -> i32 {
-        self.engine_mut().ui_set_anchor(name, anchor(anchor_idx)) as i32
+        let name = self.resolve(name);
+        self.engine_mut().ui_set_anchor(&name, anchor(anchor_idx)) as i32
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn ui_set_color(&mut self, name: &str, r: f64, g: f64, b: f64, a: f64) -> i32 {
-        self.engine_mut().ui_set_color(name, [r as f32, g as f32, b as f32, a as f32]) as i32
+        let name = self.resolve(name);
+        self.engine_mut().ui_set_color(&name, [r as f32, g as f32, b as f32, a as f32]) as i32
     }
 
     pub fn ui_set_fixed(&mut self, name: &str, fixed: i32) -> i32 {
-        self.engine_mut().ui_set_fixed(name, fixed != 0) as i32
+        let name = self.resolve(name);
+        self.engine_mut().ui_set_fixed(&name, fixed != 0) as i32
     }
 
     /// Subscribe a named entity to interaction events (click/enter/exit).
     pub fn subscribe(&mut self, name: &str) -> i32 {
-        self.engine_mut().subscribe(name) as i32
+        let name = self.resolve(name);
+        self.engine_mut().subscribe(&name) as i32
     }
 
     /// Pop the next queued guest event, as `(kind, name)` (0=click, 1=enter, 2=exit).
@@ -793,27 +874,37 @@ impl GuestHost {
     /// Attach an axis-aligned rectangle collider to a named entity (screen space).
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_collider(&mut self, name: &str, x: f64, y: f64, w: f64, h: f64) -> i32 {
-        self.engine_mut().spawn_collider(name, x as f32, y as f32, w as f32, h as f32) as i32
+        let name = self.resolve(name);
+        self.engine_mut().spawn_collider(&name, x as f32, y as f32, w as f32, h as f32) as i32
     }
 
     /// Read a named entity's current animation name and frame.
     pub fn get_anim(&mut self, name: &str) -> Option<(String, f64)> {
-        self.engine().get_anim(name).map(|(n, f)| (n, f as f64))
+        let name = self.resolve(name);
+        self.engine().get_anim(&name).map(|(n, f)| (n, f as f64))
     }
 
     /// Whether a named resource exists (0 = texture, 1 = font, 2 = animation).
     pub fn has_resource(&mut self, kind: i32, name: &str) -> i32 {
+        let resource_kind = match kind {
+            0 => ResourceKind::Texture,
+            1 => ResourceKind::Font,
+            2 => ResourceKind::Animation,
+            _ => return 0,
+        };
+        let name = self.resolve_resource(resource_kind, name);
         (match kind {
-            0 => self.engine().has_texture(name),
-            1 => self.engine().has_font(name),
-            2 => self.engine().has_animation(name),
+            0 => self.engine().has_texture(&name),
+            1 => self.engine().has_font(&name),
+            2 => self.engine().has_animation(&name),
             _ => false,
         }) as i32
     }
 
     /// The pixel dimensions of a loaded texture, if any.
     pub fn texture_size(&mut self, name: &str) -> Option<(f64, f64)> {
-        self.engine().texture_size(name).map(|(w, h)| (w as f64, h as f64))
+        let name = self.resolve_resource(ResourceKind::Texture, name);
+        self.engine().texture_size(&name).map(|(w, h)| (w as f64, h as f64))
     }
 
     // ---- Bulk noise fields (host generates, guest composes) ----------------
@@ -1001,5 +1092,75 @@ impl GuestHost {
     /// Reduce an `f32` field (`op`: 0 min, 1 max, 2 mean, 3 variance).
     pub fn reduce_field(&mut self, name: &str, op: i32) -> f64 {
         self.engine().fields.reduce(name, reduce_op(op)).unwrap_or(f32::NAN) as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use classic_engine::Engine;
+
+    #[test]
+    fn resolve_scopes_names_to_guest_namespace() {
+        let mut e = Engine::new_for_test();
+        // A global entity (empty namespace, e.g. a shared dependency ROM).
+        e.load_state(r#"{"entities":{"globalEnt":{"components":[]}}}"#).unwrap();
+        // A namespaced ROM's entities.
+        e.namespace = "scene".into();
+        e.load_state(r#"{"entities":{"rocket":{"components":[]}}}"#).unwrap();
+
+        let mut host = GuestHost::new();
+        host.set_engine(&mut e);
+        host.set_namespace("scene");
+
+        // Bare names resolve in the guest's namespace first.
+        assert_eq!(host.resolve("rocket"), "scene::rocket");
+        // ...then fall back to the global namespace.
+        assert_eq!(host.resolve("globalEnt"), "globalEnt");
+        // Qualified names pass through verbatim.
+        assert_eq!(host.resolve("common::tilemap"), "common::tilemap");
+        // Unknown names fall back to the qualified key.
+        assert_eq!(host.resolve("missing"), "scene::missing");
+
+        // Spawn qualification prefixes the guest namespace.
+        assert_eq!(host.qualify("car"), "scene::car");
+        assert_eq!(host.qualify("common::tilemap"), "common::tilemap");
+    }
+
+    #[test]
+    fn resolve_resource_scopes_names_to_guest_namespace() {
+        let mut e = Engine::new_for_test();
+        // A global texture (empty namespace) and a namespaced ROM's resources.
+        e.texture_names.insert("cursor".to_string());
+        e.texture_names.insert("scene::rocket".to_string());
+        e.animations.insert(
+            "scene::walk".to_string(),
+            classic_core::types::AnimationData {
+                name: "walk".to_string(),
+                src: "humanoid".to_string(),
+                rate: 24.0,
+                sequence: vec![0],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                channels: vec![],
+                metadata: None,
+            },
+        );
+
+        let mut host = GuestHost::new();
+        host.set_engine(&mut e);
+        host.set_namespace("scene");
+
+        // Bare resource names resolve in the guest's namespace first.
+        assert_eq!(host.resolve_resource(ResourceKind::Texture, "rocket"), "scene::rocket");
+        // ...then fall back to the global namespace.
+        assert_eq!(host.resolve_resource(ResourceKind::Texture, "cursor"), "cursor");
+        // Animations resolve through their registry.
+        assert_eq!(host.resolve_resource(ResourceKind::Animation, "walk"), "scene::walk");
+        // Qualified names pass through verbatim.
+        assert_eq!(
+            host.resolve_resource(ResourceKind::Texture, "common::tileSet"),
+            "common::tileSet"
+        );
     }
 }

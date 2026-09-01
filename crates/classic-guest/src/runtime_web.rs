@@ -2142,4 +2142,8 @@ impl GuestRuntime for WebWasmRuntime {
         self.host.borrow_mut().set_engine(engine);
         start.call0(&JsValue::undefined()).map(|_| ()).map_err(|e| GuestError::Trap(js_err(&e)))
     }
+
+    fn set_namespace(&mut self, namespace: &str) {
+        self.host.borrow_mut().set_namespace(namespace);
+    }
 }

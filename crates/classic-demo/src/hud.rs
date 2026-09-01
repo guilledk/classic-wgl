@@ -270,7 +270,7 @@ pub fn init_iso_coord_overlay(engine: &mut Engine, state: &DemoStateRef) {
         engine.world.spawn((
             Transform::new(Vec3::new(0.0, 0.0, z_layer), Vec3::new(scale, scale, 1.0)),
             SdfTextRender {
-                atlas_name: "dejavusans".into(),
+                atlas_name: "common::dejavusans".into(),
                 color,
                 text: text.to_string(),
                 ignore_cam: true,
@@ -337,13 +337,17 @@ pub fn init_iso_coord_overlay(engine: &mut Engine, state: &DemoStateRef) {
     }
 
     // on_update: reposition labels + update coord text every frame
-    let tilemap_name = "tilemap".to_string();
     let coord_x = cx_e;
     let coord_y = cy_e;
     let coord_z = cz_e;
 
     engine.on_update(move |engine| {
-        let Some(&tm_entity) = engine.names.get(&tilemap_name) else { return };
+        // Resolve the tilemap by role, not by the bare `"tilemap"` name: under
+        // the multi-ROM split the tilemap entity is namespace-qualified
+        // (`demo::tilemap` / `lunar::tilemap`).
+        let Some(tm_entity) = engine.entity_by_role(classic_core::RoleKind::Tilemap) else {
+            return;
+        };
         let Ok(tm) = engine.world.get::<&Tilemap>(tm_entity) else { return };
 
         let mx = tm.mouse_iso_pos.x;
