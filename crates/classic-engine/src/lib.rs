@@ -634,6 +634,10 @@ impl Engine {
                     for part in def.parts.iter_mut().chain(def.tires.iter_mut()) {
                         part.texture = self.entity_key(&part.texture);
                     }
+                    // The anchors data-artifact name is namespace-qualified the
+                    // same way `vehicle_anchors` keys are, so `spawn_vehicle`
+                    // resolves the right artifact under the ROM's namespace.
+                    def.anchors = self.entity_key(&def.anchors);
                     self.vehicles.insert(self.entity_key(name), def);
                 }
                 Err(e) => {
