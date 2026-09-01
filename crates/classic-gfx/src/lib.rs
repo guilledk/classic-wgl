@@ -1,6 +1,6 @@
 //! # Skill: `classic-gfx`
 //!
-//! **Read `.claude/skills/classic-gfx/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-gfx/SKILL.md` before working on this module.**
 //!
 //! classic-gfx: OpenGL ES 3.0 / WebGL2 graphics layer.
 //!

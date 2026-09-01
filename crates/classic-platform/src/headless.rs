@@ -1,6 +1,6 @@
 //! # Skill: `classic-platform`
 //!
-//! **Read `.claude/skills/classic-platform/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-platform/SKILL.md` before working on this module.**
 //!
 //! Surfaceless EGL renderer — no window, no compositor.
 //!

@@ -4,14 +4,14 @@
 //! prefab init-* builders, editor tools, and the CLASSIC_TEST runner.
 //!
 //! **Skills to read before working here:**
-//! - [classic-ecs](.claude/skills/classic-ecs/SKILL.md) — ECS patterns, components, update_fns
-//! - [classic-ui](.claude/skills/classic-ui/SKILL.md) — UIManager, layout, collider integration
-//! - [classic-physics](.claude/skills/classic-physics/SKILL.md) — click dispatch, selection, pathfinding
-//! - [classic-iso](.claude/skills/classic-iso/SKILL.md) — iso coords, sprite rendering, nav mesh
-//! - [classic-gfx](.claude/skills/classic-gfx/SKILL.md) — draw_*, GL state, DEPTH_TEST contract
-//! - [classic-text](.claude/skills/classic-text/SKILL.md) — SdfText, glyph buffers, justify
-//! - [classic-testing](.claude/skills/classic-testing/SKILL.md) — CLASSIC_TEST, golden harness
-//! - [classic-debugging](.claude/skills/classic-debugging/SKILL.md) — CLASSIC_LOG, debugging playbook
+//! - [classic-ecs](.agents/skills/classic-ecs/SKILL.md) — ECS patterns, components, update_fns
+//! - [classic-ui](.agents/skills/classic-ui/SKILL.md) — UIManager, layout, collider integration
+//! - [classic-physics](.agents/skills/classic-physics/SKILL.md) — click dispatch, selection, pathfinding
+//! - [classic-iso](.agents/skills/classic-iso/SKILL.md) — iso coords, sprite rendering, nav mesh
+//! - [classic-gfx](.agents/skills/classic-gfx/SKILL.md) — draw_*, GL state, DEPTH_TEST contract
+//! - [classic-text](.agents/skills/classic-text/SKILL.md) — SdfText, glyph buffers, justify
+//! - [classic-testing](.agents/skills/classic-testing/SKILL.md) — CLASSIC_TEST, golden harness
+//! - [classic-debugging](.agents/skills/classic-debugging/SKILL.md) — CLASSIC_LOG, debugging playbook
 
 pub mod env_config;
 pub mod golden;

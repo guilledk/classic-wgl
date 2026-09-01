@@ -1,6 +1,6 @@
 //! # Skill: `classic-iso`
 //!
-//! **Read `.claude/skills/classic-iso/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-iso/SKILL.md` before working on this module.**
 //!
 use glam::{Mat3, Mat4, Vec3};
 

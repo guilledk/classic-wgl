@@ -15,6 +15,10 @@ Releases are **one per merge window**, cut directly on `master` (no release
 PR).  See [`VERSIONING.md`](../../VERSIONING.md) for the policy; this skill is
 the runbook.
 
+`classic-land` (its Phase 6) orchestrates the cross-repo release in pipeline
+order — classic-assets → classic-roms → classic-wgl — and invokes this skill
+for the per-repo mechanics.  Never cut a repo's release out of that order.
+
 ## When
 
 - A stack of `wkt/*` branches has been reviewed and merged to `master`.
@@ -36,23 +40,29 @@ the runbook.
    - fixes/features only → `patch`,
    - explicit prerelease → `--version X.Y.Z-alpha.N`.
 
-3. Run the release (bumps `Cargo.toml`, freezes `CHANGELOG.md`, tags):
+3. Run the release (bumps `Cargo.toml`, freezes `CHANGELOG.md`, and prints the
+   commit/tag commands — it does not mutate git):
 
    ```bash
    cargo xtask release patch
    ```
 
-4. Verify the frozen entry reads well, then push:
+4. Verify the frozen entry reads well, then commit + tag + push.  The bump also
+   propagates to `Cargo.lock` (the workspace version appears in every crate
+   entry), so include it in the release commit:
 
    ```bash
-   git show --stat HEAD
+   git show --stat
+   git add Cargo.toml CHANGELOG.md Cargo.lock
+   git commit -m "release v<version>"
+   git tag -a v<version> -m "release v<version>"
    git push origin master --tags
    ```
 
 5. Open a GitHub release with the new changelog section as the body.
 
-6. If the release changed anything the golden baselines depend on, re-pin the
-   ROM lock and re-baseline:
+6. If a roms publish changed published ROM checksums since the last re-pin,
+   re-pin the ROM lock and re-baseline (publish + re-pin move together):
 
    ```bash
    cargo xtask lock-roms

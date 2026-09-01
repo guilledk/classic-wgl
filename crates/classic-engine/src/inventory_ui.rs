@@ -1,6 +1,6 @@
 //! # Skill: `classic-ui`
 //!
-//! **Read `.claude/skills/classic-ui/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-ui/SKILL.md` before working on this module.**
 //!
 //! Host-owned container-inventory hover tooltip, rendered through the
 //! retained-mode UI toolkit as a single grid of icon + amount children.

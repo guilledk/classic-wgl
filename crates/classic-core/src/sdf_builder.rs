@@ -1,6 +1,6 @@
 //! # Skill: `classic-text`
 //!
-//! **Read `.claude/skills/classic-text/SKILL.md` before working on this module.**
+//! **Read `.agents/skills/classic-text/SKILL.md` before working on this module.**
 //!
 //! SDF font glyph-buffer builder.
 

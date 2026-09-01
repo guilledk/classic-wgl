@@ -34,6 +34,8 @@ cargo clippy -p classic-core -p classic-gfx -p classic-engine -p classic-platfor
 
 # ROMs (must run once after checkout, and when the published ROMs bump)
 cargo xtask fetch-roms               # downloads the staged demo/lunar ROMs (and worker wasm) into roms/out/ (gitignored)
+cargo xtask lock-roms                # pin published checksums to tests/golden/roms.lock.json
+cargo xtask check-roms               # fail fast when the published bucket drifts from the lock (CI golden gate)
 
 # Web pathfinder module (must run before any --target wasm32 build/check;
 # trunk serve/build do it automatically via the `pre_build` hook in `Trunk.toml`)
@@ -283,6 +285,11 @@ plans/
   (see `apps/desktop/src/main.rs` and `apps/web/src/lib.rs`).
 - CI runs `cargo xtask fetch-roms` before `cargo build`; deploy stages nothing
   (the web app fetches R2 directly).
+- **ROM-lock lockstep.** Publishing new ROMs to the bucket must move together
+  with re-pinning `tests/golden/roms.lock.json` (`cargo xtask lock-roms`) and
+  re-baselining the goldens — never publish without re-pinning in the same
+  change, or `cargo xtask check-roms` (the CI golden job) fails fast the moment
+  the bucket diverges from the committed lockfile.
 
 ## CLASSIC_* environment variables
 
@@ -325,7 +332,7 @@ plans/
 
 ## Skills
 
-Engine skills (in `.claude/skills/`):
+Engine skills (in `.agents/skills/`):
 
 | Skill | Covers |
 |---|---|
