@@ -16,6 +16,7 @@
 pub mod env_config;
 pub mod golden;
 pub mod inventory;
+pub mod inventory_ui;
 pub mod selection;
 pub mod ui;
 pub mod vehicle;
@@ -134,23 +135,23 @@ struct SdfTextGpu {
 }
 
 /// A frame resolved through a packed-atlas frame table.
-struct ResolvedFrame {
-    sheet_name: String,
-    uv_rect: [f32; 4],
+pub(crate) struct ResolvedFrame {
+    pub(crate) sheet_name: String,
+    pub(crate) uv_rect: [f32; 4],
     /// Content pixel size (frame rect w/h).
-    size: [f32; 2],
+    pub(crate) size: [f32; 2],
     /// Untrimmed source cell size (0 = unknown).
-    source_size: [u32; 2],
+    pub(crate) source_size: [u32; 2],
     /// Offset of the trimmed content within the source cell.
-    trim_offset: [i32; 2],
+    pub(crate) trim_offset: [i32; 2],
     /// Optional packer-provided anchor, already in trimmed-frame `[0..1]`.
-    anchor: Option<[f32; 2]>,
+    pub(crate) anchor: Option<[f32; 2]>,
     /// Per-sheet normal-map GL texture name (`"{sheet_name}-normal"`), set when
     /// the frame's sheet declares a `normal` companion.
-    normal_tex: Option<String>,
+    pub(crate) normal_tex: Option<String>,
     /// Per-sheet depth-map GL texture name + depth range, set when the frame's
     /// sheet declares a `depth` companion.
-    depth_tex: Option<(String, f32)>,
+    pub(crate) depth_tex: Option<(String, f32)>,
 }
 
 pub struct Engine {
@@ -172,6 +173,10 @@ pub struct Engine {
     /// engine can update a named entity's collider in place instead of
     /// re-registering it every frame.
     collider_pids: HashMap<String, u32>,
+    /// Names whose collider is owned by `sync_selectable_colliders` (world-space
+    /// footprint colliders), so the disabled-cleanup pass can disable stale ones
+    /// without touching screen-space `spawn_collider` colliders.
+    selectable_colliders: HashSet<String>,
     /// The host-owned RTS selection set (see `selection.rs`).
     pub selection: selection::SelectionSet,
     /// Active RTS drag-box rubber band, `Some((begin, end))` in screen space
@@ -270,6 +275,9 @@ pub struct Engine {
     guest_worker: Option<classic_worker::GuestWorker>,
     /// Host-owned named-field registry (grid kernels operate over these).
     pub fields: fields::FieldRegistry,
+    /// Host-owned container-inventory tooltip renderer (hover target + icon/
+    /// amount overlay).  Drives the overlay drawn each frame in `frame()`.
+    pub inventory_ui: inventory_ui::InventoryUi,
     nav_gpu: Option<TilemapGpu>,
     debug_frame: u64,
     pre_update_hooks: Vec<UpdateFn>,
@@ -340,6 +348,7 @@ impl Engine {
             physics: PhysicsProvider::new(),
             collider_names: HashMap::new(),
             collider_pids: HashMap::new(),
+            selectable_colliders: HashSet::new(),
             subscribed: HashSet::new(),
             guest_events: VecDeque::new(),
             guest_hover: None,
@@ -389,6 +398,7 @@ impl Engine {
             next_task_id: 0,
             guest_worker: None,
             fields: fields::FieldRegistry::default(),
+            inventory_ui: inventory_ui::InventoryUi::default(),
             nav_gpu: None,
             debug_frame: 0,
             pre_update_hooks: Vec::new(),
@@ -1196,6 +1206,15 @@ impl Engine {
         Some((tm.mouse_iso_pos.x, tm.mouse_iso_pos.y))
     }
 
+    /// Show the container-inventory hover tooltip for a named entity, or hide
+    /// it when `name` is empty.  The host resolves the entity and renders the
+    /// tooltip from its `Inventory`; the guest only supplies *which* entity is
+    /// hovered and *when* to show/hide.
+    pub fn inventory_ui_show(&mut self, name: &str) {
+        let target = if name.is_empty() { None } else { self.names.get(name).copied() };
+        self.inventory_ui.set_target(target);
+    }
+
     /// Project an iso tile coordinate to screen space, using the Tilemap-role
     /// entity's scale.  Returns `None` when no Tilemap-role entity exists.
     pub fn iso_to_screen(&self, x: f32, y: f32) -> Option<(f32, f32)> {
@@ -1472,7 +1491,8 @@ impl Engine {
         jump_cost: f32,
         turn_cost: f32,
     ) -> Option<Vec<(i32, i32)>> {
-        let snapshot = self.build_vehicle_nav_snapshot()?;
+        let obstacles = self.compute_nav_obstacles();
+        let snapshot = self.build_vehicle_nav_snapshot(&obstacles)?;
         let result = pathfinder::find_vehicle_path_snapshot(
             &snapshot,
             from,
@@ -1511,7 +1531,11 @@ impl Engine {
             };
             (nav.size_x, nav.size_y, nav.data.iter().map(|&v| v as i32).collect::<Vec<_>>())
         };
-        let snapshot = Arc::new(pathfinder::NavSnapshot::new(size_x, size_y, data));
+        // Unified obstacles: footprints of `blocks_nav` colliders block both
+        // humanoid and vehicle pathfinding.
+        let obstacles = self.compute_nav_obstacles();
+        let combined: Vec<i32> = data.iter().zip(&obstacles).map(|(&d, &o)| d & o).collect();
+        let snapshot = Arc::new(pathfinder::NavSnapshot::new(size_x, size_y, combined));
         if let Some(worker) = self.pathfinder.as_mut() {
             worker.set_snapshot(Arc::clone(&snapshot));
         }
@@ -1519,7 +1543,7 @@ impl Engine {
 
         // Rebuild + push the vehicle nav snapshot (structural nav + heights +
         // height/tile scale) so the worker can run vehicle A* off-thread too.
-        if let Some(vehicle_snapshot) = self.build_vehicle_nav_snapshot() {
+        if let Some(vehicle_snapshot) = self.build_vehicle_nav_snapshot(&obstacles) {
             if let Some(worker) = self.pathfinder.as_mut() {
                 worker.set_vehicle_snapshot(Arc::clone(&vehicle_snapshot));
             }
@@ -1530,21 +1554,62 @@ impl Engine {
         self.nav_version = self.nav_version.wrapping_add(1);
     }
 
+    /// Build the unified obstacle grid (0 = blocked, 1 = open) from the
+    /// footprints of every non-disabled entity whose collider has `blocks_nav`
+    /// set.  Used for both humanoid and vehicle pathfinding.
+    fn compute_nav_obstacles(&self) -> Vec<i32> {
+        let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return Vec::new() };
+        let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) else { return Vec::new() };
+        let (size_x, size_y) = (nav.size_x, nav.size_y);
+        let mut grid = vec![1i32; (size_x * size_y) as usize];
+
+        for (entity, (iso, tf)) in self.world.query::<(&IsoSprite, &Transform)>().iter() {
+            if self.is_disabled(entity) || iso.footprint.is_empty() {
+                continue;
+            }
+            let name = self.debug_name(entity);
+            let Some(&pid) = self.collider_pids.get(&name) else { continue };
+            if !self.physics.collider_blocks_nav(pid) {
+                continue;
+            }
+            // Rasterize the footprint AABB (iso tile coords at the entity position).
+            let mut min_x = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for pt in &iso.footprint {
+                min_x = min_x.min(tf.position.x + pt.x);
+                max_x = max_x.max(tf.position.x + pt.x);
+                min_y = min_y.min(tf.position.y + pt.y);
+                max_y = max_y.max(tf.position.y + pt.y);
+            }
+            let x0 = (min_x.floor() as i32).clamp(0, size_x - 1);
+            let x1 = (max_x.floor() as i32).clamp(0, size_x - 1);
+            let y0 = (min_y.floor() as i32).clamp(0, size_y - 1);
+            let y1 = (max_y.floor() as i32).clamp(0, size_y - 1);
+            for ty in y0..=y1 {
+                for tx in x0..=x1 {
+                    grid[(ty * size_x + tx) as usize] = 0;
+                }
+            }
+        }
+        grid
+    }
+
     /// Build the [`pathfinder::VehicleNavSnapshot`] the worker uses for vehicle
     /// A*, from the live `NavMesh` (structural nav) and `Tilemap` (heights +
     /// scales).  Returns `None` when either component is missing.
-    fn build_vehicle_nav_snapshot(&self) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
+    fn build_vehicle_nav_snapshot(
+        &self,
+        obstacles: &[i32],
+    ) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
         let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
         let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
         let size_x = nav.size_x;
         let size_y = nav.size_y;
-        // The terrain nav grid encodes slope-limited *human* walkability, not
-        // obstacles.  A vehicle derives climbability from its own per-request
-        // pitch/roll tolerance, so the shared snapshot's `structural` grid only
-        // needs to gate hard obstacles.  No current vehicle scene (lunar,
-        // lrvtest, container) has any, so treat it as fully open and let
-        // pitch/roll be the sole slope gate.
-        let structural: Vec<i32> = vec![1; (size_x * size_y) as usize];
+        // The vehicle `structural` grid gates hard obstacles (blocking
+        // colliders); slope climbability is derived per-request from pitch/roll.
+        let structural: Vec<i32> = obstacles.to_vec();
 
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
         let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
@@ -1717,10 +1782,52 @@ impl Engine {
         true
     }
 
-    /// The name of the top gameplay entity under a screen point, if any.
-    pub fn pick_at(&self, x: f32, y: f32) -> Option<String> {
-        let pid = self.physics.point_query(x, y).into_iter().next()?;
-        self.collider_names.get(&pid).cloned()
+    /// The name of the top gameplay entity under a screen point, optionally
+    /// filtered to entities carrying `filter`'s component (empty = any).  The
+    /// filter is a component type name (e.g. `"Inventory"`, `"Selectable"`);
+    /// an unknown name matches nothing.
+    pub fn pick_at(&self, x: f32, y: f32, filter: &str) -> Option<String> {
+        self.physics.point_query(x, y).into_iter().find_map(|pid| {
+            let name = self.collider_names.get(&pid)?;
+            if filter.is_empty() {
+                return Some(name.clone());
+            }
+            let entity = self.names.get(name)?;
+            if self.has_component(*entity, filter) {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Mark (or clear) a named entity's collider as a navigation obstacle.
+    /// Rebuilds the nav snapshots so the change is reflected immediately.
+    /// Returns `false` when the entity has no registered collider.
+    pub fn set_collider_blocks_nav(&mut self, name: &str, blocks: bool) -> bool {
+        if let Some(&pid) = self.collider_pids.get(name) {
+            self.physics.set_collider_blocks_nav(pid, blocks);
+            self.refresh_nav_snapshot();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether `entity` carries the named component.  The empty name matches
+    /// every entity; recognized component type names map to a runtime check.
+    fn has_component(&self, entity: hecs::Entity, name: &str) -> bool {
+        match name {
+            "" => true,
+            "Inventory" => self.world.get::<&classic_core::inventory::Inventory>(entity).is_ok(),
+            "Selectable" => self.world.get::<&Selectable>(entity).is_ok(),
+            "IsoSprite" => self.world.get::<&IsoSprite>(entity).is_ok(),
+            "IsoVehicle" => self.world.get::<&IsoVehicle>(entity).is_ok(),
+            "Sprite" => self.world.get::<&SpriteRender>(entity).is_ok(),
+            "SdfTextRender" => self.world.get::<&SdfTextRender>(entity).is_ok(),
+            "Tilemap" => self.world.get::<&Tilemap>(entity).is_ok(),
+            _ => false,
+        }
     }
 
     /// The name of the top *subscribed* entity under a screen point, if any.
@@ -2396,6 +2503,14 @@ impl Engine {
             }
         }
 
+        // Container-inventory hover tooltip (host-owned).  Reconcile it before
+        // the render list is built so show/hide, content, and position are
+        // atomic with this frame's render — no one-frame lag on hover changes
+        // or camera pan/zoom.  Take-and-restore so `sync` can re-borrow `self`.
+        let mut inventory_ui = std::mem::take(&mut self.inventory_ui);
+        inventory_ui.sync(self);
+        self.inventory_ui = inventory_ui;
+
         // Render-list: sprites + tilemaps + iso sprites
         let mut items: Vec<(f32, hecs::Entity, DrawKind)> = Vec::new();
         for (e, (tf, sprite)) in self.world.query::<(&Transform, &SpriteRender)>().iter() {
@@ -2966,8 +3081,55 @@ impl Engine {
                         .get::<&classic_core::components::UiNode>(*entity)
                         .map(|n| (n.size.x, n.size.y))
                         .unwrap_or((tf.scale.x, tf.scale.y));
-                    let model = Mat4::from_translation(tf.position)
-                        * Mat4::from_scale(Vec3::new(w, h, 1.0));
+                    let frame_ref = sprite
+                        .frame_name
+                        .as_deref()
+                        .and_then(|n| Self::resolve_frame(&self.frame_tables, &sprite.texture, n));
+                    let mut uv: Option<IsoUv> = None;
+                    let model = match &frame_ref {
+                        Some(fr) => {
+                            let sw = if fr.source_size[0] > 0 {
+                                fr.source_size[0] as f32
+                            } else {
+                                fr.size[0]
+                            };
+                            let sh = if fr.source_size[1] > 0 {
+                                fr.source_size[1] as f32
+                            } else {
+                                fr.size[1]
+                            };
+                            let (cw, ch) = (fr.size[0], fr.size[1]);
+                            // Fit the trimmed content into the `(w, h)` box,
+                            // preserving aspect and centered.  The trim offset
+                            // is compensated so the content (not the source
+                            // cell) lands in the middle of the box — icon
+                            // frames are trimmed out of a larger source cell.
+                            let scale =
+                                if cw > 0.0 && ch > 0.0 { (w / cw).min(h / ch) } else { 1.0 };
+                            let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
+                            let off_x = (w - cw * scale) / 2.0 - bx * scale;
+                            let off_y = (h - ch * scale) / 2.0 - by * scale;
+                            uv = Some((fr.uv_rect, [bx, by], [sw, sh], [cw, ch]));
+                            Mat4::from_translation(Vec3::new(
+                                tf.position.x + off_x,
+                                tf.position.y + off_y,
+                                tf.position.z,
+                            )) * Mat4::from_scale(Vec3::new(sw * scale, sh * scale, 1.0))
+                        }
+                        None => {
+                            Mat4::from_translation(tf.position)
+                                * Mat4::from_scale(Vec3::new(w, h, 1.0))
+                        }
+                    };
+                    let region = match &uv {
+                        Some((uv_rect, trim_offset, source_size, content_size)) => {
+                            SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size }
+                        }
+                        None => {
+                            let ts = [sprite.tile_set_size.x, sprite.tile_set_size.y];
+                            SpriteRegion::Grid { frame: sprite.frame, tile_set_size: ts }
+                        }
+                    };
                     if let Some(ref mut t) = self.trace {
                         let name = name_by_entity.get(entity).copied().unwrap_or("");
                         t.push(golden::TraceItemParams {
@@ -2984,12 +3146,11 @@ impl Engine {
                             normal: None,
                         });
                     }
-                    let ts = [sprite.tile_set_size.x, sprite.tile_set_size.y];
                     gfx.draw_sprite(
                         &model,
                         &Mat4::IDENTITY,
                         &sprite.texture,
-                        SpriteRegion::Grid { frame: sprite.frame, tile_set_size: ts },
+                        region,
                         true,
                         1.0,
                         &sprite_settings,
@@ -3674,7 +3835,7 @@ impl Engine {
     /// the frame's content pixel size, its trim/anchor metadata, and any
     /// per-sheet normal/depth companion GL texture names.  Returns `None` if
     /// the texture has no frame table or the name is unknown.
-    fn resolve_frame(
+    pub(crate) fn resolve_frame(
         tables: &HashMap<String, FrameTable>,
         texture: &str,
         frame_name: &str,

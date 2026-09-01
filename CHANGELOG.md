@@ -21,6 +21,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `vehicle_set_speed`, `vehicle_probe`, `vehicle_probe_clear`,
   `get_sprite_frame`, `set_sprite_offset`, `inventory_capacity`) (#80).
 - Drop-preview path overlay and right-click deselect in the demo (#80).
+- Container hover tooltip: a `UiKind::Grid` layout, packed-atlas icon sprites,
+  and a host-owned `InventoryUi` overlay showing item icons + counts above a
+  hovered container (#80).
+- Navigation blocking: `ColliderData.blocks_nav` + `set_collider_blocks_nav`
+  rasterize blocking footprints into the nav grid for humanoid and vehicle
+  pathfinding; `vehicle_footprint_radius` lets guests derive pickup/drop
+  clearance from the real footprints (#80).
 
 ## [0.1.0-alpha.0] - 2026-08-28
 

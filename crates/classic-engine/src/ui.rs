@@ -222,6 +222,40 @@ impl UIManager {
         e
     }
 
+    /// Create a grid layout container: children are laid out row-major into
+    /// `columns` columns, each column as wide as its widest child and each row
+    /// as tall as its tallest child.  `row_align` aligns a child vertically
+    /// within its row (`Left` = top, `Center` = middle, `Right` = bottom).
+    pub fn spawn_grid(
+        &mut self,
+        world: &mut World,
+        columns: u32,
+        col_gap: f32,
+        row_gap: f32,
+        row_align: UiAlign,
+        color: [f32; 4],
+    ) -> hecs::Entity {
+        let name = self.gen_name("grid");
+        let e = world.spawn((
+            Transform::new(glam::Vec3::new(0.0, 0.0, self.zlayer as f32), glam::Vec3::ONE),
+            RectRender { color, ignore_cam: true },
+            UiNode {
+                parent: None,
+                children: Vec::new(),
+                size: Vec2::new(10.0, 10.0),
+                anchor: UiAnchor::TopLeft,
+                fixed: false,
+                clip_children: false,
+                scroll_y: 0.0,
+                clip_rect: Vec4::ZERO,
+                kind: UiKind::Grid { columns, col_gap, row_gap, row_align },
+            },
+        ));
+        self.elements.insert(name, e);
+        self.mark_dirty();
+        e
+    }
+
     /// Create a single-child padding wrapper.
     pub fn spawn_padding(
         &mut self,
@@ -274,6 +308,49 @@ impl UIManager {
                 frame,
                 frame_name: None,
                 tile_set_size: glam::Vec2::new(tile_set_size[0], tile_set_size[1]),
+                anchor: glam::Vec2::ZERO,
+            },
+            UiNode {
+                parent: None,
+                children: Vec::new(),
+                size: Vec2::new(width, height),
+                anchor: UiAnchor::TopLeft,
+                fixed: false,
+                clip_children: false,
+                scroll_y: 0.0,
+                clip_rect: Vec4::ZERO,
+                kind: UiKind::Sprite,
+            },
+        ));
+        self.elements.insert(name, e);
+        self.mark_dirty();
+        e
+    }
+
+    /// Create a packed-atlas sprite UI element, addressed by `frame_name`
+    /// through the texture's frame table (e.g. an inventory icon drawn from the
+    /// shared `icons` sheet).  `width`/`height` are the target content pixel
+    /// size; the render arm resolves the frame and scales the trimmed content
+    /// to that box.
+    pub fn spawn_sprite_frame(
+        &mut self,
+        world: &mut World,
+        texture: &str,
+        frame_name: &str,
+        width: f32,
+        height: f32,
+    ) -> hecs::Entity {
+        let name = self.gen_name("sprite-frame");
+        let e = world.spawn((
+            Transform::new(glam::Vec3::new(0.0, 0.0, self.zlayer as f32), glam::Vec3::ONE),
+            SpriteRender {
+                position: glam::Vec3::ZERO,
+                scale: glam::Vec3::ONE,
+                texture: texture.to_string(),
+                ignore_cam: true,
+                frame: 0.0,
+                frame_name: Some(frame_name.to_string()),
+                tile_set_size: glam::Vec2::ONE,
                 anchor: glam::Vec2::ZERO,
             },
             UiNode {
@@ -503,6 +580,9 @@ impl UIManager {
             UiKind::Array { .. } => {
                 self.layout_array(entity, world);
             }
+            UiKind::Grid { .. } => {
+                self.layout_grid(entity, world);
+            }
             UiKind::Padding { .. } => {
                 self.layout_padding(entity, world);
             }
@@ -609,6 +689,99 @@ impl UIManager {
             }
 
             offset += main + spacing;
+        }
+    }
+
+    /// Layout for UIGrid: measure children, size self to a row-major grid of
+    /// `columns` columns, and position each child in its cell.
+    fn layout_grid(&self, entity: hecs::Entity, world: &mut World) {
+        let (columns, col_gap, row_gap, row_align) =
+            match world.get::<&UiNode>(entity).unwrap().kind.clone() {
+                UiKind::Grid { columns, col_gap, row_gap, row_align } => {
+                    (columns, col_gap, row_gap, row_align)
+                }
+                _ => return,
+            };
+        let columns = (columns.max(1)) as usize;
+
+        let children: Vec<hecs::Entity> = world
+            .get::<&UiNode>(entity)
+            .map(|n| n.children.iter().map(|c| c.entity).collect())
+            .unwrap_or_default();
+
+        for &child in &children {
+            self.measure_and_position(child, world);
+        }
+
+        let enabled: Vec<(hecs::Entity, f32, f32)> = children
+            .iter()
+            .filter_map(|&e| {
+                if world.get::<&Disabled>(e).is_ok() {
+                    return None;
+                }
+                world.get::<&UiNode>(e).ok().map(|n| (e, n.size.x, n.size.y))
+            })
+            .collect();
+
+        if enabled.is_empty() {
+            if let Ok(mut node) = world.get::<&mut UiNode>(entity) {
+                node.size = Vec2::ZERO;
+            }
+            if let Ok(mut tf) = world.get::<&mut Transform>(entity) {
+                tf.scale.x = 0.0;
+                tf.scale.y = 0.0;
+            }
+            return;
+        }
+
+        let rows = enabled.len().div_ceil(columns);
+        let mut col_w = vec![0.0_f32; columns];
+        let mut row_h = vec![0.0_f32; rows];
+        for (i, &(_e, w, h)) in enabled.iter().enumerate() {
+            col_w[i % columns] = col_w[i % columns].max(w);
+            row_h[i / columns] = row_h[i / columns].max(h);
+        }
+
+        let total_w: f32 = col_w.iter().sum::<f32>() + col_gap * (columns.saturating_sub(1)) as f32;
+        let total_h: f32 = row_h.iter().sum::<f32>() + row_gap * (rows.saturating_sub(1)) as f32;
+
+        {
+            let mut node = world.get::<&mut UiNode>(entity).unwrap();
+            node.size = Vec2::new(total_w, total_h);
+        }
+        {
+            let mut tf = world.get::<&mut Transform>(entity).unwrap();
+            tf.scale.x = total_w;
+            tf.scale.y = total_h;
+        }
+
+        let (px, py) = {
+            let tf = world.get::<&Transform>(entity).unwrap();
+            (tf.position.x, tf.position.y)
+        };
+
+        // Column start offsets.
+        let mut col_x = vec![0.0_f32; columns];
+        for c in 1..columns {
+            col_x[c] = col_x[c - 1] + col_w[c - 1] + col_gap;
+        }
+        let mut row_y = vec![0.0_f32; rows];
+        for r in 1..rows {
+            row_y[r] = row_y[r - 1] + row_h[r - 1] + row_gap;
+        }
+
+        for (i, &(e, _w, h)) in enabled.iter().enumerate() {
+            let col = i % columns;
+            let row = i / columns;
+            let y_off = match row_align {
+                UiAlign::Left => 0.0,
+                UiAlign::Center => (row_h[row] - h) / 2.0,
+                UiAlign::Right => row_h[row] - h,
+            };
+            if let Ok(mut tf) = world.get::<&mut Transform>(e) {
+                tf.position.x = px + col_x[col];
+                tf.position.y = py + row_y[row] + y_off;
+            }
         }
     }
 

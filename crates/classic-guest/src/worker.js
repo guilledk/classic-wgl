@@ -130,6 +130,9 @@ var OP_GET_SPRITE_FRAME = 90;
 var OP_INVENTORY_CAPACITY = 91;
 var OP_VEHICLE_PROBE = 92;
 var OP_VEHICLE_PROBE_CLEAR = 93;
+var OP_INVENTORY_UI_SHOW = 94;
+var OP_SET_COLLIDER_BLOCKS_NAV = 95;
+var OP_VEHICLE_FOOTPRINT_RADIUS = 96;
 
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
@@ -332,6 +335,9 @@ function envImports() {
         vehicle_probe_clear: function (ptr, len) {
             return hostCall(OP_VEHICLE_PROBE_CLEAR, [readStr(ptr, len)], []).ret | 0;
         },
+        vehicle_footprint_radius: function (ptr, len) {
+            return hostCall(OP_VEHICLE_FOOTPRINT_RADIUS, [readStr(ptr, len)], []).ret;
+        },
         selected_names: function (outPtr, outCap) {
             var r = hostCall(OP_SELECTED_NAMES, [], [outPtr, outCap]);
             if (r.out.length > 0) writeMem(outPtr, r.out);
@@ -374,6 +380,12 @@ function envImports() {
             if (r.out.length > 0) writeMem(outPtr, r.out);
             return r.ret | 0;
         },
+        inventory_ui_show: function (ptr, len) {
+            return hostCall(OP_INVENTORY_UI_SHOW, [readStr(ptr, len)], []).ret | 0;
+        },
+        set_collider_blocks_nav: function (ptr, len, blocks) {
+            return hostCall(OP_SET_COLLIDER_BLOCKS_NAV, [readStr(ptr, len)], [blocks]).ret | 0;
+        },
         get_camera: function (outPtr) {
             var r = hostCall(OP_GET_CAMERA, [], [outPtr]);
             if (r.out.length > 0) writeMem(outPtr, r.out);
@@ -385,8 +397,8 @@ function envImports() {
         set_grid: function (show) {
             return hostCall(OP_SET_GRID, [], [show]).ret | 0;
         },
-        pick_at: function (x, y, outPtr, outCap) {
-            var r = hostCall(OP_PICK_AT, [], [x, y, outPtr, outCap]);
+        pick_at: function (x, y, filterPtr, filterLen, outPtr, outCap) {
+            var r = hostCall(OP_PICK_AT, [readStr(filterPtr, filterLen)], [x, y, outPtr, outCap]);
             if (r.out.length > 0) writeMem(outPtr, r.out);
             return r.ret | 0;
         },

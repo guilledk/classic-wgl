@@ -349,6 +349,7 @@ fn guest_selection_and_speed_imports_wired() {
             (import "env" "vehicle_set_speed" (func $vss (param i32 i32 f64) (result i32)))
             (import "env" "vehicle_probe" (func $vprobe (param i32 i32 i32 i32) (result i32)))
             (import "env" "vehicle_probe_clear" (func $vclear (param i32 i32) (result i32)))
+            (import "env" "vehicle_footprint_radius" (func $vfpr (param i32 i32) (result f64)))
             (import "env" "selected_names" (func $sel (param i32 i32) (result i32)))
             (import "env" "selection_clear" (func $clear (result i32)))
             (import "env" "set_sprite_offset" (func $soff (param i32 i32 f64 f64 f64) (result i32)))
@@ -358,6 +359,7 @@ fn guest_selection_and_speed_imports_wired() {
                 (drop (call $vss (i32.const 0) (i32.const 3) (f64.const 1.3)))
                 (drop (call $vprobe (i32.const 0) (i32.const 3) (i32.const 2) (i32.const 0)))
                 (drop (call $vclear (i32.const 0) (i32.const 3)))
+                (drop (call $vfpr (i32.const 0) (i32.const 3)))
                 (drop (call $sel (i32.const 64) (i32.const 64)))
                 (drop (call $clear))
                 (drop (call $soff (i32.const 0) (i32.const 3) (f64.const 0.0) (f64.const -448.0) (f64.const 0.0)))))"#,
@@ -463,6 +465,26 @@ fn guest_get_sprite_frame_and_inventory_capacity_wired() {
 
             assert_eq!(engine.world.get::<&IsoSprite>(copy_a).unwrap().frame, 42.0);
             assert_eq!(engine.world.get::<&IsoSprite>(copy_b).unwrap().frame, 7.0);
+        },
+    );
+}
+
+#[test]
+fn guest_inventory_ui_show_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "inventory_ui_show" (func $show (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "unit")
+            (func (export "update") (param f64)
+                (drop (call $show (i32.const 0) (i32.const 4)))
+                (drop (call $show (i32.const 0) (i32.const 0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            // Show "unit" then hide with an empty name; the import must not
+            // trap (neither entity needs an Inventory for the intent itself).
+            rt.update(&mut engine, 0.016).unwrap();
         },
     );
 }
@@ -600,8 +622,27 @@ fn pick_at_returns_entity_under_point() {
     engine.register_named_collider("tree", collider);
     engine.physics.begin_frame();
 
-    assert_eq!(engine.pick_at(100.0, 100.0), Some("tree".to_string()));
-    assert_eq!(engine.pick_at(500.0, 500.0), None);
+    assert_eq!(engine.pick_at(100.0, 100.0, ""), Some("tree".to_string()));
+    assert_eq!(engine.pick_at(500.0, 500.0, ""), None);
+}
+
+#[test]
+fn pick_at_filters_by_component() {
+    let mut engine = Engine::new_for_test();
+    engine.spawn_named("crate");
+    assert!(engine.spawn_collider("crate", 50.0, 60.0, 20.0, 10.0));
+
+    engine.spawn_named("container");
+    let entity = *engine.names.get("container").unwrap();
+    engine.world.insert_one(entity, classic_core::inventory::Inventory::default()).unwrap();
+    assert!(engine.spawn_collider("container", 50.0, 60.0, 20.0, 10.0));
+
+    engine.physics.begin_frame();
+
+    // No filter: top collider (crate registered first → lowest pid).
+    assert_eq!(engine.pick_at(50.0, 60.0, ""), Some("crate".to_string()));
+    // Inventory filter: skips crate, returns the inventory-bearing container.
+    assert_eq!(engine.pick_at(50.0, 60.0, "Inventory"), Some("container".to_string()));
 }
 
 #[test]
@@ -781,8 +822,8 @@ fn spawn_collider_and_pick() {
     assert!(engine.subscribe("unit"));
     engine.physics.begin_frame();
 
-    assert_eq!(engine.pick_at(50.0, 60.0), Some("unit".to_string()));
-    assert_eq!(engine.pick_at(500.0, 500.0), None);
+    assert_eq!(engine.pick_at(50.0, 60.0, ""), Some("unit".to_string()));
+    assert_eq!(engine.pick_at(500.0, 500.0, ""), None);
 }
 
 #[test]

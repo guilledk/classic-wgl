@@ -204,6 +204,14 @@ impl Engine {
         let _ = self.world.insert(to_e, (to_inv,));
         moved
     }
+
+    /// The sorted `(item_id, count)` stacks of a named entity's [`Inventory`]
+    /// (empty if the entity has none).  Host-internal + tests; the guest
+    /// populates contents via `inventory_add` and reads nothing back.
+    pub fn inventory_stacks(&self, name: &str) -> Vec<(ItemId, u32)> {
+        let Some(&entity) = self.names.get(name) else { return Vec::new() };
+        self.world.get::<&Inventory>(entity).map(|inv| inv.stacks.clone()).unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -219,6 +227,7 @@ mod tests {
                 stack_rule: StackRule::Bulk { max_per_stack: 100 },
                 mass: 1.0,
                 volume: 0.5,
+                icon: None,
             },
             ItemDef {
                 name: "lox".into(),
@@ -226,6 +235,7 @@ mod tests {
                 stack_rule: StackRule::Gaseous { pressure_factor: 4.0, max_per_stack: 500 },
                 mass: 1.1,
                 volume: 1.0,
+                icon: None,
             },
             ItemDef {
                 name: "shipping_container".into(),
@@ -233,6 +243,7 @@ mod tests {
                 stack_rule: StackRule::Unit { max_per_stack: 1 },
                 mass: 2200.0,
                 volume: 33.0,
+                icon: None,
             },
         ];
         let types = vec![
