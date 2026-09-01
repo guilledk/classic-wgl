@@ -17,6 +17,9 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Close the web depth gap: a `BC4_R` depth sheet transcodes to
   `COMPRESSED_R11_EAC` (`ETC2_EAC_R11`) on a WebGL 2 device without RGTC instead
   of the RGBA8 fallback.
+- Worker-ize the web transcode: `.basis` sheets transcode in a dedicated web
+  `Worker` (async) with a synchronous main-thread fallback, so large sheets no
+  longer block the frame loop.
 
 ## [0.1.1] - 2026-09-01
 

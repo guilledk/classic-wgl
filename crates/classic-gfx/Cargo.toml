@@ -21,8 +21,11 @@ bytemuck.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 basis-universal = "0.3.1"
 
-# Web Basis Universal transcoder (P1.0/R2): a precompiled three.js
-# `basis_transcoder` `.wasm`, instantiated synchronously via js-sys.
+# Web Basis Universal transcoder (P1.0/R3): our own Emscripten-built
+# `basis_transcoder.wasm`, run in a web Worker (async) with a synchronous
+# main-thread fallback.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys.workspace = true
 wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true
