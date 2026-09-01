@@ -1,0 +1,58 @@
+# classic-wgl engine architecture
+direction: right
+
+apps: Apps {
+  desktop: "classic-desktop\n(native binary)"
+  web: "classic-web\n(wasm cdylib)"
+}
+
+platform: Platform trait {
+  native: "winit + glutin\n(native GL)"
+  web: "web-sys + trunk\n(WebGL2)"
+  headless: "EGL\n(surfaceless)"
+}
+
+engine: "classic-engine\nEngine core" {
+  Engine: "World · Time\nInputState · Gfx"
+  UIManager: "retained-mode\nlayout"
+  PhysicsProvider: "click · hover\ncollision"
+  IsoVehicle: "wheeled vehicles\nchassis plane"
+}
+
+crates: "supporting crates" {
+  classic-core: "ECS (hecs)\nregistry · math\ncollision · tilemap"
+  classic-gfx: "GL layer\ndraw_* · shaders"
+  classic-terrain: "noise toolkit\n(no_std)"
+  classic-pathfinder: "A* · vehicle search\n(no_std)"
+  classic-rom: "RomArchive · Rom\nmanifest · resources"
+  classic-guest: "Wasmi / Wasmtime\nguest ABI + SDK"
+  classic-worker: "PathfinderWorker\nGuestWorker"
+}
+
+production: "ROM production" {
+  assets: "classic-assets\n(Blender)"
+  roms: "classic-roms\n(pack scenes)"
+  bucket: "classic-roms.com\n(Cloudflare R2)" {
+    shape: cylinder
+  }
+  assets -> roms: build + pack
+  roms -> bucket: publish
+}
+
+apps.desktop -> platform.native
+apps.web -> platform.web
+platform.native -> engine
+platform.web -> engine
+platform.headless -> engine
+
+engine -> crates.classic-core
+engine -> crates.classic-gfx
+engine -> crates.classic-rom
+engine -> crates.classic-guest
+engine -> crates.classic-worker
+
+crates.classic-core -> crates.classic-terrain
+crates.classic-core -> crates.classic-pathfinder
+crates.classic-worker -> crates.classic-pathfinder: pathfinder.wasm
+
+production.bucket -> crates.classic-rom: "cargo xtask\nfetch-roms"
