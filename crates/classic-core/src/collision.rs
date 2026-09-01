@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use glam::{Mat4, Vec3};
 
-use crate::components::{ColliderData, Shape};
+use crate::components::{ColliderData, ColliderSpace, Shape};
 use crate::gjk::{GjkContext, GjkShape};
 use crate::quadtree::{Quadtree, RectBounds};
 use crate::types::Rect;
@@ -182,6 +182,9 @@ struct ColliderEntry {
     /// serializable component) so they never round-trip through `state.json`.
     handlers: HashMap<HandlerKind, Vec<Box<dyn FnMut() -> bool>>>,
     enabled: bool,
+    /// Screen-space projection of a [`ColliderSpace::World`] collider,
+    /// recomputed each `begin_frame`.  `None` for screen-space colliders.
+    projected: Option<Shape>,
 }
 
 impl ColliderEntry {
@@ -194,6 +197,27 @@ impl ColliderEntry {
     }
 }
 
+/// Project a world-space collider geometry to screen space through the camera
+/// matrix, so a single screen-space quadtree serves both UI (screen) and
+/// gameplay (world) colliders.
+fn project_shape(shape: &Shape, position: Vec3, scale: Vec3, m: Mat4) -> Shape {
+    match shape {
+        Shape::Circle { diameter } => {
+            // The camera scale is uniform; recover it from the x-axis length.
+            let cam_scale = m.transform_vector3(Vec3::X).length();
+            let r = diameter * 0.5 * scale.x * cam_scale;
+            Shape::Circle { diameter: r * 2.0 }
+        }
+        Shape::Polygon { verts, .. } => {
+            let model = Mat4::from_translation(Vec3::new(position.x, position.y, 0.0))
+                * Mat4::from_scale(scale);
+            let projected: Vec<Vec3> =
+                verts.iter().map(|v| m.transform_point3(model.transform_point3(*v))).collect();
+            polygon_from_verts(projected)
+        }
+    }
+}
+
 pub struct PhysicsProvider {
     next_id: u32,
     entries: HashMap<u32, ColliderEntry>,
@@ -203,6 +227,8 @@ pub struct PhysicsProvider {
     screen: Quadtree<ColliderHandle>,
     collided: HashMap<u32, HashMap<u32, bool>>,
     colliding: HashMap<u32, HashMap<u32, bool>>,
+    /// World → screen transform, set by the engine before `begin_frame`.
+    world_to_screen: Mat4,
     /// Set to true when a click handler fires on a collider with `consumes_click`.
     pub consumed_click: bool,
     /// Set by the engine before `perform_calls` — true only on actual mouse presses.
@@ -236,9 +262,16 @@ impl PhysicsProvider {
             screen: Quadtree::new(screen_collider, 10, 4),
             collided: HashMap::new(),
             colliding: HashMap::new(),
+            world_to_screen: Mat4::IDENTITY,
             consumed_click: false,
             mouse_clicked: false,
         }
+    }
+
+    /// Set the world → screen transform used to project [`ColliderSpace::World`]
+    /// colliders.  Call before `begin_frame` each frame.
+    pub fn set_world_to_screen(&mut self, m: Mat4) {
+        self.world_to_screen = m;
     }
 
     pub fn resize_screen(&mut self, w: f32, h: f32) {
@@ -249,8 +282,10 @@ impl PhysicsProvider {
     pub fn register_collider(&mut self, collider: ColliderData) -> u32 {
         let pid = self.next_id;
         self.next_id += 1;
-        self.entries
-            .insert(pid, ColliderEntry { collider, handlers: HashMap::new(), enabled: true });
+        self.entries.insert(
+            pid,
+            ColliderEntry { collider, handlers: HashMap::new(), enabled: true, projected: None },
+        );
         pid
     }
 
@@ -258,10 +293,23 @@ impl PhysicsProvider {
         self.entries.remove(&pid);
     }
 
+    /// Replace a collider's world-space shape in place (used by the engine to
+    /// keep runtime gameplay colliders tracking their entities).  The collider's
+    /// `space` is set to [`ColliderSpace::World`].
+    pub fn update_world_shape(&mut self, pid: u32, shape: Shape) {
+        if let Some(entry) = self.entries.get_mut(&pid) {
+            entry.collider.shape = shape;
+            entry.collider.space = ColliderSpace::World;
+            entry.collider.position = Vec3::ZERO;
+            entry.collider.scale = Vec3::ONE;
+        }
+    }
+
     /// Rebuild a collider's polygon shape from a (0,0)→(w,h) rect at a new position.
     pub fn sync_collider_rect(&mut self, pid: u32, x: f32, y: f32, w: f32, h: f32) {
         if let Some(entry) = self.entries.get_mut(&pid) {
             entry.collider.position = Vec3::new(x, y, 0.0);
+            entry.collider.space = ColliderSpace::Screen;
             let verts = vec![
                 Vec3::new(0.0, 0.0, 0.0),
                 Vec3::new(w, 0.0, 0.0),
@@ -319,6 +367,39 @@ impl PhysicsProvider {
         hits.into_iter().map(|(_, pid)| pid).collect()
     }
 
+    /// Collect the pids of enabled colliders intersecting the screen rectangle
+    /// `(begin_x, begin_y) → (end_x, end_y)`, GJK-tested against the rectangle —
+    /// the same intersect-collection `end_selection` performs, exposed read-only
+    /// for the RTS drag-box selection system.
+    pub fn box_query(&self, begin_x: f32, begin_y: f32, end_x: f32, end_y: f32) -> Vec<u32> {
+        let min = Vec3::new(begin_x.min(end_x), begin_y.min(end_y), 0.0);
+        let max = Vec3::new(begin_x.max(end_x), begin_y.max(end_y), 0.0);
+        let delta = max - min;
+        let rect = Rect::new(min.x, min.y, delta.x.max(1.0), delta.y.max(1.0));
+
+        let sel_shape = polygon_from_verts(vec![
+            Vec3::new(min.x, min.y, 0.0),
+            Vec3::new(max.x, min.y, 0.0),
+            Vec3::new(max.x, max.y, 0.0),
+            Vec3::new(min.x, max.y, 0.0),
+        ]);
+        let sel_ref = ShapeRef { shape: &sel_shape, position: Vec3::ZERO, scale: Vec3::ONE };
+
+        let candidates: Vec<_> = self.screen.retrieve(&rect).iter().copied().cloned().collect();
+        let mut out = Vec::new();
+        for ch in &candidates {
+            if ch.pid <= 1 {
+                continue;
+            }
+            let (shape, pos, scl) = self.shape_of(ch.pid);
+            let entry_ref = ShapeRef { shape, position: pos, scale: scl };
+            if GjkContext::new(&sel_ref, &entry_ref).perform_test() {
+                out.push(ch.pid);
+            }
+        }
+        out
+    }
+
     /// Run GJK test between two collider/virtual entries.
     pub fn gjk_test(&self, a_pid: u32, b_pid: u32) -> bool {
         let (shape_a, pos_a, scl_a) = self.shape_of(a_pid);
@@ -334,7 +415,11 @@ impl PhysicsProvider {
         } else if pid == 1 {
             (&self.selection.shape, self.selection.position, self.selection.scale)
         } else if let Some(e) = self.entries.get(&pid) {
-            (&e.collider.shape, e.collider.position, e.collider.scale)
+            match &e.projected {
+                // World colliders are queried through their screen projection.
+                Some(p) => (p, Vec3::ZERO, Vec3::ONE),
+                None => (&e.collider.shape, e.collider.position, e.collider.scale),
+            }
         } else {
             panic!("unknown collider pid {pid}");
         }
@@ -345,11 +430,24 @@ impl PhysicsProvider {
         let sc = self.screen_collider;
         self.screen = Quadtree::new(sc, 10, 4);
 
-        for (&pid, entry) in &self.entries {
+        for (&pid, entry) in &mut self.entries {
             if !entry.enabled {
                 continue;
             }
-            let r = entry.collider.shape.rect(entry.collider.position, entry.collider.scale);
+            let r = if entry.collider.space == ColliderSpace::World {
+                let projected = project_shape(
+                    &entry.collider.shape,
+                    entry.collider.position,
+                    entry.collider.scale,
+                    self.world_to_screen,
+                );
+                let r = projected.rect(Vec3::ZERO, Vec3::ONE);
+                entry.projected = Some(projected);
+                r
+            } else {
+                entry.projected = None;
+                entry.collider.shape.rect(entry.collider.position, entry.collider.scale)
+            };
             if r.intersects(&sc) {
                 self.screen.insert(ColliderHandle { pid, rect: r });
             }

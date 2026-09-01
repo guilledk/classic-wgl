@@ -4,6 +4,7 @@ pub mod collision;
 pub mod components;
 pub mod fields;
 pub mod instrument;
+pub mod inventory;
 pub mod math;
 pub mod registry;
 pub mod sdf_builder;
@@ -16,8 +17,10 @@ pub mod quadtree;
 pub mod simplex_noise;
 
 use components::{
-    Animator, IsoAgent, IsoSprite, IsoVehicle, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
+    Animator, IsoAgent, IsoSprite, IsoVehicle, NavMesh, RectRender, Role, SdfTextRender,
+    Selectable, Tilemap,
 };
+use inventory::Inventory;
 
 pub use camera::Camera;
 pub use components::{RoleKind, SpriteRender, Transform};
@@ -131,6 +134,28 @@ pub fn register_all_components() {
             subsumes: &[],
         },
         ComponentReg {
+            name: "Inventory",
+            spawn: |b, v| {
+                let inv: Inventory = serde_json::from_value(v)?;
+                b.add(inv);
+                Ok(())
+            },
+            dump: Some(dumper_inventory),
+            order: 38,
+            subsumes: &[],
+        },
+        ComponentReg {
+            name: "Selectable",
+            spawn: |b, v| {
+                let s: Selectable = serde_json::from_value(v)?;
+                b.add(s);
+                Ok(())
+            },
+            dump: Some(dumper_selectable),
+            order: 39,
+            subsumes: &[],
+        },
+        ComponentReg {
             name: "IsometricNavMesh",
             spawn: |b, v| {
                 let n: NavMesh = serde_json::from_value(v)?;
@@ -219,6 +244,16 @@ fn dumper_animator(world: &hecs::World, entity: hecs::Entity) -> Option<serde_js
 fn dumper_isovehicle(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let v = world.get::<&IsoVehicle>(entity).ok()?;
     serde_json::to_value(&*v).ok().map(|v| component_value("IsoVehicle", v))
+}
+
+fn dumper_inventory(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let inv = world.get::<&Inventory>(entity).ok()?;
+    serde_json::to_value(&*inv).ok().map(|v| component_value("Inventory", v))
+}
+
+fn dumper_selectable(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let s = world.get::<&Selectable>(entity).ok()?;
+    serde_json::to_value(*s).ok().map(|v| component_value("Selectable", v))
 }
 
 fn dumper_navmesh(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {

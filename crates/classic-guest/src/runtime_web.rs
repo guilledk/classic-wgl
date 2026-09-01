@@ -595,6 +595,22 @@ impl WebWasmRuntime {
             );
         }
 
+        // get_sprite_frame
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "get_sprite_frame",
+                Box::new(move |ptr: i32, len: i32| -> f64 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().get_sprite_frame(&name)
+                }) as Box<dyn FnMut(i32, i32) -> f64>
+            );
+        }
+
         // set_sprite_color
         {
             let host = host.clone();
@@ -608,6 +624,22 @@ impl WebWasmRuntime {
                     };
                     host.borrow_mut().set_sprite_color(&name, r, g, b, a)
                 }) as Box<dyn FnMut(i32, i32, f64, f64, f64, f64) -> i32>
+            );
+        }
+
+        // set_sprite_offset
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "set_sprite_offset",
+                Box::new(move |ptr: i32, len: i32, dx: f64, dy: f64, dz: f64| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().set_sprite_offset(&name, dx, dy, dz)
+                }) as Box<dyn FnMut(i32, i32, f64, f64, f64) -> i32>
             );
         }
 
@@ -1007,6 +1039,203 @@ impl WebWasmRuntime {
                     };
                     host.borrow_mut().vehicle_stop(&name)
                 }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        // vehicle_set_speed
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_set_speed",
+                Box::new(move |ptr: i32, len: i32, speed: f64| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().vehicle_set_speed(&name, speed)
+                }) as Box<dyn FnMut(i32, i32, f64) -> i32>
+            );
+        }
+
+        // vehicle_probe
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_probe",
+                Box::new(move |ptr: i32, len: i32, tx: i32, ty: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().vehicle_probe(&name, tx, ty)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // vehicle_probe_clear
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "vehicle_probe_clear",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().vehicle_probe_clear(&name)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        // selected_names
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "selected_names",
+                Box::new(move |out_ptr: i32, out_cap: i32| -> i32 {
+                    let json = host.borrow_mut().selected_names();
+                    if out_cap < json.len() as i32 {
+                        return -1;
+                    }
+                    let mem = mem.borrow();
+                    write_str(mem.as_ref().unwrap(), out_ptr, &json)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        // selection_clear
+        {
+            let host = host.clone();
+            set_import!(
+                "selection_clear",
+                Box::new(move || -> i32 { host.borrow_mut().selection_clear() })
+                    as Box<dyn FnMut() -> i32>
+            );
+        }
+
+        // inventory_dump
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "inventory_dump",
+                Box::new(move |ptr: i32, len: i32, out_ptr: i32, out_cap: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    let json = host.borrow_mut().inventory_dump(&name);
+                    if out_cap < json.len() as i32 {
+                        return -1;
+                    }
+                    let mem = mem.borrow();
+                    write_str(mem.as_ref().unwrap(), out_ptr, &json)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // inventory_capacity
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "inventory_capacity",
+                Box::new(move |ptr: i32, len: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    host.borrow_mut().inventory_capacity(&name)
+                }) as Box<dyn FnMut(i32, i32) -> i32>
+            );
+        }
+
+        // inventory_add
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "inventory_add",
+                Box::new(move |ptr: i32, len: i32, item_ptr: i32, item_len: i32, n: i32| -> i32 {
+                    let (name, item) = {
+                        let mem = mem.borrow();
+                        let m = mem.as_ref().unwrap();
+                        (read_str(m, ptr, len), read_str(m, item_ptr, item_len))
+                    };
+                    host.borrow_mut().inventory_add(&name, &item, n)
+                }) as Box<dyn FnMut(i32, i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // inventory_remove
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "inventory_remove",
+                Box::new(move |ptr: i32, len: i32, item_ptr: i32, item_len: i32, n: i32| -> i32 {
+                    let (name, item) = {
+                        let mem = mem.borrow();
+                        let m = mem.as_ref().unwrap();
+                        (read_str(m, ptr, len), read_str(m, item_ptr, item_len))
+                    };
+                    host.borrow_mut().inventory_remove(&name, &item, n)
+                }) as Box<dyn FnMut(i32, i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // inventory_transfer
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "inventory_transfer",
+                Box::new(
+                    move |from_ptr: i32,
+                          from_len: i32,
+                          to_ptr: i32,
+                          to_len: i32,
+                          item_ptr: i32,
+                          item_len: i32,
+                          n: i32|
+                          -> i32 {
+                        let (from, to, item) = {
+                            let mem = mem.borrow();
+                            let m = mem.as_ref().unwrap();
+                            (
+                                read_str(m, from_ptr, from_len),
+                                read_str(m, to_ptr, to_len),
+                                read_str(m, item_ptr, item_len),
+                            )
+                        };
+                        host.borrow_mut().inventory_transfer(&from, &to, &item, n)
+                    }
+                ) as Box<dyn FnMut(i32, i32, i32, i32, i32, i32, i32) -> i32>
+            );
+        }
+
+        // item_def
+        {
+            let host = host.clone();
+            let mem = mem.clone();
+            set_import!(
+                "item_def",
+                Box::new(move |ptr: i32, len: i32, out_ptr: i32, out_cap: i32| -> i32 {
+                    let name = {
+                        let mem = mem.borrow();
+                        read_str(mem.as_ref().unwrap(), ptr, len)
+                    };
+                    let json = host.borrow_mut().item_def(&name);
+                    if out_cap < json.len() as i32 {
+                        return -1;
+                    }
+                    let mem = mem.borrow();
+                    write_str(mem.as_ref().unwrap(), out_ptr, &json)
+                }) as Box<dyn FnMut(i32, i32, i32, i32) -> i32>
             );
         }
 

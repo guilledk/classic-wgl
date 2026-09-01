@@ -27,6 +27,12 @@ uniform vec3 light_color;
 // Defaults to (1,1,1) — a no-op for every existing asset.  Tintable sprites
 // ship a grayscale albedo and set this at runtime (see IsoSprite.color).
 uniform vec3 tint;
+// RTS selection silhouette: when `selected` is set, transparent edge texels
+// adjacent to an opaque texel (within `outline_delta` sheet-UV) are drawn in
+// `selection_color` as a per-sprite outline.
+uniform float selected;
+uniform vec3 selection_color;
+uniform vec2 outline_delta;
 
 out vec4 fragColor;
 
@@ -65,7 +71,29 @@ vec4 getTilePixel(float tile_id_flat, vec2 tex_coord) {
 
 void main(void ) {
     vec4 color = getTilePixel(tile_id_flat, vec2(vTexCoord.x, vTexCoord.y));
-    if (color.a < 0.01) discard;
+
+    if (selected > 0.5) {
+        if (color.a < 0.01) {
+            // Transparent texel: draw a silhouette edge where a cardinal
+            // neighbour is opaque.  `sheetUv` maps the current texel to the
+            // sheet; neighbours are sampled directly (no re-discard).
+            vec2 suv = sheetUv(vec2(vTexCoord.x, vTexCoord.y));
+            float neighbour = max(
+                max(texture(tex_sampler, suv + vec2(outline_delta.x, 0.0)).a,
+                    texture(tex_sampler, suv - vec2(outline_delta.x, 0.0)).a),
+                max(texture(tex_sampler, suv + vec2(0.0, outline_delta.y)).a,
+                    texture(tex_sampler, suv - vec2(0.0, outline_delta.y)).a)
+            );
+            if (neighbour < 0.01) {
+                discard;
+            }
+            fragColor = vec4(selection_color, 1.0);
+            return;
+        }
+    } else if (color.a < 0.01) {
+        discard;
+    }
+
     color.rgb *= tint;
     if (use_depth_map > 0.5) {
         highp float gray = texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r;

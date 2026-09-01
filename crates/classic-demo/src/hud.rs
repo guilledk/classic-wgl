@@ -15,6 +15,29 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::state::DemoStateRef;
 
+/// Draw the RTS selection rubber band (a screen-space rectangle) while the
+/// player drags a box selection.  `engine.rts_box` is `Some((begin, end))` only
+/// while dragging and outside a terrain-paint tool.
+pub fn draw_rts_rubber_band(engine: &mut Engine) {
+    let Some((begin, end)) = engine.rts_box else { return };
+    let x = begin.x.min(end.x);
+    let y = begin.y.min(end.y);
+    let w = (begin.x - end.x).abs();
+    let h = (begin.y - end.y).abs();
+    if w < 1.0 && h < 1.0 {
+        return;
+    }
+    let Some(gfx) = engine.gfx.as_mut() else { return };
+
+    let model =
+        Mat4::from_translation(Vec3::new(x, y, 0.0)) * Mat4::from_scale(Vec3::new(w, h, 1.0));
+    gfx.draw_rect(&model, &Mat4::IDENTITY, &[0.0, 1.0, 0.0, 0.12], true);
+
+    let verts = vec![x, y, 0.0, x + w, y, 0.0, x + w, y + h, 0.0, x, y + h, 0.0];
+    let buf = GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &verts, glow::STREAM_DRAW);
+    gfx.draw_line_loop(&buf, 4, &Mat4::IDENTITY, &Mat4::IDENTITY, &[0.0, 1.0, 0.0, 0.9]);
+}
+
 /// Route the mouse wheel to the text-demo panel when it is open and under the
 /// cursor, before camera zoom (which runs first in registration order).
 pub fn route_text_scroll(engine: &mut Engine, state: &DemoStateRef) {
@@ -483,8 +506,11 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
         }
     }
 
-    // Vehicle path indicators (planned A* routes), gated on KeyV.
-    if state.borrow().debug_vehicle_paths {
+    // Vehicle path indicators (planned A* routes), shown while their vehicle is
+    // selected.  Snapshot the selection + preview paths before borrowing gfx.
+    let selected: Vec<hecs::Entity> = engine.selection().selected.iter().copied().collect();
+    let preview_paths: Vec<Vec<[i32; 2]>> = engine.preview_paths.values().cloned().collect();
+    {
         let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap);
         let Some(gfx) = engine.gfx.as_mut() else { return };
         let cam = engine.camera.matrix();
@@ -502,7 +528,10 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                     tm.height_scale,
                 )
             };
-            for (_e, (vehicle, tf)) in engine.world.query::<(&IsoVehicle, &Transform)>().iter() {
+            for (e, (vehicle, tf)) in engine.world.query::<(&IsoVehicle, &Transform)>().iter() {
+                if !selected.contains(&e) {
+                    continue;
+                }
                 if vehicle.path.is_empty() || vehicle.path_idx >= vehicle.path.len() {
                     continue;
                 }
@@ -553,6 +582,36 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                     glow::STREAM_DRAW,
                 );
                 gfx.draw_line_loop(&rb, 4, &Mat4::IDENTITY, &cam, &[1.0, 0.9, 0.2, 0.95]);
+            }
+
+            // Candidate path from the reachability probe (a drop-preview target),
+            // drawn as an orange strip so the player can see the planned route.
+            let to_world = |px: f32, py: f32| -> [f32; 3] {
+                let h = bilinear_height(&hd, size_x, size_y, px, py);
+                let mut v = Vec3::new(px, py, 0.0);
+                v = iso_to_cart_world.transform_point3(v);
+                v += tilemap_pos;
+                v.y -= h * hs;
+                [v.x, v.y, v.z]
+            };
+            for path in &preview_paths {
+                if path.len() < 2 {
+                    continue;
+                }
+                let mut verts: Vec<f32> = Vec::with_capacity(path.len() * 3);
+                for &[ix, iy] in path {
+                    verts.extend_from_slice(&to_world(ix as f32 + 0.5, iy as f32 + 0.5));
+                }
+                let buf =
+                    GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &verts, glow::STREAM_DRAW);
+                gfx.draw_line_strip(
+                    &buf,
+                    0,
+                    (verts.len() / 3) as i32,
+                    &Mat4::IDENTITY,
+                    &cam,
+                    &[1.0, 0.55, 0.1, 0.95],
+                );
             }
         }
     }
