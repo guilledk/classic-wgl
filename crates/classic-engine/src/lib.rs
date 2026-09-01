@@ -17,7 +17,9 @@ pub mod env_config;
 pub mod golden;
 pub mod inventory;
 pub mod inventory_ui;
+pub mod light;
 pub mod selection;
+pub mod shadow;
 pub mod ui;
 pub mod vehicle;
 
@@ -29,8 +31,8 @@ use std::sync::Arc;
 
 use classic_core::collision::PhysicsProvider;
 use classic_core::components::{
-    Animator, ColliderData, DebugName, IsoSprite, IsoVehicle, NavMesh, RectRender, Role,
-    SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
+    Animator, ColliderData, DebugName, IsoAgent, IsoSprite, IsoVehicle, Light, NavMesh, RectRender,
+    Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
@@ -40,6 +42,7 @@ use classic_core::tilemap::{
     bilinear_height, build_mesh, build_tile_texture, horizontal_depth_scale, sample_height_mesh,
     HEIGHT_DEPTH_SCALE_M, HORIZONTAL_DEPTH_SCALE, PPM_TARGET,
 };
+use classic_core::types::AnimChannel;
 use classic_core::types::AnimationData;
 use classic_core::types::FrameTable;
 use classic_core::types::OffsetKeyframe;
@@ -110,6 +113,9 @@ struct IsoDraw {
     color: [f32; 4],
     /// Whether the sprite is currently RTS-selected (draws a silhouette edge).
     selected: bool,
+    /// The sprite's ground anchor as `(sheared y, light-space height)`, used
+    /// to unproject billboard fragments into light space for shadowing.
+    sprite_anchor: [f32; 3],
 }
 
 impl IsoDraw {
@@ -199,6 +205,11 @@ pub struct Engine {
     pub light_ambient: [f32; 3],
     pub light_dir: [f32; 3],
     pub light_color: [f32; 3],
+    /// Dynamic light handle table (point/spot lights beyond the sun term).
+    /// Each handle maps to a spawned `Light` ECS entity; the active set is
+    /// gathered (resolving parent attachments) and uploaded to the `LightBlock`
+    /// UBO once per frame.
+    pub light_handles: light::LightHandles,
     pub animations: HashMap<String, AnimationData>,
     /// Packed-atlas frame tables keyed by texture name, loaded from the ROM's
     /// `frames` resources at boot (issue #45).  A sprite with `frame_name` set
@@ -359,6 +370,7 @@ impl Engine {
             light_ambient: [0.15, 0.15, 0.2],
             light_dir: [0.45, -0.35, 0.82],
             light_color: [1.0, 0.95, 0.85],
+            light_handles: light::LightHandles::new(),
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
             frame_tables: HashMap::new(),
@@ -556,7 +568,7 @@ impl Engine {
         // manifest is loaded from the ROM's `animations/` resources and folded
         // into the registered `AnimationData`.
         for (name, metadata_bytes) in resources.animations() {
-            self.load_animation_offsets(name, metadata_bytes);
+            self.load_animation_channels(name, metadata_bytes);
         }
 
         // Wheeled-vehicle definitions (JSON sidecars) from the `vehicles`
@@ -678,6 +690,103 @@ impl Engine {
             resources,
             state: self.dump_state(),
         })
+    }
+
+    /// Load the unified typed-channel animation blob (`animation.bin`),
+    /// falling back to the legacy sparse-offset (`KAOS`) and dense formats.
+    ///
+    /// The current format (magic `b"KACH"`) carries named, typed, sparse
+    /// keyframe channels — `offset` (sprite motion) plus `light.*` channels
+    /// (position/color/intensity/radius/dir/cone) — all pre-scaled into the
+    /// engine's final units by the exporter, so the animator interpolates them
+    /// verbatim.  The `offset` channel is folded into `offset_keyframes` so the
+    /// sprite animator's existing interpolation path keeps working unchanged.
+    pub fn load_animation_channels(&mut self, animation_name: &str, bytes: &[u8]) {
+        const MAGIC: &[u8; 4] = b"KACH";
+
+        if bytes.len() < 4 || &bytes[0..4] != MAGIC {
+            self.load_animation_offsets(animation_name, bytes);
+            return;
+        }
+
+        let Some(animation) = self.animations.get_mut(animation_name) else {
+            return;
+        };
+
+        let version = bytes[4];
+        if version != 1 || bytes.len() < 13 {
+            return;
+        }
+        let channel_count =
+            u32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]) as usize;
+        let mut o = 13usize;
+        let mut channels = Vec::with_capacity(channel_count);
+        for _ in 0..channel_count {
+            if o + 1 > bytes.len() {
+                break;
+            }
+            let name_len = bytes[o] as usize;
+            o += 1;
+            if o + name_len > bytes.len() {
+                break;
+            }
+            let name = String::from_utf8_lossy(&bytes[o..o + name_len]).into_owned();
+            o += name_len;
+            if o + 1 > bytes.len() {
+                break;
+            }
+            let component = bytes[o];
+            o += 1;
+            if o + 4 > bytes.len() {
+                break;
+            }
+            let key_count =
+                u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]) as usize;
+            o += 4;
+            let mut keys = Vec::with_capacity(key_count);
+            for _ in 0..key_count {
+                if o + 4 > bytes.len() {
+                    break;
+                }
+                let frame =
+                    u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+                o += 4;
+                let floats = component as usize;
+                if o + floats * 4 > bytes.len() {
+                    break;
+                }
+                let mut v = Vec::with_capacity(floats);
+                for _ in 0..floats {
+                    v.push(f32::from_le_bytes([
+                        bytes[o],
+                        bytes[o + 1],
+                        bytes[o + 2],
+                        bytes[o + 3],
+                    ]));
+                    o += 4;
+                }
+                keys.push((frame, v));
+            }
+            channels.push(AnimChannel { name, component, keys });
+        }
+        animation.channels = channels;
+
+        // Fold the `offset` channel into `offset_keyframes` so the sprite
+        // animator's existing interpolation path is unchanged.
+        if let Some(ch) = animation.channels.iter().find(|c| c.name == "offset") {
+            animation.offset_keyframes = ch
+                .keys
+                .iter()
+                .map(|(frame, v)| OffsetKeyframe {
+                    frame: *frame,
+                    offset: [
+                        v.first().copied().unwrap_or(0.0),
+                        v.get(1).copied().unwrap_or(0.0),
+                        v.get(2).copied().unwrap_or(0.0),
+                    ],
+                })
+                .collect();
+        }
     }
 
     /// Load per-frame visual offsets emitted by the animation renderer.
@@ -1250,6 +1359,38 @@ impl Engine {
         let cam = self.world_to_screen_matrix(vw, vh);
         let screen = cam.transform_point3(world);
         Some((screen.x, screen.y))
+    }
+
+    /// Convert an iso tile coordinate to a **light-space** point (the space
+    /// consumed by the lit shaders' `vLightPos` varying, by `light_dir`, by
+    /// `vNormal`, and by [`Light::position`]).
+    ///
+    /// Light space is [`light_matrix`] applied to `(x, y, 0)`, with the surface
+    /// height carried in **z alone** — +Z is up, as in [`crate::shadow`].
+    ///
+    /// Two space bugs have been fixed here.  It once applied the renderer's
+    /// isometric shear (`cart.y -= z_px`), placing lights in sheared screen
+    /// space while the normals they are dotted against lived in light space.
+    /// It then used `iso_to_cartesian_4`, which carries the `diag(1, 0.5, 1)`
+    /// isometric squash — so `length`/`normalize`/`dot` operated in a space
+    /// where y counts half as much as x, and point-light pools came out as
+    /// screen circles instead of ground ellipses.
+    ///
+    /// `elevation` is metres above the sampled terrain surface (same units as
+    /// `height_data`; `height_scale` converts metres to world px).  Returns
+    /// `None` without a Tilemap-role entity.
+    pub fn iso_to_world(&self, x: f32, y: f32, elevation: f32) -> Option<Vec3> {
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let (tm, tm_tf) = {
+            let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
+            let tf = self.world.get::<&Transform>(tm_entity).ok()?;
+            (tm, tf)
+        };
+        let mut p =
+            light_matrix(tm_tf.position, tm_tf.scale).transform_point3(Vec3::new(x, y, 0.0));
+        let h = sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y);
+        p.z = (h + elevation) * tm.height_scale;
+        Some(p)
     }
 
     /// Terrain height (in world z units) at the given iso tile coordinate.
@@ -1871,6 +2012,157 @@ impl Engine {
         self.light_ambient = ambient;
         self.light_dir = dir;
         self.light_color = color;
+    }
+
+    /// Spawn a dynamic light entity, returning its handle (or `None` when the
+    /// light table is full).  A `ttl` of `None` makes the light persistent; a
+    /// finite `ttl` (seconds) auto-releases it after decaying.
+    pub fn spawn_light(&mut self, light: Light, ttl: Option<f32>) -> Option<u32> {
+        self.light_handles.spawn(&mut self.world, light, ttl)
+    }
+
+    /// Overwrite an active light entity's parameters by handle.
+    pub fn update_light(&mut self, handle: u32, light: Light) -> bool {
+        self.light_handles.set(&mut self.world, handle, light)
+    }
+
+    /// Read an active light's current parameters by handle (`None` if the
+    /// handle is inactive).
+    pub fn light_by_handle(&self, handle: u32) -> Option<Light> {
+        self.light_handles.get(&self.world, handle)
+    }
+
+    /// Despawn a light entity and release its handle.
+    pub fn release_light(&mut self, handle: u32) -> bool {
+        self.light_handles.release(&mut self.world, handle)
+    }
+
+    /// Gather the active lights from the world, resolving parent attachments to
+    /// light-space world positions.  A parented light treats `Light.position`
+    /// as a light-space offset from the parent entity's ground point
+    /// (`iso_to_world`); an unparented light's position is already light space.
+    pub fn gather_lights(&self) -> Vec<Light> {
+        let mut lights = Vec::new();
+        for (_e, light) in self.world.query::<&Light>().iter() {
+            let mut l = light.clone();
+            if let Some(parent_name) = l.parent.as_deref() {
+                // Parent resolution must not fail *open*: a dangling name, a
+                // missing `Transform`, or a missing tilemap used to silently
+                // reinterpret the relative offset as an absolute position, so
+                // the light teleported to a random spot with no warning.
+                match self.names.get(parent_name) {
+                    Some(&pe) => match self.world.get::<&Transform>(pe) {
+                        Ok(tf) => match self.iso_to_world(tf.position.x, tf.position.y, 0.0) {
+                            Some(base) => {
+                                // The parent sprite renders at
+                                // `tile + frame_offset` (its animated descent
+                                // carries altitude + drift); `iso_to_world`
+                                // only sees the tile.  Fold the frame offset
+                                // into the base so an attached light follows
+                                // the parent's actual position — a descending
+                                // rocket's burn light must track the nozzle,
+                                // not the landing pad.  Mirror
+                                // `compute_iso_sprite_model`: altitude
+                                // (`fo.z`) lands in z, horizontal drift in x/y.
+                                let fo = self.parent_frame_offset(pe);
+                                l.position =
+                                    base + Vec3::new(
+                                        fo.x,
+                                        classic_core::math::cartesian_y_to_light(fo.y + fo.z),
+                                        fo.z,
+                                    ) + l.position;
+                            }
+                            None => classic_core::cl_warn!(
+                                classic_core::instrument::Chan::Render,
+                                "light parent {parent_name:?} has no tilemap to resolve against; \
+                                 skipping the light"
+                            ),
+                        },
+                        Err(_) => {
+                            classic_core::cl_warn!(
+                                classic_core::instrument::Chan::Render,
+                                "light parent {parent_name:?} has no Transform; skipping the light"
+                            );
+                            continue;
+                        }
+                    },
+                    None => {
+                        classic_core::cl_warn!(
+                            classic_core::instrument::Chan::Render,
+                            "light parent {parent_name:?} not found; skipping the light"
+                        );
+                        continue;
+                    }
+                }
+            }
+            lights.push(l);
+        }
+        // `MAX_LIGHTS` bounds the UBO block, but `gather_lights` reads every
+        // `Light` entity — including `state.json`-declared and directly-spawned
+        // ones that never went through `LightHandles`.  Enforce the budget here
+        // so the shader's `count` never disagrees with the packed array (which
+        // would otherwise drop the tail in arbitrary hecs order).
+        lights.truncate(classic_gfx::MAX_LIGHTS);
+        for l in &lights {
+            classic_core::cl_debug!(
+                classic_core::instrument::Chan::Render,
+                "light: parent={:?} pos=({:.1},{:.1},{:.1}) radius={:.1} intensity={:.2}",
+                l.parent,
+                l.position.x,
+                l.position.y,
+                l.position.z,
+                l.radius,
+                l.intensity
+            );
+        }
+        lights
+    }
+
+    /// The visual `frame_offset` (screen-space) of a parent entity, or
+    /// `Vec3::ZERO` when the parent has none (a static sprite).  Animated
+    /// `IsoSprite` / `IsoAgent` entities carry the descent/run offset here;
+    /// `gather_lights` folds it into an attached light's position so the light
+    /// tracks the parent's animated motion.
+    fn parent_frame_offset(&self, parent: hecs::Entity) -> Vec3 {
+        if let Ok(s) = self.world.get::<&IsoSprite>(parent) {
+            return s.frame_offset;
+        }
+        if let Ok(a) = self.world.get::<&IsoAgent>(parent) {
+            return a.frame_offset;
+        }
+        Vec3::ZERO
+    }
+
+    /// Project a **light-space** position into the renderer's screen space
+    /// (the space the overlay hooks draw in, i.e. after the isometric squash
+    /// and the `y -= z` height shear, before the camera matrix).
+    ///
+    /// Light space is `T(origin) · S(scale) · Rz(-45°)` of tile space, so the
+    /// round-trip light → tile → screen collapses to a single diagonal:
+    /// `screen = (x, 0.5·y, z)` of `(light − origin)`, then `y -= z`.  Used by
+    /// the light-debug overlay to place markers without re-deriving the
+    /// tilemap transform.
+    pub fn light_to_screen(&self, light: Vec3) -> Vec3 {
+        let origin = self
+            .entity_by_role(RoleKind::Tilemap)
+            .and_then(|e| self.world.get::<&Transform>(e).ok())
+            .map(|tf| tf.position)
+            .unwrap_or(Vec3::ZERO);
+        let rel = light - origin;
+        Vec3::new(origin.x + rel.x, origin.y + rel.y * 0.5 - rel.z, origin.z + rel.z)
+    }
+
+    /// Convert a **light-space** position back to tile coordinates (the inverse
+    /// of [`Self::iso_to_world`]'s `light_matrix`), for sampling the terrain
+    /// height directly under a light.  Returns `(tile_x, tile_y)`.
+    pub fn light_to_tile(&self, light: Vec3) -> Option<Vec2> {
+        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
+        let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
+        let rel = light - tm_tf.position;
+        let a = rel.x / tm_tf.scale.x.max(1e-6);
+        let b = rel.y / tm_tf.scale.y.max(1e-6);
+        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+        Some(Vec2::new((a - b) * inv_sqrt2, (a + b) * inv_sqrt2))
     }
 
     /// Spawn a named screen-space solid-color rectangle (a HUD element).
@@ -2593,29 +2885,9 @@ impl Engine {
         // drag; under RTS selection the tilemap selection is off.
         let paint_mode = if self.guest_flag("rts_selection") { -1 } else { self.selection_mode };
 
-        let Some(gfx) = self.gfx.as_mut() else { return };
-        let vp = gfx.viewport_w;
-        let vh2 = gfx.viewport_h;
-        self.camera.size = Vec3::new(vp, vh2, 0.0);
-
-        // begin_frame sets depthFunc/depthMask but does NOT glEnable(DEPTH_TEST).
-        // draw_tilemap/draw_iso_sprite toggle it locally. UI/SDF runs without it.
-        // Enabling it globally depth-rejects all UI under ortho projection.
-        gfx.begin_frame();
-        let cam = self.camera.matrix();
-
-        // Create trace collector when golden mode is active and we're on the capture frame.
-        let golden_active = !config.golden_mode.is_empty();
-        if golden_active && self.debug_frame == self.golden_capture_frame {
-            self.trace = Some(golden::TraceCollector::new(
-                "baseline",
-                vp,
-                vh2,
-                &cam,
-                self.camera.position,
-                self.camera.scale,
-            ));
-        }
+        // Decay transient lights and gather the active set for the UBO upload.
+        self.light_handles.decay(&mut self.world, delta);
+        let lights = self.gather_lights();
 
         // Model matrix z MUST stay inside [-10000, 10000] — the orthographic
         // projection clips everything outside. The sort key can differ from
@@ -2641,8 +2913,9 @@ impl Engine {
             }
         }
 
-        // Precompute isometric-sprite draw params once, shared by the normal
-        // and ghost passes below.
+        // Precompute isometric-sprite draw params once, shared by the shadow
+        // casters, the normal pass, and the ghost pass below.  Built before the
+        // `gfx` mutable borrow so the shadow pass can reuse the same params.
         let mut iso_draws: Vec<IsoDraw> = Vec::new();
         for (order, entity) in &iso_items {
             let Ok(tf) = self.world.get::<&Transform>(*entity) else {
@@ -2688,7 +2961,9 @@ impl Engine {
                     )
                 }
                 None => {
-                    let Some(tex) = gfx.textures.get(&iso_sprite.texture) else {
+                    let Some(tex) =
+                        self.gfx.as_ref().and_then(|g| g.textures.get(&iso_sprite.texture))
+                    else {
                         continue;
                     };
                     let td = (
@@ -2701,7 +2976,7 @@ impl Engine {
                 }
             };
 
-            let model = Self::compute_iso_sprite_model(
+            let (model, sprite_anchor) = Self::compute_iso_sprite_model(
                 &iso_sprite,
                 &tf,
                 &tilemap_tf,
@@ -2739,7 +3014,125 @@ impl Engine {
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
+                sprite_anchor,
             });
+        }
+
+        // Fit the directional shadow matrix to the primary tilemap's extents
+        // plus the sprite casters' billboards (so their shadows aren't clipped
+        // at the light box's near plane).  Still before the `gfx` mutable borrow.
+        let shadow_pass: Option<shadow::LightMatrix> = if config.shadows {
+            self.entity_by_role(RoleKind::Tilemap).and_then(|e| {
+                let tm = self.world.get::<&Tilemap>(e).ok()?;
+                let tf = self.world.get::<&Transform>(e).ok()?;
+                let lm = light_matrix(tf.position, tf.scale);
+                let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max) * tm.height_scale;
+                let casters: Vec<(Mat4, [f32; 3])> =
+                    iso_draws.iter().map(|d| (d.model, d.sprite_anchor)).collect();
+                Some(shadow::fit_directional_light_matrix(
+                    &lm,
+                    tm.size_x as f32,
+                    tm.size_y as f32,
+                    z_max,
+                    Vec3::from_array(self.light_dir),
+                    shadow::SHADOW_PADDING,
+                    &casters,
+                    classic_gfx::SHADOW_MAP_SIZE as f32,
+                ))
+            })
+        } else {
+            None
+        };
+
+        let Some(gfx) = self.gfx.as_mut() else { return };
+        let vp = gfx.viewport_w;
+        let vh2 = gfx.viewport_h;
+        self.camera.size = Vec3::new(vp, vh2, 0.0);
+
+        // begin_frame sets depthFunc/depthMask but does NOT glEnable(DEPTH_TEST).
+        // draw_tilemap/draw_iso_sprite toggle it locally. UI/SDF runs without it.
+        // Enabling it globally depth-rejects all UI under ortho projection.
+        gfx.begin_frame();
+        // Upload the dynamic light block once per frame (consumed by the lit
+        // tilemap + sprite shaders).
+        gfx.upload_lights(&lights);
+        let cam = self.camera.matrix();
+
+        // Directional shadow pass (terrain casters) — before Phase 1.  Renders
+        // every non-nav tilemap into the depth texture from the sun's view.
+        let shadow_settings: Option<classic_gfx::ShadowSettings> = match &shadow_pass {
+            Some(m) => {
+                let tex = gfx.shadow_map_texture();
+                if let Some(tex) = tex {
+                    gfx.begin_shadow_pass();
+                    for (_, entity, kind) in &items {
+                        if !matches!(kind, DrawKind::Tilemap) {
+                            continue;
+                        }
+                        let is_nav = self
+                            .world
+                            .get::<&Role>(*entity)
+                            .is_ok_and(|r| r.value == RoleKind::NavMesh);
+                        if is_nav {
+                            continue;
+                        }
+                        let Ok(tf) = self.world.get::<&Transform>(*entity) else {
+                            continue;
+                        };
+                        let lm = light_matrix(tf.position, tf.scale);
+                        let name = name_by_entity.get(entity).copied().unwrap_or("");
+                        if let Some(gpu) = self.tilemap_gpu.get(name) {
+                            gfx.draw_shadow_tilemap(
+                                &lm,
+                                &m.view_proj,
+                                gpu.vertex_count as i32,
+                                &gpu.mesh_buf,
+                            );
+                        }
+                    }
+                    // Sprite shadow casters: each iso sprite casts its alpha
+                    // silhouette into the shadow map (vehicles, agents, props).
+                    // Billboards are their own receivers, so they need a
+                    // slope-scaled offset the terrain does not.
+                    gfx.set_shadow_sprite_offset();
+                    for draw in &iso_draws {
+                        gfx.draw_shadow_sprite(
+                            &draw.model,
+                            &m.view_proj,
+                            &draw.texture,
+                            draw.region(),
+                            &draw.sprite_anchor,
+                        );
+                    }
+                    gfx.end_shadow_pass();
+                    let texel = 1.0 / classic_gfx::SHADOW_MAP_SIZE as f32;
+                    Some(classic_gfx::ShadowSettings {
+                        texture: tex,
+                        view_proj: m.view_proj,
+                        bias: shadow::SHADOW_BIAS,
+                        strength: shadow::SHADOW_STRENGTH,
+                        texel: [texel, texel],
+                        normal_offset: m.world_texel * shadow::SHADOW_NORMAL_OFFSET,
+                        debug: config.shadow_debug,
+                    })
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        // Create trace collector when golden mode is active and we're on the capture frame.
+        let golden_active = !config.golden_mode.is_empty();
+        if golden_active && self.debug_frame == self.golden_capture_frame {
+            self.trace = Some(golden::TraceCollector::new(
+                "baseline",
+                vp,
+                vh2,
+                &cam,
+                self.camera.position,
+                self.camera.scale,
+            ));
         }
 
         // Phase 1: terrain (tilemap + nav mesh) — writes the depth buffer.
@@ -2759,8 +3152,8 @@ impl Engine {
                     if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
                         let iso = cartesian_to_iso_4().inverse();
                         let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-                        let iso3 = Mat3::from_mat4(iso);
-                        let normal_matrix = iso3.inverse().transpose();
+                        let lm = light_matrix(tf.position, tf.scale);
+                        let normal_matrix = terrain_normal_matrix(&lm);
                         let nav_ts = gfx
                             .textures
                             .get(&nav.tile_set)
@@ -2804,7 +3197,10 @@ impl Engine {
                                     HEIGHT_DEPTH_SCALE_M,
                                 ],
                                 ppm: PPM_TARGET,
+                                light_matrix: lm,
                                 normal_matrix,
+                                sprite_normal_matrix: classic_core::math::blender_to_light_3(),
+                                shadow: shadow_settings,
                             },
                             false,
                             gpu.vertex_count as i32,
@@ -2822,13 +3218,13 @@ impl Engine {
                 let Some(gpu) = self.tilemap_gpu.get(entity_name) else {
                     continue;
                 };
-                // Build the iso matrix.
+                // Build the iso matrix (rasterisation) and the light matrix
+                // (everything else) — see `light_matrix`.
                 let iso = cartesian_to_iso_4().inverse();
                 let iso_matrix = Mat4::from_scale(tf.scale) * iso;
+                let lm = light_matrix(tf.position, tf.scale);
 
-                // Normal matrix: transpose(inverse(mat3(iso)))
-                let iso3 = Mat3::from_mat4(iso);
-                let normal_matrix = iso3.inverse().transpose();
+                let normal_matrix = terrain_normal_matrix(&lm);
 
                 let tps = tm.tile_pixel_size;
                 let tile_pixel_size = [tps[0] as f32, tps[1] as f32];
@@ -2876,7 +3272,10 @@ impl Engine {
                             HEIGHT_DEPTH_SCALE_M,
                         ],
                         ppm: PPM_TARGET,
+                        light_matrix: lm,
                         normal_matrix,
+                        sprite_normal_matrix: classic_core::math::blender_to_light_3(),
+                        shadow: shadow_settings,
                     },
                     self.show_grid,
                     gpu.vertex_count as i32,
@@ -2888,17 +3287,22 @@ impl Engine {
         // Phase 2: isometric normal passes — draw on top of terrain, writing
         // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
         // `RenderSettings` (shared by both sprite passes) carries the light
-        // preset; the sprite shader only consumes the ambient/dir/color terms
-        // (the normal is baked world-space, so `normal_matrix` is unused by
-        // sprites, but the struct needs a value).
-        let iso = cartesian_to_iso_4().inverse();
+        // preset.  Sprite normals come from a baked map rather than the mesh,
+        // so the *terrain* `normal_matrix` is unused here (the struct needs a
+        // value); `sprite_normal_matrix` is the one that matters — it rotates
+        // the baked Blender-world normal into light space.  `light_matrix` is
+        // likewise unused (sprites reconstruct their light-space position from
+        // `sprite_anchor`).
         let sprite_settings = RenderSettings {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
             light_color: self.light_color,
             depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_M],
             ppm: PPM_TARGET,
-            normal_matrix: Mat3::from_mat4(iso).inverse().transpose(),
+            light_matrix: Mat4::IDENTITY,
+            normal_matrix: Mat3::IDENTITY,
+            sprite_normal_matrix: classic_core::math::blender_to_light_3(),
+            shadow: shadow_settings,
         };
         for draw in &iso_draws {
             if let Some(ref mut t) = self.trace {
@@ -2926,6 +3330,7 @@ impl Engine {
                 draw.depth_base,
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
+                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Normal,
@@ -2948,6 +3353,7 @@ impl Engine {
                 draw.depth_base,
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
+                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Ghost,
@@ -3891,7 +4297,7 @@ impl Engine {
         tilemap: &Tilemap,
         tex_dim: (f32, f32),
         anchor_px: Vec2,
-    ) -> Mat4 {
+    ) -> (Mat4, [f32; 3]) {
         let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
 
         let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
@@ -3906,13 +4312,46 @@ impl Engine {
             sprite_tf.position.y,
         );
         cart_pos.y -= h * tilemap.height_scale;
+        // Carry the terrain height in world z (matching the tilemap shader's
+        // `worldPos.z = vertex_pos.z`) so sprite fragments share the terrain's
+        // light/shadow space, not just its y-lift.
+        cart_pos.z = h * tilemap.height_scale;
 
         let anchor_delta = Vec3::new(-anchor_px.x, -anchor_px.y, 0.0);
 
-        Mat4::from_translation(cart_pos)
+        let model = Mat4::from_translation(cart_pos)
             * Mat4::from_scale(sprite_tf.scale)
             * Mat4::from_translation(anchor_delta)
-            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0))
+            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0));
+
+        // The sprite's ground anchor, bridging the two spaces:
+        //
+        //   x = sheared screen y   — where the quad actually sits on screen
+        //   y = light-space height — the sprite's base, +Z up
+        //   z = light-space y      — metric, un-squashed, un-sheared
+        //
+        // A billboard is a screen-aligned quad: its tall axis is *screen* up,
+        // which in an isometric view means world **+Z**, not world -Y.  The
+        // shaders use this triple to unproject billboard fragments back into
+        // light space so sprites light, cast and receive shadows as standing
+        // geometry rather than as decals lying flat on the ground.
+        //
+        // The light-space y used to be recovered in the shader as
+        // `anchor.x + anchor.y` (un-shearing the screen y with the height).
+        // That silently folded a flying sprite's *altitude* — which the
+        // animation `offset` channel packs into screen y — into its light-space
+        // **y**, so a descending rocket was lit as though it were lying on the
+        // ground far to the north.  `frame_offset.z` carries the altitude
+        // separately (0 for every non-flying asset, so this is a no-op for
+        // them) and it is applied to the height instead.
+        let altitude = iso_sprite.frame_offset.z;
+        let light = light_matrix(tilemap_tf.position, tilemap_tf.scale)
+            .transform_point3(Vec3::new(sprite_tf.position.x, sprite_tf.position.y, 0.0));
+        // `frame_offset.y` is pre-sheared (`drift_y - altitude`), so the pure
+        // horizontal drift is `frame_offset.y + altitude`.
+        let drift_y =
+            classic_core::math::cartesian_y_to_light(iso_sprite.frame_offset.y + altitude);
+        (model, [cart_pos.y, cart_pos.z + altitude, light.y + drift_y])
     }
 
     /// Compute the anchor-plane iso depth for a sprite position (the depth a
@@ -3960,6 +4399,52 @@ impl Default for Engine {
     }
 }
 
+/// The tile → **light space** transform for a tilemap: `T(origin) · S(scale) ·
+/// Rz(-45°)`.
+///
+/// This is the single source of truth for light space on the CPU *and* the
+/// GPU: it is uploaded verbatim as the `light_matrix` uniform consumed by
+/// `iso_tilemap.vert` and `shadow_depth.vert`, and it is what
+/// [`Engine::iso_to_world`] evaluates.  `light_matrix_matches_iso_to_world`
+/// pins the two together.
+///
+/// It differs from the renderer's `iso_matrix` (`S(scale) ·
+/// iso_to_cartesian_4()`) by exactly the `diag(1, 0.5, 1)` isometric squash —
+/// see [`classic_core::math::iso_to_light_4`] for why lighting must not carry
+/// it.  The tilemap origin is a cartesian pixel offset, so its `y` is
+/// un-squashed here to match.
+///
+/// Note the operand order `S · Rz`, not `Rz · S`: the two differ whenever the
+/// tile scale is not xy-isotropic, and the CPU path used to compose them the
+/// other way round from the shader.
+pub fn light_matrix(origin: Vec3, scale: Vec3) -> Mat4 {
+    Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
+        * Mat4::from_scale(scale)
+        * classic_core::math::iso_to_light_4()
+}
+
+/// Normal matrix for terrain meshes: `inverse_transpose(mat3(light_matrix))`.
+///
+/// The tilemap mesh is authored in **tile space** — `vertex_pos` is
+/// `(tile_x, tile_y, height_px)`, so x and y are tile *indices* while z is
+/// pixels — and `build_vertex_normals` takes cross products in that same
+/// space.  The light transform is `S(tilemap.scale) * Rz(-45°)`, which scales
+/// x and y by the tile pixel size (45) and leaves z alone.
+///
+/// Two bugs have lived here.  First it used the **unscaled** iso matrix,
+/// dropping that factor of 45 from the normals but not from the positions; a
+/// 1 m/tile slope then produced a normal near `(-64, 0, 1)`, i.e. an almost
+/// vertical cliff, and the terrain Lambert term degenerated into a binary slope
+/// mask (issue #77).  Then it used the **squashed** `iso_matrix`, so terrain
+/// normals described a world compressed 2× along y while sprite normals (baked
+/// in metric Blender space) described the real one — the two could not agree.
+///
+/// Building it from [`light_matrix`] makes the slope ratio physical *and*
+/// metric, so terrain and sprites finally share one frame.
+fn terrain_normal_matrix(light_matrix: &Mat4) -> Mat3 {
+    Mat3::from_mat4(*light_matrix).inverse().transpose()
+}
+
 /// Decode a little-endian `u32` grid byte blob.
 fn decode_u32(bytes: &[u8]) -> Vec<u32> {
     bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
@@ -3991,6 +4476,7 @@ fn encode_f32(vals: &[f32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use classic_core::components::LightKind;
 
     #[test]
     fn animation_offsets_map_altitude_to_screen_y() {
@@ -4005,6 +4491,7 @@ mod tests {
                 sequence: vec![0, 1],
                 offsets: vec![],
                 offset_keyframes: vec![],
+                channels: vec![],
                 metadata: None,
             },
         );
@@ -4046,6 +4533,7 @@ mod tests {
                 sequence: vec![0, 1],
                 offsets: vec![],
                 offset_keyframes: vec![],
+                channels: vec![],
                 metadata: None,
             },
         );
@@ -4149,6 +4637,280 @@ mod tests {
             + (64.0 / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
         assert!(
             (Engine::compute_iso_base_depth(pos, HORIZONTAL_DEPTH_SCALE) - expected).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn iso_to_world_lifts_elevation_above_terrain() {
+        classic_core::register_all_components();
+        let mut engine = Engine::new_for_test();
+
+        // A flat 4x4 tilemap at the origin with a uniform 1-metre plateau,
+        // scale [45,45,1] and a 64 px/metre height scale (the lunar PPM).
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::new(45.0, 45.0, 1.0),
+            size_x: 4,
+            size_y: 4,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 16],
+            height_data: vec![1.0f32; 25],
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+            selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        };
+        let entity = engine.world.spawn((
+            tilemap,
+            Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0)),
+            Role::new(RoleKind::Tilemap),
+        ));
+        engine.names.insert("tilemap".into(), entity);
+
+        // Ground level: the light sits at the 1 m surface → z = 1 * 64.
+        let ground = engine.iso_to_world(0.0, 0.0, 0.0).unwrap();
+        assert!((ground.z - 64.0).abs() < 1e-3, "got z {}", ground.z);
+
+        // 2 m above: z = 3 * 64.  Elevation is carried in z alone — light space
+        // is +Z up, so raising a light must not move it in x or y.  (This
+        // previously asserted a y lift of 2 * 64, the renderer's isometric
+        // shear, which put lights in a different space from the normals they
+        // are dotted against.)
+        let raised = engine.iso_to_world(0.0, 0.0, 2.0).unwrap();
+        assert!((raised.z - 192.0).abs() < 1e-3, "got z {}", raised.z);
+        assert!((ground.y - raised.y).abs() < 1e-4, "y should not move");
+        assert!((ground.x - raised.x).abs() < 1e-4, "x should not move");
+
+        // Without a Tilemap-role entity, the mapping is unavailable.
+        let empty = Engine::new_for_test();
+        assert!(empty.iso_to_world(0.0, 0.0, 0.0).is_none());
+    }
+
+    fn push_channel(v: &mut Vec<u8>, name: &str, component: u8, keys: &[(u32, &[f32])]) {
+        v.push(name.len() as u8);
+        v.extend_from_slice(name.as_bytes());
+        v.push(component);
+        v.extend_from_slice(&(keys.len() as u32).to_le_bytes());
+        for (frame, vals) in keys {
+            v.extend_from_slice(&frame.to_le_bytes());
+            for val in *vals {
+                v.extend_from_slice(&val.to_le_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn animation_channels_parse_and_interpolate() {
+        classic_core::register_all_components();
+        let mut engine = Engine::new();
+        engine.animations.insert(
+            "rocketLanding".to_string(),
+            AnimationData {
+                name: "rocketLanding".to_string(),
+                src: "rocketLanding".to_string(),
+                rate: 24.0,
+                sequence: vec![0, 1],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                channels: vec![],
+                metadata: None,
+            },
+        );
+
+        // Unified blob: magic b"KACH", u8 version=1, f32 ppm, u32 channel_count.
+        let mut blob = Vec::new();
+        blob.extend_from_slice(b"KACH");
+        blob.push(1u8);
+        blob.extend_from_slice(&64.0f32.to_le_bytes());
+        blob.extend_from_slice(&2u32.to_le_bytes());
+        push_channel(&mut blob, "offset", 3, &[(0, &[0.0, -3200.0, 0.0]), (240, &[0.0, 0.0, 0.0])]);
+        push_channel(&mut blob, "light.intensity", 1, &[(0, &[0.0]), (120, &[1.0]), (240, &[0.0])]);
+        engine.load_animation_channels("rocketLanding", &blob);
+
+        let anim = &engine.animations["rocketLanding"];
+        assert_eq!(anim.channels.len(), 2);
+        assert_eq!(anim.channels[0].name, "offset");
+        assert_eq!(anim.channels[1].name, "light.intensity");
+
+        // The `offset` channel is folded into `offset_keyframes` (pre-scaled).
+        assert_eq!(anim.offset_keyframes.len(), 2);
+        assert_eq!(anim.offset_keyframes[0].offset[1], -3200.0);
+
+        // Interpolation + clamping of a scalar channel.
+        assert_eq!(anim.channel_sample("light.intensity", 60.0), Some(vec![0.5]));
+        assert_eq!(anim.channel_sample("light.intensity", 300.0), Some(vec![0.0]));
+        assert_eq!(anim.channel_sample("light.intensity", -5.0), Some(vec![0.0]));
+        assert_eq!(anim.channel_sample("missing", 0.0), None);
+    }
+
+    #[test]
+    fn parented_light_resolves_to_world() {
+        classic_core::register_all_components();
+        let mut engine = Engine::new_for_test();
+
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::new(45.0, 45.0, 1.0),
+            size_x: 4,
+            size_y: 4,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 16],
+            height_data: vec![1.0f32; 25],
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+            selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        };
+        let tm = engine.world.spawn((
+            tilemap,
+            Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0)),
+            Role::new(RoleKind::Tilemap),
+        ));
+        engine.names.insert("tilemap".into(), tm);
+
+        let parent_tile = Vec3::new(2.0, 1.0, 0.0);
+        let parent = engine.world.spawn((Transform::new(parent_tile, Vec3::ONE),));
+        engine.names.insert("rocket".into(), parent);
+
+        let local = Vec3::new(3.0, -4.0, 12.0);
+        let light = Light {
+            kind: LightKind::Point,
+            position: local,
+            color: [1.0, 0.6, 0.2],
+            intensity: 2.0,
+            radius: 150.0,
+            dir: Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: Some("rocket".into()),
+        };
+        engine.world.spawn((light.clone(),));
+
+        let gathered = engine.gather_lights();
+        assert_eq!(gathered.len(), 1);
+
+        let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
+        let expected = base + local;
+        assert!((gathered[0].position.x - expected.x).abs() < 1e-3);
+        assert!((gathered[0].position.y - expected.y).abs() < 1e-3);
+        assert!((gathered[0].position.z - expected.z).abs() < 1e-3);
+
+        // An unparented light stays at its authored (world) position.
+        let mut engine = Engine::new_for_test();
+        let world_pos = Vec3::new(50.0, 60.0, 70.0);
+        engine.world.spawn((Light { position: world_pos, parent: None, ..light.clone() },));
+        let gathered = engine.gather_lights();
+        assert_eq!(gathered.len(), 1);
+        assert!((gathered[0].position - world_pos).length() < 1e-3);
+
+        // A dangling parent must *not* silently turn the offset into an
+        // absolute position — the light is dropped (and a warning logged).
+        let mut engine = Engine::new_for_test();
+        engine.world.spawn((Light {
+            position: world_pos,
+            parent: Some("ghost".into()),
+            ..light.clone()
+        },));
+        assert_eq!(engine.gather_lights().len(), 0, "dangling parent must skip the light");
+    }
+
+    #[test]
+    fn parented_light_tracks_parent_frame_offset() {
+        // A parented light must follow the parent sprite's animated
+        // `frame_offset` (altitude → z, horizontal drift → x/y), not just the
+        // tile.  The frame offset is screen-space: y packs `drift_y - altitude`.
+        let mut engine = Engine::new_for_test();
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::new(45.0, 45.0, 1.0),
+            size_x: 8,
+            size_y: 8,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 64],
+            height_data: vec![0.0f32; 81],
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+            selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        };
+        let tm = engine.world.spawn((
+            tilemap,
+            Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0)),
+            Role::new(RoleKind::Tilemap),
+        ));
+        engine.names.insert("tilemap".into(), tm);
+
+        let parent_tile = Vec3::new(2.0, 2.0, 0.0);
+        let parent = engine.world.spawn((
+            Transform::new(parent_tile, Vec3::ONE),
+            IsoSprite {
+                position: parent_tile,
+                scale: Vec3::ONE,
+                texture: "t".into(),
+                tilemap: "tilemap".into(),
+                frame: 0.0,
+                frame_name: None,
+                tile_set_size: Vec2::new(1.0, 1.0),
+                anchor: Vec2::new(0.5, 0.5),
+                footprint: vec![],
+                ghost_group: 0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                frame_offset: Vec3::new(10.0, -100.0, 0.0),
+            },
+        ));
+        engine.names.insert("rocket".into(), parent);
+
+        let offset = Vec3::new(0.0, 0.0, 255.6);
+        let light = Light {
+            kind: LightKind::Point,
+            position: offset,
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            radius: 800.0,
+            dir: Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: Some("rocket".into()),
+        };
+        engine.world.spawn((light.clone(),));
+
+        let gathered = engine.gather_lights();
+        let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
+        // fo = (10, -100, 0): light drift = (10, 2*(-100+0), 0) = (10, -200, 0).
+        let expected = base + Vec3::new(10.0, -200.0, 0.0) + offset;
+        assert!(
+            (gathered[0].position.x - expected.x).abs() < 1e-2,
+            "x: {} vs {}",
+            gathered[0].position.x,
+            expected.x
+        );
+        assert!(
+            (gathered[0].position.y - expected.y).abs() < 1e-2,
+            "y: {} vs {}",
+            gathered[0].position.y,
+            expected.y
+        );
+        assert!(
+            (gathered[0].position.z - expected.z).abs() < 1e-2,
+            "z: {} vs {}",
+            gathered[0].position.z,
+            expected.z
         );
     }
 }

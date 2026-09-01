@@ -4,7 +4,9 @@
 use std::rc::Rc;
 
 use classic_core::collision::polygon_from_verts;
-use classic_core::components::{Animator, ColliderData, IsoAgent, IsoSprite, Tilemap, Transform};
+use classic_core::components::{
+    Animator, ColliderData, IsoAgent, IsoSprite, Light, Tilemap, Transform,
+};
 use classic_core::math::iso_to_cartesian_4;
 use classic_core::tilemap::bilinear_height;
 use classic_core::types::AnimationData;
@@ -85,6 +87,43 @@ fn interpolate_offset(animation: &AnimationData, counter: f32) -> glam::Vec3 {
     glam::Vec3::from_array(lo_kf.offset).lerp(glam::Vec3::from_array(hi_kf.offset), t)
 }
 
+/// Apply the `light.*` animation channels to a `Light` component at a
+/// fractional timeline position.  Channels absent from the animation leave
+/// the light's field unchanged, so a clip with no light channels (e.g. the
+/// rocket's launch) simply holds the light's last state.
+fn apply_light_channels(data: &AnimationData, counter: f32, l: &mut Light) {
+    if let Some(p) = data.channel_sample("light.position", counter) {
+        if p.len() >= 3 {
+            l.position = glam::Vec3::new(p[0], p[1], p[2]);
+        }
+    }
+    if let Some(c) = data.channel_sample("light.color", counter) {
+        if c.len() >= 3 {
+            l.color = [c[0], c[1], c[2]];
+        }
+    }
+    if let Some(i) = data.channel_sample("light.intensity", counter) {
+        if let Some(&v) = i.first() {
+            l.intensity = v;
+        }
+    }
+    if let Some(r) = data.channel_sample("light.radius", counter) {
+        if let Some(&v) = r.first() {
+            l.radius = v;
+        }
+    }
+    if let Some(d) = data.channel_sample("light.dir", counter) {
+        if d.len() >= 3 {
+            l.dir = glam::Vec3::new(d[0], d[1], d[2]);
+        }
+    }
+    if let Some(k) = data.channel_sample("light.cone", counter) {
+        if let Some(&v) = k.first() {
+            l.cone_angle = v;
+        }
+    }
+}
+
 /// The frame a finished animation rests on.  A looping animation returns to its
 /// first frame; a one-shot holds its last frame so the sprite stays in its end
 /// pose (e.g. the landing rocket keeps its legs deployed on the pad) instead of
@@ -109,8 +148,17 @@ pub fn init_animator_system(engine: &mut Engine) {
             .map(|(n, a)| (n.clone(), (a.rate, a.sequence.len())))
             .collect();
 
-        let mut frame_writes: Vec<(hecs::Entity, String, f32, glam::Vec3, Option<String>)> =
-            Vec::new();
+        struct FrameWrite {
+            entity: hecs::Entity,
+            comp_type: String,
+            frame: f32,
+            offset: glam::Vec3,
+            counter: f32,
+            texture: Option<String>,
+            anim_name: Option<String>,
+        }
+
+        let mut frame_writes: Vec<FrameWrite> = Vec::new();
         for (_e, anim) in engine.world.query::<&mut Animator>().iter() {
             if !anim.playing && !anim.repeat {
                 continue;
@@ -158,60 +206,72 @@ pub fn init_animator_system(engine: &mut Engine) {
             let parts: Vec<&str> = anim.target.splitn(2, '.').collect();
             if parts.len() == 2 {
                 if let Some(&target_e) = engine.names.get(parts[0]) {
-                    frame_writes.push((
-                        target_e,
-                        parts[1].to_string(),
-                        anim.frame,
-                        frame_offset,
+                    frame_writes.push(FrameWrite {
+                        entity: target_e,
+                        comp_type: parts[1].to_string(),
+                        frame: anim.frame,
+                        offset: frame_offset,
+                        counter: anim.counter,
                         texture,
-                    ));
+                        anim_name: Some(anim_name.clone()),
+                    });
                 }
             }
         }
 
-        for (target_e, comp_type, frame, offset, texture) in &frame_writes {
-            match comp_type.as_str() {
+        for w in &frame_writes {
+            match w.comp_type.as_str() {
                 "IsoAgent" => {
-                    if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(*target_e) {
-                        if let Some(t) = texture {
+                    if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(w.entity) {
+                        if let Some(t) = &w.texture {
                             if &a.texture != t {
                                 a.texture.clone_from(t);
                             }
                         }
-                        a.frame = *frame;
-                        a.frame_offset = *offset;
+                        a.frame = w.frame;
+                        a.frame_offset = w.offset;
                         a.frame_name = engine
                             .frame_tables
                             .contains_key(&a.texture)
-                            .then(|| format!("{}_{}", a.texture, *frame as u32));
+                            .then(|| format!("{}_{}", a.texture, w.frame as u32));
                     }
-                    if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
-                        if let Some(t) = texture {
+                    if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(w.entity) {
+                        if let Some(t) = &w.texture {
                             if &s.texture != t {
                                 s.texture.clone_from(t);
                             }
                         }
-                        s.frame = *frame;
-                        s.frame_offset = *offset;
+                        s.frame = w.frame;
+                        s.frame_offset = w.offset;
                         s.frame_name = engine
                             .frame_tables
                             .contains_key(&s.texture)
-                            .then(|| format!("{}_{}", s.texture, *frame as u32));
+                            .then(|| format!("{}_{}", s.texture, w.frame as u32));
                     }
                 }
                 "IsoSprite" => {
-                    if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(*target_e) {
-                        if let Some(t) = texture {
+                    if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(w.entity) {
+                        if let Some(t) = &w.texture {
                             if &s.texture != t {
                                 s.texture.clone_from(t);
                             }
                         }
-                        s.frame = *frame;
-                        s.frame_offset = *offset;
+                        s.frame = w.frame;
+                        s.frame_offset = w.offset;
                         s.frame_name = engine
                             .frame_tables
                             .contains_key(&s.texture)
-                            .then(|| format!("{}_{}", s.texture, *frame as u32));
+                            .then(|| format!("{}_{}", s.texture, w.frame as u32));
+                    }
+                }
+                "Light" => {
+                    if let Ok(mut l) = engine.world.get::<&mut Light>(w.entity) {
+                        let Some(data) =
+                            w.anim_name.as_deref().and_then(|n| engine.animations.get(n))
+                        else {
+                            continue;
+                        };
+                        apply_light_channels(data, w.counter, &mut l);
                     }
                 }
                 _ => {}
@@ -295,7 +355,7 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
 }
 
 /// Register keyboard toggles for debug overlays (F = footprints, V = vehicle
-/// paths, F9 = dump, F10 = save ROM archive).
+/// paths, L = lights, F9 = dump, F10 = save ROM archive).
 pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
     let state = Rc::clone(state);
     engine.on_update(move |engine| {
@@ -305,6 +365,10 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
                 s.editor.debug_footprints = !s.editor.debug_footprints;
                 engine.show_grid = s.editor.debug_footprints;
             }
+        }
+        if engine.input.was_key_pressed("KeyL") {
+            let mut s = state.borrow_mut();
+            s.debug_lights = !s.debug_lights;
         }
         // F9: dump state.json (tile/nav/height data is inlined).
         if engine.input.was_key_pressed("F9") {
@@ -320,8 +384,9 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
 
 #[cfg(test)]
 mod tests {
-    use super::{interpolate_offset, rest_frame};
-    use classic_core::types::{AnimationData, OffsetKeyframe};
+    use super::{apply_light_channels, interpolate_offset, rest_frame};
+    use classic_core::components::{Light, LightKind};
+    use classic_core::types::{AnimChannel, AnimationData, OffsetKeyframe};
 
     fn anim(offsets: Vec<[f32; 3]>, keyframes: Vec<OffsetKeyframe>) -> AnimationData {
         AnimationData {
@@ -331,6 +396,7 @@ mod tests {
             sequence: vec![],
             offsets,
             offset_keyframes: keyframes,
+            channels: vec![],
             metadata: None,
         }
     }
@@ -378,5 +444,53 @@ mod tests {
     fn rest_frame_empty_sequence_is_zero() {
         assert_eq!(rest_frame(&[], false), 0.0);
         assert_eq!(rest_frame(&[], true), 0.0);
+    }
+
+    #[test]
+    fn apply_light_channels_drives_each_light_field() {
+        // The burn envelope: intensity 0 → 3 → 0 across the burn window, with a
+        // position/color/radius that stay constant (as the rocket exporter
+        // emits them).  Sampling at the burn peak must light the Light, and an
+        // absent channel must leave the field untouched.
+        let mut data = anim(vec![], vec![]);
+        data.channels = vec![
+            AnimChannel {
+                name: "light.intensity".into(),
+                component: 1,
+                keys: vec![(0, vec![0.0]), (192, vec![0.0]), (216, vec![3.0]), (246, vec![0.0])],
+            },
+            AnimChannel {
+                name: "light.position".into(),
+                component: 3,
+                keys: vec![(0, vec![10.0, 20.0, 30.0]), (288, vec![10.0, 20.0, 30.0])],
+            },
+            AnimChannel {
+                name: "light.color".into(),
+                component: 3,
+                keys: vec![(0, vec![1.0, 0.55, 0.15]), (288, vec![1.0, 0.55, 0.15])],
+            },
+        ];
+
+        let mut light = Light {
+            kind: LightKind::Point,
+            position: glam::Vec3::ZERO,
+            color: [0.0, 0.0, 0.0],
+            intensity: 0.0,
+            radius: 200.0,
+            dir: glam::Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: None,
+        };
+        apply_light_channels(&data, 216.0, &mut light);
+
+        assert_eq!(light.intensity, 3.0);
+        assert_eq!(light.position, glam::Vec3::new(10.0, 20.0, 30.0));
+        assert_eq!(light.color, [1.0, 0.55, 0.15]);
+        // `radius` has no channel → unchanged.
+        assert_eq!(light.radius, 200.0);
+
+        // Before ignition the light is off.
+        apply_light_channels(&data, 100.0, &mut light);
+        assert_eq!(light.intensity, 0.0);
     }
 }

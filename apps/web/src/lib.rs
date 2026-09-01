@@ -10,6 +10,7 @@ const ROM_URLS: &[(&str, &str)] = &[
     ("lunar", "https://classic-roms.com/lunar.rom"),
     ("moon", "https://classic-roms.com/lunar.rom"),
     ("lrvtest", "https://classic-roms.com/lrvtest.rom"),
+    ("basetest", "https://classic-roms.com/basetest.rom"),
 ];
 
 /// The `roms.json` checksum index, used to content-address cached ROMs.

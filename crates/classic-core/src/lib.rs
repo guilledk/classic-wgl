@@ -23,7 +23,7 @@ use components::{
 use inventory::Inventory;
 
 pub use camera::Camera;
-pub use components::{RoleKind, SpriteRender, Transform};
+pub use components::{Light, LightKind, RoleKind, SpriteRender, Transform};
 pub use types::Rect;
 
 /// Pathfinding lives in the standalone `classic-pathfinder` crate (shared by
@@ -211,6 +211,17 @@ pub fn register_all_components() {
             order: 60,
             subsumes: &[],
         },
+        ComponentReg {
+            name: "Light",
+            spawn: |b, v| {
+                let l: Light = serde_json::from_value(v)?;
+                b.add(l);
+                Ok(())
+            },
+            dump: Some(dumper_light),
+            order: 59,
+            subsumes: &[],
+        },
     ]);
 }
 
@@ -296,4 +307,9 @@ fn dumper_camera(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json
 fn dumper_role(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
     let r = world.get::<&Role>(entity).ok()?;
     serde_json::to_value(*r).ok().map(|v| component_value("Role", v))
+}
+
+fn dumper_light(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
+    let l = world.get::<&Light>(entity).ok()?;
+    serde_json::to_value((*l).clone()).ok().map(|v| component_value("Light", v))
 }

@@ -2,7 +2,7 @@
 //! always; wasmtime on native) with small hand-written WAT guest modules.
 
 use classic_core::components::{
-    Animator, ColliderData, Disabled, IsoSprite, NavMesh, Role, Shape, Tilemap,
+    Animator, ColliderData, Disabled, IsoSprite, Light, NavMesh, Role, Shape, Tilemap,
 };
 use classic_core::types::AnimationData;
 use classic_core::RoleKind;
@@ -666,6 +666,62 @@ fn guest_set_light_updates_uniforms() {
 }
 
 #[test]
+fn guest_light_pool_spawn_set_release() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "light_spawn" (func $spawn (param i32 f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "light_set" (func $set (param i32 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "light_release" (func $release (param i32) (result i32)))
+            (global $handle (mut i32) (i32.const -1))
+            (global $frame (mut i32) (i32.const 0))
+            (func (export "update") (param f64)
+                (local $f i32)
+                (local.set $f (global.get $frame))
+                (if (i32.eqz (local.get $f))
+                    (then
+                        (global.set $handle
+                            (call $spawn
+                                (i32.const 0)
+                                (f64.const 10) (f64.const 20) (f64.const 0)
+                                (f64.const 1) (f64.const 0.5) (f64.const 0.25)
+                                (f64.const 2) (f64.const 100) (f64.const 0)))))
+                (if (i32.eq (local.get $f) (i32.const 1))
+                    (then
+                        (drop (call $set
+                            (global.get $handle)
+                            (f64.const 30) (f64.const 40) (f64.const 5)
+                            (f64.const 0) (f64.const 0) (f64.const 1)
+                            (f64.const 3) (f64.const 50)))))
+                (if (i32.eq (local.get $f) (i32.const 2))
+                    (then
+                        (drop (call $release (global.get $handle)))))
+                (global.set $frame (i32.add (local.get $f) (i32.const 1))))
+        )"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            let lights = |engine: &Engine| {
+                engine.world.query::<&Light>().iter().map(|(_, l)| l.clone()).collect::<Vec<_>>()
+            };
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(lights(&engine).len(), 1);
+            assert_eq!(lights(&engine)[0].position.x, 10.0);
+            assert_eq!(lights(&engine)[0].color, [1.0, 0.5, 0.25]);
+            assert_eq!(lights(&engine)[0].intensity, 2.0);
+
+            rt.update(&mut engine, 0.016).unwrap();
+            let active = lights(&engine);
+            assert_eq!(active[0].position.x, 30.0);
+            assert_eq!(active[0].color, [0.0, 0.0, 1.0]);
+            assert_eq!(active[0].intensity, 3.0);
+
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(lights(&engine).len(), 0);
+        },
+    );
+}
+
+#[test]
 fn guest_mouse_down_and_key_up_trigger_action() {
     with_each_runtime(
         r#"(module
@@ -1152,6 +1208,7 @@ fn install_test_resources(engine: &mut Engine) {
             sequence: vec![],
             offsets: vec![],
             offset_keyframes: vec![],
+            channels: vec![],
             metadata: None,
         },
     );

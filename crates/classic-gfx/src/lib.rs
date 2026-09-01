@@ -9,6 +9,7 @@
 
 mod shaders;
 
+use classic_core::components::Light;
 use glam::{Mat3, Mat4, Vec3};
 use glow::HasContext;
 use std::cell::RefCell;
@@ -161,6 +162,14 @@ impl Shader {
             unsafe { gl.uniform_1_i32(Some(&loc), v as i32) }
         }
     }
+
+    /// Bind a named `std140` uniform block to a UBO binding point.  A no-op for
+    /// programs that don't declare the block (the index query returns `None`).
+    pub fn bind_uniform_block(&self, gl: &glow::Context, name: &str, binding: u32) {
+        if let Some(idx) = unsafe { gl.get_uniform_block_index(self.program, name) } {
+            unsafe { gl.uniform_block_binding(self.program, idx, binding) };
+        }
+    }
 }
 
 fn compile_single(gl: &glow::Context, ty: u32, src: &str) -> Result<glow::Shader, String> {
@@ -306,6 +315,90 @@ impl GlBuffer {
         self.bind(gl);
         unsafe { gl.buffer_sub_data_u8_slice(self.target, 0, bytes) }
     }
+
+    /// Bind this buffer to a numbered indexed-buffer binding point (used for
+    /// uniform blocks; the target must be `UNIFORM_BUFFER`).
+    pub fn bind_base(&self, gl: &glow::Context, index: u32) {
+        unsafe { gl.bind_buffer_base(self.target, index, Some(self.buffer)) }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic lights (std140 uniform block)
+// ---------------------------------------------------------------------------
+
+/// Maximum number of dynamic lights uploadable to the `LightBlock` UBO.
+/// The block is 3 `vec4`s per light, so `256` lights occupy
+/// `16 + 256 * 48 = 12304` bytes — comfortably within the WebGL2-guaranteed
+/// 16 KB `MAX_UNIFORM_BLOCK_SIZE`.
+pub const MAX_LIGHTS: usize = 256;
+
+/// The UBO binding point shared by every shader that declares `LightBlock`.
+pub const LIGHT_UBO_BINDING: u32 = 1;
+
+/// Edge length of the square directional shadow map (depth texture).
+pub const SHADOW_MAP_SIZE: u32 = 2048;
+
+/// Slope-scaled depth offset applied to sprite billboard shadow casters, in
+/// OpenGL polygon-offset factor units.  See `Gfx::set_shadow_sprite_offset`.
+pub const SHADOW_SPRITE_SLOPE_OFFSET: f32 = 4.0;
+
+/// Constant depth offset paired with `SHADOW_SPRITE_SLOPE_OFFSET`.
+pub const SHADOW_SPRITE_UNIT_OFFSET: f32 = 8.0;
+
+/// Texture unit the directional shadow map is bound to in the lit shaders.
+/// Tilemap uses units 0/1, sprites use 0/1/2 — unit 3 is free for both.
+pub const SHADOW_MAP_UNIT: u32 = 3;
+
+/// Pack a slice of [`Light`]s into the flat `f32` buffer consumed by the
+/// `LightBlock` `std140` uniform block:
+///
+/// ```text
+/// offset 0        : vec4 count            (x = active light count)
+/// per light i     : vec4 pos_radius       (xyz = position, w = radius)
+///                 : vec4 color_intensity  (rgb = color, a = intensity)
+///                 : vec4 dir_cone         (xyz = direction, w = cone_angle)
+/// ```
+///
+/// `cone_angle <= 0` is the point-light sentinel (the shader skips the cone
+/// term), so both `LightKind::Point` and `LightKind::Spot` share one layout.
+/// The returned buffer is always `(1 + MAX_LIGHTS * 3) * 4` floats; trailing
+/// lights beyond `capacity` are silently dropped.
+pub fn pack_lights(lights: &[Light], capacity: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; (1 + capacity * 3) * 4];
+    out[0] = (lights.len().min(capacity)) as f32;
+    for (i, l) in lights.iter().take(capacity).enumerate() {
+        let base = (1 + i * 3) * 4;
+        out[base..base + 4].copy_from_slice(&[l.position.x, l.position.y, l.position.z, l.radius]);
+        out[base + 4..base + 8].copy_from_slice(&[l.color[0], l.color[1], l.color[2], l.intensity]);
+        let cone =
+            if l.kind == classic_core::components::LightKind::Point { 0.0 } else { l.cone_angle };
+        out[base + 8..base + 12].copy_from_slice(&[l.dir.x, l.dir.y, l.dir.z, cone]);
+    }
+    out
+}
+
+/// A host-side UBO backing the `LightBlock` uniform block.  Owns the CPU-side
+/// capacity and the GPU buffer; uploaded once per frame by [`Gfx::upload_lights`].
+pub struct LightBuffer {
+    buffer: GlBuffer,
+    capacity: usize,
+}
+
+impl LightBuffer {
+    pub fn new(gl: &glow::Context, capacity: usize) -> Self {
+        let floats = (1 + capacity * 3) * 4;
+        let zeros = vec![0.0f32; floats];
+        let buffer = GlBuffer::from_slice(gl, glow::UNIFORM_BUFFER, &zeros, glow::DYNAMIC_DRAW);
+        Self { buffer, capacity }
+    }
+
+    /// Upload the packed light block and bind it to [`LIGHT_UBO_BINDING`].
+    pub fn upload(&self, gl: &glow::Context, lights: &[Light]) {
+        let data = pack_lights(lights, self.capacity);
+        self.buffer.sub_data(gl, &data);
+        self.buffer.bind_base(gl, LIGHT_UBO_BINDING);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +499,50 @@ pub struct RenderSettings {
     pub light_color: [f32; 3],
     pub depth_scale: [f32; 2],
     pub ppm: f32,
+    /// Tile -> light space (`T(origin) * S(tile_scale) * Rz(-45deg)`), the
+    /// metric frame every lighting quantity lives in.  Deliberately *not*
+    /// `model_matrix * iso_matrix`: that carries the isometric
+    /// `diag(1, 0.5, 1)` squash.  Built by `classic_engine::light_matrix`;
+    /// consumed by the tilemap draw only (sprites reconstruct their light-space
+    /// position from `sprite_anchor`).
+    pub light_matrix: Mat4,
+    /// Terrain normal matrix: `inverse_transpose(mat3(light_matrix))`.  Unused
+    /// by the sprite draws (their normals come from a baked map).
     pub normal_matrix: Mat3,
+    /// Sprite normal matrix: rotates a baked Blender-world-space normal into
+    /// light space (`classic_core::math::blender_to_light_3`).  Unused by the
+    /// tilemap draw (its normals are mesh-derived).
+    pub sprite_normal_matrix: Mat3,
+    /// Optional directional shadow map.  When `Some`, the lit shaders sample the
+    /// depth texture and multiply the **sun diffuse** term by the shadow factor
+    /// (ambient + point lights stay unshadowed).  When `None`, `use_shadow` is
+    /// 0 and the term is byte-identical to the unshadowed path.
+    pub shadow: Option<ShadowSettings>,
+}
+
+/// The directional shadow map consumed by the lit shaders.
+#[derive(Clone, Copy)]
+pub struct ShadowSettings {
+    /// Depth texture sampled as a `sampler2D` (manual compare, PCF).
+    pub texture: glow::Texture,
+    /// `proj * view` mapping world space to light clip space.
+    pub view_proj: Mat4,
+    /// Depth bias (in light NDC units) added to the stored depth before compare.
+    pub bias: f32,
+    /// Diffuse fraction kept by a fully-shadowed pixel (`0..=1`); lit pixels
+    /// keep `1.0`.  A value `> 0` stops shadows reading as black, so the cast
+    /// shadow stays a subtle complement to the Lambertian self-shading.
+    pub strength: f32,
+    /// One shadow-map texel in UV space (`1 / SHADOW_MAP_SIZE`), for PCF.
+    pub texel: [f32; 2],
+    /// Distance to push the receiver along its surface normal before sampling,
+    /// in world units (normal-offset bias).  Suppresses shadow acne without the
+    /// peter-panning a comparable depth bias would cause.
+    pub normal_offset: f32,
+    /// `CLASSIC_SHADOW_DEBUG`: replace the shaded output with the raw shadow
+    /// visibility factor (white = lit, black = occluded), bypassing albedo,
+    /// ambient and point lights.  Diagnostic only.
+    pub debug: bool,
 }
 
 pub struct Gfx {
@@ -417,6 +553,8 @@ pub struct Gfx {
     pub viewport_w: f32,
     pub viewport_h: f32,
     pub render_target: Option<GlFrameBuffer>,
+    lights: LightBuffer,
+    shadow_map: Option<DepthFramebuffer>,
     vao: glow::VertexArray,
 }
 
@@ -424,6 +562,7 @@ impl Gfx {
     pub fn new(gl: Rc<glow::Context>) -> Self {
         let quad = build_quad(&gl);
         let vao = unsafe { gl.create_vertex_array() }.expect("create VAO");
+        let lights = LightBuffer::new(&gl, MAX_LIGHTS);
         Self {
             gl,
             shaders: HashMap::new(),
@@ -432,8 +571,16 @@ impl Gfx {
             viewport_w: 1920.0,
             viewport_h: 1080.0,
             render_target: None,
+            lights,
+            shadow_map: None,
             vao,
         }
+    }
+
+    /// Upload the active dynamic lights into the `LightBlock` UBO and bind it to
+    /// [`LIGHT_UBO_BINDING`] (consumed by `sheet.frag` + `iso_tilemap.frag`).
+    pub fn upload_lights(&self, lights: &[Light]) {
+        self.lights.upload(&self.gl, lights);
     }
 
     /// Create and set an offscreen render target of the given size.
@@ -470,6 +617,9 @@ impl Gfx {
         unif: &[&str],
     ) -> Result<(), String> {
         let s = Shader::compile(&self.gl, vs_src, fs_src, attr, unif)?;
+        // Bind the light UBO for any shader that declares `LightBlock` (the two
+        // lit shaders); a no-op for every other program.
+        s.bind_uniform_block(&self.gl, "LightBlock", LIGHT_UBO_BINDING);
         self.shaders.insert(name.to_string(), s);
         Ok(())
     }
@@ -526,6 +676,169 @@ impl Gfx {
         }
     }
 
+    // -- shadow pass -------------------------------------------------------
+
+    /// The depth texture of the directional shadow map (raw GL handle for
+    /// sampling in the lit shaders).  Lazily created on first use.
+    pub fn shadow_map_texture(&mut self) -> Option<glow::Texture> {
+        self.ensure_shadow_map();
+        self.shadow_map.as_ref().map(|s| s.depth_tex)
+    }
+
+    fn ensure_shadow_map(&mut self) {
+        if self.shadow_map.is_none() {
+            self.shadow_map =
+                Some(DepthFramebuffer::new(&self.gl, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE));
+        }
+    }
+
+    /// Begin the directional shadow pass: bind the depth-only shadow FBO, size
+    /// the viewport to the shadow map, and clear depth to 1.0 (far).  The caller
+    /// then emits shadow casters via [`Gfx::draw_shadow_tilemap`] and finishes
+    /// with [`Gfx::end_shadow_pass`].
+    pub fn begin_shadow_pass(&mut self) {
+        self.ensure_shadow_map();
+        let gl = &self.gl;
+        let Some(sm) = &self.shadow_map else { return };
+        sm.bind(gl);
+        unsafe {
+            gl.viewport(0, 0, sm.width as i32, sm.height as i32);
+            gl.clear_depth_f32(1.0);
+            gl.clear(glow::DEPTH_BUFFER_BIT);
+            gl.disable(glow::BLEND);
+            gl.disable(glow::STENCIL_TEST);
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(true);
+            // Push casters slightly away from the light so coplanar terrain
+            // Constant-depth offset only.  A slope-scaled factor (the old
+            // `polygon_offset(2.0, 4.0)`) blows up as the depth slope grows,
+            // which pushed every occluder behind every receiver and produced
+            // exactly zero shadows.  Acne is handled by normal-offset bias on
+            // the receive side instead — see `SHADOW_NORMAL_OFFSET`.
+            gl.enable(glow::POLYGON_OFFSET_FILL);
+            gl.polygon_offset(0.0, 1.0);
+        }
+    }
+
+    /// Draw one terrain mesh into the shadow map in light space
+    /// (`light_matrix * vertex`, no camera matrix).
+    pub fn draw_shadow_tilemap(
+        &self,
+        light_matrix: &Mat4,
+        view_proj: &Mat4,
+        vertex_count: i32,
+        vertex_buffer: &GlBuffer,
+    ) {
+        let gl = &self.gl;
+        let s = self.shader("shadowDepth");
+        s.bind(gl);
+        vertex_attrib_ptr_f32(gl, vertex_buffer, s.attr("vertex_pos"), 3, 36, 0);
+        s.uniform_mat4(gl, "light_matrix", light_matrix);
+        s.uniform_mat4(gl, "light_view_proj", view_proj);
+        unsafe {
+            gl.draw_arrays(glow::TRIANGLES, 0, vertex_count);
+        }
+    }
+
+    /// Switch the shadow pass to slope-scaled depth offset for sprite casters.
+    ///
+    /// A sprite is a *plane*, and it is both caster and receiver: every sprite
+    /// fragment samples the very texels its own billboard wrote.  Because the
+    /// plane is slanted relative to the light, stored depth varies across the
+    /// PCF kernel, neighbouring taps disagree, and the sprite stipples itself
+    /// with ~50% self-shadow.  Normal-offset bias cannot fix this — the offset
+    /// stays inside the billboard's own (large) footprint in the shadow map.
+    ///
+    /// Slope-scaled offset is the right tool here precisely because the error
+    /// being corrected *is* proportional to the depth slope.  It is safe now
+    /// that the light-space geometry is correct; it was catastrophic before
+    /// only because the degenerate 2.7° sun made every slope enormous.
+    ///
+    /// Terrain casters keep the constant offset from [`Gfx::begin_shadow_pass`].
+    pub fn set_shadow_sprite_offset(&self) {
+        unsafe {
+            self.gl.polygon_offset(SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET);
+        }
+    }
+
+    /// Draw one sprite billboard into the shadow map.  The colour texture's
+    /// alpha is the silhouette (transparent pixels discard), so the sprite casts
+    /// a shaped shadow rather than a full quad.
+    pub fn draw_shadow_sprite(
+        &self,
+        model: &Mat4,
+        view_proj: &Mat4,
+        texture_name: &str,
+        region: SpriteRegion<'_>,
+        sprite_anchor: &[f32; 3],
+    ) {
+        let gl = &self.gl;
+        let s = self.shader("shadowSprite");
+        let t = self.texture(texture_name);
+
+        s.bind(gl);
+        t.bind(gl, 0);
+        s.uniform_1i(gl, "tex_sampler", 0);
+        s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_mat4(gl, "light_view_proj", view_proj);
+        s.uniform_vec3(gl, "sprite_anchor", Vec3::from_array(*sprite_anchor));
+        match region {
+            SpriteRegion::Grid { frame, tile_set_size } => {
+                s.uniform_1f(gl, "tile_id_flat", frame);
+                s.uniform_vec2(gl, "tile_set_size", &tile_set_size);
+                s.uniform_1f(gl, "use_uv_rect", 0.0);
+                s.uniform_vec4(gl, "uv_rect", &[0.0, 0.0, 0.0, 0.0]);
+                s.uniform_vec2(gl, "trim_offset", &[0.0, 0.0]);
+                s.uniform_vec2(gl, "source_size", &[1.0, 1.0]);
+                s.uniform_vec2(gl, "content_size", &[1.0, 1.0]);
+            }
+            SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size } => {
+                s.uniform_1f(gl, "tile_id_flat", 0.0);
+                s.uniform_vec2(gl, "tile_set_size", &[1.0, 1.0]);
+                s.uniform_1f(gl, "use_uv_rect", 1.0);
+                s.uniform_vec4(gl, "uv_rect", uv_rect);
+                s.uniform_vec2(gl, "trim_offset", trim_offset);
+                s.uniform_vec2(gl, "source_size", source_size);
+                s.uniform_vec2(gl, "content_size", content_size);
+            }
+        }
+
+        vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
+        vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
+        self.quad.indices.bind(gl);
+
+        unsafe {
+            gl.draw_elements(
+                glow::TRIANGLES,
+                self.quad.index_count as i32,
+                glow::UNSIGNED_SHORT,
+                0,
+            );
+        }
+    }
+
+    /// End the shadow pass: restore the depth state and rebind the main render
+    /// target (offscreen FBO or the default framebuffer) with the main viewport.
+    pub fn end_shadow_pass(&self) {
+        let gl = &self.gl;
+        unsafe {
+            gl.disable(glow::POLYGON_OFFSET_FILL);
+            gl.polygon_offset(0.0, 0.0);
+            gl.depth_mask(true);
+            gl.depth_func(glow::LEQUAL);
+            gl.disable(glow::DEPTH_TEST);
+            gl.enable(glow::BLEND);
+            if let Some(ref rt) = self.render_target {
+                rt.bind(gl);
+                gl.viewport(0, 0, rt.width as i32, rt.height as i32);
+            } else {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+                gl.viewport(0, 0, self.viewport_w as i32, self.viewport_h as i32);
+            }
+        }
+    }
+
     // -- draw calls --------------------------------------------------------
 
     /// Read a single RGBA pixel (normalized `[0, 1]`) from the current render
@@ -576,6 +889,33 @@ impl Gfx {
         s.uniform_mat4(gl, "projection_matrix", &proj);
         s.uniform_mat4(gl, "camera_matrix", if ignore_cam { &Mat4::IDENTITY } else { camera });
         s.uniform_mat4(gl, "model_matrix", model);
+    }
+
+    /// Bind the directional shadow map and set the sampling uniforms on a lit
+    /// shader (`isoTilemap` / `imageSheet`).  When `settings.shadow` is `None`,
+    /// `use_shadow` is cleared to 0 (the shaders skip the term).
+    fn bind_shadow(&self, s: &Shader, settings: &RenderSettings) {
+        let gl = &self.gl;
+        match &settings.shadow {
+            Some(shadow) => {
+                unsafe {
+                    gl.active_texture(glow::TEXTURE0 + SHADOW_MAP_UNIT);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(shadow.texture));
+                }
+                s.uniform_1i(gl, "shadow_map", SHADOW_MAP_UNIT as i32);
+                s.uniform_mat4(gl, "light_view_proj", &shadow.view_proj);
+                s.uniform_1f(gl, "shadow_bias", shadow.bias);
+                s.uniform_1f(gl, "shadow_strength", shadow.strength);
+                s.uniform_vec2(gl, "shadow_texel", &shadow.texel);
+                s.uniform_1f(gl, "shadow_normal_offset", shadow.normal_offset);
+                s.uniform_1f(gl, "use_shadow", 1.0);
+                s.uniform_1f(gl, "shadow_debug", if shadow.debug { 1.0 } else { 0.0 });
+            }
+            None => {
+                s.uniform_1f(gl, "use_shadow", 0.0);
+                s.uniform_1f(gl, "shadow_debug", 0.0);
+            }
+        }
     }
 
     /// Draw a solid-colour rectangle.
@@ -651,11 +991,14 @@ impl Gfx {
         s.uniform_1f(gl, "selected", 0.0);
         s.uniform_vec3(gl, "selection_color", Vec3::from_array([0.0, 0.0, 0.0]));
         s.uniform_vec2(gl, "outline_delta", &[0.0, 0.0]);
+        s.uniform_1f(gl, "use_lighting", 0.0);
         s.uniform_1f(gl, "use_normal_map", 0.0);
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         s.uniform_vec3(gl, "tint", Vec3::from_array([1.0, 1.0, 1.0]));
+        s.uniform_1f(gl, "use_shadow", 0.0);
+        s.uniform_1f(gl, "shadow_debug", 0.0);
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -736,6 +1079,7 @@ impl Gfx {
         depth_base: f32,
         normal_map: Option<&str>,
         tint: &[f32; 3],
+        sprite_anchor: &[f32; 3],
         settings: &RenderSettings,
         ghost_alpha: f32,
         selected: bool,
@@ -820,6 +1164,10 @@ impl Gfx {
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         s.uniform_vec3(gl, "tint", Vec3::from_array(*tint));
+        s.uniform_vec3(gl, "sprite_anchor", Vec3::from_array(*sprite_anchor));
+        s.uniform_mat3(gl, "sprite_normal_matrix", &settings.sprite_normal_matrix);
+        s.uniform_1f(gl, "use_lighting", 1.0);
+        self.bind_shadow(s, settings);
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -852,6 +1200,7 @@ impl Gfx {
         depth_base: f32,
         normal_map: Option<&str>,
         tint: &[f32; 3],
+        sprite_anchor: &[f32; 3],
         settings: &RenderSettings,
         ghost_group: u32,
         pass: IsoSpritePass,
@@ -874,6 +1223,7 @@ impl Gfx {
             depth_base,
             normal_map,
             tint,
+            sprite_anchor,
             settings,
             ghost_alpha,
             selected,
@@ -1052,9 +1402,11 @@ impl Gfx {
         s.uniform_1i(gl, "show_grid", if show_grid { 1 } else { 0 });
         s.uniform_vec3(gl, "grid_color", Vec3::ZERO);
         s.uniform_mat3(gl, "normal_matrix", &settings.normal_matrix);
+        s.uniform_mat4(gl, "light_matrix", &settings.light_matrix);
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
+        self.bind_shadow(s, settings);
 
         unsafe {
             gl.enable(glow::DEPTH_TEST);
@@ -1096,12 +1448,16 @@ impl ShaderSourceRegistry {
         r.override_vertex("direct_tex.vert", shaders::DIRECT_TEX_VERT);
         r.override_vertex("iso_tilemap.vert", shaders::ISO_TILEMAP_VERT);
         r.override_vertex("sdf.vert", shaders::SDF_VERT);
+        r.override_vertex("shadow_depth.vert", shaders::SHADOW_DEPTH_VERT);
+        r.override_vertex("shadow_sprite.vert", shaders::SHADOW_SPRITE_VERT);
         r.override_fragment("solid.frag", shaders::SOLID_FRAG);
         r.override_fragment("image.frag", shaders::IMAGE_FRAG);
         r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
         r.override_fragment("iso_tilemap.frag", shaders::ISO_TILEMAP_FRAG);
         r.override_fragment("sheet.frag", shaders::SHEET_FRAG);
         r.override_fragment("sdf.frag", shaders::SDF_FRAG);
+        r.override_fragment("shadow_depth.frag", shaders::SHADOW_DEPTH_FRAG);
+        r.override_fragment("shadow_sprite.frag", shaders::SHADOW_SPRITE_FRAG);
         r
     }
 
@@ -1197,9 +1553,21 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "depth_range",
                 "normal_sampler",
                 "use_normal_map",
+                "use_lighting",
+                "sprite_normal_matrix",
                 "ambient_color",
                 "light_direction",
                 "light_color",
+                "tint",
+                "sprite_anchor",
+                "shadow_map",
+                "light_view_proj",
+                "shadow_bias",
+                "shadow_strength",
+                "shadow_texel",
+                "use_shadow",
+                "shadow_debug",
+                "shadow_normal_offset",
             ],
         },
         BuiltinShader {
@@ -1223,6 +1591,32 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             ],
         },
         BuiltinShader {
+            name: "shadowDepth",
+            vertex: "shadow_depth.vert",
+            fragment: "shadow_depth.frag",
+            attr: &["vertex_pos"],
+            unif: &["light_matrix", "light_view_proj"],
+        },
+        BuiltinShader {
+            name: "shadowSprite",
+            vertex: "shadow_sprite.vert",
+            fragment: "shadow_sprite.frag",
+            attr: &["vertex_pos", "tex_coord"],
+            unif: &[
+                "model_matrix",
+                "light_view_proj",
+                "sprite_anchor",
+                "tex_sampler",
+                "tile_id_flat",
+                "tile_set_size",
+                "use_uv_rect",
+                "uv_rect",
+                "trim_offset",
+                "source_size",
+                "content_size",
+            ],
+        },
+        BuiltinShader {
             name: "isoTilemap",
             vertex: "iso_tilemap.vert",
             fragment: "iso_tilemap.frag",
@@ -1230,6 +1624,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             unif: &[
                 "iso_matrix",
                 "model_matrix",
+                "light_matrix",
                 "camera_matrix",
                 "projection_matrix",
                 "normal_matrix",
@@ -1251,6 +1646,14 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "ambient_color",
                 "light_direction",
                 "light_color",
+                "shadow_map",
+                "light_view_proj",
+                "shadow_bias",
+                "shadow_strength",
+                "shadow_texel",
+                "use_shadow",
+                "shadow_debug",
+                "shadow_normal_offset",
             ],
         },
     ]
@@ -1298,6 +1701,71 @@ impl DynamicVb {
 
     pub fn bind(&self, gl: &glow::Context) {
         unsafe { gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer)) }
+    }
+}
+
+/// A depth-only framebuffer: a `DEPTH_COMPONENT24` texture attached to
+/// `DEPTH_ATTACHMENT` with no color attachment (`draw_buffers([NONE])`).  Used
+/// for the directional shadow map; the depth texture is sampled as a
+/// `sampler2D` in the lit shaders (manual `step` compare, no PCF).
+pub struct DepthFramebuffer {
+    fbo: glow::Framebuffer,
+    depth_tex: glow::Texture,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl DepthFramebuffer {
+    pub fn new(gl: &glow::Context, width: u32, height: u32) -> Self {
+        let fbo = unsafe { gl.create_framebuffer() }.expect("create fbo");
+        let depth_tex = unsafe { gl.create_texture() }.expect("create texture");
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(depth_tex));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::DEPTH_COMPONENT24 as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::DEPTH_COMPONENT,
+                glow::UNSIGNED_INT,
+                glow::PixelUnpackData::Slice(None),
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::DEPTH_ATTACHMENT,
+                glow::TEXTURE_2D,
+                Some(depth_tex),
+                0,
+            );
+            // No color attachment: mask color writes so the FBO is complete.
+            gl.draw_buffers(&[glow::NONE]);
+            gl.read_buffer(glow::NONE);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        Self { fbo, depth_tex, width, height }
+    }
+
+    pub fn bind(&self, gl: &glow::Context) {
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+        }
     }
 }
 
@@ -1461,5 +1929,55 @@ impl Drop for GlFrameBuffer {
     fn drop(&mut self) {
         // Resources are leaked intentionally — this struct lives for the
         // process lifetime and Drop can't access the GL context.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use classic_core::components::{Light, LightKind};
+
+    #[test]
+    fn pack_lights_std140_layout() {
+        let lights = vec![Light {
+            kind: LightKind::Point,
+            position: glam::Vec3::new(1.0, 2.0, 3.0),
+            color: [0.1, 0.2, 0.3],
+            intensity: 4.0,
+            radius: 50.0,
+            dir: glam::Vec3::new(5.0, 6.0, 7.0),
+            cone_angle: 0.5,
+            parent: None,
+        }];
+        let buf = pack_lights(&lights, MAX_LIGHTS);
+        assert_eq!(buf.len(), (1 + MAX_LIGHTS * 3) * 4);
+        // count vec4
+        assert_eq!(buf[0], 1.0);
+        assert_eq!(buf[1], 0.0);
+        // light 0: [pos.xyz | radius]
+        assert_eq!(&buf[4..8], &[1.0, 2.0, 3.0, 50.0]);
+        // light 0: [color.rgb | intensity]
+        assert_eq!(&buf[8..12], &[0.1, 0.2, 0.3, 4.0]);
+        // light 0: [dir.xyz | cone]; a Point light forces cone_angle to 0.
+        assert_eq!(&buf[12..16], &[5.0, 6.0, 7.0, 0.0]);
+    }
+
+    #[test]
+    fn pack_lights_spot_keeps_cone_angle() {
+        let lights = vec![Light {
+            kind: LightKind::Spot,
+            dir: glam::Vec3::new(0.0, 0.0, 1.0),
+            cone_angle: 0.7,
+            ..Default::default()
+        }];
+        let buf = pack_lights(&lights, MAX_LIGHTS);
+        assert_eq!(&buf[12..16], &[0.0, 0.0, 1.0, 0.7]);
+    }
+
+    #[test]
+    fn pack_lights_truncates_beyond_capacity() {
+        let lights = vec![Light::default(); MAX_LIGHTS + 5];
+        let buf = pack_lights(&lights, MAX_LIGHTS);
+        assert_eq!(buf[0], MAX_LIGHTS as f32);
     }
 }

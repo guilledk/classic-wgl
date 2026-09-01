@@ -366,3 +366,46 @@ fn inventory_dumper_round_trips() {
     assert_eq!(back.kind, "cargo_bay");
     assert_eq!(back.stacks, vec![(0, 1), (1, 4)]);
 }
+
+#[test]
+fn light_dumper_round_trips() {
+    register_all_components();
+
+    let light = classic_core::components::Light {
+        kind: classic_core::components::LightKind::Spot,
+        position: [10.0, 20.0, 3.0].into(),
+        color: [1.0, 0.5, 0.25],
+        intensity: 2.0,
+        radius: 150.0,
+        dir: [0.0, 0.0, 1.0].into(),
+        cone_angle: 0.8,
+        parent: None,
+    };
+
+    let mut world = hecs::World::new();
+    let e = world.spawn((light,));
+
+    let regs = classic_core::registry::ordered_regs();
+    let light_reg = regs.iter().find(|r| r.name == "Light").unwrap();
+    let val = light_reg.dump.unwrap()(&world, e).unwrap();
+
+    assert_eq!(val["type"], "Light");
+    assert_eq!(val["kind"], "spot");
+    assert_eq!(val["position"], serde_json::json!([10.0, 20.0, 3.0]));
+    assert_eq!(val["color"], serde_json::json!([1.0, 0.5, 0.25]));
+    assert_eq!(val["intensity"], 2.0);
+    assert_eq!(val["radius"], 150.0);
+    assert_eq!(val["cone_angle"].as_f64().unwrap() as f32, 0.8);
+
+    // Spawn it back from the dumped value (minus the "type" key).
+    let mut fields = val.as_object().unwrap().clone();
+    fields.remove("type");
+    let mut builder = hecs::EntityBuilder::new();
+    (light_reg.spawn)(&mut builder, serde_json::Value::Object(fields)).unwrap();
+    let spawned = world.spawn(builder.build());
+    let round_tripped = world.get::<&classic_core::components::Light>(spawned).unwrap();
+    assert_eq!(round_tripped.kind, classic_core::components::LightKind::Spot);
+    assert_eq!(round_tripped.position.x, 10.0);
+    assert_eq!(round_tripped.radius, 150.0);
+    assert_eq!(round_tripped.cone_angle, 0.8);
+}

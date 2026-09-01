@@ -188,6 +188,30 @@ categories:
   `should_reverse` hysteresis when the target is ~100° behind.  See
   `classic-physics` (turn-cost A\*) and `classic-iso` (steering tire frames).
 
+### Dynamic lights
+
+- **`Light`** — a pooled dynamic point/spot light (registered as a component so
+  it can be authored in `state.json` and round-trips through the registry).
+  Fields: `kind: LightKind` (`Point`/`Spot`, `#[serde(rename_all = "snake_case")]`),
+  `position: Vec3` (**light space**, +Z up — see below),
+  `color: [f32;3]`, `intensity: f32`, `radius: f32` (attenuation, world px;
+  `<= 0` disables falloff), `dir: Vec3`, `cone_angle: f32` (spot half-angle;
+  `<= 0` encodes Point).  Spot fields are future-proofed but not yet emitted.
+- **⚠️ `position` is in light space, not screen space.**  Light space is
+  `model * iso_matrix * vertex` with **+Z up** — the same space `light_dir`,
+  `vNormal` and the shadow map live in.  The renderer's isometric shear
+  (`y -= z`, which makes height visible on screen) must **not** be applied:
+  mixing the two makes `dot(n, normalize(lightPos - p))` compare vectors from
+  different spaces.  `Engine::iso_to_world(x, y, elevation)` is the single
+  correct conversion — it carries elevation in `z` alone.  See `classic-gfx`
+  §17 for the full two-spaces rule; getting this wrong is what made the
+  directional shadow map cast nothing for an entire session.
+- The **runtime pool** is `Engine.light_pool` (`classic-engine/src/light.rs`,
+  `LightPool`) — a free-list of `Light`s with per-light TTL decay.  The ECS
+  `Light` component and the pool share the same `Light` type; declarative scene
+  lights are optional (guest spawning suffices for the first pass).  See
+  `classic-gfx` §16 for the UBO layout.
+
 ### Collision / UI
 
 - **`ColliderData`** — serializable physics shape.  Contains `shape: Shape`
@@ -282,13 +306,14 @@ so `Transform` is not emitted separately.  The current subsumes graph:
 | Camera            | (none)                |
 | Transform         | (none)                |
 | Role              | (none)                |
+| Light             | (none)                |
 
 ### Order priority
 
 During `dump_state`, `ordered_regs()` sorts by `order` (ascending).  The
 current priorities: Tilemap(10), IsometricNavMesh(15), Sprite(20),
 IsoSprite(30), Animator(35), IsoAgent(40), Rect(45), SdfText(46),
-Camera(48), Transform(50), Role(60).  This controls the field order in the
+Camera(48), Transform(50), Light(59), Role(60).  This controls the field order in the
 serialized JSON.  Note `Transform` is **not** "emitted last" — `Role(60)`
 sorts after it.
 

@@ -13,5 +13,10 @@
     "size": 7789703,
     "sha256": "118b9287febf73261a3f97ff2f3cead1a292b7321f46deb66dc30d81c68d9d41",
     "version": "0.1.0"
+  },
+  "basetest": {
+    "size": 7970914,
+    "sha256": "cfdf7959334816463689c874babe6090ea8b5ce00099cd48f36ce06de3638362",
+    "version": "0.1.0"
   }
 }

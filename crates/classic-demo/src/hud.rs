@@ -616,6 +616,59 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
         }
     }
 
+    // Light markers (KeyL): an X crosshair at each active light plus a vertical
+    // Z line from the terrain surface up to the light, so its 3D placement is
+    // visible at a glance.
+    if state.borrow().debug_lights {
+        let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap);
+        let (hd, size_x, size_y, hs) = if let Some(tm_e) = tm_entity {
+            let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
+            (tm.height_data.clone(), tm.size_x, tm.size_y, tm.height_scale)
+        } else {
+            (Vec::new(), 0, 0, 0.0)
+        };
+
+        // Compute screen positions before mutably borrowing `gfx`.
+        let markers: Vec<([f32; 3], [f32; 3])> = engine
+            .gather_lights()
+            .iter()
+            .map(|light| {
+                let light_screen = engine.light_to_screen(light.position);
+                let terrain_z = engine
+                    .light_to_tile(light.position)
+                    .map(|tile| bilinear_height(&hd, size_x, size_y, tile.x, tile.y) * hs)
+                    .unwrap_or(0.0);
+                let terrain_screen = engine.light_to_screen(Vec3::new(
+                    light.position.x,
+                    light.position.y,
+                    terrain_z,
+                ));
+                let ls = [light_screen.x, light_screen.y, light_screen.z];
+                let ts = [terrain_screen.x, terrain_screen.y, terrain_screen.z];
+                (ts, ls)
+            })
+            .collect();
+
+        let Some(gfx) = engine.gfx.as_mut() else { return };
+        let cam = engine.camera.matrix();
+        let x_cross: [f32; 12] = [-8.0, -8.0, 0.0, 8.0, 8.0, 0.0, -8.0, 8.0, 0.0, 8.0, -8.0, 0.0];
+        let cross_buf =
+            GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &x_cross, glow::STATIC_DRAW);
+
+        for (terrain, light) in markers {
+            // Vertical Z line (terrain surface → light).
+            let line: [f32; 6] = [terrain[0], terrain[1], terrain[2], light[0], light[1], light[2]];
+            let line_buf =
+                GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &line, glow::STREAM_DRAW);
+            gfx.draw_line_strip(&line_buf, 0, 2, &Mat4::IDENTITY, &cam, &[1.0, 1.0, 0.0, 0.9]);
+
+            // X crosshair at the light position.
+            let m = Mat4::from_translation(Vec3::from_array(light));
+            gfx.draw_line_strip(&cross_buf, 0, 2, &m, &cam, &[1.0, 1.0, 0.0, 1.0]);
+            gfx.draw_line_strip(&cross_buf, 2, 2, &m, &cam, &[1.0, 1.0, 0.0, 1.0]);
+        }
+    }
+
     // Iso compass rose (always visible).
     let sguard = state.borrow();
     if let Some(buf) = sguard.iso_compass_buf.as_ref() {

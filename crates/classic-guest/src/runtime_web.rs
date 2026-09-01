@@ -92,6 +92,8 @@ const OP_RIDGED_FIELD: u32 = 9;
 const OP_BILLOW_FIELD: u32 = 10;
 const OP_TILING_FIELD: u32 = 11;
 const OP_NOISE_FIELD: u32 = 12;
+const OP_LIGHT_SPAWN: u32 = 13;
+const OP_LIGHT_SET: u32 = 14;
 
 /// The global symbol the high-arity import shims call into.
 const DISPATCHER_SYMBOL: &str = "__classic_guest_import";
@@ -448,6 +450,29 @@ impl WebWasmRuntime {
                                 bytes.len() as i32
                             }
                         }
+                        OP_LIGHT_SPAWN => host.borrow_mut().light_spawn(
+                            arg_i32(&args, 0),
+                            arg_f64(&args, 1),
+                            arg_f64(&args, 2),
+                            arg_f64(&args, 3),
+                            arg_f64(&args, 4),
+                            arg_f64(&args, 5),
+                            arg_f64(&args, 6),
+                            arg_f64(&args, 7),
+                            arg_f64(&args, 8),
+                            arg_f64(&args, 9),
+                        ),
+                        OP_LIGHT_SET => host.borrow_mut().light_set(
+                            arg_i32(&args, 0),
+                            arg_f64(&args, 1),
+                            arg_f64(&args, 2),
+                            arg_f64(&args, 3),
+                            arg_f64(&args, 4),
+                            arg_f64(&args, 5),
+                            arg_f64(&args, 6),
+                            arg_f64(&args, 7),
+                            arg_f64(&args, 8),
+                        ),
                         _ => 0,
                     };
                     JsValue::from_f64(result as f64)
@@ -1419,6 +1444,18 @@ impl WebWasmRuntime {
 
         // set_light
         set_import_str!("set_light", OP_SET_LIGHT, "a,b,c,d,e,f,g,h,i");
+
+        // light_spawn / light_set (high-arity), light_release (direct)
+        set_import_str!("light_spawn", OP_LIGHT_SPAWN, "a,b,c,d,e,f,g,h,i,j,k");
+        set_import_str!("light_set", OP_LIGHT_SET, "a,b,c,d,e,f,g,h,i");
+        {
+            let host = host.clone();
+            set_import!(
+                "light_release",
+                Box::new(move |handle: i32| -> i32 { host.borrow_mut().light_release(handle) })
+                    as Box<dyn FnMut(i32) -> i32>
+            );
+        }
 
         // spawn_rect
         set_import_str!("spawn_rect", OP_SPAWN_RECT, "a,b,c,d,e,f,g,h,i,j");

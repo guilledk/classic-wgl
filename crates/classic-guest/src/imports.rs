@@ -663,6 +663,54 @@ macro_rules! install_host_imports {
 
         $linker.func_wrap(
             m,
+            "light_spawn",
+            |mut caller: Caller<'_, $host>,
+             kind: i32,
+             x: f64,
+             y: f64,
+             z: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             intensity: f64,
+             radius: f64,
+             ttl: f64|
+             -> i32 {
+                caller
+                    .data_mut()
+                    .guest_mut()
+                    .light_spawn(kind, x, y, z, r, g, b, intensity, radius, ttl)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "light_set",
+            |mut caller: Caller<'_, $host>,
+             handle: i32,
+             x: f64,
+             y: f64,
+             z: f64,
+             r: f64,
+             g: f64,
+             b: f64,
+             intensity: f64,
+             radius: f64|
+             -> i32 {
+                caller.data_mut().guest_mut().light_set(handle, x, y, z, r, g, b, intensity, radius)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
+            "light_release",
+            |mut caller: Caller<'_, $host>, handle: i32| -> i32 {
+                caller.data_mut().guest_mut().light_release(handle)
+            },
+        )?;
+
+        $linker.func_wrap(
+            m,
             "spawn_rect",
             |mut caller: Caller<'_, $host>,
              name_ptr: i32,

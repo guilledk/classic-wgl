@@ -101,6 +101,9 @@ both the wasmi and wasmtime backends) are the SDK surface:
 | `pick_at` | `(x: f64, y: f64, out_ptr, out_cap) -> i32` | name of the top gameplay entity under a screen point (bytes written, `0` if none) |
 | `get_light` | `(out_ptr) -> i32` | writes 9 f64 (ambient, direction, color) |
 | `set_light` | `(a0..a2, d0..d2, c0..c2: f64) -> i32` | set light uniforms |
+| `light_spawn` | `(kind: i32, x,y,z, r,g,b, intensity, radius, ttl: f64) -> i32` | spawn a pooled dynamic light (`kind` 0=point, 1=spot; `ttl <= 0` = persistent); returns handle, `-1` when the pool is full |
+| `light_set` | `(handle: i32, x,y,z, r,g,b, intensity, radius: f64) -> i32` | overwrite an active pooled light by handle (`1` ok, `0` bad handle) |
+| `light_release` | `(handle: i32) -> i32` | release a pooled light back to the free-list (`1` ok, `0` bad handle) |
 | `spawn_rect` | `(name, x, y, w, h, r, g, b, a) -> i32` | spawn a named screen-space solid-color rectangle |
 | `spawn_text` | `(name, x, y, text, scale, r, g, b, a) -> i32` | spawn a named screen-space SDF text label |
 | `set_text` | `(name, text) -> i32` | update a named SDF text label's string |
@@ -252,6 +255,15 @@ confined to `GuestHost::engine`/`engine_mut`.
    `abi::write_*_to` slice helpers).
 4. Add a WAT test in `tests/guest.rs` (it runs against every backend).
 5. Update this skill's import table.
+
+**Gotcha — worker/web OP codes are hand-numbered.** `runtime_worker.rs` and
+`worker.js` carry a parallel `OP_*` table (and `runtime_web.rs` a separate
+`OP_*` dispatcher table).  New high-arity imports must take the **next free
+code** in each table — codes 77–80 are already taken by the sprite
+`set_sprite_frame`/`set_sprite_color`/`spawn_sprite_clone`/`set_enabled`
+imports.  The `light_*` imports use 81–83 (worker) and 13–14 (web dispatcher).
+`light_spawn`/`light_set` are >8 args → web dispatcher; `light_release` is a
+direct `Closure`.
 
 Treat every new import as a sandbox-surface change: it is reachable by untrusted
 guest code and must not expose raw engine internals or leak borrows.

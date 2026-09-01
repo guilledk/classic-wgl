@@ -6,7 +6,7 @@
 //! heavy lifting lives in safe `Engine` methods; only the pointer deref is
 //! `unsafe`.
 
-use classic_core::components::{TextJustify, UiAlign, UiAnchor};
+use classic_core::components::{Light, LightKind, TextJustify, UiAlign, UiAnchor};
 use classic_core::fields::FieldDtype;
 use classic_core::instrument::Chan;
 use classic_core::pathfinder::PathPoll;
@@ -482,6 +482,87 @@ impl GuestHost {
             [c0 as f32, c1 as f32, c2 as f32],
         );
         1
+    }
+
+    /// Spawn a dynamic light in the host light pool.  `kind` is `0` = point,
+    /// `1` = spot; `ttl <= 0` is persistent (otherwise the light auto-releases
+    /// after `ttl` seconds).  Returns the light handle, or `-1` when the pool
+    /// is full.
+    #[allow(clippy::too_many_arguments)]
+    pub fn light_spawn(
+        &mut self,
+        kind: i32,
+        x: f64,
+        y: f64,
+        z: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        intensity: f64,
+        radius: f64,
+        ttl: f64,
+    ) -> i32 {
+        let light = Light {
+            kind: if kind == 1 { LightKind::Spot } else { LightKind::Point },
+            position: glam::Vec3::new(x as f32, y as f32, z as f32),
+            color: [r as f32, g as f32, b as f32],
+            intensity: intensity as f32,
+            radius: radius as f32,
+            dir: glam::Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: None,
+        };
+        let ttl = if ttl <= 0.0 { None } else { Some(ttl as f32) };
+        self.engine_mut().spawn_light(light, ttl).map(|h| h as i32).unwrap_or(-1)
+    }
+
+    /// Overwrite an active pooled light's parameters by handle.  Returns `1` on
+    /// success, `0` for an unknown/inactive handle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn light_set(
+        &mut self,
+        handle: i32,
+        x: f64,
+        y: f64,
+        z: f64,
+        r: f64,
+        g: f64,
+        b: f64,
+        intensity: f64,
+        radius: f64,
+    ) -> i32 {
+        // `light_set` only updates the transform/radiance fields; it must not
+        // demote a spot light or detach a parented light.  A negative handle is
+        // invalid (the host treats handles as unsigned slot indices, so `-1`
+        // must not silently alias slot 0).
+        if handle < 0 {
+            return 0;
+        }
+        let handle = handle as u32;
+        let mut light = self.engine().light_by_handle(handle).unwrap_or(Light {
+            kind: LightKind::Point,
+            position: glam::Vec3::ZERO,
+            color: [1.0, 1.0, 1.0],
+            intensity: 1.0,
+            radius: 200.0,
+            dir: glam::Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: None,
+        });
+        light.position = glam::Vec3::new(x as f32, y as f32, z as f32);
+        light.color = [r as f32, g as f32, b as f32];
+        light.intensity = intensity as f32;
+        light.radius = radius as f32;
+        self.engine_mut().update_light(handle, light) as i32
+    }
+
+    /// Release a pooled light back to the free-list.  Returns `1` on success,
+    /// `0` for an unknown/inactive handle.
+    pub fn light_release(&mut self, handle: i32) -> i32 {
+        if handle < 0 {
+            return 0;
+        }
+        self.engine_mut().release_light(handle as u32) as i32
     }
 
     /// Spawn a named screen-space solid-color rectangle.

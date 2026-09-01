@@ -30,6 +30,8 @@ pub struct EditorState {
     pub light_preset: String,
     pub light_azimuth: f32,
     pub light_elevation: f32,
+    /// Toggle a persistent test point light (placed at the mouse's iso tile).
+    pub test_light: bool,
 }
 
 impl Default for EditorState {
@@ -47,6 +49,7 @@ impl Default for EditorState {
             light_preset: "sunny".into(),
             light_azimuth: 45.0,
             light_elevation: 45.0,
+            test_light: false,
         }
     }
 }
@@ -65,6 +68,12 @@ pub struct DemoState {
     pub iso_coord_x_e: Option<Entity>,
     pub iso_coord_y_e: Option<Entity>,
     pub iso_coord_z_e: Option<Entity>,
+    /// Handle of the demo's persistent test point light (spawned by the
+    /// light-widget test toggle), so it can be released/updated on toggle off.
+    pub test_light_handle: Option<u32>,
+    /// Draw each active light as an X marker + a vertical Z line from the
+    /// terrain surface to the light (KeyL).
+    pub debug_lights: bool,
     /// The ROM guest runtime (installed by `init_guest`).
     pub guest: Option<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
 }
@@ -84,6 +93,8 @@ impl Default for DemoState {
             iso_coord_x_e: None,
             iso_coord_y_e: None,
             iso_coord_z_e: None,
+            test_light_handle: None,
+            debug_lights: false,
             guest: None,
         }
     }

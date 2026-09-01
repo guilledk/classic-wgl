@@ -145,11 +145,16 @@ metre divisor.  The constants are shared with the shaders via the `depth_scale`
 ### Tilemap vertex shader (`iso_tilemap.vert`)
 
 ```glsl
-vec4 worldPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
+// Light space (+Z up): what all lighting and the shadow map use.
+vec4 lightPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
+// Screen space: the isometric shear, for rasterisation only.
+vec4 worldPos = lightPos;
 worldPos.y -= vertex_pos.z;
 
 highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
 clipPos.z = isoDepth * 2.0 - 1.0;
+
+vLightPos = lightPos.xyz;   // the only position varying emitted
 ```
 
 Key aspects:
@@ -157,6 +162,11 @@ Key aspects:
 1. **Height offset on Y:** `worldPos.y -= vertex_pos.z` — height (Z) is subtracted
    from the screen-space Y coordinate.  This produces the correct vertical
    displacement for elevated tiles.
+   **⚠️ This shear is for rasterisation only.**  It leaves height in *both* y
+   and z, so the resulting space has up axis `(0,-1,1)/√2`.  Never use it for
+   lighting, normals, light positions or the shadow map — those all live in the
+   unsheared **light space** (`lightPos`, +Z up), which is why `vLightPos` is
+   the only position varying the shader emits.  See `classic-gfx` §17.
 2. **Depth axis is `tx - ty`:**  The map's depth direction runs along the
    `(1, -1)` diagonal in iso space.  Tiles with larger `tx - ty` are farther
    from the camera.
@@ -771,6 +781,31 @@ let normal_matrix = iso3.inverse().transpose();
 ```
 
 This corrects normals for the non-uniform 2:1 scale of the isometric transform.
+
+### Dynamic point lights (UBO)
+
+In addition to the sun (above), `Engine` maintains a pooled set of **dynamic
+point lights** uploaded to a `std140` UBO once per frame.  See the `classic-gfx`
+skill (§16 "Dynamic lights") for the buffer layout and the `classic-ecs` skill
+for the `Light` component.  Only two points matter for iso placement:
+
+- **`Engine::iso_to_world(x, y, elevation)`** is the single conversion from an
+  iso tile to a **light-space** position: `p_xy =
+  iso_to_cartesian_4() * S(tilemap.scale) * (x,y,0) + tilemap.position`, then
+  `p.z = (h+elevation)·height_scale`.  `elevation` is metres above the terrain
+  (same units as `height_data`); `height_scale` is px/metre.
+  **Height goes in `z` alone.**  Light space is +Z up — the same space
+  `light_dir` and `vNormal` live in.  This function used to also apply the
+  renderer's isometric shear (`p.y -= z_px`), which put lights in screen space
+  while the normals they are dotted against stayed in light space; `dot(n, L)`
+  then mixed spaces.  See `classic-gfx` §17.
+- The conversion is safe only when `tilemap.scale.x == tilemap.scale.y`
+  (the two scenes use `[45,45,1]`); `iso_to_cartesian_4() * S(scale)` and
+  `S(scale) * iso_to_cartesian_4()` differ for non-uniform x/y scale.
+
+Point lights are **unoccluded** (no point-light shadows).  A bare point light on
+terrain reads as a symmetric "sphere"; that's expected until point-light shadows
+(M5).  The sun *does* cast a directional shadow map — see `classic-gfx` §17.
 
 ---
 

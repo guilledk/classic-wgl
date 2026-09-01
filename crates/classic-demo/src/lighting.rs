@@ -47,6 +47,114 @@ pub fn init_lighting(engine: &mut Engine, state: &DemoStateRef) {
     apply_light_preset(engine, state, "sunny");
 }
 
+/// Height of the test point light above the terrain surface, in metres.
+const TEST_LIGHT_HEIGHT_M: f32 = 2.0;
+
+/// A minimal test widget: a single `P` button that toggles a persistent test
+/// point light following the mouse, placed `TEST_LIGHT_HEIGHT_M` above the
+/// terrain (via [`Engine::iso_to_world`]).  Exercises the pooled-light
+/// spawn/update/release path against the live scene, for manual verification
+/// of the dynamic-light UBO.
+pub fn init_test_light_widget(engine: &mut Engine, state: &DemoStateRef) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let btn_sz: f32 = 32.0;
+
+    let desired = Rc::new(Cell::new(false));
+    let Some(ref mut ui) = engine.ui else { return };
+
+    let btn;
+    {
+        let d = desired.clone();
+        btn = ui.spawn_button(
+            &mut engine.world,
+            &mut engine.physics,
+            btn_sz,
+            btn_sz,
+            [0.6, 0.4, 0.2, 1.0],
+            ui::ButtonOptions {
+                text: Some("P".into()),
+                text_scale: 0.4,
+                sdf_text: true,
+                hover: true,
+                click_action: Some(Box::new(move || {
+                    d.set(!d.get());
+                    true
+                })),
+                ..Default::default()
+            },
+        );
+    }
+
+    state.borrow_mut().test_light_handle = None;
+    engine.set_enabled(btn, true);
+
+    let btn_e = btn;
+    let state_clone = Rc::clone(state);
+
+    engine.on_update(move |engine| {
+        let on = desired.get();
+        let currently = state_clone.borrow().editor.test_light;
+
+        // On toggle-on, spawn a persistent light at the cursor; on toggle-off,
+        // release it.
+        if on != currently {
+            if on {
+                let handle = engine.mouse_iso().and_then(|(mx, my)| {
+                    let p = engine.iso_to_world(mx, my, TEST_LIGHT_HEIGHT_M)?;
+                    engine.spawn_light(
+                        classic_core::components::Light {
+                            kind: classic_core::components::LightKind::Point,
+                            position: p,
+                            color: [1.0, 0.7, 0.3],
+                            intensity: 1.5,
+                            radius: 300.0,
+                            dir: glam::Vec3::ZERO,
+                            cone_angle: 0.0,
+                            parent: None,
+                        },
+                        None,
+                    )
+                });
+                state_clone.borrow_mut().test_light_handle = handle;
+            } else if let Some(h) = state_clone.borrow_mut().test_light_handle.take() {
+                engine.release_light(h);
+            }
+            state_clone.borrow_mut().editor.test_light = on;
+        }
+
+        // While toggled on, track the cursor every frame (a live preview).
+        if on {
+            let Some(h) = state_clone.borrow().test_light_handle else { return };
+            if let Some((mx, my)) = engine.mouse_iso() {
+                if let Some(p) = engine.iso_to_world(mx, my, TEST_LIGHT_HEIGHT_M) {
+                    engine.update_light(
+                        h,
+                        classic_core::components::Light {
+                            kind: classic_core::components::LightKind::Point,
+                            position: p,
+                            color: [1.0, 0.7, 0.3],
+                            intensity: 1.5,
+                            radius: 300.0,
+                            dir: glam::Vec3::ZERO,
+                            cone_angle: 0.0,
+                            parent: None,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Anchor the button to the top-left corner, under the light widget.
+        let vp = engine.ui.as_ref().map(|u| (u.viewport_w, u.viewport_h)).unwrap_or((0.0, 0.0));
+        if let Ok(mut tf) = engine.world.get::<&mut classic_core::Transform>(btn_e) {
+            tf.position = glam::Vec3::new(8.0, vp.1 - 8.0 - btn_sz, tf.position.z);
+        }
+        ui::UIManager::position_children_of(btn_e, &mut engine.world);
+    });
+}
+
 /// Light config widget: preset cycle + azimuth/elevation adjustment buttons.
 #[allow(clippy::too_many_lines)]
 pub fn init_light_widget(engine: &mut Engine, state: &DemoStateRef) {
