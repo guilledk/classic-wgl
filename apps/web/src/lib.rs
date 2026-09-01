@@ -152,21 +152,15 @@ async fn run() -> anyhow::Result<()> {
         }
     };
 
-    let mut engine: Option<classic_engine::Engine> = None;
+    // Bootstrap the engine asynchronously: the `.basis` transcode runs in a
+    // dedicated Worker (awaited here) so it never blocks the main thread.
+    let gl = platform.gl();
+    let mut engine = classic_demo::init_engine_multi_async(gl, &loaded).await;
 
-    platform.run_loop(move |gl, input, vw, vh, delta, should_close| {
-        if engine.is_none() {
-            classic_core::cl_info!(
-                classic_core::instrument::Chan::Platform,
-                "web: initialising engine"
-            );
-            engine = Some(classic_demo::init_engine_multi(gl, &loaded));
-        }
-        if let Some(e) = engine.as_mut() {
-            e.frame(input, vw, vh, delta);
-            if e.test_should_close {
-                *should_close = true;
-            }
+    platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {
+        engine.frame(input, vw, vh, delta);
+        if engine.test_should_close {
+            *should_close = true;
         }
     });
 

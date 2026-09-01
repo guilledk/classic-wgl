@@ -147,7 +147,7 @@ pub fn transcode_rgba8(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 }
 
 // Web: the compressed path uses our own precompiled transcoder `.wasm`
-// (P1.0/R3) — an Emscripten build of the Basis Universal transcoder,
-// instantiated synchronously on the main thread (see `basis_web`).
+// (P1.0/R3) — an Emscripten build of the Basis Universal transcoder, run in a
+// web Worker with a synchronous main-thread fallback (see `basis_web`).
 #[cfg(target_arch = "wasm32")]
-pub use crate::basis_web::{transcode, transcode_rgba8};
+pub use crate::basis_web::{transcode, transcode_async, transcode_rgba8, transcode_rgba8_async};

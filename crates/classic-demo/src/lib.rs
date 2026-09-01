@@ -110,16 +110,34 @@ pub fn init_guests(e: &mut Engine, state: &DemoStateRef, loaded: &LoadedRoms) {
 pub fn init_engine_multi(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
     let mut e = Engine::new();
     e.load_roms(gl, loaded);
+    finish_init_engine(&mut e, loaded);
+    e
+}
 
+/// Web-only async bootstrap: awaits the worker-ized `.basis` transcode during
+/// `load_roms_async`, then installs the shared host layer synchronously.
+#[cfg(target_arch = "wasm32")]
+pub async fn init_engine_multi_async(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
+    let mut e = Engine::new();
+    e.load_roms_async(gl, loaded).await;
+    finish_init_engine(&mut e, loaded);
+    e
+}
+
+/// The shared post-load tail of [`init_engine_multi`] (and its async variant):
+/// cursor/camera/animator prefabs, default lighting, the background guest
+/// worker, the ROM guests, terrain commit, colliders, and the editor/HUD host
+/// layer.
+fn finish_init_engine(e: &mut Engine, loaded: &LoadedRoms) {
     let state: DemoStateRef = Rc::new(RefCell::new(DemoState::default()));
 
-    prefabs::init_cursor(&mut e);
-    prefabs::init_camera_wasd(&mut e);
-    prefabs::init_animator_system(&mut e);
+    prefabs::init_cursor(e);
+    prefabs::init_camera_wasd(e);
+    prefabs::init_animator_system(e);
 
     // Default lighting (sunny) is applied before the guest installs, so a
     // guest that sets its own look (lunar) wins over the default.
-    lighting::init_lighting(&mut e, &state);
+    lighting::init_lighting(e, &state);
 
     // Install the background guest worker (Tier 3) *before* the foreground
     // guests run their `init` hook, so a generating guest can submit work from
@@ -138,7 +156,7 @@ pub fn init_engine_multi(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
     // ROM guest code.  Each guest owns its terrain — a generating guest
     // bulk-uploads the grids, a hand-authored guest commits its inline state —
     // and then owns its own view setup.
-    init_guests(&mut e, &state, loaded);
+    init_guests(e, &state, loaded);
 
     // Static scene (no guest): commit the ROM-authored grids so the tilemap
     // renders without a guest driving `commit_terrain`.
@@ -153,33 +171,33 @@ pub fn init_engine_multi(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
 
     // Footprint colliders sample the terrain heights, so they run after the
     // guest has committed the map.
-    prefabs::init_footprint_colliders(&mut e);
+    prefabs::init_footprint_colliders(e);
 
     // `CLASSIC_NO_UI` suppresses the whole editor/HUD/overlay layer so a capture
     // shows only the lit scene — the reference frame for lighting/shadow work,
     // where the SDF panel and HUD would otherwise occlude a third of the view.
     let host_features = loaded.root_rom().map(|r| r.manifest.host_features).unwrap_or(false);
     if host_features && !classic_engine::env_config::EnvConfig::get().no_ui {
-        prefabs::init_debug_toggles(&mut e, &state);
-        editor::init_ui(&mut e);
-        editor::init_tool_buttons(&mut e, &state);
-        editor::init_height_widget(&mut e, &state);
-        editor::init_vehicle_widget(&mut e);
-        lighting::init_light_widget(&mut e, &state);
+        prefabs::init_debug_toggles(e, &state);
+        editor::init_ui(e);
+        editor::init_tool_buttons(e, &state);
+        editor::init_height_widget(e, &state);
+        editor::init_vehicle_widget(e);
+        lighting::init_light_widget(e, &state);
         // The test-light widget is interactive-only (it spawns a pooled light
         // at the mouse), so it stays out of the deterministic headless/golden
         // render path.
         let env = classic_engine::env_config::EnvConfig::get();
         if !env.headless && !env.test_active() && !env.golden_active() {
-            lighting::init_test_light_widget(&mut e, &state);
+            lighting::init_test_light_widget(e, &state);
         }
-        editor::init_tile_palette(&mut e, &state);
-        editor::init_nav_palette(&mut e, &state);
+        editor::init_tile_palette(e, &state);
+        editor::init_nav_palette(e, &state);
         e.init_nav_mesh_render();
-        editor::init_editor_mode_control(&mut e, &state);
+        editor::init_editor_mode_control(e, &state);
         e.measure_all_ui_labels();
-        hud::init_text_showcase(&mut e, &state);
-        hud::init_iso_coord_overlay(&mut e, &state);
+        hud::init_text_showcase(e, &state);
+        hud::init_iso_coord_overlay(e, &state);
 
         // Engine hooks — the demo owns this behaviour, registered as callbacks.
         {
@@ -198,11 +216,10 @@ pub fn init_engine_multi(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
             e.add_overlay(hud::draw_rts_rubber_band);
         }
     }
-    testing::install(&mut e, &state);
+    testing::install(e, &state);
 
     let entrypoint = loaded.root_rom().map(|r| r.manifest.entrypoint.clone()).unwrap_or_default();
     cl_info!(Chan::Frame, "classic-demo initialized (entrypoint={})", entrypoint);
-    e
 }
 
 /// Full demo engine bootstrap for a single loaded ROM (the legacy path).  Wraps

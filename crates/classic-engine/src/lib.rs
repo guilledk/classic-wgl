@@ -91,6 +91,16 @@ struct TextureDepth {
     depth_range: f32,
 }
 
+/// A pending GPU-compressed (`.basis`) texture upload: one unique `src` sheet
+/// plus every manifest entry key that aliases it.  Collected by
+/// `load_manifest_resources` and uploaded in a second phase (synchronously on
+/// native, awaited through the web transcoder worker on wasm).
+struct BasisTextureJob {
+    keys: Vec<String>,
+    bytes: Vec<u8>,
+    format: String,
+}
+
 /// Packed-atlas UV draw params: `(uv_rect, trim_offset, source_size, content_size)`.
 type IsoUv = ([f32; 4], [f32; 2], [f32; 2], [f32; 2]);
 
@@ -497,11 +507,16 @@ impl Engine {
     /// normal companions, SDF fonts, animations, frame tables, vehicles) into
     /// the shared [`Gfx`] + engine registries.  Safe to call with `gfx == None`
     /// (texture upload is skipped; the non-GL registries still populate).
+    ///
+    /// GPU-compressed (`.basis`) textures are **not** uploaded here: they are
+    /// collected into the returned `Vec<BasisTextureJob>` for a second-phase
+    /// upload (sync on native, awaited through the web transcoder worker on
+    /// wasm), so the web path can transcode off the main thread.
     fn load_manifest_resources(
         &mut self,
         manifest: &classic_rom::RomManifest,
         resources: &classic_rom::ResourceSet,
-    ) {
+    ) -> Vec<BasisTextureJob> {
         // Textures from the manifest, skipping the SDF atlas textures (those
         // are uploaded by the SDF font path with LINEAR filtering).  Several
         // manifest entries may share one `src` — every frame-table texture
@@ -513,6 +528,8 @@ impl Engine {
         let atlas_names: std::collections::HashSet<String> =
             resources.fonts().keys().map(|f| self.entity_key(&format!("{f}-sdf"))).collect();
         let mut uploaded_by_src: HashMap<String, GlTexture> = HashMap::new();
+        let mut basis_by_src: HashMap<String, usize> = HashMap::new();
+        let mut basis_jobs: Vec<BasisTextureJob> = Vec::new();
         for entry in &manifest.manifest.textures {
             let key = self.entity_key(&entry.name);
             self.texture_names.insert(key.clone());
@@ -528,12 +545,24 @@ impl Engine {
                 }
                 continue;
             }
+            if let Some(job_idx) = basis_by_src.get(&entry.src) {
+                basis_jobs[*job_idx].keys.push(key);
+                continue;
+            }
             // GPU-compressed textures (Phase 1) transcode + upload via the
             // `format`-declared target; uncompressed textures use the native
             // channel count (RGB8 normal / R8 depth / RGBA8 albedo).
             if let Some(format) = &entry.format {
-                self.load_texture_basis(&key, bytes, format);
-            } else if entry.name.ends_with("-depth") {
+                let idx = basis_jobs.len();
+                basis_jobs.push(BasisTextureJob {
+                    keys: vec![key],
+                    bytes: bytes.clone(),
+                    format: format.clone(),
+                });
+                basis_by_src.insert(entry.src.clone(), idx);
+                continue;
+            }
+            if entry.name.ends_with("-depth") {
                 self.load_texture_luma8(&key, bytes);
             } else if entry.name.ends_with("-normal") {
                 self.load_texture_rgb8(&key, bytes);
@@ -661,6 +690,41 @@ impl Engine {
                 }
             }
         }
+
+        basis_jobs
+    }
+
+    /// Upload a batch of pending `.basis` textures synchronously (native), then
+    /// alias each job's remaining keys to the first key's GL texture.
+    fn upload_basis_sync(&mut self, jobs: &[BasisTextureJob]) {
+        for job in jobs {
+            self.load_texture_basis(&job.keys[0], &job.bytes, &job.format);
+            let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
+            if let Some(tex) = tex {
+                for alias in &job.keys[1..] {
+                    if let Some(gfx) = self.gfx.as_mut() {
+                        gfx.textures.insert(alias.clone(), tex.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Upload a batch of pending `.basis` textures through the web transcoder
+    /// worker (awaited), then alias each job's remaining keys.
+    #[cfg(target_arch = "wasm32")]
+    async fn upload_basis_async(&mut self, jobs: Vec<BasisTextureJob>) {
+        for job in jobs {
+            self.load_texture_basis_async(&job.keys[0], &job.bytes, &job.format).await;
+            let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
+            if let Some(tex) = tex {
+                for alias in &job.keys[1..] {
+                    if let Some(gfx) = self.gfx.as_mut() {
+                        gfx.textures.insert(alias.clone(), tex.clone());
+                    }
+                }
+            }
+        }
     }
 
     /// Initialise the GL layer from a ROM manifest + resource set: compile the
@@ -716,6 +780,21 @@ impl Engine {
         self.hydrate_roms(loaded);
     }
 
+    /// Web-only async counterpart to [`Engine::load_roms`]: the `.basis`
+    /// transcode stage is awaited through the web transcoder worker (the rest of
+    /// hydration stays synchronous).
+    #[cfg(target_arch = "wasm32")]
+    pub async fn load_roms_async(
+        &mut self,
+        gl: Rc<glow::Context>,
+        loaded: &classic_rom::LoadedRoms,
+    ) {
+        if let Some(root) = loaded.root_rom() {
+            self.ensure_gfx(gl, &root.manifest);
+        }
+        self.hydrate_roms_async(loaded).await;
+    }
+
     /// The GL-free core of [`Engine::load_roms`]: per-ROM resource + entity +
     /// grid hydration in topological order, plus DAG bookkeeping.  Split out so
     /// the multi-ROM logic is unit-testable without a GL context.
@@ -724,13 +803,39 @@ impl Engine {
         for entry in &loaded.order {
             let ns = Self::effective_namespace(entry, multi);
             self.namespace = ns.clone();
-            self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources);
-            let keys = self.load_state_in(&ns, &entry.rom.state).expect("load ROM state");
-            self.rewrite_cross_refs(&ns, &keys);
-            self.rewrite_resource_refs(&ns, &keys);
-            self.load_grids(&entry.rom.resources);
+            let jobs = self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources);
+            self.upload_basis_sync(&jobs);
+            self.hydrate_rom_entry(&ns, entry);
         }
+        self.finish_hydrate_roms(loaded);
+    }
 
+    /// Web-only async hydration: identical to [`Engine::hydrate_roms`] except the
+    /// `.basis` upload is awaited through the transcoder worker.
+    #[cfg(target_arch = "wasm32")]
+    async fn hydrate_roms_async(&mut self, loaded: &classic_rom::LoadedRoms) {
+        let multi = loaded.order.len() > 1;
+        for entry in &loaded.order {
+            let ns = Self::effective_namespace(entry, multi);
+            self.namespace = ns.clone();
+            let jobs = self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources);
+            self.upload_basis_async(jobs).await;
+            self.hydrate_rom_entry(&ns, entry);
+        }
+        self.finish_hydrate_roms(loaded);
+    }
+
+    /// Hydrate one ROM entry's state + grids (after its resources are loaded).
+    fn hydrate_rom_entry(&mut self, ns: &str, entry: &classic_rom::LoadedRom) {
+        let keys = self.load_state_in(ns, &entry.rom.state).expect("load ROM state");
+        self.rewrite_cross_refs(ns, &keys);
+        self.rewrite_resource_refs(ns, &keys);
+        self.load_grids(&entry.rom.resources);
+    }
+
+    /// Shared tail of [`Engine::hydrate_roms`] / [`Engine::hydrate_roms_async`]:
+    /// DAG bookkeeping, the item catalog, and per-scene vehicle overrides.
+    fn finish_hydrate_roms(&mut self, loaded: &classic_rom::LoadedRoms) {
         self.loaded_roms = loaded.order.clone();
 
         // Item catalog: the root ROM's items/inventory_types (per-ROM item
@@ -1400,10 +1505,21 @@ impl Engine {
     /// Upload a Basis Universal `.basis` payload as a GPU-compressed texture
     /// (transcoding to the `format`-declared target, or raw RGBA8 as fallback).
     /// A payload that cannot be transcoded is dropped (logged), leaving the
-    /// texture unuploaded — the web transcoder gap (P1.0/R2) surfaces here.
+    /// texture unuploaded.
     pub fn load_texture_basis(&mut self, name: &str, basis_bytes: &[u8], format: &str) {
         if let Some(gfx) = self.gfx.as_mut() {
             if !gfx.add_texture_basis(name, basis_bytes, format) {
+                log::warn!("texture {name}: basis transcode unavailable (format {format})");
+            }
+        }
+    }
+
+    /// Web-only async counterpart to [`Engine::load_texture_basis`]: transcode
+    /// off the main thread (worker) and upload, awaited by the caller.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn load_texture_basis_async(&mut self, name: &str, basis_bytes: &[u8], format: &str) {
+        if let Some(gfx) = self.gfx.as_mut() {
+            if !gfx.add_texture_basis_async(name, basis_bytes, format).await {
                 log::warn!("texture {name}: basis transcode unavailable (format {format})");
             }
         }
