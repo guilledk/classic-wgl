@@ -241,6 +241,9 @@ pub struct Engine {
     /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
     /// `vehicles` resources at boot.
     pub vehicles: HashMap<String, classic_core::types::VehicleDef>,
+    /// Blender-exported vehicle anchors data artifacts keyed by name, loaded
+    /// from the ROM's `data` resources (referenced by `VehicleDef::anchors`).
+    pub vehicle_anchors: HashMap<String, classic_core::types::VehicleAnchors>,
     /// The ROM-namespaced item catalog, interned once at `load_rom`.  Read-only
     /// after load; the inventory mechanics look items up by [`ItemId`].
     pub items: classic_core::inventory::ItemRegistry,
@@ -397,6 +400,7 @@ impl Engine {
             texture_normals: HashMap::new(),
             texture_names: HashSet::new(),
             vehicles: HashMap::new(),
+            vehicle_anchors: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),
             next_ghost_group: 1,
             rom_manifest_json: None,
@@ -637,6 +641,22 @@ impl Engine {
                 }
             }
         }
+
+        // Blender-exported data artifacts (vehicle anchors, …) from the `data`
+        // resources, keyed by name and referenced by authored defs' `anchors`.
+        for (name, bytes) in resources.data() {
+            match serde_json::from_slice::<classic_core::types::VehicleAnchors>(bytes) {
+                Ok(anchors) => {
+                    self.vehicle_anchors.insert(self.entity_key(name), anchors);
+                }
+                Err(e) => {
+                    classic_core::cl_error!(
+                        Chan::Guest,
+                        "data artifact '{name}' parse failed: {e}"
+                    );
+                }
+            }
+        }
     }
 
     /// Initialise the GL layer from a ROM manifest + resource set: compile the
@@ -732,25 +752,15 @@ impl Engine {
     }
 
     /// Merge the root manifest's `vehicle_overrides` (qualified vehicle name →
-    /// top-level `VehicleDef` field overrides) into the hydrated vehicle
-    /// registry.  A vehicle not present (or an override with no object shape)
-    /// is skipped; the merge mirrors `classic-roms`' old pack-time bake —
-    /// serialize the loaded def, overlay the override keys, deserialize back.
+    /// typed `VehicleOverrides`) into the hydrated vehicle registry by direct
+    /// field assignment — no JSON round-trip.  A vehicle not present is skipped.
     fn apply_vehicle_overrides(
         &mut self,
-        overrides: &std::collections::HashMap<String, serde_json::Value>,
+        overrides: &std::collections::HashMap<String, classic_core::types::VehicleOverrides>,
     ) {
-        for (name, override_val) in overrides {
-            let Some(def) = self.vehicles.get(name).cloned() else { continue };
-            let Ok(mut val) = serde_json::to_value(&def) else { continue };
-            let Some(obj) = val.as_object_mut() else { continue };
-            if let Some(ov) = override_val.as_object() {
-                for (key, value) in ov {
-                    obj.insert(key.clone(), value.clone());
-                }
-            }
-            if let Ok(merged) = serde_json::from_value::<classic_core::types::VehicleDef>(val) {
-                self.vehicles.insert(name.clone(), merged);
+        for (name, ov) in overrides {
+            if let Some(def) = self.vehicles.get_mut(name) {
+                ov.apply_to(def);
             }
         }
     }
@@ -5493,13 +5503,13 @@ mod tests {
     fn apply_vehicle_overrides_merges_root_tuning_into_shared_def() {
         let mut e = Engine::new_for_test();
         let def: classic_core::types::VehicleDef = serde_json::from_str(
-            r#"{"name":"lrv","directions":8,
-                "parts":[{"name":"body","texture":"lrvBody","anchors":[[0.5,0.5]]}]}"#,
+            r#"{"name":"lrv","directions":8,"anchors":"lrv_anchors",
+                "parts":[{"name":"body","texture":"lrvBody"}]}"#,
         )
         .unwrap();
         e.vehicles.insert("lunar-common::lrv".into(), def);
 
-        let overrides: std::collections::HashMap<String, serde_json::Value> =
+        let overrides: std::collections::HashMap<String, classic_core::types::VehicleOverrides> =
             serde_json::from_value(serde_json::json!({
                 "lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0, "safe_fall_px": 96.0}
             }))
@@ -5514,10 +5524,11 @@ mod tests {
         assert_eq!(merged.parts.len(), 1);
 
         // An override for a vehicle the DAG didn't hydrate is ignored.
-        let unknown: std::collections::HashMap<String, serde_json::Value> = serde_json::from_value(
-            serde_json::json!({"missing::lrv": {"turn_rate_deg_per_sec": 1.0}}),
-        )
-        .unwrap();
+        let unknown: std::collections::HashMap<String, classic_core::types::VehicleOverrides> =
+            serde_json::from_value(
+                serde_json::json!({"missing::lrv": {"turn_rate_deg_per_sec": 1.0}}),
+            )
+            .unwrap();
         e.apply_vehicle_overrides(&unknown);
         assert!(!e.vehicles.contains_key("missing::lrv"));
     }
