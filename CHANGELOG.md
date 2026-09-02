@@ -24,6 +24,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   line per draw item with its screen-space rect) alongside the golden trace, so
   text-only models can introspect a rendered frame.
 
+### Changed
+
+- Read the vehicle anchors `data[]` artifact as `name → anchors` maps
+  (`BTreeMap`), dropping the redundant `name`/`directions`/per-part `texture`
+  fields (#89).
+
 ## [0.1.1] - 2026-09-01
 
 ### Added
