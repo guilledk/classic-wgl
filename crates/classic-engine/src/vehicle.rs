@@ -362,12 +362,14 @@ fn derive_wheel_offsets(
 /// The values pushed into the body + wheel sprites each frame.
 struct VehicleWrite {
     body: [f32; 3],
-    body_offset_y: f32,
+    /// Body lift above its own terrain in **world metres** (`frame_offset.z`).
+    body_altitude: f32,
     body_anchor: [f32; 2],
     direction: u32,
     body_frame: f32,
     wheel_xy: [[f32; 2]; 4],
-    wheel_off_y: [f32; 4],
+    /// Per-wheel lift above its terrain in **world metres** (`frame_offset.z`).
+    wheel_altitude: [f32; 4],
     wheel_z: [f32; 4],
     wheel_anchors: [[f32; 2]; 4],
     steer_index: u32,
@@ -784,9 +786,9 @@ impl Engine {
                 }
             }
             v.airborne = airborne;
-            // `frame_offset.y` is still squashed-cartesian px until step C.6;
-            // write the lift back in px so the sprite model un-projects it.
-            let body_offset_y = -(v.altitude - body_terrain) * PPM_TARGET;
+            // `frame_offset.z` is the altitude above the sprite's own terrain in
+            // world metres (the sprite model re-adds terrain height at its x/y).
+            let body_altitude = v.altitude - body_terrain;
 
             // -- body pitch (angular spring-damper) --------------------------
             // Target = terrain slope along the heading from the instantaneous
@@ -834,7 +836,7 @@ impl Engine {
             // around the body plane: it droops at most `wheel_travel_down` below
             // and compresses at most `wheel_travel_up` above.  Anything beyond
             // that is absorbed by the body plane (lift + tilt) instead.
-            let mut wheel_off_y = [0.0f32; 4];
+            let mut wheel_altitude = [0.0f32; 4];
             let mut wheel_z = [0.0f32; 4];
             for i in 0..4 {
                 let target = wheel_ground[i]
@@ -845,7 +847,7 @@ impl Engine {
                 // Never sink below the terrain, and never compress above the
                 // travel cap (so wheels never ride over the body).
                 let final_h = v.wheel_h[i].max(wheel_ground[i]).min(plane[i] + v.wheel_travel_up);
-                wheel_off_y[i] = -(final_h - wheel_ground[i]) * PPM_TARGET;
+                wheel_altitude[i] = final_h - wheel_ground[i];
                 wheel_z[i] = final_h;
             }
 
@@ -859,12 +861,12 @@ impl Engine {
 
             VehicleWrite {
                 body: [x, y, v.altitude],
-                body_offset_y,
+                body_altitude,
                 body_anchor: lerp_dir2(&v.body_anchors, v.heading),
                 direction: v.direction,
                 body_frame,
                 wheel_xy,
-                wheel_off_y,
+                wheel_altitude,
                 wheel_z,
                 wheel_anchors,
                 steer_index: v.steer_index,
@@ -890,7 +892,7 @@ impl Engine {
         if let Ok(mut s) = self.world.get::<&mut IsoSprite>(ve) {
             s.frame = write.body_frame;
             s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, write.body_frame);
-            s.frame_offset.y = write.body_offset_y;
+            s.frame_offset.z = write.body_altitude;
             s.anchor = Vec2::from(write.body_anchor);
         }
 
@@ -904,7 +906,7 @@ impl Engine {
             if let Ok(mut s) = self.world.get::<&mut IsoSprite>(*we) {
                 s.frame = write.direction as f32;
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, s.frame);
-                s.frame_offset.y = write.wheel_off_y[i];
+                s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
             }
         }
@@ -922,7 +924,7 @@ impl Engine {
                 let frame = (write.steer_index * DIRECTIONS + write.direction) as f32;
                 s.frame = frame;
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, frame);
-                s.frame_offset.y = write.wheel_off_y[i];
+                s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
             }
         }
@@ -986,12 +988,12 @@ impl Engine {
 
             VehicleWrite {
                 body: [x, y, v.altitude],
-                body_offset_y: -(v.altitude - terrain.height(x, y)) * PPM_TARGET,
+                body_altitude: v.altitude - terrain.height(x, y),
                 body_anchor: v.body_anchors[direction],
                 direction: v.direction,
                 body_frame,
                 wheel_xy,
-                wheel_off_y: [0.0; 4],
+                wheel_altitude: [0.0; 4],
                 wheel_z,
                 wheel_anchors,
                 steer_index: v.steer_index,
