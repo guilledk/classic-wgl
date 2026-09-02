@@ -27,6 +27,7 @@ pub mod state;
 pub mod testing;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use classic_core::cl_error;
@@ -34,9 +35,14 @@ use classic_core::cl_info;
 use classic_core::instrument::Chan;
 use classic_engine::Engine;
 use classic_guest::{create_runtime, GuestLimits, GuestRuntime};
-use classic_rom::{BootEvent, BootSink, LoadedRoms, Rom};
+use classic_rom::{BootEvent, BootSink, LoadedRom, LoadedRoms, Rom};
 
 use crate::state::{DemoState, DemoStateRef};
+
+/// Compiled native guest modules keyed by ROM resolver name — the off-main-
+/// thread half of guest init (see [`compile_guest_modules`]).  Empty on web,
+/// where browser `WebAssembly` compiles inline during [`init_guest`].
+pub type CompiledModules = HashMap<String, classic_guest::CompiledModule>;
 
 /// Install a single ROM guest runtime: instantiate the ROM's compiled guest
 /// module against the given namespace, run its optional one-shot `init` hook
@@ -57,30 +63,103 @@ pub fn init_guest(
     e.set_synchronous_workers(limits.synchronous_workers);
     sink.on_event(BootEvent::GuestCompiling { rom: rom.to_string() });
     match create_runtime(wasm, limits) {
-        Ok(mut rt) => {
-            sink.on_event(BootEvent::GuestInstantiated { rom: rom.to_string() });
-            rt.set_namespace(namespace);
-            if let Err(err) = rt.init(e) {
-                cl_error!(Chan::Guest, "guest init failed: {err}");
-            }
-            let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(rt));
-            state.borrow_mut().guests.push(rt.clone());
-            let mut started = false;
-            e.on_update(move |engine| {
-                let dt = engine.time.delta as f64;
-                let mut guest = rt.borrow_mut();
-                if let Err(err) = guest.update(engine, dt) {
-                    cl_error!(Chan::Guest, "guest update failed: {err}");
-                }
-                if !started {
-                    started = true;
-                    if let Err(err) = guest.start(engine) {
-                        cl_error!(Chan::Guest, "guest start failed: {err}");
-                    }
-                }
-            });
-        }
+        Ok(rt) => install_guest_runtime(e, state, rt, namespace, rom, sink),
         Err(err) => cl_error!(Chan::Guest, "init_guest: {err}"),
+    }
+}
+
+/// Install a guest from a module already compiled off-thread.  The
+/// `GuestCompiling` event was emitted on the background thread during
+/// [`compile_guest_modules`]; only instantiation happens here (GL thread).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn init_guest_compiled(
+    e: &mut Engine,
+    state: &DemoStateRef,
+    module: &classic_guest::CompiledModule,
+    limits: &GuestLimits,
+    namespace: &str,
+    rom: &str,
+    sink: &dyn BootSink,
+) {
+    e.set_synchronous_workers(limits.synchronous_workers);
+    match classic_guest::create_runtime_from_module(module, limits) {
+        Ok(rt) => install_guest_runtime(e, state, rt, namespace, rom, sink),
+        Err(err) => cl_error!(Chan::Guest, "init_guest: {err}"),
+    }
+}
+
+/// The shared tail of guest install: emit `GuestInstantiated`, run the
+/// one-shot `init` hook synchronously, and register the per-frame
+/// `update`/`start` closure.
+fn install_guest_runtime(
+    e: &mut Engine,
+    state: &DemoStateRef,
+    mut rt: Box<dyn GuestRuntime>,
+    namespace: &str,
+    rom: &str,
+    sink: &dyn BootSink,
+) {
+    sink.on_event(BootEvent::GuestInstantiated { rom: rom.to_string() });
+    rt.set_namespace(namespace);
+    if let Err(err) = rt.init(e) {
+        cl_error!(Chan::Guest, "guest init failed: {err}");
+    }
+    let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(rt));
+    state.borrow_mut().guests.push(rt.clone());
+    let mut started = false;
+    e.on_update(move |engine| {
+        let dt = engine.time.delta as f64;
+        let mut guest = rt.borrow_mut();
+        if let Err(err) = guest.update(engine, dt) {
+            cl_error!(Chan::Guest, "guest update failed: {err}");
+        }
+        if !started {
+            started = true;
+            if let Err(err) = guest.start(engine) {
+                cl_error!(Chan::Guest, "guest start failed: {err}");
+            }
+        }
+    });
+}
+
+/// The per-ROM guest limits used by both the off-thread compile and the on-
+/// thread instantiate, so the two halves agree on fuel/memory/sync config.
+fn guest_limits(entry: &LoadedRom) -> GuestLimits {
+    let env = classic_engine::env_config::EnvConfig::get();
+    GuestLimits {
+        trusted: entry.rom.manifest.trusted,
+        // The deterministic harness (CLASSIC_TEST) and golden capture both
+        // force synchronous workers so frame output is independent of
+        // background-thread scheduling.
+        synchronous_workers: env.test_active() || env.golden_active(),
+        ..GuestLimits::default()
+    }
+}
+
+/// Compile every guest module in the DAG off the main thread (native
+/// wasmtime), keyed by ROM resolver name.  Emits `GuestCompiling` per compiled
+/// module.  On web this returns an empty map (guests compile inline).
+pub fn compile_guest_modules(loaded: &LoadedRoms, sink: &dyn BootSink) -> CompiledModules {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut out = CompiledModules::new();
+        for entry in &loaded.order {
+            let Some(wasm) = entry.rom.resources.code().get("main") else { continue };
+            let limits = guest_limits(entry);
+            sink.on_event(BootEvent::GuestCompiling { rom: entry.name.clone() });
+            match classic_guest::compile_module(wasm, &limits) {
+                Ok(module) => {
+                    out.insert(entry.name.clone(), module);
+                }
+                Err(err) => cl_error!(Chan::Guest, "compile guest `{}`: {err}", entry.name),
+            }
+        }
+        out
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (loaded, sink);
+        CompiledModules::new()
     }
 }
 
@@ -88,19 +167,26 @@ pub fn init_guest(
 /// topological order (deps first), so a dependent scene's guest `init` can
 /// reference dependency entities at init and per-frame `update`s run deps
 /// before dependents.
-pub fn init_guests(e: &mut Engine, state: &DemoStateRef, loaded: &LoadedRoms, sink: &dyn BootSink) {
-    let env = classic_engine::env_config::EnvConfig::get();
+pub fn init_guests(
+    e: &mut Engine,
+    state: &DemoStateRef,
+    loaded: &LoadedRoms,
+    compiled: &CompiledModules,
+    sink: &dyn BootSink,
+) {
+    // Web compiles guests inline, so the pre-compiled map is always empty there.
+    #[cfg(target_arch = "wasm32")]
+    let _ = compiled;
+
     for entry in &loaded.order {
         let Some(wasm) = entry.rom.resources.code().get("main") else { continue };
         let ns = e.rom_namespace(&entry.name);
-        let limits = GuestLimits {
-            trusted: entry.rom.manifest.trusted,
-            // The deterministic harness (CLASSIC_TEST) and golden capture both
-            // force synchronous workers so frame output is independent of
-            // background-thread scheduling.
-            synchronous_workers: env.test_active() || env.golden_active(),
-            ..GuestLimits::default()
-        };
+        let limits = guest_limits(entry);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(module) = compiled.get(&entry.name) {
+            init_guest_compiled(e, state, module, &limits, &ns, &entry.name, sink);
+            continue;
+        }
         init_guest(e, state, wasm, &limits, &ns, &entry.name, sink);
     }
 }
@@ -118,7 +204,24 @@ pub fn init_engine_multi(
 ) -> Engine {
     let mut e = Engine::new();
     e.load_roms(gl, loaded, sink);
-    finish_init_engine(&mut e, loaded, sink);
+    finish_init_engine(&mut e, loaded, &CompiledModules::new(), sink);
+    e
+}
+
+/// Desktop async bootstrap: `loaded` was resolved and its textures decoded and
+/// guests compiled off-thread; this hydrates the GL-side steps (upload, SDF,
+/// entity/guest instantiate) on the calling thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn init_engine_multi_decoded(
+    gl: Rc<glow::Context>,
+    loaded: &LoadedRoms,
+    decoded: HashMap<String, classic_engine::boot::DecodedTexture>,
+    compiled: &CompiledModules,
+    sink: &dyn BootSink,
+) -> Engine {
+    let mut e = Engine::new();
+    e.load_roms_decoded(gl, loaded, decoded, sink);
+    finish_init_engine(&mut e, loaded, compiled, sink);
     e
 }
 
@@ -132,7 +235,7 @@ pub async fn init_engine_multi_async(
 ) -> Engine {
     let mut e = Engine::new();
     e.load_roms_async(gl, loaded, sink).await;
-    finish_init_engine(&mut e, loaded, sink);
+    finish_init_engine(&mut e, loaded, &CompiledModules::new(), sink);
     e
 }
 
@@ -140,7 +243,12 @@ pub async fn init_engine_multi_async(
 /// cursor/camera/animator prefabs, default lighting, the background guest
 /// worker, the ROM guests, terrain commit, colliders, and the editor/HUD host
 /// layer.
-fn finish_init_engine(e: &mut Engine, loaded: &LoadedRoms, sink: &dyn BootSink) {
+fn finish_init_engine(
+    e: &mut Engine,
+    loaded: &LoadedRoms,
+    compiled: &CompiledModules,
+    sink: &dyn BootSink,
+) {
     let state: DemoStateRef = Rc::new(RefCell::new(DemoState::default()));
 
     prefabs::init_cursor(e);
@@ -168,7 +276,7 @@ fn finish_init_engine(e: &mut Engine, loaded: &LoadedRoms, sink: &dyn BootSink) 
     // ROM guest code.  Each guest owns its terrain — a generating guest
     // bulk-uploads the grids, a hand-authored guest commits its inline state —
     // and then owns its own view setup.
-    init_guests(e, &state, loaded, sink);
+    init_guests(e, &state, loaded, compiled, sink);
 
     // Static scene (no guest): commit the ROM-authored grids so the tilemap
     // renders without a guest driving `commit_terrain`.

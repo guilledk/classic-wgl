@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use classic_rom::{BootSink, LoadedRoms, ResourceKind};
+use classic_rom::{BootEvent, BootSink, LoadedRoms, ResourceKind};
 
 /// Owned, decoded texture pixels (Send), ready for GL upload.
 #[derive(Clone, Debug)]
@@ -105,6 +105,33 @@ impl<'a> BootPlan<'a> {
     pub fn total_steps(&self) -> usize {
         self.steps.len()
     }
+}
+
+/// Decode every pending [`BootStep::Decode`] step in `plan` into owned, `Send`
+/// [`DecodedTexture`]s keyed for the matching [`BootStep::Upload`], emitting a
+/// [`BootEvent::ResourceDecoded`] per texture.
+///
+/// This is the off-main-thread half of boot: it touches only `image` decode
+/// (no GL) and consumes each `Decode` step (replacing it with the default
+/// [`BootStep::Noop`]) so the large pixel payloads are moved, never cloned.
+/// Every non-decode step is left untouched for the GL thread to run.  The
+/// returned map is `Send` and crosses the thread boundary as the decoded-assets
+/// payload.
+pub fn decode_plan(plan: &mut BootPlan<'_>) -> HashMap<String, DecodedTexture> {
+    let mut decoded = HashMap::new();
+    for step in &mut plan.steps {
+        let taken = std::mem::take(step);
+        match taken {
+            BootStep::Decode { key, rom, kind, format, bytes } => {
+                let texture = decode_texture(format, &bytes);
+                let dims = texture.dims();
+                decoded.insert(key.clone(), texture);
+                plan.sink.on_event(BootEvent::ResourceDecoded { rom, kind, name: key, dims });
+            }
+            other => *step = other,
+        }
+    }
+    decoded
 }
 
 /// Decode a PNG into owned pixels of the given channel layout.

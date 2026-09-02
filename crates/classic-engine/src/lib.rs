@@ -783,6 +783,23 @@ impl Engine {
     /// consumed.  `n == usize::MAX` drains the whole plan synchronously —
     /// the golden/headless/test fast path.
     pub fn boot_step(&mut self, plan: &mut boot::BootPlan<'_>, n: usize) -> usize {
+        self.boot_step_impl(plan, n, true)
+    }
+
+    /// Like [`Engine::boot_step`], but `Decode` steps are treated as already
+    /// done: their pixels were decoded off-thread and injected into
+    /// `plan.decoded` (see [`boot::decode_plan`]).  Upload + metadata + SDF +
+    /// entity/guest instantiate still run here, on the GL thread.
+    pub fn boot_step_predecoded(&mut self, plan: &mut boot::BootPlan<'_>, n: usize) -> usize {
+        self.boot_step_impl(plan, n, false)
+    }
+
+    fn boot_step_impl(
+        &mut self,
+        plan: &mut boot::BootPlan<'_>,
+        n: usize,
+        do_decode: bool,
+    ) -> usize {
         let mut ran = 0;
         while ran < n && plan.cursor < plan.steps.len() {
             let step = std::mem::take(&mut plan.steps[plan.cursor]);
@@ -790,15 +807,19 @@ impl Engine {
             ran += 1;
             match step {
                 boot::BootStep::Decode { key, rom, kind, format, bytes } => {
-                    let decoded = boot::decode_texture(format, &bytes);
-                    let dims = decoded.dims();
-                    plan.decoded.insert(key.clone(), decoded);
-                    plan.sink.on_event(classic_rom::BootEvent::ResourceDecoded {
-                        rom,
-                        kind,
-                        name: key,
-                        dims,
-                    });
+                    // The pre-decoded path skips the CPU decode (the pixels are
+                    // already in `plan.decoded`); the bytes are simply dropped.
+                    if do_decode {
+                        let decoded = boot::decode_texture(format, &bytes);
+                        let dims = decoded.dims();
+                        plan.decoded.insert(key.clone(), decoded);
+                        plan.sink.on_event(classic_rom::BootEvent::ResourceDecoded {
+                            rom,
+                            kind,
+                            name: key,
+                            dims,
+                        });
+                    }
                 }
                 boot::BootStep::Upload { key } => {
                     if let Some(decoded) = plan.decoded.remove(&key) {
@@ -916,6 +937,27 @@ impl Engine {
             self.ensure_gfx(gl, &root.manifest, sink);
         }
         self.hydrate_roms(loaded, sink);
+    }
+
+    /// Hydrate the engine from a resolved DAG whose texture `Decode` steps were
+    /// already run off-thread.  `decoded` maps each texture key to its
+    /// [`boot::DecodedTexture`] pixels (produced by [`boot::decode_plan`]);
+    /// the `Decode` steps are skipped and every remaining step (upload,
+    /// metadata, SDF, entity hydrate, finish) runs on this, the GL thread.
+    pub fn load_roms_decoded(
+        &mut self,
+        gl: Rc<glow::Context>,
+        loaded: &classic_rom::LoadedRoms,
+        decoded: HashMap<String, boot::DecodedTexture>,
+        sink: &dyn classic_rom::BootSink,
+    ) {
+        if let Some(root) = loaded.root_rom() {
+            self.ensure_gfx(gl, &root.manifest, sink);
+        }
+        let mut plan = self.begin_boot(loaded, sink);
+        plan.decoded = decoded;
+        self.boot_step_predecoded(&mut plan, usize::MAX);
+        self.upload_basis_sync(&plan.basis_jobs, sink);
     }
 
     /// Web-only async counterpart to [`Engine::load_roms`]: the `.basis`

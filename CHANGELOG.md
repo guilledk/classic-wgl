@@ -31,6 +31,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `BootPlan`/`BootStep` pipeline (`Engine::begin_boot`/`boot_step`), splitting
   each texture into CPU decode (`DecodedTexture`) and GL upload, with a
   `boot_step(usize::MAX)` synchronous fast path.
+- Async desktop boot: create the window first, then run ROM resolve, archive
+  decompress, texture decode, and wasmtime module compile on a background thread
+  (streaming `BootEvent` over `mpsc`) while the main thread drains events and
+  uploads decoded textures; the headless/golden boot stays synchronous.
 
 ### Changed
 
