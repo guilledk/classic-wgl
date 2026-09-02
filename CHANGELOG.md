@@ -27,6 +27,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   sinks) threaded through ROM resolve, archive open, resource load, and guest
   init, plus a `CLASSIC_LOADER`/`CLASSIC_BOOT_LOG` config and a `boot` log
   channel.
+- Boot plan: split ROM hydration into a precomputed, incrementally-consumable
+  `BootPlan`/`BootStep` pipeline (`Engine::begin_boot`/`boot_step`), splitting
+  each texture into CPU decode (`DecodedTexture`) and GL upload, with a
+  `boot_step(usize::MAX)` synchronous fast path.
 
 ### Changed
 

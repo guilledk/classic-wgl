@@ -13,6 +13,7 @@
 //! - [classic-testing](.agents/skills/classic-testing/SKILL.md) — CLASSIC_TEST, golden harness
 //! - [classic-debugging](.agents/skills/classic-debugging/SKILL.md) — CLASSIC_LOG, debugging playbook
 
+pub mod boot;
 pub mod env_config;
 pub mod golden;
 pub mod inventory;
@@ -51,7 +52,7 @@ use classic_core::types::FrameTable;
 use classic_core::types::OffsetKeyframe;
 use classic_core::types::SdfFontMetrics;
 use classic_core::{Camera, RoleKind, SpriteRender, Transform};
-use classic_gfx::{Gfx, GlBuffer, GlTexture, IsoSpritePass, RenderSettings, SpriteRegion};
+use classic_gfx::{Gfx, GlBuffer, IsoSpritePass, RenderSettings, SpriteRegion};
 use classic_platform::InputState;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
@@ -94,13 +95,10 @@ struct TextureDepth {
 
 /// A pending GPU-compressed (`.basis`) texture upload: one unique `src` sheet
 /// plus every manifest entry key that aliases it.  Collected by
-/// `load_manifest_resources` and uploaded in a second phase (synchronously on
-/// native, awaited through the web transcoder worker on wasm).
-struct BasisTextureJob {
-    keys: Vec<String>,
-    bytes: Vec<u8>,
-    format: String,
-}
+/// `begin_boot` and uploaded in a second phase (synchronously on native,
+/// awaited through the web transcoder worker on wasm).  Lives in `boot` so the
+/// plan can own it.
+use boot::BasisTextureJob;
 
 /// Packed-atlas UV draw params: `(uv_rect, trim_offset, source_size, content_size)`.
 type IsoUv = ([f32; 4], [f32; 2], [f32; 2], [f32; 2]);
@@ -513,153 +511,194 @@ impl Engine {
         }
     }
 
-    /// Upload/register a ROM's manifest-declared resources (textures, depth +
-    /// normal companions, SDF fonts, animations, frame tables, vehicles) into
-    /// the shared [`Gfx`] + engine registries.  Safe to call with `gfx == None`
-    /// (texture upload is skipped; the non-GL registries still populate).
+    /// Build the hydration [`boot::BootPlan`] for a resolved multi-ROM DAG.
     ///
-    /// GPU-compressed (`.basis`) textures are **not** uploaded here: they are
-    /// collected into the returned `Vec<BasisTextureJob>` for a second-phase
-    /// upload (sync on native, awaited through the web transcoder worker on
-    /// wasm), so the web path can transcode off the main thread.
-    ///
-    /// Decode/upload progress is streamed to `sink` as
-    /// `ResourceDecoded`/`TextureUploaded` events.
-    fn load_manifest_resources(
+    /// Precomputes the sequence of [`boot::BootStep`]s — one texture decode +
+    /// upload per unique sheet, one SDF font, one metadata registration, one
+    /// entity-hydration batch, and the shared finish tail — plus the pending
+    /// basis jobs, **without** mutating the engine.  Consume it with
+    /// [`Engine::boot_step`].  Running every step (`boot_step(usize::MAX)`) is
+    /// byte-for-byte equivalent to the old synchronous boot.
+    pub fn begin_boot<'a>(
+        &self,
+        loaded: &'a classic_rom::LoadedRoms,
+        sink: &'a dyn classic_rom::BootSink,
+    ) -> boot::BootPlan<'a> {
+        let multi = loaded.order.len() > 1;
+        let mut steps: Vec<boot::BootStep> = Vec::new();
+        let mut basis_jobs: Vec<BasisTextureJob> = Vec::new();
+
+        for (entry_idx, entry) in loaded.order.iter().enumerate() {
+            let ns = Self::effective_namespace(entry, multi);
+            let manifest = &entry.rom.manifest;
+            let resources = &entry.rom.resources;
+            let rom = if manifest.entrypoint.is_empty() {
+                "root".to_string()
+            } else {
+                manifest.entrypoint.clone()
+            };
+
+            // Cheap non-GL registrations (texture names, depth/normal
+            // bookkeeping, animations, frame tables, animation channels,
+            // vehicles, data) happen as one step before the per-texture work.
+            steps.push(boot::BootStep::RegisterMetadata { ns: ns.clone(), entry: entry_idx });
+
+            // SDF atlas textures are skipped here — the font path uploads them.
+            let atlas_names: std::collections::HashSet<String> = resources
+                .fonts()
+                .keys()
+                .map(|f| self.entity_key_ns(&ns, &format!("{f}-sdf")))
+                .collect();
+
+            // Several manifest entries share one `src` (every frame-table texture
+            // points at its shared colour sheet), so decode + upload each unique
+            // `src` once and alias the rest to the same GL texture.
+            let mut uploaded_by_src: HashMap<String, String> = HashMap::new();
+            let mut basis_by_src: HashMap<String, usize> = HashMap::new();
+
+            for entry in &manifest.manifest.textures {
+                let key = self.entity_key_ns(&ns, &entry.name);
+                if atlas_names.contains(&key) {
+                    continue;
+                }
+                let Some(bytes) = resources.textures().get(&entry.name) else {
+                    continue;
+                };
+                if let Some(from_key) = uploaded_by_src.get(&entry.src) {
+                    steps.push(boot::BootStep::AliasTexture { key, from_key: from_key.clone() });
+                    continue;
+                }
+                if let Some(job_idx) = basis_by_src.get(&entry.src) {
+                    basis_jobs[*job_idx].keys.push(key);
+                    continue;
+                }
+                // GPU-compressed textures (Phase 1) transcode + upload via the
+                // `format`-declared target; uncompressed textures use the native
+                // channel count (RGB8 normal / R8 depth / RGBA8 albedo).
+                if let Some(format) = &entry.format {
+                    let idx = basis_jobs.len();
+                    basis_jobs.push(BasisTextureJob {
+                        keys: vec![key],
+                        bytes: bytes.clone(),
+                        format: format.clone(),
+                    });
+                    basis_by_src.insert(entry.src.clone(), idx);
+                    continue;
+                }
+                let kind = if entry.name.ends_with("-depth") {
+                    classic_rom::ResourceKind::Depth
+                } else if entry.name.ends_with("-normal") {
+                    classic_rom::ResourceKind::Normal
+                } else {
+                    classic_rom::ResourceKind::Texture
+                };
+                let format = match kind {
+                    classic_rom::ResourceKind::Depth => boot::TextureFormat::Luma8,
+                    classic_rom::ResourceKind::Normal => boot::TextureFormat::Rgb8,
+                    _ => boot::TextureFormat::Rgba8,
+                };
+                steps.push(boot::BootStep::Decode {
+                    key: key.clone(),
+                    rom: rom.clone(),
+                    kind,
+                    format,
+                    bytes: bytes.clone(),
+                });
+                steps.push(boot::BootStep::Upload { key: key.clone() });
+                uploaded_by_src.insert(entry.src.clone(), key);
+            }
+
+            // Per-texture depth maps (grayscale `gl_FragDepth` masks), uploaded
+            // as sibling `"{name}-depth"` textures.
+            for entry in &manifest.manifest.textures {
+                if entry.depth.is_some() {
+                    if let Some(bytes) = resources.depths().get(&entry.name) {
+                        let key = self.entity_key_ns(&ns, &entry.name);
+                        let depth_tex = format!("{key}-depth");
+                        steps.push(boot::BootStep::Decode {
+                            key: depth_tex.clone(),
+                            rom: rom.clone(),
+                            kind: classic_rom::ResourceKind::Depth,
+                            format: boot::TextureFormat::Luma8,
+                            bytes: bytes.clone(),
+                        });
+                        steps.push(boot::BootStep::Upload { key: depth_tex });
+                    }
+                }
+            }
+
+            // Per-texture normal maps (RGB world-space normals), uploaded as
+            // sibling `"{name}-normal"` textures.
+            for entry in &manifest.manifest.textures {
+                if entry.normal.is_some() {
+                    if let Some(bytes) = resources.normals().get(&entry.name) {
+                        let key = self.entity_key_ns(&ns, &entry.name);
+                        let normal_tex = format!("{key}-normal");
+                        steps.push(boot::BootStep::Decode {
+                            key: normal_tex.clone(),
+                            rom: rom.clone(),
+                            kind: classic_rom::ResourceKind::Normal,
+                            format: boot::TextureFormat::Rgb8,
+                            bytes: bytes.clone(),
+                        });
+                        steps.push(boot::BootStep::Upload { key: normal_tex });
+                    }
+                }
+            }
+
+            // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf"), keyed by
+            // the namespace-qualified font name.
+            for (font_name, metrics_bytes) in resources.fonts() {
+                let key = self.entity_key_ns(&ns, font_name);
+                let atlas_src = format!("{font_name}-sdf");
+                let metrics_json =
+                    std::str::from_utf8(metrics_bytes).expect("SDF metrics UTF-8").to_string();
+                if let Some(atlas_png) = resources.textures().get(&atlas_src) {
+                    steps.push(boot::BootStep::LoadSdfFont {
+                        key,
+                        metrics_json,
+                        atlas_png: atlas_png.to_vec(),
+                    });
+                }
+            }
+
+            // Entity graph + grids.
+            steps.push(boot::BootStep::HydrateEntry { ns, entry: entry_idx });
+        }
+
+        steps.push(boot::BootStep::Finish);
+
+        boot::BootPlan { loaded, sink, steps, basis_jobs, cursor: 0, decoded: HashMap::new() }
+    }
+
+    /// Register a ROM's non-GL metadata: texture names, depth/normal companion
+    /// bookkeeping, animations, frame tables, animation channels, vehicles, and
+    /// data artifacts.  Called by the [`boot::BootStep::RegisterMetadata`] step
+    /// with `self.namespace` already set to the entry's effective namespace.
+    fn register_manifest_metadata(
         &mut self,
         manifest: &classic_rom::RomManifest,
         resources: &classic_rom::ResourceSet,
-        sink: &dyn classic_rom::BootSink,
-    ) -> Vec<BasisTextureJob> {
-        let rom = if manifest.entrypoint.is_empty() {
-            "root".to_string()
-        } else {
-            manifest.entrypoint.clone()
-        };
-        // Textures from the manifest, skipping the SDF atlas textures (those
-        // are uploaded by the SDF font path with LINEAR filtering).  Several
-        // manifest entries may share one `src` — every frame-table texture
-        // points at its shared colour sheet — so decode + upload each unique
-        // `src` once and alias the rest to the same GL texture (the packed-atlas
-        // draw path binds the sheet name, not the frame-table name).  Every key
-        // is namespace-qualified (`{ns}::{name}`) under the ROM's effective
-        // namespace so namespaced ROMs' resources coexist with the global set.
-        let atlas_names: std::collections::HashSet<String> =
-            resources.fonts().keys().map(|f| self.entity_key(&format!("{f}-sdf"))).collect();
-        let mut uploaded_by_src: HashMap<String, GlTexture> = HashMap::new();
-        let mut basis_by_src: HashMap<String, usize> = HashMap::new();
-        let mut basis_jobs: Vec<BasisTextureJob> = Vec::new();
+    ) {
+        // Every manifest texture name (including the SDF atlases) is registered
+        // so `has_texture`/`resolve_resource` see it under its qualified key.
         for entry in &manifest.manifest.textures {
-            let key = self.entity_key(&entry.name);
-            self.texture_names.insert(key.clone());
-            if atlas_names.contains(&key) {
-                continue;
-            }
-            let Some(bytes) = resources.textures().get(&entry.name) else {
-                continue;
-            };
-            if let Some(tex) = uploaded_by_src.get(&entry.src) {
-                if let Some(gfx) = self.gfx.as_mut() {
-                    gfx.textures.insert(key, tex.clone());
-                }
-                continue;
-            }
-            if let Some(job_idx) = basis_by_src.get(&entry.src) {
-                basis_jobs[*job_idx].keys.push(key);
-                continue;
-            }
-            // GPU-compressed textures (Phase 1) transcode + upload via the
-            // `format`-declared target; uncompressed textures use the native
-            // channel count (RGB8 normal / R8 depth / RGBA8 albedo).
-            if let Some(format) = &entry.format {
-                let idx = basis_jobs.len();
-                basis_jobs.push(BasisTextureJob {
-                    keys: vec![key],
-                    bytes: bytes.clone(),
-                    format: format.clone(),
-                });
-                basis_by_src.insert(entry.src.clone(), idx);
-                continue;
-            }
-            let kind = if entry.name.ends_with("-depth") {
-                classic_rom::ResourceKind::Depth
-            } else if entry.name.ends_with("-normal") {
-                classic_rom::ResourceKind::Normal
-            } else {
-                classic_rom::ResourceKind::Texture
-            };
-            let dims = match kind {
-                classic_rom::ResourceKind::Depth => self.load_texture_luma8(&key, bytes),
-                classic_rom::ResourceKind::Normal => self.load_texture_rgb8(&key, bytes),
-                _ => self.load_texture_png(&key, bytes),
-            };
-            sink.on_event(classic_rom::BootEvent::ResourceDecoded {
-                rom: rom.clone(),
-                kind,
-                name: key.clone(),
-                dims,
-            });
-            sink.on_event(classic_rom::BootEvent::TextureUploaded { name: key.clone() });
-            if let Some(tex) = self.gfx.as_ref().and_then(|g| g.textures.get(&key)) {
-                uploaded_by_src.insert(entry.src.clone(), tex.clone());
-            }
+            self.texture_names.insert(self.entity_key(&entry.name));
         }
 
-        // Per-texture depth maps (grayscale `gl_FragDepth` masks).  Uploaded as
-        // sibling textures named `"{name}-depth"` and recorded against the
-        // color texture name so `draw_iso_sprite` can look them up.
+        // Depth/normal companion bookkeeping (the pixel uploads happen in the
+        // decode/upload steps; here we record the sibling texture names).
         for entry in &manifest.manifest.textures {
             if entry.depth.is_some() {
-                if let Some(bytes) = resources.depths().get(&entry.name) {
-                    let key = self.entity_key(&entry.name);
-                    let depth_tex = format!("{key}-depth");
-                    let dims = self.load_texture_luma8(&depth_tex, bytes);
-                    sink.on_event(classic_rom::BootEvent::ResourceDecoded {
-                        rom: rom.clone(),
-                        kind: classic_rom::ResourceKind::Depth,
-                        name: depth_tex.clone(),
-                        dims,
-                    });
-                    sink.on_event(classic_rom::BootEvent::TextureUploaded {
-                        name: depth_tex.clone(),
-                    });
-                    self.texture_depths.insert(key, TextureDepth { depth_tex });
-                }
+                let key = self.entity_key(&entry.name);
+                self.texture_depths
+                    .insert(key.clone(), TextureDepth { depth_tex: format!("{key}-depth") });
             }
         }
-
-        // Per-texture normal maps (RGB world-space normals).  Uploaded as
-        // sibling textures named `"{name}-normal"` and recorded against the
-        // color texture name so `draw_iso_sprite` can bind them for the
-        // runtime Lambertian term.
         for entry in &manifest.manifest.textures {
             if entry.normal.is_some() {
-                if let Some(bytes) = resources.normals().get(&entry.name) {
-                    let key = self.entity_key(&entry.name);
-                    let normal_tex = format!("{key}-normal");
-                    let dims = self.load_texture_rgb8(&normal_tex, bytes);
-                    sink.on_event(classic_rom::BootEvent::ResourceDecoded {
-                        rom: rom.clone(),
-                        kind: classic_rom::ResourceKind::Normal,
-                        name: normal_tex.clone(),
-                        dims,
-                    });
-                    sink.on_event(classic_rom::BootEvent::TextureUploaded {
-                        name: normal_tex.clone(),
-                    });
-                    self.texture_normals.insert(key, normal_tex);
-                }
-            }
-        }
-
-        // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf"), keyed by
-        // the namespace-qualified font name.
-        for (font_name, metrics_bytes) in resources.fonts() {
-            let key = self.entity_key(font_name);
-            let atlas_name = format!("{font_name}-sdf");
-            let metrics_str = std::str::from_utf8(metrics_bytes).expect("SDF metrics UTF-8");
-            if let Some(atlas_png) = resources.textures().get(&atlas_name) {
-                self.load_sdf_font(&key, metrics_str, atlas_png);
+                let key = self.entity_key(&entry.name);
+                self.texture_normals.insert(key.clone(), format!("{key}-normal"));
             }
         }
 
@@ -738,8 +777,61 @@ impl Engine {
                 }
             }
         }
+    }
 
-        basis_jobs
+    /// Execute up to `n` [`boot::BootStep`]s from `plan`, returning the number
+    /// consumed.  `n == usize::MAX` drains the whole plan synchronously —
+    /// the golden/headless/test fast path.
+    pub fn boot_step(&mut self, plan: &mut boot::BootPlan<'_>, n: usize) -> usize {
+        let mut ran = 0;
+        while ran < n && plan.cursor < plan.steps.len() {
+            let step = std::mem::take(&mut plan.steps[plan.cursor]);
+            plan.cursor += 1;
+            ran += 1;
+            match step {
+                boot::BootStep::Decode { key, rom, kind, format, bytes } => {
+                    let decoded = boot::decode_texture(format, &bytes);
+                    let dims = decoded.dims();
+                    plan.decoded.insert(key.clone(), decoded);
+                    plan.sink.on_event(classic_rom::BootEvent::ResourceDecoded {
+                        rom,
+                        kind,
+                        name: key,
+                        dims,
+                    });
+                }
+                boot::BootStep::Upload { key } => {
+                    if let Some(decoded) = plan.decoded.remove(&key) {
+                        self.upload_decoded(&key, &decoded);
+                    }
+                    plan.sink.on_event(classic_rom::BootEvent::TextureUploaded { name: key });
+                }
+                boot::BootStep::AliasTexture { key, from_key } => {
+                    let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&from_key)).cloned();
+                    if let (Some(tex), Some(gfx)) = (tex, self.gfx.as_mut()) {
+                        gfx.textures.insert(key, tex);
+                    }
+                }
+                boot::BootStep::RegisterMetadata { ns, entry } => {
+                    self.namespace = ns;
+                    let entry = &plan.loaded.order[entry];
+                    self.register_manifest_metadata(&entry.rom.manifest, &entry.rom.resources);
+                }
+                boot::BootStep::LoadSdfFont { key, metrics_json, atlas_png } => {
+                    self.load_sdf_font(&key, &metrics_json, &atlas_png);
+                }
+                boot::BootStep::HydrateEntry { ns, entry } => {
+                    self.namespace = ns.clone();
+                    let entry = &plan.loaded.order[entry];
+                    self.hydrate_rom_entry(&ns, entry, plan.sink);
+                }
+                boot::BootStep::Finish => {
+                    self.finish_hydrate_roms(plan.loaded);
+                }
+                boot::BootStep::Noop => {}
+            }
+        }
+        ran
     }
 
     /// Upload a batch of pending `.basis` textures synchronously (native), then
@@ -780,22 +872,6 @@ impl Engine {
                 }
             }
         }
-    }
-
-    /// Initialise the GL layer from a ROM manifest + resource set: compile the
-    /// manifest's shaders (built-ins, overridable by a ROM via the named
-    /// shader registry), upload every declared texture, load the SDF fonts, and
-    /// register the animations.  The single-ROM convenience wrapper over
-    /// [`Engine::ensure_gfx`] + [`Engine::load_manifest_resources`].
-    pub fn init_gfx(
-        &mut self,
-        gl: Rc<glow::Context>,
-        manifest: &classic_rom::RomManifest,
-        resources: &classic_rom::ResourceSet,
-    ) {
-        self.namespace = manifest.namespace.clone();
-        self.ensure_gfx(gl, manifest, &classic_rom::NullBootSink);
-        self.load_manifest_resources(manifest, resources, &classic_rom::NullBootSink);
     }
 
     /// Hydrate the engine from a single ROM (the legacy path).  Wraps the ROM
@@ -860,18 +936,13 @@ impl Engine {
 
     /// The GL-free core of [`Engine::load_roms`]: per-ROM resource + entity +
     /// grid hydration in topological order, plus DAG bookkeeping.  Split out so
-    /// the multi-ROM logic is unit-testable without a GL context.
+    /// the multi-ROM logic is unit-testable without a GL context.  Builds a
+    /// [`boot::BootPlan`] and drains it synchronously, then uploads the pending
+    /// basis jobs.
     fn hydrate_roms(&mut self, loaded: &classic_rom::LoadedRoms, sink: &dyn classic_rom::BootSink) {
-        let multi = loaded.order.len() > 1;
-        for entry in &loaded.order {
-            let ns = Self::effective_namespace(entry, multi);
-            self.namespace = ns.clone();
-            let jobs =
-                self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources, sink);
-            self.upload_basis_sync(&jobs, sink);
-            self.hydrate_rom_entry(&ns, entry, sink);
-        }
-        self.finish_hydrate_roms(loaded);
+        let mut plan = self.begin_boot(loaded, sink);
+        self.boot_step(&mut plan, usize::MAX);
+        self.upload_basis_sync(&plan.basis_jobs, sink);
     }
 
     /// Web-only async hydration: identical to [`Engine::hydrate_roms`] except the
@@ -882,16 +953,9 @@ impl Engine {
         loaded: &classic_rom::LoadedRoms,
         sink: &dyn classic_rom::BootSink,
     ) {
-        let multi = loaded.order.len() > 1;
-        for entry in &loaded.order {
-            let ns = Self::effective_namespace(entry, multi);
-            self.namespace = ns.clone();
-            let jobs =
-                self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources, sink);
-            self.upload_basis_async(jobs, sink).await;
-            self.hydrate_rom_entry(&ns, entry, sink);
-        }
-        self.finish_hydrate_roms(loaded);
+        let mut plan = self.begin_boot(loaded, sink);
+        self.boot_step(&mut plan, usize::MAX);
+        self.upload_basis_async(std::mem::take(&mut plan.basis_jobs), sink).await;
     }
 
     /// Hydrate one ROM entry's state + grids (after its resources are loaded).
@@ -1551,37 +1615,45 @@ impl Engine {
 
     /// Upload a PNG texture from raw bytes, returning the decoded `(w, h)`.
     pub fn load_texture_png(&mut self, name: &str, png_bytes: &[u8]) -> (u32, u32) {
-        let img = image::load_from_memory(png_bytes).expect("decode PNG");
-        let rgba = img.to_rgba8();
-        let (w, h) = (rgba.width(), rgba.height());
-        if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_rgba8(name, &rgba, w, h);
-        }
-        (w, h)
+        let decoded = boot::decode_texture(boot::TextureFormat::Rgba8, png_bytes);
+        let dims = decoded.dims();
+        self.upload_decoded(name, &decoded);
+        dims
     }
 
     /// Upload a grayscale PNG as an R8 texture (depth maps, SDF atlases),
     /// returning the decoded `(w, h)`.
     pub fn load_texture_luma8(&mut self, name: &str, png_bytes: &[u8]) -> (u32, u32) {
-        let img = image::load_from_memory(png_bytes).expect("decode PNG");
-        let luma = img.to_luma8();
-        let (w, h) = (luma.width(), luma.height());
-        if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_r8(name, &luma, w, h);
-        }
-        (w, h)
+        let decoded = boot::decode_texture(boot::TextureFormat::Luma8, png_bytes);
+        let dims = decoded.dims();
+        self.upload_decoded(name, &decoded);
+        dims
     }
 
     /// Upload an RGB PNG as an RGB8 texture (world-space normal maps),
     /// returning the decoded `(w, h)`.
     pub fn load_texture_rgb8(&mut self, name: &str, png_bytes: &[u8]) -> (u32, u32) {
-        let img = image::load_from_memory(png_bytes).expect("decode PNG");
-        let rgb = img.to_rgb8();
-        let (w, h) = (rgb.width(), rgb.height());
+        let decoded = boot::decode_texture(boot::TextureFormat::Rgb8, png_bytes);
+        let dims = decoded.dims();
+        self.upload_decoded(name, &decoded);
+        dims
+    }
+
+    /// Upload a decoded texture to the GL layer (a no-op when `gfx == None`).
+    pub fn upload_decoded(&mut self, name: &str, texture: &boot::DecodedTexture) {
         if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_rgb8(name, &rgb, w, h);
+            match texture {
+                boot::DecodedTexture::Rgba8 { width, height, pixels } => {
+                    gfx.add_texture_rgba8(name, pixels, *width, *height);
+                }
+                boot::DecodedTexture::Luma8 { width, height, pixels } => {
+                    gfx.add_texture_r8(name, pixels, *width, *height);
+                }
+                boot::DecodedTexture::Rgb8 { width, height, pixels } => {
+                    gfx.add_texture_rgb8(name, pixels, *width, *height);
+                }
+            }
         }
-        (w, h)
     }
 
     /// Upload a Basis Universal `.basis` payload as a GPU-compressed texture
@@ -5692,6 +5764,46 @@ mod tests {
 
         // The root ROM is mirrored into the single-ROM fields.
         assert_eq!(e.rom_manifest.as_ref().unwrap().entrypoint, "scene");
+    }
+
+    #[test]
+    fn boot_plan_stepwise_drain_matches_full_drain() {
+        let loaded = classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: "common".into(),
+                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
+                },
+            ],
+        };
+
+        let mut full = Engine::new_for_test();
+        let mut full_plan = full.begin_boot(&loaded, &classic_rom::NullBootSink);
+        full.boot_step(&mut full_plan, usize::MAX);
+
+        let mut stepwise = Engine::new_for_test();
+        let mut plan = stepwise.begin_boot(&loaded, &classic_rom::NullBootSink);
+        let total = plan.total_steps();
+        let mut consumed = 0;
+        while !plan.is_done() {
+            consumed += stepwise.boot_step(&mut plan, 1);
+        }
+
+        // One step at a time consumes exactly the full plan, in order.
+        assert!(plan.is_done());
+        assert_eq!(consumed, total);
+        assert_eq!(full.name_order, stepwise.name_order);
+        assert_eq!(full.loaded_roms.len(), 2);
+        assert_eq!(stepwise.loaded_roms.len(), 2);
+        assert!(stepwise.names.contains_key("common::tile"));
+        assert!(stepwise.names.contains_key("scene::rocket"));
     }
 
     #[test]
