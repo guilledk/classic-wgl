@@ -8,7 +8,7 @@
 //! orthographic camera), and depth is the camera view depth
 //! [`iso_view_depth`] normalised over [`DEPTH_NEAR`]/[`DEPTH_FAR`].
 
-use glam::{Mat3, Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 
 /// Convert a tile coordinate + world height (metres) to Blender-canonical
 /// world space: `(tx·TILE_M, −ty·TILE_M, h)`.
@@ -83,6 +83,20 @@ pub fn iso_camera_px_inverse(px: Vec2) -> Vec3 {
     right * view_x + up * view_y + back * view_z
 }
 
+/// The orthographic camera ray through a camera-view pixel `px` (before
+/// pan/zoom), for terrain/collider picking.
+///
+/// The ray starts at the near depth plane ([`DEPTH_NEAR`]) and points into the
+/// scene (`−back`), so marching from its origin returns the *first* surface the
+/// camera sees — a slope in front correctly occludes terrain behind it.
+pub fn iso_camera_ray(px: Vec2) -> Ray {
+    let (right, up, back) = iso_basis();
+    let view_x = px.x / crate::tilemap::PPM_TARGET;
+    let view_y = -px.y / crate::tilemap::PPM_TARGET;
+    let near = right * view_x + up * view_y + back * DEPTH_NEAR;
+    Ray::new(near, -back)
+}
+
 /// The closest view depth (metres): `dot(back, world)` at the nearest point.
 ///
 /// Fixed so every scene shares one depth range — a 400×400 map spans
@@ -98,47 +112,34 @@ pub const DEPTH_NEAR: f32 = 220.0;
 /// `render/presets.py::DEPTH_FAR`.
 pub const DEPTH_FAR: f32 = -220.0;
 
-/// World metres → **light space** (px, metric +Z up).
-///
-/// Light space is `S(scale) · Rz(-45°) · D⁻¹` for `D⁻¹ = diag(1/TILE_M,
-/// −1/TILE_M, PPM_TARGET)` (world metres → tile space).  It is independent of
-/// the screen camera: the `Rz(-45°)` drops the `diag(1, 0.5, 1)` squash so
-/// `length()`, `normalize()` and `dot(n, L)` mean the same thing in every
-/// direction.  Every lighting quantity — `Light::position`, `light_dir`,
-/// `vNormal`, `vLightPos`, the shadow map — lives here.
-pub fn iso_world_light_matrix(scale: Vec3) -> Mat4 {
-    let d_inv = Mat4::from_scale(Vec3::new(
-        1.0 / crate::tilemap::TILE_M,
-        -1.0 / crate::tilemap::TILE_M,
-        crate::tilemap::PPM_TARGET,
-    ));
-    let iso_to_light = Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4);
-    Mat4::from_scale(scale) * iso_to_light * d_inv
-}
-
-/// Normal matrix for **world-metre** terrain normals: transforms a metric world
-/// normal into light space.
-///
-/// The world normal is `normalize(D⁻¹ · tile_normal)` with
-/// `D⁻¹ = diag(1/TILE_M, −1/TILE_M, PPM_TARGET)`, so the correct matrix is
-/// `inverse_transpose(S(scale)·Rz(−45°)) · D` — **not**
-/// `inverse_transpose(mat3(iso_world_light_matrix))` (which would be
-/// `D · inverse_transpose(...)`; `D` does not commute with the rotation, and
-/// that subtly re-axes slope lighting).
-pub fn iso_world_normal_matrix(scale: Vec3) -> Mat3 {
-    let d = Mat3::from_diagonal(Vec3::new(
-        crate::tilemap::TILE_M,
-        -crate::tilemap::TILE_M,
-        1.0 / crate::tilemap::PPM_TARGET,
-    ));
-    let iso_to_light = Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4);
-    Mat3::from_mat4(Mat4::from_scale(scale) * iso_to_light).inverse().transpose() * d
-}
-
 pub fn deg_to_rad(deg: f32) -> f32 {
     deg * std::f32::consts::PI / 180.0
 }
 
 pub fn rad_to_deg(rad: f32) -> f32 {
     rad * 180.0 / std::f32::consts::PI
+}
+
+/// A world-space ray: an `origin` and a unit `direction`.
+///
+/// The terrain (and, later, collider) raycast marches along `direction` from
+/// `origin` and returns the first intersection, so a "camera → mouse" ray is
+/// built with the origin on the camera side and `direction` pointing into the
+/// scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ray {
+    pub origin: Vec3,
+    pub dir: Vec3,
+}
+
+impl Ray {
+    /// A ray from `origin` along `dir` (normalised).
+    pub fn new(origin: Vec3, dir: Vec3) -> Self {
+        Self { origin, dir: dir.normalize() }
+    }
+
+    /// The point `origin + dir · t`.
+    pub fn at(&self, t: f32) -> Vec3 {
+        self.origin + self.dir * t
+    }
 }

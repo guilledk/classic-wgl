@@ -776,16 +776,19 @@ pub struct Light {
     pub kind: LightKind,
     /// World-metre position (`+tx → +X`, `+ty → −Y`, +Z up) — the same
     /// Blender-canonical frame the terrain and sprite geometry live in.
-    /// [`Engine::iso_to_world`] places it; `gather_lights` converts it to the
-    /// shader's light space before upload.  It is **not** the screen camera
-    /// space.
+    /// [`Engine::iso_to_world`] places it; lighting evaluates it directly in
+    /// world space (there is no separate light space).  It is **not** the
+    /// screen camera space.
     pub position: Vec3,
     /// Linear RGB colour.
     pub color: [f32; 3],
     /// Scalar multiplier applied to `color`.
     #[serde(default = "default_light_intensity")]
     pub intensity: f32,
-    /// Attenuation radius in world units; `<= 0` disables distance falloff.
+    /// Attenuation radius.  Authored in the legacy light-space unit (px;
+    /// `PPM_TARGET` px per metre) for compatibility with existing lights and
+    /// the guest ABI; `gather_lights` converts it to world metres before the
+    /// UBO upload.  `<= 0` disables distance falloff.
     #[serde(default = "default_light_radius")]
     pub radius: f32,
     /// Spot direction (world space); ignored by point lights.

@@ -28,12 +28,9 @@ uniform float depth_base;
 // happens to ship without a normal map.
 uniform float use_lighting;
 uniform float use_normal_map;
-// World normal -> light space (`iso_world_normal_matrix`).  Sprite normal maps
-// are baked in Blender world space (`render/materials.py` emits
-// `Geometry.Normal` with no view transform) — the same metric world space the
-// terrain normals now live in — so they share the terrain's normal matrix
-// rather than a sprite-specific rotation.
-uniform mat3 normal_matrix;
+// Sprite normal maps are baked in Blender world space (`render/materials.py`
+// emits `Geometry.Normal` with no view transform) — the same metric world space
+// the terrain normals live in — so they are used as-is, with no normal matrix.
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
@@ -75,11 +72,10 @@ out vec4 fragColor;
 // --- BEGIN SHARED LIGHTING (must stay byte-identical to iso_tilemap.frag;
 // --- pinned by `lit_shaders_share_the_lighting_block`) ---
 //
-// `p` and `l.pos_radius.xyz` are both **metric light space** (+Z up, `ppm` px
-// per metre on every axis — see `classic_core::math::iso_world_light_matrix`), so
-// `length` is a true distance and `dot(n, L)` a true cosine.  They previously
-// lived in the isometric space, which compresses y by 2x; every point light
-// was therefore an ellipsoid evaluated as if it were a sphere.
+// `p` and `l.pos_radius.xyz` are both **metric world space** (+Z up, metres),
+// so `length` is a true distance and `dot(n, L)` a true cosine.  They previously
+// lived in the isometric screen space, which compresses y by 2x; every point
+// light was therefore an ellipsoid evaluated as if it were a sphere.
 vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     vec3 toLight = l.pos_radius.xyz - p;
     float dist = length(toLight);
@@ -130,7 +126,7 @@ float shadowSample(vec2 suv, float fragDepth) {
     return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
 }
 
-// `n` is the receiver's surface normal in light space.  Nudging the sample
+// `n` is the receiver's surface normal in world space.  Nudging the sample
 // point along it by ~a texel keeps a surface from sampling the very texel it
 // wrote, which is what causes shadow acne, without detaching the shadow from
 // its caster the way a large depth bias would.
@@ -226,10 +222,10 @@ void main(void ) {
             + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5);
     }
 
-    // Normal from the sheet's normal-map companion, rotated from the Blender
-    // world space it was baked in into light space.  A (0.5,0.5,0.5) texel
-    // decodes to (0,0,0) and marks an *emissive* region (e.g. the rocket
-    // flame), which keeps flat albedo and skips shading entirely.
+    // Normal from the sheet's normal-map companion, used in world space (the
+    // Blender space it was baked in).  A (0.5,0.5,0.5) texel decodes to
+    // (0,0,0) and marks an *emissive* region (e.g. the rocket flame), which
+    // keeps flat albedo and skips shading entirely.
     //
     // `emissive` is that sentinel and nothing else.  It used to also swallow
     // "this sprite has no normal map at all", which left such sprites with no
@@ -244,7 +240,7 @@ void main(void ) {
     // Normal-offset bias needs a direction even where the sprite is emissive or
     // has no normal map; away from the terrain (+Z) is the safe default.
     vec3 n = dot(rawNormal, rawNormal) > 0.001
-        ? normalize(normal_matrix * rawNormal)
+        ? normalize(rawNormal)
         : vec3(0.0, 0.0, 1.0);
 
     // Bring-up diagnostic (CLASSIC_SHADOW_DEBUG): sun visibility only.  The

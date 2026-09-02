@@ -12,9 +12,6 @@ uniform mat4 world_matrix;
 uniform mat4 model_matrix;
 uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
-uniform mat3 normal_matrix;
-// World metres -> light space (px, metric +Z up): `iso_world_light_matrix`.
-uniform mat4 light_matrix;
 
 uniform vec2 map_size;
 uniform vec2 tile_pixel_size;
@@ -44,7 +41,8 @@ void main(void ) {
     gl_Position = clipPos;
     vMapCoord = map_coord;
     vTileId = tile_id;
-    vNormal = normalize(normal_matrix * normal);
-    vec4 lightPos = light_matrix * vec4(world, 1.0);
-    vLightPos = lightPos.xyz;
+    // Terrain normals are baked in world space (metres, +Z up); lighting is
+    // done in that same world space, so there is no normal transform here.
+    vNormal = normalize(normal);
+    vLightPos = world;
 }
