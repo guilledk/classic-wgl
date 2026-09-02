@@ -18,8 +18,6 @@ uniform highp vec2 trim_offset;
 uniform highp vec2 source_size;
 uniform highp vec2 content_size;
 uniform float use_depth_map;
-uniform highp float depth_base;
-uniform highp float depth_range;
 // Whether this draw participates in scene lighting at all.  The 2D/baked
 // `draw_sprite` path (cursor, HUD, UI) sets 0: it never writes a light-space
 // position, so its `vLightPos` is meaningless.  This used to be implied by
@@ -211,10 +209,10 @@ void main(void ) {
 
     color.rgb *= tint;
     if (use_depth_map > 0.5) {
-        highp float gray = texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r;
-        // `depth_base` and `depth_range` are both window-space iso depths, so
-        // `gl_FragDepth` (also window-space) needs no clip→window remap.
-        gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
+        // The depth sheet stores the camera view depth directly (window
+        // `[0, 1]`), so `gl_FragDepth` needs no `depth_base`/`depth_range`
+        // reconstruction.
+        gl_FragDepth = texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r;
     }
 
     // Normal from the sheet's normal-map companion, rotated from the Blender

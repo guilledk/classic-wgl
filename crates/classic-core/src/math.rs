@@ -4,10 +4,11 @@
 //!
 //! World-metre coordinate helpers.  After the coordinate-system unification the
 //! renderer lives in a single Blender-canonical world space; the whole
-//! isometric projection is folded into [`iso_world_matrix`] (screen),
-//! [`iso_world_light_matrix`] (light) and the `y -= ppm·z` height shear.
+//! isometric projection is folded into [`iso_camera_matrix`] (the single
+//! orthographic camera), and depth is the camera view depth
+//! [`iso_view_depth`] normalised over [`DEPTH_NEAR`]/[`DEPTH_FAR`].
 
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec2, Vec3};
 
 /// Convert a tile coordinate + world height (metres) to Blender-canonical
 /// world space: `(tx·TILE_M, −ty·TILE_M, h)`.
@@ -19,16 +20,26 @@ pub fn iso_world_pos(tx: f32, ty: f32, h: f32) -> Vec3 {
     Vec3::new(tx * crate::tilemap::TILE_M, -ty * crate::tilemap::TILE_M, h)
 }
 
-/// The fixed isometric **view** matrix (45° yaw + 30° elevation, 2:1 dimetric),
-/// mapping Blender world space → camera view space.
-///
-/// The camera basis matches `classic-assets` `render/iso.py::iso_basis(30°)`:
+/// The orthographic camera basis `(right, up, back)` (all unit length),
+/// matching `classic-assets` `render/iso.py::iso_basis(30°)`:
 ///
 /// ```text
 /// right = (√½, −√½, 0)
 /// up    = (sin30°·√½, sin30°·√½, cos30°) = (0.3536, 0.3536, 0.8660)
-/// back  = right × up = (−0.6124, −0.6124, 0.5)
+/// back  = right × up = (−√(3/8), −√(3/8), 0.5)
 /// ```
+pub fn iso_basis() -> (Vec3, Vec3, Vec3) {
+    let half = std::f32::consts::FRAC_1_SQRT_2; // √½
+    let sin_el = 0.5; // sin(30°)
+    let cos_el = 0.866_025_4; // cos(30°) = √3/2
+    let right = Vec3::new(half, -half, 0.0);
+    let up = Vec3::new(sin_el * half, sin_el * half, cos_el);
+    let back = right.cross(up);
+    (right, up, back)
+}
+
+/// The fixed isometric **view** matrix (45° yaw + 30° elevation, 2:1 dimetric),
+/// mapping Blender world space → camera view space.
 ///
 /// `view · world` yields the camera-frame coordinate
 /// `(dot(right, w), dot(up, w), dot(back, w))`: the first two components are the
@@ -37,53 +48,63 @@ pub fn iso_world_pos(tx: f32, ty: f32, h: f32) -> Vec3 {
 /// this one matrix — there is no separate squash, shear, or light-space
 /// rotation.
 pub fn iso_camera_matrix() -> Mat4 {
-    let half = std::f32::consts::FRAC_1_SQRT_2; // √½
-    let sin_el = 0.5; // sin(30°)
-    let cos_el = 0.866_025_4; // cos(30°) = √3/2
-    let right = Vec3::new(half, -half, 0.0);
-    let up = Vec3::new(sin_el * half, sin_el * half, cos_el);
-    let back = right.cross(up);
+    let (right, up, back) = iso_basis();
     // Camera-to-world has the basis as columns; its inverse (== transpose for
     // an orthonormal basis) is the world-to-camera view matrix.
     Mat4::from_cols(right.extend(0.0), up.extend(0.0), back.extend(0.0), glam::Vec4::W).transpose()
 }
 
-/// World metres → squashed-cartesian **screen pixels** (before the `y -= ppm·z`
-/// shear), reproducing the current `iso_matrix` path for world-metre vertices.
+/// Camera view depth of a world point, in metres: `dot(back, world)`.
 ///
-/// The current renderer builds screen space as `S(scale) · diag(1, 0.5, 1) ·
-/// Rz(-45°)` applied to *tile* vertices `(tx, ty, z_px)`.  A world-metre vertex
-/// is `v = (tx·TILE_M, −ty·TILE_M, h_m)` with `z_px = h_m·PPM_TARGET`, i.e.
-/// `tile = D⁻¹ · v` for `D⁻¹ = diag(1/TILE_M, −1/TILE_M, PPM_TARGET)`.  So the
-/// world-metre screen transform is `S(scale) · diag(1, 0.5, 1) · Rz(-45°) ·
-/// D⁻¹`.  The caller still applies the `y -= ppm·z` shear (or folds it in)
-/// afterwards.
-///
-/// This is the **zero-visual-drift** bridge used to move the tilemap and sprite
-/// pipelines to world metres without changing a single rendered pixel.
-pub fn iso_world_matrix(scale: Vec3) -> Mat4 {
-    let d_inv = Mat4::from_scale(Vec3::new(
-        1.0 / crate::tilemap::TILE_M,
-        -1.0 / crate::tilemap::TILE_M,
-        crate::tilemap::PPM_TARGET,
-    ));
-    // The 45° yaw plus the 2:1 dimetric squash: `diag(1, 0.5, 1) · Rz(-45°)`.
-    let iso_to_cartesian = Mat4::from_scale(Vec3::new(1.0, 0.5, 1.0))
-        * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4);
-    Mat4::from_scale(scale) * iso_to_cartesian * d_inv
+/// `back` points toward the camera, so view depth *decreases* with distance:
+/// the nearest map corner (SW) has the most positive value, the farthest (NE)
+/// the most negative.  Normalise to window `[0, 1]` with
+/// [`DEPTH_NEAR`]/[`DEPTH_FAR`].
+pub fn iso_view_depth(world: Vec3) -> f32 {
+    iso_basis().2.dot(world)
 }
 
-/// World metres → **light space** (px, metric +Z up), reproducing the current
-/// `light_matrix` path for world-metre vertices (origin handled by the caller).
+/// Project a world point to **camera-view screen pixels** (before pan/zoom):
+/// `(right·w, −up·w)` scaled by `PPM_TARGET`.  The screen y is negated because
+/// the camera `up` axis projects to the negative old-cartesian y.
+pub fn iso_camera_px(world: Vec3) -> Vec3 {
+    let view = iso_camera_matrix().transform_point3(world);
+    Vec3::new(view.x * crate::tilemap::PPM_TARGET, -view.y * crate::tilemap::PPM_TARGET, 0.0)
+}
+
+/// Inverse of [`iso_camera_px`]: map camera-view screen pixels to the world
+/// point on the ground plane (`z = 0`) that projects to them.
+pub fn iso_camera_px_inverse(px: Vec2) -> Vec3 {
+    let (right, up, back) = iso_basis();
+    let view_x = px.x / crate::tilemap::PPM_TARGET;
+    let view_y = -px.y / crate::tilemap::PPM_TARGET;
+    // Solve `world.z = up.z·view_y + back.z·view_z == 0`.
+    let view_z = -up.z * view_y / back.z;
+    right * view_x + up * view_y + back * view_z
+}
+
+/// The closest view depth (metres): `dot(back, world)` at the nearest point.
 ///
-/// Light space is `Rz(-45°) · diag(1,-1,1) · world · ppm`; re-expressing the
-/// current `S(scale) · Rz(-45°)` (applied to tile vertices) for world metres
-/// gives `S(scale) · Rz(-45°) · D⁻¹` (see [`iso_world_matrix`] for `D⁻¹`).
+/// Fixed so every scene shares one depth range — a 400×400 map spans
+/// `±√(3/8)·400·TILE_M ≈ ±172`, and the tallest sprite (the ~47 m rocket)
+/// adds `0.5·47 ≈ 24` toward the near side.  `220` covers both with margin;
+/// smaller maps use a sub-range.  Mirrored by classic-assets
+/// `render/presets.py::DEPTH_NEAR`.
+pub const DEPTH_NEAR: f32 = 220.0;
+
+/// The farthest view depth (metres): `dot(back, world)` at the farthest point.
 ///
-/// Dropping the `diag(1, 0.5, 1)` squash makes light space metric: at the
-/// standard 45 px tile / 64 px-per-metre setup, one tile spans 45 px along both
-/// axes, so `length()`, `normalize()` and `dot(n, L)` mean the same thing in
-/// every direction.  Every lighting quantity — `Light::position`, `light_dir`,
+/// See [`DEPTH_NEAR`].  Mirrored by classic-assets
+/// `render/presets.py::DEPTH_FAR`.
+pub const DEPTH_FAR: f32 = -220.0;
+
+/// World metres → **light space** (px, metric +Z up).
+///
+/// Light space is `S(scale) · Rz(-45°) · D⁻¹` for `D⁻¹ = diag(1/TILE_M,
+/// −1/TILE_M, PPM_TARGET)` (world metres → tile space).  It is independent of
+/// the screen camera: the `Rz(-45°)` drops the `diag(1, 0.5, 1)` squash so
+/// `length()`, `normalize()` and `dot(n, L)` mean the same thing in every
+/// direction.  Every lighting quantity — `Light::position`, `light_dir`,
 /// `vNormal`, `vLightPos`, the shadow map — lives here.
 pub fn iso_world_light_matrix(scale: Vec3) -> Mat4 {
     let d_inv = Mat4::from_scale(Vec3::new(
@@ -96,8 +117,7 @@ pub fn iso_world_light_matrix(scale: Vec3) -> Mat4 {
 }
 
 /// Normal matrix for **world-metre** terrain normals: transforms a metric world
-/// normal into light space, reproducing the current
-/// `inverse_transpose(S(scale)·Rz(−45°))` applied to *tile* normals.
+/// normal into light space.
 ///
 /// The world normal is `normalize(D⁻¹ · tile_normal)` with
 /// `D⁻¹ = diag(1/TILE_M, −1/TILE_M, PPM_TARGET)`, so the correct matrix is
@@ -113,33 +133,6 @@ pub fn iso_world_normal_matrix(scale: Vec3) -> Mat3 {
     ));
     let iso_to_light = Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4);
     Mat3::from_mat4(Mat4::from_scale(scale) * iso_to_light).inverse().transpose() * d
-}
-
-/// World-metre iso-depth scale for a tilemap of `size_x × size_y`, consumed by
-/// the tilemap vertex shader and the sprite depth corners:
-/// `depth = 0.5 + (v.x + v.y)/scale[0] + v.z/scale[1]` (window space `[0, 1]`).
-///
-/// `scale[0]` is the horizontal divisor in world metres.  The sprite depth
-/// sheets bake their per-pixel grayscale against a fixed 400-tile horizontal
-/// divisor (classic-assets `render/materials.py`), so the divisor is floored at
-/// `TILE_M · 400` and grown to the map diagonal (`TILE_M · 2·max(size)`) for
-/// maps larger than 200×200, whose `tx − ty` span would otherwise clip the
-/// NE/SW corners.
-///
-/// `scale[1]` is the height divisor in metres, derived from the 30°-elevation
-/// camera back axis (`back = (−√(3/8), −√(3/8), +1/2)`): one metre of height
-/// contributes `back.z = 0.5` of view depth while one tile of `tx − ty`
-/// contributes `√(3/8)·TILE_M`, so the height divisor is
-/// `2·√(3/8)·TILE_M·400` (`344.46`).
-///
-/// Both divisors are re-baked to plain camera view depth in step E; until then
-/// they keep the legacy depth-sheet interlock, so depth stays bit-for-bit
-/// stable across the world-metre refactor.
-pub fn iso_world_depth_scale(size_x: i32, size_y: i32) -> [f32; 2] {
-    // Horizontal divisor: floored at the 400-tile divisor the sprite depth
-    // sheets bake against, then grown to the map diagonal for large maps.
-    let horizontal_tiles = (2.0 * size_x.max(size_y).max(1) as f32).max(400.0);
-    [crate::tilemap::TILE_M * horizontal_tiles, 344.46]
 }
 
 pub fn deg_to_rad(deg: f32) -> f32 {

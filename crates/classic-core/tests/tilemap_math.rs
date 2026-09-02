@@ -1,29 +1,21 @@
-use classic_core::math::iso_world_depth_scale;
-use classic_core::tilemap::{bilinear_height, sample_height_mesh, TILE_M};
+use classic_core::math::{iso_view_depth, DEPTH_FAR, DEPTH_NEAR};
+use classic_core::tilemap::{bilinear_height, sample_height_mesh};
 
 #[test]
-fn iso_world_depth_scale_covers_map_diagonal() {
-    // 200×200 (the demo) matches the fixed 400-tile divisor in world metres.
-    assert_eq!(iso_world_depth_scale(200, 200)[0], TILE_M * 400.0);
-    // 400×400 (the lunar scene) doubles it so the NE/SW corners are not clipped.
-    assert_eq!(iso_world_depth_scale(400, 400)[0], TILE_M * 800.0);
-    // Small maps (48×48 container/lrvtest) must NOT fall below the 400-tile
-    // divisor: the depth maps are baked with it, so a smaller divisor
-    // misaligns sprite depth maps with the terrain (front corners ghost).
-    assert_eq!(iso_world_depth_scale(48, 48)[0], TILE_M * 400.0);
-
-    // The full world-metre diagonal must stay within window depth [0, 1]:
-    //   depth(v) = (v.x + v.y)/scale[0] + 0.5 + v.z/scale[1]
-    for &(sx, sy) in &[(200, 200), (400, 400), (600, 600), (400, 200)] {
-        let scale = iso_world_depth_scale(sx, sy);
-        let ne = (sx as f32 * TILE_M) / scale[0] + 0.5;
-        let sw = -(sy as f32 * TILE_M) / scale[0] + 0.5;
-        assert!(ne <= 1.0, "NE depth {ne} clipped (scale {scale:?})");
-        assert!(sw >= 0.0, "SW depth {sw} clipped (scale {scale:?})");
+fn fixed_depth_span_covers_largest_map() {
+    // The fixed global depth span must contain the camera view depth of the
+    // largest map (400×400) plus the tallest sprite's height, so no scene clips.
+    let depth = |tx: f32, ty: f32, z: f32| {
+        let world = classic_core::math::iso_world_pos(tx, ty, z);
+        (DEPTH_NEAR - iso_view_depth(world)) / (DEPTH_NEAR - DEPTH_FAR)
+    };
+    for &(tx, ty) in &[(0.0, 0.0), (400.0, 0.0), (0.0, 400.0), (400.0, 400.0)] {
+        let d = depth(tx, ty, 0.0);
+        assert!((0.0..=1.0).contains(&d), "ground depth {d} at ({tx},{ty}) clipped");
     }
-
-    // Degenerate maps must not divide by zero.
-    assert!(iso_world_depth_scale(0, 0)[0] > 0.0);
+    // The ~47 m rocket adds `0.5·47 ≈ 24` view depth toward the near side.
+    let d = depth(0.0, 400.0, 47.0);
+    assert!((0.0..=1.0).contains(&d), "rocket-top depth {d} clipped");
 }
 
 #[test]

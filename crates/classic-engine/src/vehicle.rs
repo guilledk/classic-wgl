@@ -14,7 +14,7 @@
 use classic_core::components::{
     DebugName, IsoSprite, IsoVehicle, RoleKind, Selectable, Tilemap, Transform,
 };
-use classic_core::math::iso_world_matrix;
+use classic_core::math::iso_camera_px_inverse;
 use classic_core::pathfinder::PathPoll;
 use classic_core::tilemap::{sample_height_mesh, PPM_TARGET, TILE_M};
 use glam::{Vec2, Vec3};
@@ -338,21 +338,21 @@ fn anchors8(anchors: &[[f32; 2]]) -> [[f32; 2]; 8] {
 ///
 /// `delta_px = (wheel_anchor - body_anchor) * cell` is the wheel's screen
 /// displacement from the body origin in the sprite's own frame; converting it
-/// through the engine's iso transform yields the tile offset that reproduces
-/// that displacement exactly.
+/// through the orthographic camera (the anchors are baked by the exporter's
+/// 30° `iso_basis` camera at `PPM_TARGET` px/m) yields the tile offset that
+/// reproduces that displacement exactly.
 fn derive_wheel_offsets(
     body_anchors: &[[f32; 2]; 8],
     wheel_anchors: &[[[f32; 2]; 8]; 4],
     cell: [f32; 2],
-    tile_scale: f32,
+    _tile_scale: f32,
 ) -> [[[f32; 2]; 8]; 4] {
     let mut offsets = [[[0.0f32; 2]; 8]; 4];
-    let world_inv = iso_world_matrix(Vec3::new(tile_scale, tile_scale, 1.0)).inverse();
     for (i, anchors) in wheel_anchors.iter().enumerate() {
         for d in 0..8 {
             let dx = (anchors[d][0] - body_anchors[d][0]) * cell[0];
             let dy = (anchors[d][1] - body_anchors[d][1]) * cell[1];
-            let world = world_inv.transform_point3(Vec3::new(dx, dy, 0.0));
+            let world = iso_camera_px_inverse(Vec2::new(dx, dy));
             offsets[i][d] = [world.x / TILE_M, -world.y / TILE_M];
         }
     }
@@ -1349,7 +1349,7 @@ impl Engine {
 mod tests {
     use super::*;
     use classic_core::components::{NavMesh, Role};
-    use classic_core::math::iso_world_pos;
+    use classic_core::math::{iso_camera_px, iso_world_pos};
     use classic_core::types::{FrameTable, VehicleAnchors, VehicleDef, VehiclePartDef};
 
     /// Build a `VehicleAnchors` from `(name, anchors)` pairs — the name→anchors
@@ -1579,8 +1579,7 @@ mod tests {
                 0.0,
             );
             let world = iso_world_pos(offsets[i][0][0], offsets[i][0][1], 0.0);
-            let screen =
-                iso_world_matrix(Vec3::new(tile_scale, tile_scale, 1.0)).transform_point3(world);
+            let screen = iso_camera_px(world);
             assert!((screen.x - delta.x).abs() < 1e-3, "wheel {i} x {screen} vs {delta}");
             assert!((screen.y - delta.y).abs() < 1e-3, "wheel {i} y {screen} vs {delta}");
         }

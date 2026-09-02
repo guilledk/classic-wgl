@@ -7,8 +7,8 @@ use classic_core::components::{
     UiNode,
 };
 use classic_core::instrument::Chan;
-use classic_core::math::{iso_world_matrix, iso_world_pos};
-use classic_core::tilemap::{bilinear_height, PPM_TARGET};
+use classic_core::math::{iso_camera_px, iso_world_pos};
+use classic_core::tilemap::bilinear_height;
 use classic_engine::Engine;
 use classic_gfx::GlBuffer;
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -427,11 +427,10 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &x_cross, glow::STATIC_DRAW);
 
         if let Some(tm_e) = tm_entity {
-            let (world_matrix, tilemap_pos, size_x, size_y, hd) = {
+            let (tilemap_pos, size_x, size_y, hd) = {
                 let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
                 let tm_tf = engine.world.get::<&Transform>(tm_e).unwrap();
-                let world_matrix = iso_world_matrix(tm_tf.scale);
-                (world_matrix, tm_tf.position, tm.size_x, tm.size_y, tm.height_data.clone())
+                (tm_tf.position, tm.size_x, tm.size_y, tm.height_data.clone())
             };
             for (_e, (iso_sprite, tf)) in engine.world.query::<(&IsoSprite, &Transform)>().iter() {
                 let mut world_fp: Vec<f32> = Vec::with_capacity(iso_sprite.footprint.len() * 3);
@@ -441,8 +440,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                     let h = bilinear_height(&hd, size_x, size_y, px, py);
 
                     let world = iso_world_pos(px, py, h) + tilemap_pos;
-                    let mut v = world_matrix.transform_point3(world);
-                    v.y -= PPM_TARGET * world.z;
+                    let v = iso_camera_px(world);
                     world_fp.extend_from_slice(&[v.x, v.y, v.z]);
                 }
 
@@ -459,9 +457,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                 let ay = tf.position.y;
                 let ah = bilinear_height(&hd, size_x, size_y, ax, ay);
 
-                let anchor_world = iso_world_pos(ax, ay, ah) + tilemap_pos;
-                let mut anchor_cart = world_matrix.transform_point3(anchor_world);
-                anchor_cart.y -= PPM_TARGET * anchor_world.z;
+                let anchor_cart = iso_camera_px(iso_world_pos(ax, ay, ah) + tilemap_pos);
 
                 let anchor_m = Mat4::from_translation(anchor_cart);
                 gfx.draw_line_strip(&x_cross_buf, 0, 2, &anchor_m, &cam, &[1.0, 0.0, 1.0, 0.9]);
@@ -483,8 +479,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                         for &(ix, iy) in &ring_iso {
                             let h = bilinear_height(&hd, size_x, size_y, ix, iy);
                             let world = iso_world_pos(ix, iy, h) + tilemap_pos;
-                            let mut v = world_matrix.transform_point3(world);
-                            v.y -= PPM_TARGET * world.z;
+                            let v = iso_camera_px(world);
                             ring_verts.extend_from_slice(&[v.x, v.y, v.z]);
                         }
                         let rb = GlBuffer::from_slice(
@@ -509,11 +504,10 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
         let Some(gfx) = engine.gfx.as_mut() else { return };
         let cam = engine.camera.matrix();
         if let Some(tm_e) = tm_entity {
-            let (world_matrix, tilemap_pos, size_x, size_y, hd) = {
+            let (tilemap_pos, size_x, size_y, hd) = {
                 let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
                 let tm_tf = engine.world.get::<&Transform>(tm_e).unwrap();
-                let world_matrix = iso_world_matrix(tm_tf.scale);
-                (world_matrix, tm_tf.position, tm.size_x, tm.size_y, tm.height_data.clone())
+                (tm_tf.position, tm.size_x, tm.size_y, tm.height_data.clone())
             };
             for (e, (vehicle, tf)) in engine.world.query::<(&IsoVehicle, &Transform)>().iter() {
                 if !selected.contains(&e) {
@@ -525,8 +519,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                 let to_world = |px: f32, py: f32| -> [f32; 3] {
                     let h = bilinear_height(&hd, size_x, size_y, px, py);
                     let world = iso_world_pos(px, py, h) + tilemap_pos;
-                    let mut v = world_matrix.transform_point3(world);
-                    v.y -= PPM_TARGET * world.z;
+                    let v = iso_camera_px(world);
                     [v.x, v.y, v.z]
                 };
 
@@ -575,8 +568,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
             let to_world = |px: f32, py: f32| -> [f32; 3] {
                 let h = bilinear_height(&hd, size_x, size_y, px, py);
                 let world = iso_world_pos(px, py, h) + tilemap_pos;
-                let mut v = world_matrix.transform_point3(world);
-                v.y -= PPM_TARGET * world.z;
+                let v = iso_camera_px(world);
                 [v.x, v.y, v.z]
             };
             for path in &preview_paths {

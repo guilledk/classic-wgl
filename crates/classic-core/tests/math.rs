@@ -87,30 +87,31 @@ fn iso_camera_matrix_preserves_horizontal_dimetric_shape() {
 }
 
 #[test]
-fn iso_world_matrix_reproduces_tile_screen() {
-    // The zero-drift bridge: `iso_world_matrix` applied to a world-metre vertex
-    // must equal the current `S(scale) · diag(1, 0.5, 1) · Rz(-45°)` applied to
-    // the tile vertex `(tx, ty, h·PPM_TARGET)`, bit-for-bit (before the shear).
-    let scale = glam::Vec3::new(45.0, 45.0, 1.0);
-    let world = math::iso_world_matrix(scale);
-    let old_iso = glam::Mat4::from_scale(scale) * old_iso_to_cartesian_4();
+fn iso_camera_px_round_trips_ground_points() {
+    // The camera-view pixel projection and its ground-plane inverse must
+    // round-trip world points on the `z = 0` plane.
+    for &(tx, ty) in &[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (3.0, 2.0), (200.0, 200.0)] {
+        let world = math::iso_world_pos(tx, ty, 0.0);
+        let px = math::iso_camera_px(world);
+        let back = math::iso_camera_px_inverse(glam::Vec2::new(px.x, px.y));
+        assert!(
+            (back - world).length() < 1e-3,
+            "ground round-trip at ({tx},{ty}): {world:?} vs {back:?}"
+        );
+    }
+}
 
-    for &(tx, ty, h) in
-        &[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (3.0, 2.0, 5.0), (200.0, 200.0, 10.0)]
-    {
-        let new_screen = world.transform_point3(math::iso_world_pos(tx, ty, h));
-        let old_screen = old_iso.transform_point3(glam::Vec3::new(
-            tx,
-            ty,
-            h * classic_core::tilemap::PPM_TARGET,
-        ));
-        for (axis, (a, b)) in ["x", "y", "z"].iter().zip([
-            (new_screen.x, old_screen.x),
-            (new_screen.y, old_screen.y),
-            (new_screen.z, old_screen.z),
-        ]) {
-            assert!((a - b).abs() < 1e-3, "{axis} drift at ({tx},{ty},{h}): new={a} old={b}");
-        }
+#[test]
+fn iso_view_depth_normalizes_over_near_far() {
+    // `iso_view_depth` is `dot(back, world)`; the normalised window depth is
+    // `(DEPTH_NEAR - dot)/(DEPTH_NEAR - DEPTH_FAR)` (0 = nearest, 1 = farthest).
+    let back = math::iso_basis().2;
+    for &(tx, ty) in &[(0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (200.0, 200.0)] {
+        let world = math::iso_world_pos(tx, ty, 0.0);
+        let dot = math::iso_view_depth(world);
+        assert!((dot - back.dot(world)).abs() < 1e-6);
+        let depth = (math::DEPTH_NEAR - dot) / (math::DEPTH_NEAR - math::DEPTH_FAR);
+        assert!((0.0..=1.0).contains(&depth), "depth {depth} out of [0,1]");
     }
 }
 

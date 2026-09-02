@@ -542,7 +542,9 @@ pub struct RenderSettings {
     pub ambient: [f32; 3],
     pub light_dir: [f32; 3],
     pub light_color: [f32; 3],
-    pub depth_scale: [f32; 2],
+    /// Camera view-depth bounds `[near, far]` (metres) for the iso-depth
+    /// normalisation `depth = (near - dot(back, world)) / (near - far)`.
+    pub depth_span: [f32; 2],
     pub ppm: f32,
     /// World -> light space (`iso_world_light_matrix`), the metric frame every
     /// lighting quantity lives in.  Deliberately *not* `model_matrix *
@@ -1186,12 +1188,12 @@ impl Gfx {
     /// Bind the `imageSheet` shader, sprite texture and uniforms shared by the
     /// normal and ghost passes of the isometric sprite draw.
     ///
-    /// When `depth_map` is `Some((name, range))`, the sprite writes a per-pixel
-    /// `gl_FragDepth` sampled from the grayscale depth-map texture (so
-    /// overlapping sprites occlude each other per-pixel rather than purely by
-    /// draw order); `depth_base` is the anchor-plane isoDepth the map's 0.5
-    /// grayscale maps to.  When `normal_map` is `Some(name)`, the sprite is
-    /// shaded with a runtime Lambertian term from `settings`.
+    /// When `depth_map` is `Some(name)`, the sprite writes a per-pixel
+    /// `gl_FragDepth` sampled from the depth-map texture (which stores camera
+    /// view depth directly in window `[0, 1]`), so overlapping sprites occlude
+    /// each other per-pixel rather than purely by draw order.  When
+    /// `normal_map` is `Some(name)`, the sprite is shaded with a runtime
+    /// Lambertian term from `settings`.
     #[allow(clippy::too_many_arguments)]
     fn bind_iso_sprite(
         &self,
@@ -1203,8 +1205,7 @@ impl Gfx {
         texture_name: &str,
         region: SpriteRegion<'_>,
         iso_depth_corners: &[f32; 4],
-        depth_map: Option<(&str, f32)>,
-        depth_base: f32,
+        depth_map: Option<&str>,
         normal_map: Option<&str>,
         tint: &[f32; 3],
         settings: &RenderSettings,
@@ -1268,14 +1269,12 @@ impl Gfx {
         s.uniform_vec3(gl, "selection_color", Vec3::from_array(*selection_color));
         s.uniform_vec2(gl, "outline_delta", &outline_delta);
 
-        if let Some((depth_tex, depth_range)) = depth_map {
+        if let Some(depth_tex) = depth_map {
             if let Some(dt) = self.textures.get(depth_tex) {
                 dt.bind(gl, 1);
                 s.uniform_1i(gl, "depth_sampler", 1);
             }
             s.uniform_1f(gl, "use_depth_map", 1.0);
-            s.uniform_1f(gl, "depth_base", depth_base);
-            s.uniform_1f(gl, "depth_range", depth_range);
         } else {
             s.uniform_1f(gl, "use_depth_map", 0.0);
         }
@@ -1328,8 +1327,7 @@ impl Gfx {
         texture_name: &str,
         region: SpriteRegion<'_>,
         iso_depth_corners: &[f32; 4],
-        depth_map: Option<(&str, f32)>,
-        depth_base: f32,
+        depth_map: Option<&str>,
         normal_map: Option<&str>,
         tint: &[f32; 3],
         settings: &RenderSettings,
@@ -1354,7 +1352,6 @@ impl Gfx {
             region,
             iso_depth_corners,
             depth_map,
-            depth_base,
             normal_map,
             tint,
             settings,
@@ -1523,7 +1520,7 @@ impl Gfx {
         s.uniform_mat4(gl, "world_matrix", world_matrix);
         s.uniform_vec2(gl, "tile_set_size", tile_set_size);
         s.uniform_vec2(gl, "tile_pixel_size", tile_pixel_size);
-        s.uniform_vec2(gl, "depth_scale", &settings.depth_scale);
+        s.uniform_vec2(gl, "depth_span", &settings.depth_span);
         s.uniform_1f(gl, "ppm", settings.ppm);
         s.uniform_vec2(gl, "map_size", map_size);
         s.uniform_vec2(gl, "selected_tile", selected_tile);
@@ -1686,8 +1683,6 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "content_size",
                 "depth_sampler",
                 "use_depth_map",
-                "depth_base",
-                "depth_range",
                 "normal_sampler",
                 "use_normal_map",
                 "use_lighting",
@@ -1768,7 +1763,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "tile_set",
                 "tile_set_size",
                 "tile_pixel_size",
-                "depth_scale",
+                "depth_span",
                 "ppm",
                 "selected_tile",
                 "selection_begin",

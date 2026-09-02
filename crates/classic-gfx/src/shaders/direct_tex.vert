@@ -6,7 +6,7 @@ in vec2 tex_coord;
 uniform mat4 model_matrix;
 uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
-// World metres -> squashed-cartesian screen pixels (before the shear).
+// World metres -> camera view space (metres): `iso_camera_matrix`.
 uniform mat4 world_matrix;
 // World metres -> light space (px, metric +Z up).
 uniform mat4 light_matrix;
@@ -24,9 +24,9 @@ void main(void ) {
         // tilemap's world/light matrices, so sprites and terrain live in one
         // screen and one light space.
         highp vec3 world = (model_matrix * vertex_pos).xyz;
-        highp vec4 worldPos = world_matrix * vec4(world, 1.0);
-        worldPos.y -= ppm * world.z;
-        vec4 clipPos = projection_matrix * camera_matrix * worldPos;
+        highp vec4 view = world_matrix * vec4(world, 1.0);
+        highp vec4 screenPos = vec4(view.x * ppm, -view.y * ppm, 0.0, 1.0);
+        vec4 clipPos = projection_matrix * camera_matrix * screenPos;
         float bottomDepth = mix(iso_depth_corners.x, iso_depth_corners.y, vertex_pos.x);
         float topDepth = mix(iso_depth_corners.z, iso_depth_corners.w, vertex_pos.x);
         float cornerDepth = mix(topDepth, bottomDepth, vertex_pos.y);
