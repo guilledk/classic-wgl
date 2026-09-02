@@ -447,7 +447,7 @@ impl Engine {
                 a.parts
                     .iter()
                     .chain(a.tires.iter())
-                    .map(|p| (p.name.clone(), anchors8(&p.anchors)))
+                    .map(|(name, anchors)| (name.clone(), anchors8(anchors)))
                     .collect()
             })
             .unwrap_or_default();
@@ -1348,9 +1348,20 @@ mod tests {
     use super::*;
     use classic_core::components::{NavMesh, Role};
     use classic_core::math::iso_to_cartesian_4;
-    use classic_core::types::{
-        FrameTable, VehicleAnchors, VehicleAnchorsPart, VehicleDef, VehiclePartDef,
-    };
+    use classic_core::types::{FrameTable, VehicleAnchors, VehicleDef, VehiclePartDef};
+
+    /// Build a `VehicleAnchors` from `(name, anchors)` pairs — the name→anchors
+    /// map shape the v2 exporters emit.
+    fn vehicle_anchors<K: Into<String>>(
+        parts: Vec<(K, Vec<[f32; 2]>)>,
+        tires: Vec<(K, Vec<[f32; 2]>)>,
+    ) -> VehicleAnchors {
+        VehicleAnchors {
+            version: 1,
+            parts: parts.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+            tires: tires.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        }
+    }
 
     fn test_tilemap() -> Tilemap {
         flat_tilemap(3, 3)
@@ -1609,20 +1620,12 @@ mod tests {
                 VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
             ],
         };
-        let anchors = VehicleAnchors {
-            version: 1,
-            name: "lrv".into(),
-            directions: 8,
-            parts: vec![
-                VehicleAnchorsPart {
-                    name: "body".into(),
-                    texture: "lrvBody".into(),
-                    anchors: vec![[0.5, 0.7352]; 8],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_fl".into(),
-                    texture: "lrvWheelFl".into(),
-                    anchors: vec![
+        let anchors = vehicle_anchors(
+            vec![
+                ("body", vec![[0.5, 0.7352]; 8]),
+                (
+                    "wheel_fl",
+                    vec![
                         [0.566, 0.618],
                         [0.712, 0.676],
                         [0.733, 0.768],
@@ -1632,11 +1635,10 @@ mod tests {
                         [0.267, 0.702],
                         [0.382, 0.629],
                     ],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_fr".into(),
-                    texture: "lrvWheelFr".into(),
-                    anchors: vec![
+                ),
+                (
+                    "wheel_fr",
+                    vec![
                         [0.734, 0.702],
                         [0.712, 0.794],
                         [0.566, 0.852],
@@ -1646,11 +1648,10 @@ mod tests {
                         [0.434, 0.618],
                         [0.618, 0.629],
                     ],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_rl".into(),
-                    texture: "lrvWheelRl".into(),
-                    anchors: vec![
+                ),
+                (
+                    "wheel_rl",
+                    vec![
                         [0.211, 0.796],
                         [0.210, 0.676],
                         [0.378, 0.591],
@@ -1660,11 +1661,10 @@ mod tests {
                         [0.622, 0.880],
                         [0.382, 0.880],
                     ],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_rr".into(),
-                    texture: "lrvWheelRr".into(),
-                    anchors: vec![
+                ),
+                (
+                    "wheel_rr",
+                    vec![
                         [0.379, 0.880],
                         [0.210, 0.794],
                         [0.211, 0.674],
@@ -1674,10 +1674,10 @@ mod tests {
                         [0.789, 0.796],
                         [0.618, 0.880],
                     ],
-                },
+                ),
             ],
-            tires: vec![],
-        };
+            vec![],
+        );
         insert_lrv(&mut engine, (def, anchors));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
@@ -1798,39 +1798,16 @@ mod tests {
                 VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
             ],
         };
-        let anchors = VehicleAnchors {
-            version: 1,
-            name: "lrv".into(),
-            directions: 8,
-            parts: vec![
-                VehicleAnchorsPart {
-                    name: "body".into(),
-                    texture: "lrvBody".into(),
-                    anchors: body.to_vec(),
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_fl".into(),
-                    texture: "lrvWheelFl".into(),
-                    anchors: fl.to_vec(),
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_fr".into(),
-                    texture: "lrvWheelFr".into(),
-                    anchors: fr.to_vec(),
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_rl".into(),
-                    texture: "lrvWheelRl".into(),
-                    anchors: rl.to_vec(),
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_rr".into(),
-                    texture: "lrvWheelRr".into(),
-                    anchors: rr.to_vec(),
-                },
+        let anchors = vehicle_anchors(
+            vec![
+                ("body", body.to_vec()),
+                ("wheel_fl", fl.to_vec()),
+                ("wheel_fr", fr.to_vec()),
+                ("wheel_rl", rl.to_vec()),
+                ("wheel_rr", rr.to_vec()),
             ],
-            tires: vec![],
-        };
+            vec![],
+        );
         insert_lrv(&mut engine, (def, anchors));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
@@ -1897,20 +1874,12 @@ mod tests {
                 VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
             ],
         };
-        let anchors = VehicleAnchors {
-            version: 1,
-            name: "lrv".into(),
-            directions: 8,
-            parts: vec![
-                VehicleAnchorsPart {
-                    name: "body".into(),
-                    texture: "lrvBody".into(),
-                    anchors: vec![[0.5, 0.7352]; 8],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_fl".into(),
-                    texture: "lrvWheelFl".into(),
-                    anchors: vec![
+        let anchors = vehicle_anchors(
+            vec![
+                ("body", vec![[0.5, 0.7352]; 8]),
+                (
+                    "wheel_fl",
+                    vec![
                         [0.566, 0.618],
                         [0.712, 0.676],
                         [0.733, 0.768],
@@ -1920,11 +1889,10 @@ mod tests {
                         [0.267, 0.702],
                         [0.382, 0.629],
                     ],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_fr".into(),
-                    texture: "lrvWheelFr".into(),
-                    anchors: vec![
+                ),
+                (
+                    "wheel_fr",
+                    vec![
                         [0.734, 0.702],
                         [0.712, 0.794],
                         [0.566, 0.852],
@@ -1934,11 +1902,10 @@ mod tests {
                         [0.434, 0.618],
                         [0.618, 0.629],
                     ],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_rl".into(),
-                    texture: "lrvWheelRl".into(),
-                    anchors: vec![
+                ),
+                (
+                    "wheel_rl",
+                    vec![
                         [0.211, 0.796],
                         [0.210, 0.676],
                         [0.378, 0.591],
@@ -1948,11 +1915,10 @@ mod tests {
                         [0.622, 0.880],
                         [0.382, 0.880],
                     ],
-                },
-                VehicleAnchorsPart {
-                    name: "wheel_rr".into(),
-                    texture: "lrvWheelRr".into(),
-                    anchors: vec![
+                ),
+                (
+                    "wheel_rr",
+                    vec![
                         [0.379, 0.880],
                         [0.210, 0.794],
                         [0.211, 0.674],
@@ -1962,10 +1928,10 @@ mod tests {
                         [0.789, 0.796],
                         [0.618, 0.880],
                     ],
-                },
+                ),
             ],
-            tires: vec![],
-        };
+            vec![],
+        );
         insert_lrv(&mut engine, (def, anchors));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
@@ -2090,20 +2056,8 @@ mod tests {
                 .map(|(n, t, _)| VehiclePartDef { name: (*n).into(), texture: (*t).into() })
                 .collect(),
         };
-        let anchors = VehicleAnchors {
-            version: 1,
-            name: "lrv".into(),
-            directions: 8,
-            parts: spec
-                .iter()
-                .map(|(n, _t, a)| VehicleAnchorsPart {
-                    name: (*n).into(),
-                    texture: String::new(),
-                    anchors: vec![*a],
-                })
-                .collect(),
-            tires: vec![],
-        };
+        let anchors =
+            vehicle_anchors(spec.iter().map(|(n, _t, a)| (*n, vec![*a])).collect(), vec![]);
         (def, anchors)
     }
 
@@ -2226,7 +2180,7 @@ mod tests {
         let part = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| {
             (
                 VehiclePartDef { name: name.into(), texture: texture.into() },
-                VehicleAnchorsPart { name: name.into(), texture: texture.into(), anchors },
+                (name.to_string(), anchors),
             )
         };
         let pairs = vec![
@@ -2288,7 +2242,7 @@ mod tests {
                 ],
             ),
         ];
-        let (parts, anchors_parts): (Vec<VehiclePartDef>, Vec<VehicleAnchorsPart>) =
+        let (parts, anchors_parts): (Vec<VehiclePartDef>, Vec<(String, Vec<[f32; 2]>)>) =
             pairs.into_iter().unzip();
         let def = VehicleDef {
             name: "lrv".into(),
@@ -2312,13 +2266,7 @@ mod tests {
             tires: vec![],
             parts,
         };
-        let anchors = VehicleAnchors {
-            version: 1,
-            name: "lrv".into(),
-            directions: 8,
-            parts: anchors_parts,
-            tires: vec![],
-        };
+        let anchors = vehicle_anchors(anchors_parts, vec![]);
         (def, anchors)
     }
 
@@ -2330,20 +2278,17 @@ mod tests {
         let (mut def, mut anchors) = lrv_def_real();
         def.steer_levels = 5;
         def.steer_max_deg = 30.0;
-        let tire = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| {
-            (
-                VehiclePartDef { name: name.into(), texture: texture.into() },
-                VehicleAnchorsPart { name: name.into(), texture: texture.into(), anchors },
-            )
-        };
-        let tire_pairs = vec![
-            tire("tire_fl", "lrvTireFl", anchors.parts[1].anchors.clone()),
-            tire("tire_fr", "lrvTireFr", anchors.parts[2].anchors.clone()),
+        def.tires = vec![
+            VehiclePartDef { name: "tire_fl".into(), texture: "lrvTireFl".into() },
+            VehiclePartDef { name: "tire_fr".into(), texture: "lrvTireFr".into() },
         ];
-        let (tires, tire_anchors): (Vec<VehiclePartDef>, Vec<VehicleAnchorsPart>) =
-            tire_pairs.into_iter().unzip();
-        def.tires = tires;
-        anchors.tires = tire_anchors;
+        anchors.tires = [
+            ("tire_fl", anchors.parts.get("wheel_fl").unwrap().clone()),
+            ("tire_fr", anchors.parts.get("wheel_fr").unwrap().clone()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
         (def, anchors)
     }
 
