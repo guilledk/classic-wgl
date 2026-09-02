@@ -11,6 +11,11 @@
 //! and `result_ptr` exposes that buffer to the shim.  `alloc` returns a
 //! caller-writable scratch buffer for uploading input grids.
 
+// The raw pointers come from the wasm linear memory across the JS/WASM ABI
+// boundary (`#[no_mangle] extern "C"` symbols instantiated by the Worker), so
+// `not_unsafe_ptr_arg_deref`'s "mark it `unsafe fn`" does not apply here.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use std::sync::{Mutex, MutexGuard};
 
 use classic_pathfinder::{GridCell, NavSnapshot, PathfinderState, VehicleNavSnapshot};
@@ -49,7 +54,6 @@ pub extern "C" fn set_snapshot(size_x: i32, size_y: i32, ptr: *const i32, len: i
 }
 
 #[no_mangle]
-#[allow(clippy::too_many_arguments)]
 pub extern "C" fn set_vehicle_snapshot(
     size_x: i32,
     size_y: i32,
@@ -57,15 +61,13 @@ pub extern "C" fn set_vehicle_snapshot(
     structural_len: i32,
     heights: *const f32,
     heights_len: i32,
-    height_scale: f32,
-    tile_scale: f32,
+    tile_m: f32,
 ) {
     let structural =
         unsafe { core::slice::from_raw_parts(structural, structural_len.max(0) as usize) }.to_vec();
     let heights =
         unsafe { core::slice::from_raw_parts(heights, heights_len.max(0) as usize) }.to_vec();
-    let snap =
-        VehicleNavSnapshot::new(size_x, size_y, structural, heights, height_scale, tile_scale);
+    let snap = VehicleNavSnapshot::new(size_x, size_y, structural, heights, tile_m);
     let mut st = state();
     match st.as_mut() {
         Some(st) => st.pathfinder.set_vehicle(snap),
@@ -98,9 +100,9 @@ pub extern "C" fn find_vehicle(
     footprint_len: i32,
     pitch_max: f32,
     roll_max: f32,
-    wheelbase_px: f32,
-    track_px: f32,
-    safe_fall_px: f32,
+    wheelbase_m: f32,
+    track_m: f32,
+    safe_fall_m: f32,
     jump_cost: f32,
     turn_cost: f32,
 ) -> i32 {
@@ -117,9 +119,9 @@ pub extern "C" fn find_vehicle(
         &footprint,
         pitch_max,
         roll_max,
-        wheelbase_px,
-        track_px,
-        safe_fall_px,
+        wheelbase_m,
+        track_m,
+        safe_fall_m,
         jump_cost,
         turn_cost,
     ) {

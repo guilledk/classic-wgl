@@ -32,9 +32,9 @@ enum Command {
         footprint: Vec<GridCell>,
         pitch_max: f32,
         roll_max: f32,
-        wheelbase_px: f32,
-        track_px: f32,
-        safe_fall_px: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+        safe_fall_m: f32,
         jump_cost: f32,
         turn_cost: f32,
     },
@@ -74,9 +74,9 @@ impl PathfinderWorker {
                         footprint,
                         pitch_max,
                         roll_max,
-                        wheelbase_px,
-                        track_px,
-                        safe_fall_px,
+                        wheelbase_m,
+                        track_m,
+                        safe_fall_m,
                         jump_cost,
                         turn_cost,
                     } => {
@@ -86,9 +86,9 @@ impl PathfinderWorker {
                             &footprint,
                             pitch_max,
                             roll_max,
-                            wheelbase_px,
-                            track_px,
-                            safe_fall_px,
+                            wheelbase_m,
+                            track_m,
+                            safe_fall_m,
                             jump_cost,
                             turn_cost,
                         );
@@ -145,9 +145,9 @@ impl PathfinderWorker {
         footprint: Vec<GridCell>,
         pitch_max: f32,
         roll_max: f32,
-        wheelbase_px: f32,
-        track_px: f32,
-        safe_fall_px: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+        safe_fall_m: f32,
         jump_cost: f32,
         turn_cost: f32,
     ) {
@@ -158,9 +158,9 @@ impl PathfinderWorker {
             footprint,
             pitch_max,
             roll_max,
-            wheelbase_px,
-            track_px,
-            safe_fall_px,
+            wheelbase_m,
+            track_m,
+            safe_fall_m,
             jump_cost,
             turn_cost,
         });
@@ -291,14 +291,17 @@ mod tests {
         assert_ne!(worker.poll_path(0), PathPoll::Pending);
     }
 
+    fn tile_m() -> f32 {
+        45.0 / 64.0
+    }
+
     fn open_vehicle_snapshot(w: i32, h: i32) -> Arc<VehicleNavSnapshot> {
         Arc::new(VehicleNavSnapshot::new(
             w,
             h,
             vec![1; (w * h) as usize],
             vec![1.0; ((w + 1) * (h + 1)) as usize],
-            32.0,
-            45.0,
+            tile_m(),
         ))
     }
 
@@ -307,16 +310,16 @@ mod tests {
         let mut heights = vec![0.0f32; n * n];
         for y in 0..n {
             for x in 0..n {
-                heights[y * n + x] = x as f32; // 1.0 unit/tile ramp
+                heights[y * n + x] = x as f32; // 1.0 m/tile ramp
             }
         }
-        Arc::new(VehicleNavSnapshot::new(w, h, vec![1; (w * h) as usize], heights, 32.0, 45.0))
+        Arc::new(VehicleNavSnapshot::new(w, h, vec![1; (w * h) as usize], heights, tile_m()))
     }
 
     fn vehicle_params() -> (f32, f32, f32, f32) {
         let pitch = 20.0f32.to_radians();
         let roll = 20.0f32.to_radians();
-        (pitch, roll, 90.0, 45.0)
+        (pitch, roll, 2.0 * tile_m(), tile_m())
     }
 
     #[test]
