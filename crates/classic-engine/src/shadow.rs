@@ -496,13 +496,13 @@ mod tests {
 
         let expected = Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
             * Mat4::from_scale(scale)
-            * classic_core::math::iso_to_light_4();
+            * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4);
         let p = Vec3::new(7.0, 3.0, 0.0);
         assert!((lm.transform_point3(p) - expected.transform_point3(p)).length() < 1e-3);
 
         // The other order is genuinely different — proving the test has teeth.
         let swapped = Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
-            * classic_core::math::iso_to_light_4()
+            * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
             * Mat4::from_scale(scale);
         assert!(
             (lm.transform_point3(p) - swapped.transform_point3(p)).length() > 1.0,
