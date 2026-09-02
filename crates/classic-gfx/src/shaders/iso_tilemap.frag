@@ -56,7 +56,7 @@ out vec4 fragColor;
 // --- pinned by `lit_shaders_share_the_lighting_block`) ---
 //
 // `p` and `l.pos_radius.xyz` are both **metric light space** (+Z up, `ppm` px
-// per metre on every axis — see `classic_core::math::iso_to_light_4`), so
+// per metre on every axis — see `classic_core::math::iso_world_light_matrix`), so
 // `length` is a true distance and `dot(n, L)` a true cosine.  They previously
 // lived in the isometric space, which compresses y by 2x; every point light
 // was therefore an ellipsoid evaluated as if it were a sphere.

@@ -1,40 +1,16 @@
 use classic_core::math;
 
-#[test]
-fn cartesian_to_iso_and_back_round_trip() {
-    let cart = math::cartesian_to_iso_4();
-    let iso_inv = math::iso_to_cartesian_4();
-    let round = iso_inv * cart;
-    let p = glam::Vec3::new(32.0, 13.0, 0.0);
-    let result = round.transform_point3(p);
-    assert!((result.x - p.x).abs() < 0.001);
-    assert!((result.y - p.y).abs() < 0.001);
-    assert!((result.z - p.z).abs() < 0.001);
+/// The pre-world-metre tile → squashed-cartesian transform, kept here as the
+/// zero-drift reference now that it has been deleted from `math.rs`:
+/// `diag(1, 0.5, 1) · Rz(-45°)`.
+fn old_iso_to_cartesian_4() -> glam::Mat4 {
+    glam::Mat4::from_scale(glam::Vec3::new(1.0, 0.5, 1.0))
+        * glam::Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
 }
 
-#[test]
-fn matrices_are_inverses() {
-    let cti = math::cartesian_to_iso_4();
-    let itc = math::iso_to_cartesian_4();
-    let product = cti * itc;
-    // Product should be approximately identity
-    let id = glam::Mat4::IDENTITY;
-    for r in 0..4 {
-        for c in 0..4 {
-            assert!((product.col(c)[r] - id.col(c)[r]).abs() < 0.001);
-        }
-    }
-}
-
-#[test]
-fn iso_transform_identity_lies_on_correct_axis() {
-    // cartesian (1, 0) → S(1,2,1) → (1,0,0) → R(π/4) → (cos45, sin45, 0) ≈ (0.707, 0.707, 0)
-    let p = glam::Vec3::new(1.0, 0.0, 0.0);
-    let iso = math::cartesian_to_iso_4().transform_point3(p);
-    let s = std::f32::consts::FRAC_1_SQRT_2; // cos(45°) = sin(45°) = 1/√2
-    assert!((iso.x - s).abs() < 0.001, "iso.x={} expected={}", iso.x, s);
-    assert!((iso.y - s).abs() < 0.001, "iso.y={} expected={}", iso.y, s);
-    assert!((iso.z - 0.0).abs() < 0.001, "iso.z={}", iso.z);
+/// The pre-world-metre tile → light transform: `Rz(-45°)` (no isometric squash).
+fn old_iso_to_light_4() -> glam::Mat4 {
+    glam::Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
 }
 
 #[test]
@@ -86,7 +62,7 @@ fn iso_camera_matrix_preserves_horizontal_dimetric_shape() {
 
     let view = math::iso_camera_matrix();
     let iso_matrix =
-        glam::Mat4::from_scale(glam::Vec3::new(TILE_PX, TILE_PX, 1.0)) * math::iso_to_cartesian_4();
+        glam::Mat4::from_scale(glam::Vec3::new(TILE_PX, TILE_PX, 1.0)) * old_iso_to_cartesian_4();
 
     for &(tx, ty) in
         &[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (3.0, 2.0), (10.0, -4.0), (200.0, 200.0)]
@@ -113,11 +89,11 @@ fn iso_camera_matrix_preserves_horizontal_dimetric_shape() {
 #[test]
 fn iso_world_matrix_reproduces_tile_screen() {
     // The zero-drift bridge: `iso_world_matrix` applied to a world-metre vertex
-    // must equal the current `S(scale) · iso_to_cartesian_4()` applied to the
-    // tile vertex `(tx, ty, h·PPM_TARGET)`, bit-for-bit (before the shear).
+    // must equal the current `S(scale) · diag(1, 0.5, 1) · Rz(-45°)` applied to
+    // the tile vertex `(tx, ty, h·PPM_TARGET)`, bit-for-bit (before the shear).
     let scale = glam::Vec3::new(45.0, 45.0, 1.0);
     let world = math::iso_world_matrix(scale);
-    let old_iso = glam::Mat4::from_scale(scale) * math::iso_to_cartesian_4();
+    let old_iso = glam::Mat4::from_scale(scale) * old_iso_to_cartesian_4();
 
     for &(tx, ty, h) in
         &[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (3.0, 2.0, 5.0), (200.0, 200.0, 10.0)]
@@ -145,7 +121,7 @@ fn iso_world_light_matrix_reproduces_tile_light() {
     // to the tile vertex `(tx, ty, h·PPM_TARGET)`.
     let scale = glam::Vec3::new(45.0, 45.0, 1.0);
     let world_light = math::iso_world_light_matrix(scale);
-    let old_light = glam::Mat4::from_scale(scale) * math::iso_to_light_4();
+    let old_light = glam::Mat4::from_scale(scale) * old_iso_to_light_4();
 
     for &(tx, ty, h) in
         &[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (3.0, 2.0, 5.0), (200.0, 200.0, 10.0)]
@@ -176,7 +152,7 @@ fn iso_world_normal_matrix_reproduces_tile_normal() {
     use classic_core::tilemap::{PPM_TARGET, TILE_M};
 
     let scale = glam::Vec3::new(45.0, 45.0, 1.0);
-    let old_nm = glam::Mat3::from_mat4(glam::Mat4::from_scale(scale) * math::iso_to_light_4())
+    let old_nm = glam::Mat3::from_mat4(glam::Mat4::from_scale(scale) * old_iso_to_light_4())
         .inverse()
         .transpose();
     let new_nm = math::iso_world_normal_matrix(scale);

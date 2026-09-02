@@ -5100,7 +5100,7 @@ impl Default for Engine {
 pub fn light_matrix(origin: Vec3, scale: Vec3) -> Mat4 {
     Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
         * Mat4::from_scale(scale)
-        * classic_core::math::iso_to_light_4()
+        * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
 }
 
 /// Decode a little-endian `u32` grid byte blob.
