@@ -29,6 +29,22 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Read the vehicle anchors `data[]` artifact as `name → anchors` maps
   (`BTreeMap`), dropping the redundant `name`/`directions`/per-part `texture`
   fields (#89).
+- Remove the separate light-space coordinate system: positions, normals, the
+  directional shadow map and the light UBO now evaluate lighting in world
+  metres, and the sun is authored in world space.  The point-light `radius`
+  stays in its legacy light-space px unit and is converted to metres at gather
+  time, so falloff is unchanged.
+- Pick the terrain point under the cursor with a camera raycast
+  (`iso_camera_ray` + `raycast_terrain`) that intersects the height field and
+  prefers the front, occluding surface, replacing the fixed-point ground-plane
+  parallax.
+
+### Fixed
+
+- Fix the `KeyL` light debug overlay so its markers track the cursor over
+  slopes: project through `iso_camera_px` and sample mesh-matched heights, and
+  account for the tilemap `Transform.position` offset in the mouse raycast and
+  shadow pass.
 
 ## [0.1.1] - 2026-09-01
 
