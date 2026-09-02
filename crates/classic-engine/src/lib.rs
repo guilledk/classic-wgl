@@ -35,7 +35,7 @@ use classic_core::components::{
     Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
-use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
+use classic_core::math::{iso_world_light_matrix, iso_world_matrix, iso_world_pos};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{
@@ -1597,51 +1597,50 @@ impl Engine {
         let name = self.debug_name(entity);
         self.tilemap_gpu.insert(name, TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
 
-        // Register updateMousePos: convert screen coords → iso tile coords
-        // with 3-iteration height parallax solve.
+        // Register updateMousePos: convert screen coords → iso tile coords by
+        // casting the cursor through the world-metre ground plane and
+        // intersecting the ray with the terrain height field.
         let tm_entity = entity;
         self.on_update(move |engine| {
-            let (tile_step, cart_to_iso, height_data, size_x, size_y, height_scale) = {
+            let (scale, height_data, size_x, size_y) = {
                 let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-                let scale = tm.scale;
-                let tile_step = scale.x * std::f32::consts::FRAC_1_SQRT_2;
-                let inv_scale = Vec3::new(1.0 / scale.x, 1.0 / scale.y, 1.0);
-                let cart_to_iso = cartesian_to_iso_4() * Mat4::from_scale(inv_scale);
-                (
-                    tile_step,
-                    cart_to_iso,
-                    tm.height_data.clone(),
-                    tm.size_x,
-                    tm.size_y,
-                    tm.height_scale,
-                )
+                let tf = engine.world.get::<&Transform>(tm_entity).unwrap();
+                (tf.scale, tm.height_data.clone(), tm.size_x, tm.size_y)
             };
 
+            // Un-project the mouse to the world-metre ground plane (`z = 0`).
             let mp = engine.input.mouse_pos;
-            let mut iso_pos = Vec3::new(mp.x, mp.y, 0.0);
-            iso_pos += engine.camera.fix();
-            iso_pos /= engine.camera.scale;
-            iso_pos = cart_to_iso.transform_point3(iso_pos);
+            let mut screen = Vec3::new(mp.x, mp.y, 0.0);
+            screen += engine.camera.fix();
+            screen /= engine.camera.scale;
+            let ground = iso_world_matrix(scale).inverse().transform_point3(screen);
 
-            let orig = iso_pos;
-            for _ in 0..3 {
-                let h = bilinear_height(&height_data, size_x, size_y, iso_pos.x, iso_pos.y);
+            // The ground point's tile coordinates shift along the depth axis by
+            // the terrain height (parallax).  Iterate the fixed point until the
+            // sampled height stabilises — a ray/height-field intersection.
+            let tx0 = ground.x / TILE_M;
+            let ty0 = -ground.y / TILE_M;
+            let mut tx = tx0;
+            let mut ty = ty0;
+            let parallax = PPM_TARGET * std::f32::consts::SQRT_2 / scale.x.max(0.001);
+            for _ in 0..8 {
+                let h = sample_height_mesh(&height_data, size_x, size_y, tx, ty);
                 if h <= 0.0 {
                     break;
                 }
-                let z_offset = (h * height_scale) / tile_step.max(0.001);
-                iso_pos.x = orig.x - z_offset;
-                iso_pos.y = orig.y + z_offset;
+                let z_off = h * parallax;
+                tx = tx0 - z_off;
+                ty = ty0 + z_off;
             }
 
             // Ground the height: `mouse_iso_pos` becomes a full (x, y, z)
             // position where `z` is the terrain height (metres) under the
             // cursor, sampled with the same triangle-linear interpolation as
             // the rendered mesh.
-            iso_pos.z = sample_height_mesh(&height_data, size_x, size_y, iso_pos.x, iso_pos.y);
+            let z = sample_height_mesh(&height_data, size_x, size_y, tx, ty);
 
             if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(tm_entity) {
-                tm.mouse_iso_pos = iso_pos;
+                tm.mouse_iso_pos = Vec3::new(tx, ty, z);
             }
         });
     }
@@ -1970,13 +1969,14 @@ impl Engine {
         self.inventory_ui.set_target(target);
     }
 
-    /// Project an iso tile coordinate to screen space, using the Tilemap-role
-    /// entity's scale.  Returns `None` when no Tilemap-role entity exists.
+    /// Project an iso tile coordinate (at ground height) to squashed-cartesian
+    /// screen space, using the world-metre pipeline.  Returns `None` when no
+    /// Tilemap-role entity exists.
     pub fn iso_to_screen(&self, x: f32, y: f32) -> Option<(f32, f32)> {
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
-        let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
-        let iso = Mat4::from_scale(tm.scale) * cartesian_to_iso_4().inverse();
-        let p = iso.transform_point3(Vec3::new(x, y, 0.0));
+        let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
+        let world = iso_world_pos(x, y, 0.0);
+        let p = iso_world_matrix(tm_tf.scale).transform_point3(world);
         Some((p.x, p.y))
     }
 
@@ -1995,35 +1995,24 @@ impl Engine {
         let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
         let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
 
-        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale);
-        let mut world = iso_to_cart_world.transform_point3(Vec3::new(x, y, 0.0));
-        world += tm_tf.position;
         let h = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y);
-        world.y -= h * tm.height_scale;
+        let world = iso_world_pos(x, y, h) + tm_tf.position;
+        let mut screen = iso_world_matrix(tm_tf.scale).transform_point3(world);
+        screen.y -= PPM_TARGET * world.z;
 
         let (vw, vh) = self.viewport_size();
         let cam = self.world_to_screen_matrix(vw, vh);
-        let screen = cam.transform_point3(world);
+        let screen = cam.transform_point3(screen);
         Some((screen.x, screen.y))
     }
 
-    /// Convert an iso tile coordinate to a **light-space** point (the space
-    /// consumed by the lit shaders' `vLightPos` varying, by `light_dir`, by
-    /// `vNormal`, and by [`Light::position`]).
-    ///
-    /// Light space is [`light_matrix`] applied to `(x, y, 0)`, with the surface
-    /// height carried in **z alone** — +Z is up, as in [`crate::shadow`].
-    ///
-    /// Two space bugs have been fixed here.  It once applied the renderer's
-    /// isometric shear (`cart.y -= z_px`), placing lights in sheared screen
-    /// space while the normals they are dotted against lived in light space.
-    /// It then used `iso_to_cartesian_4`, which carries the `diag(1, 0.5, 1)`
-    /// isometric squash — so `length`/`normalize`/`dot` operated in a space
-    /// where y counts half as much as x, and point-light pools came out as
-    /// screen circles instead of ground ellipses.
+    /// Convert an iso tile coordinate to a **world-metre** point (Blender
+    /// canonical: `(tx·TILE_M, −ty·TILE_M, h)`), with the tilemap's
+    /// `Transform.position` treated as a world-metre offset.
     ///
     /// `elevation` is metres above the sampled terrain surface (same units as
-    /// `height_data`; `height_scale` converts metres to world px).  Returns
+    /// `height_data`).  Height lives in **z alone**; the light-space conversion
+    /// (and the isometric screen shear) are the consumer's concern.  Returns
     /// `None` without a Tilemap-role entity.
     pub fn iso_to_world(&self, x: f32, y: f32, elevation: f32) -> Option<Vec3> {
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
@@ -2032,18 +2021,15 @@ impl Engine {
             let tf = self.world.get::<&Transform>(tm_entity).ok()?;
             (tm, tf)
         };
-        let mut p =
-            light_matrix(tm_tf.position, tm_tf.scale).transform_point3(Vec3::new(x, y, 0.0));
         let h = sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y);
-        p.z = (h + elevation) * tm.height_scale;
-        Some(p)
+        Some(iso_world_pos(x, y, h + elevation) + tm_tf.position)
     }
 
-    /// Terrain height (in world z units) at the given iso tile coordinate.
+    /// Terrain height (world metres) at the given iso tile coordinate.
     pub fn height_at(&self, x: f32, y: f32) -> f32 {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
         let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return 0.0 };
-        sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
+        sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y)
     }
 
     /// Write one tile index at tile coordinate `(x, y)` (bounds-checked).
@@ -2680,10 +2666,23 @@ impl Engine {
     }
 
     /// Gather the active lights from the world, resolving parent attachments to
-    /// light-space world positions.  A parented light treats `Light.position`
-    /// as a light-space offset from the parent entity's ground point
-    /// (`iso_to_world`); an unparented light's position is already light space.
+    /// world-metre positions and then converting each to light space for the
+    /// shader UBO.  A parented light treats `Light.position` as a world-metre
+    /// offset from the parent entity's ground point (`iso_to_world`); an
+    /// unparented light's position is already world metres.
     pub fn gather_lights(&self) -> Vec<Light> {
+        // World → light space for the UBO upload (`iso_world_light_matrix`);
+        // the inverse maps a squashed-cartesian `frame_offset` back to world
+        // metres (mirroring `compute_iso_sprite_model`).
+        let (world_to_light, inv_world) = {
+            let scale = self
+                .entity_by_role(RoleKind::Tilemap)
+                .and_then(|e| self.world.get::<&Transform>(e).ok())
+                .map(|tf| tf.scale)
+                .unwrap_or(Vec3::new(45.0, 45.0, 1.0));
+            (iso_world_light_matrix(scale), iso_world_matrix(scale).inverse())
+        };
+
         let mut lights = Vec::new();
         for (_e, light) in self.world.query::<&Light>().iter() {
             let mut l = light.clone();
@@ -2706,13 +2705,8 @@ impl Engine {
                                 // not the landing pad.  Mirror
                                 // `compute_iso_sprite_model`: altitude
                                 // (`fo.z`) lands in z, horizontal drift in x/y.
-                                let fo = self.parent_frame_offset(pe);
-                                l.position =
-                                    base + Vec3::new(
-                                        fo.x,
-                                        classic_core::math::cartesian_y_to_light(fo.y + fo.z),
-                                        fo.z,
-                                    ) + l.position;
+                                let fo = inv_world.transform_point3(self.parent_frame_offset(pe));
+                                l.position = base + fo + l.position;
                             }
                             None => classic_core::cl_warn!(
                                 classic_core::instrument::Chan::Render,
@@ -2737,6 +2731,8 @@ impl Engine {
                     }
                 }
             }
+            // World metres → light space for the shader's `evaluateLight`.
+            l.position = world_to_light.transform_point3(l.position);
             lights.push(l);
         }
         // `MAX_LIGHTS` bounds the UBO block, but `gather_lights` reads every
@@ -5067,7 +5063,7 @@ impl Engine {
     /// `h_depth` is the tilemap's horizontal depth scale (see
     /// [`classic_core::tilemap::horizontal_depth_scale`]).
     fn compute_iso_base_depth(pos: Vec3, h_depth: f32) -> f32 {
-        (pos.x - pos.y) / h_depth + 0.5 + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
+        (pos.x - pos.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_M
     }
 
     /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.  `h_depth` is the tilemap's horizontal depth
@@ -5086,9 +5082,7 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / h_depth
-                + 0.5
-                + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
+            let d = (pos.x + pt.x - pos.y - pt.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_M;
             raw_depths[i] = d.min(base_depth);
         }
 
@@ -5109,11 +5103,10 @@ impl Default for Engine {
 /// The tile → **light space** transform for a tilemap: `T(origin) · S(scale) ·
 /// Rz(-45°)`.
 ///
-/// This is the single source of truth for light space on the CPU *and* the
-/// GPU: it is uploaded verbatim as the `light_matrix` uniform consumed by
-/// `iso_tilemap.vert` and `shadow_depth.vert`, and it is what
-/// [`Engine::iso_to_world`] evaluates.  `light_matrix_matches_iso_to_world`
-/// pins the two together.
+/// This is the legacy tile-space bridge; the world-metre path uses
+/// [`classic_core::math::iso_world_light_matrix`] instead (which
+/// [`Engine::iso_to_world`] and `gather_lights` now round-trip through).  It is
+/// kept only for the shadow-space scale-order test until step D deletes it.
 ///
 /// It differs from the renderer's `iso_matrix` (`S(scale) ·
 /// iso_to_cartesian_4()`) by exactly the `diag(1, 0.5, 1)` isometric squash —
@@ -5317,9 +5310,7 @@ mod tests {
     #[test]
     fn compute_iso_base_depth_matches_anchor_plane_formula() {
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
-        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE
-            + 0.5
-            + (64.0 / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
+        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE + 0.5 + 64.0 / HEIGHT_DEPTH_SCALE_M;
         assert!(
             (Engine::compute_iso_base_depth(pos, HORIZONTAL_DEPTH_SCALE) - expected).abs() < 1e-9
         );
@@ -5330,8 +5321,7 @@ mod tests {
         classic_core::register_all_components();
         let mut engine = Engine::new_for_test();
 
-        // A flat 4x4 tilemap at the origin with a uniform 1-metre plateau,
-        // scale [45,45,1] and a 64 px/metre height scale (the lunar PPM).
+        // A flat 4x4 tilemap at the origin with a uniform 1-metre plateau.
         let tilemap = Tilemap {
             position: Vec3::ZERO,
             scale: Vec3::new(45.0, 45.0, 1.0),
@@ -5358,17 +5348,14 @@ mod tests {
         ));
         engine.names.insert("tilemap".into(), entity);
 
-        // Ground level: the light sits at the 1 m surface → z = 1 * 64.
+        // Ground level: the point sits at the 1 m surface → z = 1 (metres).
         let ground = engine.iso_to_world(0.0, 0.0, 0.0).unwrap();
-        assert!((ground.z - 64.0).abs() < 1e-3, "got z {}", ground.z);
+        assert!((ground.z - 1.0).abs() < 1e-3, "got z {}", ground.z);
 
-        // 2 m above: z = 3 * 64.  Elevation is carried in z alone — light space
-        // is +Z up, so raising a light must not move it in x or y.  (This
-        // previously asserted a y lift of 2 * 64, the renderer's isometric
-        // shear, which put lights in a different space from the normals they
-        // are dotted against.)
+        // 2 m above: z = 3.  Elevation is carried in z alone — world space is
+        // +Z up, so raising a light must not move it in x or y.
         let raised = engine.iso_to_world(0.0, 0.0, 2.0).unwrap();
-        assert!((raised.z - 192.0).abs() < 1e-3, "got z {}", raised.z);
+        assert!((raised.z - 3.0).abs() < 1e-3, "got z {}", raised.z);
         assert!((ground.y - raised.y).abs() < 1e-4, "y should not move");
         assert!((ground.x - raised.x).abs() < 1e-4, "x should not move");
 
@@ -5436,7 +5423,8 @@ mod tests {
         );
 
         // The pre-refactor screen-space model for the same inputs.
-        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
+        let iso_to_cart_world =
+            classic_core::math::iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
         let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
         cart_pos += iso_sprite.frame_offset;
         cart_pos += tilemap_tf.position;
@@ -5590,10 +5578,9 @@ mod tests {
         assert_eq!(gathered.len(), 1);
 
         let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
-        let expected = base + local;
-        assert!((gathered[0].position.x - expected.x).abs() < 1e-3);
-        assert!((gathered[0].position.y - expected.y).abs() < 1e-3);
-        assert!((gathered[0].position.z - expected.z).abs() < 1e-3);
+        let world_to_light = iso_world_light_matrix(Vec3::new(45.0, 45.0, 1.0));
+        let expected = world_to_light.transform_point3(base + local);
+        assert!((gathered[0].position - expected).length() < 1e-2);
 
         // An unparented light stays at its authored (world) position.
         let mut engine = Engine::new_for_test();
@@ -5601,7 +5588,8 @@ mod tests {
         engine.world.spawn((Light { position: world_pos, parent: None, ..light.clone() },));
         let gathered = engine.gather_lights();
         assert_eq!(gathered.len(), 1);
-        assert!((gathered[0].position - world_pos).length() < 1e-3);
+        let expected = world_to_light.transform_point3(world_pos);
+        assert!((gathered[0].position - expected).length() < 1e-2);
 
         // A dangling parent must *not* silently turn the offset into an
         // absolute position — the light is dropped (and a warning logged).
@@ -5618,7 +5606,8 @@ mod tests {
     fn parented_light_tracks_parent_frame_offset() {
         // A parented light must follow the parent sprite's animated
         // `frame_offset` (altitude → z, horizontal drift → x/y), not just the
-        // tile.  The frame offset is screen-space: y packs `drift_y - altitude`.
+        // tile.  The frame offset is still squashed-cartesian px here (C.4);
+        // `gather_lights` un-projects it to world metres.
         let mut engine = Engine::new_for_test();
         let tilemap = Tilemap {
             position: Vec3::ZERO,
@@ -5647,6 +5636,7 @@ mod tests {
         engine.names.insert("tilemap".into(), tm);
 
         let parent_tile = Vec3::new(2.0, 2.0, 0.0);
+        let frame_offset = Vec3::new(10.0, -100.0, 0.0);
         let parent = engine.world.spawn((
             Transform::new(parent_tile, Vec3::ONE),
             IsoSprite {
@@ -5661,7 +5651,7 @@ mod tests {
                 footprint: vec![],
                 ghost_group: 0,
                 color: [1.0, 1.0, 1.0, 1.0],
-                frame_offset: Vec3::new(10.0, -100.0, 0.0),
+                frame_offset,
             },
         ));
         engine.names.insert("rocket".into(), parent);
@@ -5681,25 +5671,17 @@ mod tests {
 
         let gathered = engine.gather_lights();
         let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
-        // fo = (10, -100, 0): light drift = (10, 2*(-100+0), 0) = (10, -200, 0).
-        let expected = base + Vec3::new(10.0, -200.0, 0.0) + offset;
+        // fo is authored in squashed-cartesian px (C.4; C.6 re-expresses it in
+        // metres): un-project it to world metres, then to light space.
+        let scale = Vec3::new(45.0, 45.0, 1.0);
+        let fo_world = iso_world_matrix(scale).inverse().transform_point3(frame_offset);
+        let world_to_light = iso_world_light_matrix(scale);
+        let expected = world_to_light.transform_point3(base + fo_world + offset);
         assert!(
-            (gathered[0].position.x - expected.x).abs() < 1e-2,
-            "x: {} vs {}",
-            gathered[0].position.x,
-            expected.x
-        );
-        assert!(
-            (gathered[0].position.y - expected.y).abs() < 1e-2,
-            "y: {} vs {}",
-            gathered[0].position.y,
-            expected.y
-        );
-        assert!(
-            (gathered[0].position.z - expected.z).abs() < 1e-2,
-            "z: {} vs {}",
-            gathered[0].position.z,
-            expected.z
+            (gathered[0].position - expected).length() < 1e-2,
+            "got {} expected {}",
+            gathered[0].position,
+            expected
         );
     }
 

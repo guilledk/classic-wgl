@@ -6,11 +6,6 @@
 //! framebuffer directly, so they require a real GL context (native or
 //! headless-EGL) and are meaningless under a broken depth-test rasterizer.
 
-use glam::Vec3;
-
-use classic_core::components::Tilemap;
-use classic_core::math::iso_to_cartesian_4;
-use classic_core::tilemap::bilinear_height;
 use classic_engine::Engine;
 
 /// Project an iso tile coordinate (at terrain height) to screen pixels
@@ -18,22 +13,10 @@ use classic_engine::Engine;
 ///
 /// Named `iso_to_screen_px` to avoid clashing with the guest SDK's
 /// `iso_to_screen` (which returns a cartesian world position, not pixels).
+/// Delegates to [`Engine::iso_to_screen_px`] so the test helper can't drift
+/// from the engine's world-metre projection.
 pub fn iso_to_screen_px(engine: &Engine, x: f32, y: f32) -> Option<(f32, f32)> {
-    let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap)?;
-    let tm = engine.world.get::<&Tilemap>(tm_entity).ok()?;
-    let tm_tf = engine.world.get::<&classic_core::components::Transform>(tm_entity).ok()?;
-
-    let iso_to_cart_world = iso_to_cartesian_4() * glam::Mat4::from_scale(tm_tf.scale);
-    let mut world = iso_to_cart_world.transform_point3(Vec3::new(x, y, 0.0));
-    world += tm_tf.position;
-    let h = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y);
-    world.y -= h * tm.height_scale;
-
-    let (vw, vh) = engine.viewport_size();
-    let size = Vec3::new(vw, vh, 0.0);
-    let fix = engine.camera.position * engine.camera.scale - size / Vec3::new(2.0, 2.0, 1.0);
-    let camera_space = world * engine.camera.scale - fix;
-    Some((camera_space.x, camera_space.y))
+    engine.iso_to_screen_px(x, y)
 }
 
 /// Read the RGBA pixel (normalized `[0, 1]`) at a top-left-origin screen

@@ -760,8 +760,7 @@ pub enum LightKind {
     Spot,
 }
 
-/// A dynamic point/spot light in the shared world space consumed by the lit
-/// shaders (`sheet.frag`, `iso_tilemap.frag`).
+/// A dynamic point/spot light in Blender-canonical **world space** (metres).
 ///
 /// `kind` selects point (omnidirectional) vs spot (directional cone).  Point
 /// lights ignore the spot fields (`dir`, `cone_angle`); the GPU `std140`
@@ -772,13 +771,11 @@ pub enum LightKind {
 pub struct Light {
     #[serde(default)]
     pub kind: LightKind,
-    /// Light-space position (metric, +Z up).  This is the frame every lighting
-    /// quantity lives in — `classic_core::math::iso_to_light_4`, i.e. the
-    /// isometric yaw *without* the `diag(1, 0.5, 1)` isometric squash.  It is
-    /// **not** the sheared screen space (`vWorldPos`) and not the squashed
-    /// `iso_to_cartesian` space — those make `length`/`normalize`/`dot` mean
-    /// something different along y.  The tilemap and sprite shaders derive
-    /// `vLightPos` in this same frame.
+    /// World-metre position (`+tx → +X`, `+ty → −Y`, +Z up) — the same
+    /// Blender-canonical frame the terrain and sprite geometry live in.
+    /// [`Engine::iso_to_world`] places it; `gather_lights` converts it to the
+    /// shader's light space before upload.  It is **not** the sheared screen
+    /// space and not the squashed `iso_to_cartesian` space.
     pub position: Vec3,
     /// Linear RGB colour.
     pub color: [f32; 3],
@@ -795,9 +792,9 @@ pub struct Light {
     #[serde(default)]
     pub cone_angle: f32,
     /// Optional parent entity name.  When set, `position` is interpreted as a
-    /// light-space offset **relative to the parent's ground point** and the
+    /// world-metre offset **relative to the parent's ground point** and the
     /// light follows the parent each frame; when `None`, `position` is an
-    /// absolute light-space position.
+    /// absolute world-metre position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
 }

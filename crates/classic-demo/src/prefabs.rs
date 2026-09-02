@@ -337,9 +337,9 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
                 None
             } else {
                 let shape = polygon_from_verts(world_verts);
-                // Set sprite z-offset from terrain height.
-                let terrain_z =
-                    bilinear_height(hd, sx, sy, sprite_iso_pos.x, sprite_iso_pos.y) * hs;
+                // Set sprite z-offset from terrain height (world metres — the
+                // same unit the depth formula and `height_at` now consume).
+                let terrain_z = bilinear_height(hd, sx, sy, sprite_iso_pos.x, sprite_iso_pos.y);
                 Some((engine.debug_name(entity), shape, terrain_z))
             }
         };
