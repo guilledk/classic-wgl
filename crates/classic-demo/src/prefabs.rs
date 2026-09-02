@@ -7,11 +7,10 @@ use classic_core::collision::polygon_from_verts;
 use classic_core::components::{
     Animator, ColliderData, IsoAgent, IsoSprite, Light, Tilemap, Transform,
 };
-use classic_core::math::iso_to_cartesian_4;
-use classic_core::tilemap::bilinear_height;
+use classic_core::math::{iso_world_matrix, iso_world_pos};
+use classic_core::tilemap::{bilinear_height, PPM_TARGET};
 use classic_core::types::AnimationData;
 use classic_engine::Engine;
-use glam::Mat4;
 
 use crate::state::DemoStateRef;
 
@@ -287,15 +286,15 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
     let tm_entity =
         engine.entity_by_role(classic_core::RoleKind::Tilemap).expect("Tilemap-role entity");
 
-    let (isosprite_entities, _tilemap_name, iso_to_cart_world, tilemap_pos) = {
+    let (isosprite_entities, _tilemap_name, world_matrix, tilemap_pos) = {
         let tilemap = engine.world.get::<&Tilemap>(tm_entity).unwrap();
         let tilemap_tf = engine.world.get::<&Transform>(tm_entity).unwrap();
         let isosprite_entities: Vec<hecs::Entity> =
             engine.world.query::<&IsoSprite>().iter().map(|(e, _)| e).collect();
 
-        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
+        let world_matrix = iso_world_matrix(tilemap_tf.scale);
 
-        (isosprite_entities, tilemap.tile_set.clone(), iso_to_cart_world, tilemap_tf.position)
+        (isosprite_entities, tilemap.tile_set.clone(), world_matrix, tilemap_tf.position)
     };
 
     for entity in isosprite_entities {
@@ -317,7 +316,6 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
             let hd = &tm.height_data;
             let sx = tm.size_x;
             let sy = tm.size_y;
-            let hs = tm.height_scale;
 
             let mut world_verts: Vec<glam::Vec3> = Vec::with_capacity(footprint.len());
             for pt in &footprint {
@@ -326,10 +324,9 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
 
                 let h = bilinear_height(hd, sx, sy, px, py);
 
-                let mut v = glam::Vec3::new(px, py, 0.0);
-                v = iso_to_cart_world.transform_point3(v);
-                v += tilemap_pos;
-                v.y -= h * hs;
+                let world = iso_world_pos(px, py, h) + tilemap_pos;
+                let mut v = world_matrix.transform_point3(world);
+                v.y -= PPM_TARGET * world.z;
                 world_verts.push(v);
             }
 

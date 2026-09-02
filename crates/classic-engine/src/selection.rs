@@ -15,8 +15,8 @@ use classic_core::collision::polygon_from_verts;
 use classic_core::components::{
     ColliderData, DebugName, IsoSprite, IsoVehicle, Selectable, Tilemap,
 };
-use classic_core::math::iso_to_cartesian_4;
-use classic_core::tilemap::bilinear_height;
+use classic_core::math::{iso_world_matrix, iso_world_pos};
+use classic_core::tilemap::{bilinear_height, PPM_TARGET};
 use classic_core::{RoleKind, Transform};
 use glam::{Mat4, Vec2, Vec3};
 
@@ -199,7 +199,7 @@ impl Engine {
     fn selectable_world_polygon(
         &self,
         tm_entity: hecs::Entity,
-        iso_to_cart_world: &Mat4,
+        world_matrix: &Mat4,
         tilemap_pos: Vec3,
         pos: Vec2,
         footprint: &[Vec2],
@@ -208,15 +208,14 @@ impl Engine {
         let hd = &tm.height_data;
         let sx = tm.size_x;
         let sy = tm.size_y;
-        let hs = tm.height_scale;
         let mut world_verts = Vec::with_capacity(footprint.len());
         for pt in footprint {
             let px = pos.x + pt.x;
             let py = pos.y + pt.y;
             let h = bilinear_height(hd, sx, sy, px, py);
-            let mut v = iso_to_cart_world.transform_point3(Vec3::new(px, py, 0.0));
-            v += tilemap_pos;
-            v.y -= h * hs;
+            let world = iso_world_pos(px, py, h) + tilemap_pos;
+            let mut v = world_matrix.transform_point3(world);
+            v.y -= PPM_TARGET * world.z;
             world_verts.push(v);
         }
         Some(polygon_from_verts(world_verts))
@@ -229,9 +228,9 @@ impl Engine {
     pub fn sync_selectable_colliders(&mut self) {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
 
-        let (iso_to_cart_world, tilemap_pos) = {
+        let (world_matrix, tilemap_pos) = {
             let Some(tm_tf) = self.world.get::<&Transform>(tm_entity).ok() else { return };
-            (iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale), tm_tf.position)
+            (iso_world_matrix(tm_tf.scale), tm_tf.position)
         };
 
         // Phase 1: gather (name, world polygon) for every visible selectable.
@@ -252,7 +251,7 @@ impl Engine {
                 let footprint = self.selectable_footprint(entity);
                 if let Some(shape) = self.selectable_world_polygon(
                     tm_entity,
-                    &iso_to_cart_world,
+                    &world_matrix,
                     tilemap_pos,
                     pos,
                     &footprint,
