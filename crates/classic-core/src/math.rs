@@ -82,6 +82,45 @@ pub fn cartesian_y_to_light(y: f32) -> f32 {
     y * 2.0
 }
 
+/// Convert a tile coordinate + world height (metres) to Blender-canonical
+/// world space: `(tx·TILE_M, −ty·TILE_M, h)`.
+///
+/// `h` is a real world-Z coordinate in metres (never a pixel offset), matching
+/// `height_data` and animation `rig_location.z`.  The `+tx → +X`, `+ty → −Y`
+/// flip is Blender's clockwise top-down convention (`render/iso.py`).
+pub fn iso_world_pos(tx: f32, ty: f32, h: f32) -> Vec3 {
+    Vec3::new(tx * crate::tilemap::TILE_M, -ty * crate::tilemap::TILE_M, h)
+}
+
+/// The fixed isometric **view** matrix (45° yaw + 30° elevation, 2:1 dimetric),
+/// mapping Blender world space → camera view space.
+///
+/// The camera basis matches `classic-assets` `render/iso.py::iso_basis(30°)`:
+///
+/// ```text
+/// right = (√½, −√½, 0)
+/// up    = (sin30°·√½, sin30°·√½, cos30°) = (0.3536, 0.3536, 0.8660)
+/// back  = right × up = (−0.6124, −0.6124, 0.5)
+/// ```
+///
+/// `view · world` yields the camera-frame coordinate
+/// `(dot(right, w), dot(up, w), dot(back, w))`: the first two components are the
+/// 2D isometric image (before ortho projection and pan/zoom), the third is view
+/// depth.  The entire 45° yaw + 30° elevation + `ty → −Y` flip collapses into
+/// this one matrix — there is no separate squash, shear, or light-space
+/// rotation.
+pub fn iso_camera_matrix() -> Mat4 {
+    let half = std::f32::consts::FRAC_1_SQRT_2; // √½
+    let sin_el = 0.5; // sin(30°)
+    let cos_el = 0.866_025_4; // cos(30°) = √3/2
+    let right = Vec3::new(half, -half, 0.0);
+    let up = Vec3::new(sin_el * half, sin_el * half, cos_el);
+    let back = right.cross(up);
+    // Camera-to-world has the basis as columns; its inverse (== transpose for
+    // an orthonormal basis) is the world-to-camera view matrix.
+    Mat4::from_cols(right.extend(0.0), up.extend(0.0), back.extend(0.0), glam::Vec4::W).transpose()
+}
+
 pub fn deg_to_rad(deg: f32) -> f32 {
     deg * std::f32::consts::PI / 180.0
 }

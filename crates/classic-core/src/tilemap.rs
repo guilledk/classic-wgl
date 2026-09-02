@@ -286,6 +286,19 @@ pub fn horizontal_depth_scale(size_x: i32, size_y: i32) -> f32 {
 /// screen pixels via `* PPM_TARGET`.
 pub const PPM_TARGET: f32 = 64.0;
 
+/// Pixel size of a tile edge in the tileset texture.  This is a **raster**
+/// dimension only — never a spatial unit.  See [`TILE_M`] for the metre length.
+pub const TILE_PX: f32 = 45.0;
+
+/// Metre length of a tile edge: `TILE_PX / PPM_TARGET = 45 / 64 = 0.703125 m`.
+///
+/// This is the missing constant that makes the tile lattice a proper metric
+/// grid.  A one-tile step along `+tx`/`+ty` is `TILE_M` metres at `PPM_TARGET`
+/// px/m, so horizontal distance and vertical height (already authored in
+/// metres) finally share one unit — resolving the long-standing "32 vs 45"
+/// horizontal/height incommensurability.
+pub const TILE_M: f32 = TILE_PX / PPM_TARGET;
+
 /// Height depth divisor in the canonical iso-depth formula, for `z` in
 /// **metres** (`height_data`, after re-expression from tileset pixels).
 ///
