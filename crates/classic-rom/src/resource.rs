@@ -379,7 +379,7 @@ mod tests {
             r#"{
                 "shaders": [],
                 "textures": [
-                    {"name": "lrvBody", "src": "res/lrv_body.png", "depth": "res/lrv_body_depth.png", "depth_range": 0.05},
+                    {"name": "lrvBody", "src": "res/lrv_body.png", "depth": "res/lrv_body_depth.png"},
                     {"name": "tree", "src": "res/tree.png"}
                 ],
                 "animations": []
