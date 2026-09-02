@@ -541,6 +541,7 @@ dependencies = [
  "classic-rom",
  "console_error_panic_hook",
  "glam",
+ "js-sys",
  "log",
  "wasm-bindgen",
  "wasm-bindgen-futures",

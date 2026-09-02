@@ -62,6 +62,10 @@ impl BootOverlay {
         }
     }
 
+    fn set(&self, message: &str) {
+        self.el.set_text_content(Some(message));
+    }
+
     fn error(&self, message: &str) {
         self.el.set_text_content(Some(message));
     }
@@ -135,6 +139,29 @@ fn boot_sink() -> Box<dyn classic_rom::BootSink> {
     }
 }
 
+/// Per-frame boot budget: run boot steps for at most this long before yielding
+/// to the browser, so no single animation frame blocks past ~16 ms.
+#[cfg(target_arch = "wasm32")]
+const BOOT_BUDGET_MILLIS: u128 = 12;
+
+/// Resolve after the next `requestAnimationFrame` tick — yield one frame so the
+/// browser paints (and the boot overlay animates) between hydration slices.
+#[cfg(target_arch = "wasm32")]
+fn next_frame() -> impl std::future::Future<Output = ()> {
+    async {
+        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+            let resolve = resolve.clone();
+            let cb = wasm_bindgen::closure::Closure::once(move || {
+                let _ = resolve.call0(&JsValue::UNDEFINED);
+            });
+            let window = web_sys::window().expect("no window");
+            let _ = window.request_animation_frame(cb.as_ref().unchecked_ref());
+            cb.forget();
+        });
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn run() -> anyhow::Result<()> {
     // `?classic_log=` configures channel logging; `?rom=` selects the ROM
@@ -144,7 +171,7 @@ async fn run() -> anyhow::Result<()> {
     }
     let spec = query_param("rom").unwrap_or_default();
     let label = query_param("rom").unwrap_or_else(|| "demo".to_string());
-    let mut overlay = BootOverlay::new(&format!("downloading scene `{label}`…"));
+    let mut overlay = BootOverlay::new(&format!("loading scene `{label}`…"));
 
     let boot_start = std::time::Instant::now();
     let sink = boot_sink();
@@ -159,7 +186,7 @@ async fn run() -> anyhow::Result<()> {
             return Err(err);
         }
     };
-    overlay.clear();
+    overlay.set("decoding resources…");
 
     use classic_platform::web::WebPlatform;
     use classic_platform::Platform;
@@ -173,11 +200,36 @@ async fn run() -> anyhow::Result<()> {
         }
     };
 
-    // Bootstrap the engine asynchronously: the `.basis` transcode runs in a
-    // dedicated Worker (awaited here) so it never blocks the main thread.
+    // Hydrate the engine incrementally: compile shaders + build the boot plan
+    // up front, then drain a time-budgeted slice of steps per animation frame
+    // so the browser stays responsive (and the overlay animates) while the
+    // large atlases decode.  The `.basis` transcode stays in its dedicated
+    // Worker (awaited after the plan drains).
     let gl = platform.gl();
-    let mut engine = classic_demo::init_engine_multi_async(gl, &loaded, sink.as_ref()).await;
+    let mut engine = classic_engine::Engine::new();
+    let mut plan = engine.begin_boot_gfx(gl, &loaded, sink.as_ref());
+    while !plan.is_done() {
+        let frame_start = std::time::Instant::now();
+        loop {
+            if plan.is_done() {
+                break;
+            }
+            engine.boot_step(&mut plan, 1);
+            if frame_start.elapsed().as_millis() >= BOOT_BUDGET_MILLIS {
+                break;
+            }
+        }
+        next_frame().await;
+    }
+    engine.upload_pending_basis(&mut plan, sink.as_ref()).await;
+    classic_demo::finish_init_engine(
+        &mut engine,
+        &loaded,
+        &classic_demo::CompiledModules::new(),
+        sink.as_ref(),
+    );
     sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed() });
+    overlay.clear();
 
     platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {
         engine.frame(input, vw, vh, delta);
