@@ -57,8 +57,8 @@ Textures and shaders are keyed by name string (from the manifest).
   The packed form is canonical.
 - `IsoSpritePass` — `Normal` | `Ghost`, selecting which phase of the two-phase
   isometric draw to run.
-- `RenderSettings` — `ambient`/`light_dir`/`light_color`/`depth_scale`/
-  `normal_matrix`, the shared lighting/projection bundle passed to
+- `RenderSettings` — `ambient`/`light_dir`/`light_color`/`depth_span`/
+  `normal_matrix`/`light_matrix`, the shared lighting/projection bundle passed to
   `draw_tilemap` and (its ambient/dir/color fields) to `draw_sprite` /
   `draw_iso_sprite` for the runtime Lambertian term.
 
@@ -127,7 +127,7 @@ screen in UI phase, missing SDF text. The `draw_line_*` functions use
 
 ```rust
 fn draw_tilemap(
-    &self, model: &Mat4, camera: &Mat4, iso_matrix: &Mat4,
+    &self, model: &Mat4, camera: &Mat4, world_matrix: &Mat4,   // `iso_camera_matrix`
     tile_data_tex: &glow::Texture,      // raw GL handle (not named)
     tileset_name: &str,                 // key into Gfx.textures
     tile_set_size: &[f32; 2],           // tiles per row/col in tileset PNG
@@ -135,7 +135,7 @@ fn draw_tilemap(
     map_size: &[f32; 2],
     selected_tile: &[f32; 2], selection_begin: &[f32; 2],
     selection_mode: i32, selection_color: &[f32; 4],
-    settings: &RenderSettings,          // ambient/light_dir/light_color/depth_scale/normal_matrix
+    settings: &RenderSettings,          // ambient/light_dir/light_color/depth_span/normal_matrix/light_matrix
     show_grid: bool,
     vertex_count: i32, vertex_buffer: &GlBuffer,
 );
@@ -148,19 +148,21 @@ sprite sheet (named, from `Gfx.textures`).
 Interleaved vertex attribs (36 bytes/vertex): `vertexPos`(3f, offset 0),
 `mapCoord`(2f, offset 12), `tileId`(1f, offset 20, >0.5 = wall), `normal`(3f, offset 24).
 
-Vertex shader: `projectionMatrix * cameraMatrix * modelMatrix * isoMatrix * vertexPos`,
-then `worldPos.y -= vertexPos.z` for height correction (**rasterisation only** —
-this shear must never reach lighting or the shadow map, see §17), then the
-canonical iso-depth formula sets `gl_Position.z` in window space:
+Vertex shader: the mesh vertices are already in **world metres**; the view is
+`world_matrix = iso_camera_matrix` (`view = world_matrix · world`), the screen is
+`(view.x·ppm, −view.y·ppm)`, and the canonical view-depth formula sets
+`gl_Position.z` in window space:
 
 ```glsl
-highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
+vec4 view = world_matrix * vec4(world, 1.0);
+vec4 screenPos = vec4(view.x * ppm, -view.y * ppm, 0.0, 1.0);
+highp float isoDepth = (depth_span.x - view.z) / (depth_span.x - depth_span.y);
 clipPos.z = isoDepth * 2.0 - 1.0;
 ```
 
-`depth_scale` and `ppm` are set from the `classic-core::tilemap` constants
-(`horizontal_depth_scale`, `HEIGHT_DEPTH_SCALE_M`, `PPM_TARGET`) so there are no
-GLSL literals.
+`depth_span` = `[DEPTH_NEAR, DEPTH_FAR]` and `ppm` = `PPM_TARGET` come from
+`classic-core` (`math::DEPTH_NEAR/DEPTH_FAR`, `tilemap::PPM_TARGET`) so there are
+no GLSL literals.  There is no `iso_matrix` and no `y -= vertex.z` shear — see §17.
 
 `selection_mode` (0=invert, 1=colorize, -1=none) highlights tiles between
 `selectionBegin` and `selectedTile`.  Lighting is diffuse:
@@ -181,11 +183,12 @@ parent tilemap for correct depth ordering.
 
 ```rust
 fn draw_iso_sprite(
-    &self, model: &Mat4, camera: &Mat4, texture_name: &str,
+    &self, model: &Mat4, camera: &Mat4, world_matrix: &Mat4,  // `iso_camera_matrix`
+    texture_name: &str,
     region: SpriteRegion<'_>,              // Grid { frame, tile_set_size } | Uv { … }
     iso_depth_corners: &[f32; 4],          // [sw, se, nw, ne]
-    depth_map: Option<(&str, f32)>,        // (depth texture name, depth_range)
-    depth_base: f32,                       // anchor-plane iso depth (0.5 gray)
+    depth_map: Option<&str>,               // depth-map texture name (per-sheet)
+    depth_base: f32,                       // sprite's window-space anchor depth
     normal_map: Option<&str>,              // normal-map texture name (runtime Lambertian)
     settings: &RenderSettings,             // ambient/light_dir/light_color (sprite uses these three)
     ghost_group: u32,
@@ -204,12 +207,13 @@ per-fragment `gl_Position.z`; when the sprite has a depth map the fragment
 shader (`sheet.frag`) instead writes `gl_FragDepth` from the grayscale map:
 
 ```glsl
-gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
+gl_FragDepth = depth_base + (gray - 0.5);
 ```
 
-`depth_base` and `depth_range` are window-space iso depths (like the tilemap's
-`gl_Position.z`), so no clip→window remap is needed — the depth map and terrain
-share one consistent depth space.
+`depth_base` is the sprite's window-space anchor depth (its ground anchor
+re-projected through the camera), so the depth map and terrain share one
+consistent view-depth space.  The `gray − 0.5` re-anchors the origin-relative
+bake (see `classic-iso` §14).
 
 When `normal_map` is `Some(name)`, the sprite is shaded with a runtime
 Lambertian term in `sheet.frag` (matching `iso_tilemap.frag`): the normal map
@@ -224,8 +228,8 @@ baked-lit path.
 regions (e.g. the rocket's flame cones) so they stay flat albedo instead of
 being shaded.
 
-**Per-sheet normal/depth:** `SpriteSheetEntry` now carries optional
-`normal`/`depth`/`depth_range` per sheet (shared-atlas parallel companions).
+**Per-sheet normal/depth:** `SpriteSheetEntry` carries optional
+`normal`/`depth` per sheet (shared-atlas parallel companions).
 The engine's `resolve_frame` derives the GL texture names
 `"{sheet_name}-normal"` / `"{sheet_name}-depth"` (bundled as plain textures by
 classic-roms) and binds them per-frame, falling back to the per-texture
@@ -609,16 +613,15 @@ not hypothetical, it is what shipped for a whole session.
 
 | Space | Transform | Up axis | Used by |
 |---|---|---|---|
-| **light** | `model * iso_matrix * vertex` | `+Z` | `light_dir`, `vNormal`, `vLightPos`, `Light::position`, `iso_to_world`, the shadow map |
-| **screen** | the above, then `y -= vertex.z` | `(0,-1,1)/√2` | rasterisation only |
+| **light** | `iso_world_light_matrix · world` = `S(scale)·Rz(−45°)·D⁻¹` | `+Z` (metric) | `light_dir`, `vNormal`, `vLightPos`, `Light::position`, `iso_to_world`, the shadow map |
+| **screen** | `iso_camera_px(world)` = `(right·w, −up·w)·ppm` | n/a (2D) | rasterisation only |
 
-The `y -= vertex.z` shear is what makes height read as height in an isometric
-view, but it leaves height in **both** y and z.  Projecting screen space along a
-`light_dir` authored with +Z up presents the sun at ~2.7° instead of 30° — a
-grazing angle that casts no usable shadow.
-
-All lighting maths happens in light space.  Screen space is deliberately **not**
-exposed as a varying, so there is nothing plausible-looking to grab by mistake.
+Light space drops the 2:1 squash (`Rz(−45°)`) so `length`/`normalize`/`dot` mean
+the same thing in every direction; screen space is the single orthographic
+camera's 2D image.  There is no `y -= vertex.z` shear anymore — the camera `up`
+axis (`up.z = cos30°`) already carries height into the screen `y`.  All lighting
+maths happens in light space; screen space is deliberately **not** exposed as a
+varying, so there is nothing plausible-looking to grab by mistake.
 
 ### Sprite billboards
 
