@@ -1246,10 +1246,10 @@ impl Engine {
     ///
     /// The current format (magic `b"KACH"`) carries named, typed, sparse
     /// keyframe channels — `offset` (sprite motion) plus `light.*` channels
-    /// (position/color/intensity/radius/dir/cone) — all pre-scaled into the
-    /// engine's final units by the exporter, so the animator interpolates them
-    /// verbatim.  The `offset` channel is folded into `offset_keyframes` so the
-    /// sprite animator's existing interpolation path keeps working unchanged.
+    /// (position/color/intensity/radius/dir/cone) — all in the engine's final
+    /// units by the exporter, so the animator interpolates them verbatim.  The
+    /// `offset` channel is folded into `offset_keyframes` so the sprite
+    /// animator's existing interpolation path keeps working unchanged.
     pub fn load_animation_channels(&mut self, animation_name: &str, bytes: &[u8]) {
         const MAGIC: &[u8; 4] = b"KACH";
 
@@ -1410,10 +1410,9 @@ impl Engine {
     ///   frame_count × `[f32 x, f32 y, f32 z]` triplets (one per frame).
     ///
     /// `rig_location` is Blender world `(x = drift, y = drift, z = altitude)`
-    /// in metres.  It is converted here to a cartesian screen-space offset:
-    /// the altitude maps onto the vertical (screen-Y, negative = up), and the
-    /// drift maps onto screen X/Y, all scaled by `pixels_per_meter` so the
-    /// rocket's motion matches the sprite's render resolution.
+    /// in metres.  It is stored verbatim as `(drift_x_m, drift_y_m, altitude_m)`
+    /// — the `pixels_per_meter` field is now ignored (the sprite model consumes
+    /// world metres directly, see `compute_iso_sprite_model`).
     pub fn load_animation_offsets(&mut self, animation_name: &str, bytes: &[u8]) {
         const MAGIC: &[u8; 4] = b"KAOS";
 
@@ -1427,7 +1426,6 @@ impl Engine {
                 return;
             }
             let count = u32::from_le_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
-            let ppm = f32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]);
             let mut keyframes = Vec::with_capacity(count);
             let mut o = 13;
             for _ in 0..count {
@@ -1447,11 +1445,7 @@ impl Engine {
                     bytes[o + 15],
                 ]);
                 o += 16;
-                keyframes.push(OffsetKeyframe {
-                    frame,
-                    // Altitude (z) lifts the rocket up = smaller cart_pos.y.
-                    offset: Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array(),
-                });
+                keyframes.push(OffsetKeyframe { frame, offset: Vec3::new(x, y, z).to_array() });
             }
             animation.offset_keyframes = keyframes;
             return;
@@ -1461,7 +1455,6 @@ impl Engine {
             return;
         }
         let frame_count = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-        let ppm = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
 
         let mut offsets = Vec::with_capacity(frame_count);
         for i in 0..frame_count {
@@ -1472,8 +1465,7 @@ impl Engine {
             let x = f32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
             let y = f32::from_le_bytes([bytes[o + 4], bytes[o + 5], bytes[o + 6], bytes[o + 7]]);
             let z = f32::from_le_bytes([bytes[o + 8], bytes[o + 9], bytes[o + 10], bytes[o + 11]]);
-            // Altitude (z) lifts the rocket up = smaller cart_pos.y.
-            offsets.push(Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array());
+            offsets.push(Vec3::new(x, y, z).to_array());
         }
         animation.offsets = offsets;
     }
@@ -1897,9 +1889,9 @@ impl Engine {
         true
     }
 
-    /// Set a named entity's `IsoSprite` visual offset (`frame_offset`, in world
-    /// pixels; negative Y lifts the sprite on screen).  Lets guests elevate a
-    /// runtime sprite (e.g. a container sliding out of a rocket).  Only valid
+    /// Set a named entity's `IsoSprite` visual offset (`frame_offset`, in
+    /// Blender-world metres: drift in x/y, altitude in z).  Lets guests elevate
+    /// a runtime sprite (e.g. a container sliding out of a rocket).  Only valid
     /// for sprites without an animator or vehicle sim that overwrites
     /// `frame_offset` each frame.
     pub fn set_sprite_offset(&mut self, name: &str, dx: f32, dy: f32, dz: f32) -> bool {
@@ -2671,16 +2663,14 @@ impl Engine {
     /// offset from the parent entity's ground point (`iso_to_world`); an
     /// unparented light's position is already world metres.
     pub fn gather_lights(&self) -> Vec<Light> {
-        // World → light space for the UBO upload (`iso_world_light_matrix`);
-        // the inverse maps a squashed-cartesian `frame_offset` back to world
-        // metres (mirroring `compute_iso_sprite_model`).
-        let (world_to_light, inv_world) = {
+        // World → light space for the UBO upload (`iso_world_light_matrix`).
+        let world_to_light = {
             let scale = self
                 .entity_by_role(RoleKind::Tilemap)
                 .and_then(|e| self.world.get::<&Transform>(e).ok())
                 .map(|tf| tf.scale)
                 .unwrap_or(Vec3::new(45.0, 45.0, 1.0));
-            (iso_world_light_matrix(scale), iso_world_matrix(scale).inverse())
+            iso_world_light_matrix(scale)
         };
 
         let mut lights = Vec::new();
@@ -2705,7 +2695,7 @@ impl Engine {
                                 // not the landing pad.  Mirror
                                 // `compute_iso_sprite_model`: altitude
                                 // (`fo.z`) lands in z, horizontal drift in x/y.
-                                let fo = inv_world.transform_point3(self.parent_frame_offset(pe));
+                                let fo = self.parent_frame_offset(pe);
                                 l.position = base + fo + l.position;
                             }
                             None => classic_core::cl_warn!(
@@ -2756,11 +2746,11 @@ impl Engine {
         lights
     }
 
-    /// The visual `frame_offset` (screen-space) of a parent entity, or
-    /// `Vec3::ZERO` when the parent has none (a static sprite).  Animated
-    /// `IsoSprite` / `IsoAgent` entities carry the descent/run offset here;
-    /// `gather_lights` folds it into an attached light's position so the light
-    /// tracks the parent's animated motion.
+    /// The visual `frame_offset` (Blender-world metres: drift in x/y, altitude
+    /// in z) of a parent entity, or `Vec3::ZERO` when the parent has none (a
+    /// static sprite).  Animated `IsoSprite` / `IsoAgent` entities carry the
+    /// descent/run offset here; `gather_lights` folds it into an attached
+    /// light's position so the light tracks the parent's animated motion.
     fn parent_frame_offset(&self, parent: hecs::Entity) -> Vec3 {
         if let Ok(s) = self.world.get::<&IsoSprite>(parent) {
             return s.frame_offset;
@@ -5013,24 +5003,14 @@ impl Engine {
             sprite_tf.position.x,
             sprite_tf.position.y,
         );
-        // Altitude lives in `frame_offset.z` once animation offsets are
-        // re-expressed in metres (step C); it is still folded into
-        // `frame_offset.y` today, so this is 0 for every current asset.
+        // `frame_offset` is Blender-world metres: horizontal drift in x/y, the
+        // altitude in z (see `load_animation_offsets`).
         let altitude = iso_sprite.frame_offset.z;
-
-        // The current animation `frame_offset` is authored in squashed-cartesian
-        // screen pixels; un-project it into world metres so it composes with the
-        // world-quad basis below.  `iso_world_matrix(scale)` maps world -> screen,
-        // so its inverse carries a screen displacement back into world metres.
-        let inv_world = classic_core::math::iso_world_matrix(tilemap_tf.scale).inverse();
-        let frame_offset_world = inv_world.transform_point3(iso_sprite.frame_offset);
+        let drift = Vec3::new(iso_sprite.frame_offset.x, iso_sprite.frame_offset.y, 0.0);
 
         // Ground anchor in Blender-world metres (terrain height + altitude).
-        let world_pos = classic_core::math::iso_world_pos(
-            sprite_tf.position.x,
-            sprite_tf.position.y,
-            h + altitude,
-        ) + frame_offset_world
+        let world_pos = iso_world_pos(sprite_tf.position.x, sprite_tf.position.y, h + altitude)
+            + drift
             + tilemap_tf.position;
 
         // Quad dimensions in metres: source-cell pixels map to metres at
@@ -5190,12 +5170,13 @@ mod tests {
         let offsets = &engine.animations["rocketLanding"].offsets;
         assert_eq!(offsets.len(), 3);
 
-        // Frame 0: 50 m altitude → 400 units up (negative screen Y).
-        assert!((offsets[0][1] - (-400.0)).abs() < 0.001, "got {:?}", offsets[0]);
-        // Drift x maps directly (scaled by ppm).
-        assert!((offsets[1][0] - (-8.0)).abs() < 0.001, "got {:?}", offsets[1]);
+        // Frame 0: 50 m altitude lands in z (the `ppm` field is now ignored).
+        assert!((offsets[0][2] - 50.0).abs() < 0.001, "got {:?}", offsets[0]);
+        // Drift x/y map verbatim (metres).
+        assert!((offsets[1][0] - (-1.0)).abs() < 0.001, "got {:?}", offsets[1]);
+        assert!((offsets[1][1] - 0.5).abs() < 0.001, "got {:?}", offsets[1]);
         // Altitude 0 → zero vertical offset.
-        assert!((offsets[2][1]).abs() < 0.001, "got {:?}", offsets[2]);
+        assert!((offsets[2][2]).abs() < 0.001, "got {:?}", offsets[2]);
     }
 
     #[test]
@@ -5234,16 +5215,16 @@ mod tests {
         let anim = &engine.animations["rocketLanding"];
         assert!(anim.offsets.is_empty(), "sparse blob must not fill `offsets`");
         assert_eq!(anim.offset_keyframes.len(), 2);
-        // Frame 0: 50 m altitude at ppm=64 → 3200 units up (negative screen Y).
+        // Frame 0: 50 m altitude lands in z (metres).
         assert_eq!(anim.offset_keyframes[0].frame, 0);
         assert!(
-            (anim.offset_keyframes[0].offset[1] - (-3200.0)).abs() < 0.01,
+            (anim.offset_keyframes[0].offset[2] - 50.0).abs() < 0.01,
             "got {:?}",
             anim.offset_keyframes[0]
         );
-        // Frame 240: touchdown → zero vertical offset.
+        // Frame 240: touchdown → zero altitude.
         assert_eq!(anim.offset_keyframes[1].frame, 240);
-        assert!(anim.offset_keyframes[1].offset[1].abs() < 0.01);
+        assert!(anim.offset_keyframes[1].offset[2].abs() < 0.01);
     }
 
     #[test]
@@ -5364,11 +5345,11 @@ mod tests {
         assert!(empty.iso_to_world(0.0, 0.0, 0.0).is_none());
     }
 
-    /// The world-quad sprite model must rasterise to the same screen pixels as
-    /// the pre-refactor screen-space billboard (zero visual drift), for the
-    /// canonical 64 px/m scenes.
+    /// The world-quad sprite model must place the ground anchor at
+    /// `iso_world_pos(x, y, h + altitude) + drift + tilemap.position`: the
+    /// `frame_offset` drift in world x/y, the altitude in world z.
     #[test]
-    fn sprite_world_model_reproduces_old_screen_quad() {
+    fn sprite_world_model_places_drift_and_altitude_in_world_metres() {
         let tilemap = Tilemap {
             position: Vec3::ZERO,
             scale: Vec3::new(45.0, 45.0, 1.0),
@@ -5390,6 +5371,8 @@ mod tests {
         };
         let tilemap_tf = Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0));
 
+        // World-metre frame offset (drift x/y, altitude z) — the step-C encoding.
+        let frame_offset = Vec3::new(0.25, -0.125, 0.5);
         let iso_sprite = IsoSprite {
             position: Vec3::new(3.5, 2.5, 0.0),
             scale: Vec3::new(1.5, 2.0, 1.0),
@@ -5399,7 +5382,7 @@ mod tests {
             frame_name: None,
             tile_set_size: Vec2::new(8.0, 8.0),
             anchor: Vec2::new(0.5, 0.98),
-            frame_offset: Vec3::new(10.0, -20.0, 0.0),
+            frame_offset,
             footprint: vec![
                 Vec2::new(0.5, -0.5),
                 Vec2::new(0.5, 0.5),
@@ -5413,7 +5396,7 @@ mod tests {
         let tex_dim = (48.0, 96.0);
         let anchor_px = Vec2::new(24.0, 94.0);
 
-        let new_model = Engine::compute_iso_sprite_model(
+        let model = Engine::compute_iso_sprite_model(
             &iso_sprite,
             &sprite_tf,
             &tilemap_tf,
@@ -5422,12 +5405,9 @@ mod tests {
             anchor_px,
         );
 
-        // The pre-refactor screen-space model for the same inputs.
-        let iso_to_cart_world =
-            classic_core::math::iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
-        let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
-        cart_pos += iso_sprite.frame_offset;
-        cart_pos += tilemap_tf.position;
+        // The ground anchor (the quad point at the anchor UV) lands at the
+        // world-metre ground position: terrain height + altitude in z, drift
+        // in x/y.
         let h = sample_height_mesh(
             &tilemap.height_data,
             tilemap.size_x,
@@ -5435,38 +5415,18 @@ mod tests {
             sprite_tf.position.x,
             sprite_tf.position.y,
         );
-        cart_pos.y -= h * tilemap.height_scale;
-        cart_pos.z = h * tilemap.height_scale;
-        let old_model = Mat4::from_translation(cart_pos)
-            * Mat4::from_scale(sprite_tf.scale)
-            * Mat4::from_translation(Vec3::new(-anchor_px.x, -anchor_px.y, 0.0))
-            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0));
+        let expected_anchor =
+            iso_world_pos(sprite_tf.position.x, sprite_tf.position.y, h + frame_offset.z)
+                + Vec3::new(frame_offset.x, frame_offset.y, 0.0)
+                + tilemap_tf.position;
 
-        let world_matrix = classic_core::math::iso_world_matrix(tilemap_tf.scale);
-        for (u, w) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
-            let v = Vec3::new(u, w, 0.0);
-            let old_screen = old_model.transform_point3(v);
-            let world = new_model.transform_point3(v);
-            let mut new_screen = world_matrix.transform_point3(world);
-            new_screen.y -= PPM_TARGET * world.z;
-            assert!(
-                (new_screen.x - old_screen.x).abs() < 1e-3,
-                "x drift at ({u},{w}): {} vs {}",
-                new_screen.x,
-                old_screen.x
-            );
-            assert!(
-                (new_screen.y - old_screen.y).abs() < 1e-3,
-                "y drift at ({u},{w}): {} vs {}",
-                new_screen.y,
-                old_screen.y
-            );
-            // z is deliberately *not* compared: the old billboard was flat in
-            // screen z (its height lived in screen y), while the world quad
-            // carries height in world z so the shader can shear it into screen
-            // y and light space.  The clip z is overridden by the iso-depth
-            // corners regardless.
-        }
+        let ua = anchor_px.x / tex_dim.0;
+        let wa = anchor_px.y / tex_dim.1;
+        let anchor_world = model.transform_point3(Vec3::new(ua, wa, 0.0));
+        assert!(
+            (anchor_world - expected_anchor).length() < 1e-3,
+            "anchor {anchor_world:?} != expected {expected_anchor:?}"
+        );
     }
 
     fn push_channel(v: &mut Vec<u8>, name: &str, component: u8, keys: &[(u32, &[f32])]) {
@@ -5506,7 +5466,7 @@ mod tests {
         blob.push(1u8);
         blob.extend_from_slice(&64.0f32.to_le_bytes());
         blob.extend_from_slice(&2u32.to_le_bytes());
-        push_channel(&mut blob, "offset", 3, &[(0, &[0.0, -3200.0, 0.0]), (240, &[0.0, 0.0, 0.0])]);
+        push_channel(&mut blob, "offset", 3, &[(0, &[0.0, 0.0, 50.0]), (240, &[0.0, 0.0, 0.0])]);
         push_channel(&mut blob, "light.intensity", 1, &[(0, &[0.0]), (120, &[1.0]), (240, &[0.0])]);
         engine.load_animation_channels("rocketLanding", &blob);
 
@@ -5515,9 +5475,10 @@ mod tests {
         assert_eq!(anim.channels[0].name, "offset");
         assert_eq!(anim.channels[1].name, "light.intensity");
 
-        // The `offset` channel is folded into `offset_keyframes` (pre-scaled).
+        // The `offset` channel is folded into `offset_keyframes` (world metres:
+        // drift x/y, altitude z).
         assert_eq!(anim.offset_keyframes.len(), 2);
-        assert_eq!(anim.offset_keyframes[0].offset[1], -3200.0);
+        assert_eq!(anim.offset_keyframes[0].offset[2], 50.0);
 
         // Interpolation + clamping of a scalar channel.
         assert_eq!(anim.channel_sample("light.intensity", 60.0), Some(vec![0.5]));
@@ -5606,8 +5567,7 @@ mod tests {
     fn parented_light_tracks_parent_frame_offset() {
         // A parented light must follow the parent sprite's animated
         // `frame_offset` (altitude → z, horizontal drift → x/y), not just the
-        // tile.  The frame offset is still squashed-cartesian px here (C.4);
-        // `gather_lights` un-projects it to world metres.
+        // tile.  The frame offset is world metres here.
         let mut engine = Engine::new_for_test();
         let tilemap = Tilemap {
             position: Vec3::ZERO,
@@ -5636,7 +5596,8 @@ mod tests {
         engine.names.insert("tilemap".into(), tm);
 
         let parent_tile = Vec3::new(2.0, 2.0, 0.0);
-        let frame_offset = Vec3::new(10.0, -100.0, 0.0);
+        // World-metre frame offset (drift x/y, altitude z).
+        let frame_offset = Vec3::new(0.25, -0.125, 0.5);
         let parent = engine.world.spawn((
             Transform::new(parent_tile, Vec3::ONE),
             IsoSprite {
@@ -5656,7 +5617,7 @@ mod tests {
         ));
         engine.names.insert("rocket".into(), parent);
 
-        let offset = Vec3::new(0.0, 0.0, 255.6);
+        let offset = Vec3::new(0.1, 0.2, 2.0);
         let light = Light {
             kind: LightKind::Point,
             position: offset,
@@ -5671,12 +5632,11 @@ mod tests {
 
         let gathered = engine.gather_lights();
         let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
-        // fo is authored in squashed-cartesian px (C.4; C.6 re-expresses it in
-        // metres): un-project it to world metres, then to light space.
+        // `frame_offset` is world metres; fold it into the base, then to light
+        // space (the same world→light conversion `gather_lights` applies).
         let scale = Vec3::new(45.0, 45.0, 1.0);
-        let fo_world = iso_world_matrix(scale).inverse().transform_point3(frame_offset);
         let world_to_light = iso_world_light_matrix(scale);
-        let expected = world_to_light.transform_point3(base + fo_world + offset);
+        let expected = world_to_light.transform_point3(base + frame_offset + offset);
         assert!(
             (gathered[0].position - expected).length() < 1e-2,
             "got {} expected {}",
