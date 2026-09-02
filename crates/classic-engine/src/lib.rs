@@ -40,7 +40,7 @@ use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{
     bilinear_height, build_mesh, build_tile_texture, horizontal_depth_scale, sample_height_mesh,
-    HEIGHT_DEPTH_SCALE_M, HORIZONTAL_DEPTH_SCALE, PPM_TARGET,
+    HEIGHT_DEPTH_SCALE_M, HORIZONTAL_DEPTH_SCALE, PPM_TARGET, TILE_M,
 };
 use classic_core::types::AnimChannel;
 use classic_core::types::AnimationData;
@@ -3718,7 +3718,7 @@ impl Engine {
                         let Ok(tf) = self.world.get::<&Transform>(*entity) else {
                             continue;
                         };
-                        let lm = light_matrix(tf.position, tf.scale);
+                        let lm = classic_core::math::iso_world_light_matrix(tf.scale);
                         let name = name_by_entity.get(entity).copied().unwrap_or("");
                         if let Some(gpu) = self.tilemap_gpu.get(name) {
                             gfx.draw_shadow_tilemap(
@@ -3789,10 +3789,9 @@ impl Engine {
                 if is_nav {
                     let Some(ref gpu) = self.nav_gpu else { continue };
                     if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
-                        let iso = cartesian_to_iso_4().inverse();
-                        let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-                        let lm = light_matrix(tf.position, tf.scale);
-                        let normal_matrix = terrain_normal_matrix(&lm);
+                        let world_matrix = classic_core::math::iso_world_matrix(tf.scale);
+                        let lm = classic_core::math::iso_world_light_matrix(tf.scale);
+                        let normal_matrix = classic_core::math::iso_world_normal_matrix(tf.scale);
                         let nav_ts = gfx
                             .textures
                             .get(&nav.tile_set)
@@ -3801,7 +3800,7 @@ impl Engine {
                         let nav_rect = golden::project_rect(
                             &cam,
                             &(Mat4::from_translation(tf.position)
-                                * iso_matrix
+                                * world_matrix
                                 * Mat4::from_scale(Vec3::new(
                                     nav.size_x as f32,
                                     nav.size_y as f32,
@@ -3829,7 +3828,7 @@ impl Engine {
                         gfx.draw_tilemap(
                             &Mat4::from_translation(tf.position),
                             &cam,
-                            &iso_matrix,
+                            &world_matrix,
                             &gpu.tile_tex,
                             &nav.tile_set,
                             &nav_ts,
@@ -3844,7 +3843,7 @@ impl Engine {
                                 light_dir: self.light_dir,
                                 light_color: self.light_color,
                                 depth_scale: [
-                                    horizontal_depth_scale(nav.size_x, nav.size_y),
+                                    TILE_M * horizontal_depth_scale(nav.size_x, nav.size_y),
                                     HEIGHT_DEPTH_SCALE_M,
                                 ],
                                 ppm: PPM_TARGET,
@@ -3871,11 +3870,10 @@ impl Engine {
                 };
                 // Build the iso matrix (rasterisation) and the light matrix
                 // (everything else) — see `light_matrix`.
-                let iso = cartesian_to_iso_4().inverse();
-                let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-                let lm = light_matrix(tf.position, tf.scale);
+                let world_matrix = classic_core::math::iso_world_matrix(tf.scale);
+                let lm = classic_core::math::iso_world_light_matrix(tf.scale);
 
-                let normal_matrix = terrain_normal_matrix(&lm);
+                let normal_matrix = classic_core::math::iso_world_normal_matrix(tf.scale);
 
                 let tps = tm.tile_pixel_size;
                 let tile_pixel_size = [tps[0] as f32, tps[1] as f32];
@@ -3887,7 +3885,7 @@ impl Engine {
                 let tm_rect = golden::project_rect(
                     &cam,
                     &(Mat4::from_translation(tf.position)
-                        * iso_matrix
+                        * world_matrix
                         * Mat4::from_scale(Vec3::new(tm.size_x as f32, tm.size_y as f32, 1.0))),
                     false,
                 );
@@ -3913,7 +3911,7 @@ impl Engine {
                 gfx.draw_tilemap(
                     &Mat4::from_translation(tf.position),
                     &cam,
-                    &iso_matrix,
+                    &world_matrix,
                     &gpu.tile_tex,
                     &tm.tile_set,
                     &tile_set_size,
@@ -3928,7 +3926,7 @@ impl Engine {
                         light_dir: self.light_dir,
                         light_color: self.light_color,
                         depth_scale: [
-                            horizontal_depth_scale(tm.size_x, tm.size_y),
+                            TILE_M * horizontal_depth_scale(tm.size_x, tm.size_y),
                             HEIGHT_DEPTH_SCALE_M,
                         ],
                         ppm: PPM_TARGET,
@@ -5122,28 +5120,6 @@ pub fn light_matrix(origin: Vec3, scale: Vec3) -> Mat4 {
     Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
         * Mat4::from_scale(scale)
         * classic_core::math::iso_to_light_4()
-}
-
-/// Normal matrix for terrain meshes: `inverse_transpose(mat3(light_matrix))`.
-///
-/// The tilemap mesh is authored in **tile space** — `vertex_pos` is
-/// `(tile_x, tile_y, height_px)`, so x and y are tile *indices* while z is
-/// pixels — and `build_vertex_normals` takes cross products in that same
-/// space.  The light transform is `S(tilemap.scale) * Rz(-45°)`, which scales
-/// x and y by the tile pixel size (45) and leaves z alone.
-///
-/// Two bugs have lived here.  First it used the **unscaled** iso matrix,
-/// dropping that factor of 45 from the normals but not from the positions; a
-/// 1 m/tile slope then produced a normal near `(-64, 0, 1)`, i.e. an almost
-/// vertical cliff, and the terrain Lambert term degenerated into a binary slope
-/// mask (issue #77).  Then it used the **squashed** `iso_matrix`, so terrain
-/// normals described a world compressed 2× along y while sprite normals (baked
-/// in metric Blender space) described the real one — the two could not agree.
-///
-/// Building it from [`light_matrix`] makes the slope ratio physical *and*
-/// metric, so terrain and sprites finally share one frame.
-fn terrain_normal_matrix(light_matrix: &Mat4) -> Mat3 {
-    Mat3::from_mat4(*light_matrix).inverse().transpose()
 }
 
 /// Decode a little-endian `u32` grid byte blob.

@@ -158,6 +158,25 @@ pub fn iso_world_light_matrix(scale: Vec3) -> Mat4 {
     Mat4::from_scale(scale) * iso_to_light_4() * d_inv
 }
 
+/// Normal matrix for **world-metre** terrain normals: transforms a metric world
+/// normal into light space, reproducing the current
+/// `inverse_transpose(S(scale)·Rz(−45°))` applied to *tile* normals.
+///
+/// The world normal is `normalize(D⁻¹ · tile_normal)` with
+/// `D⁻¹ = diag(1/TILE_M, −1/TILE_M, PPM_TARGET)`, so the correct matrix is
+/// `inverse_transpose(S(scale)·Rz(−45°)) · D` — **not**
+/// `inverse_transpose(mat3(iso_world_light_matrix))` (which would be
+/// `D · inverse_transpose(...)`; `D` does not commute with the rotation, and
+/// that subtly re-axes slope lighting).
+pub fn iso_world_normal_matrix(scale: Vec3) -> Mat3 {
+    let d = Mat3::from_diagonal(Vec3::new(
+        crate::tilemap::TILE_M,
+        -crate::tilemap::TILE_M,
+        1.0 / crate::tilemap::PPM_TARGET,
+    ));
+    Mat3::from_mat4(Mat4::from_scale(scale) * iso_to_light_4()).inverse().transpose() * d
+}
+
 pub fn deg_to_rad(deg: f32) -> f32 {
     deg * std::f32::consts::PI / 180.0
 }
