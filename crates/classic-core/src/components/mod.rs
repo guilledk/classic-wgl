@@ -777,8 +777,8 @@ pub struct Light {
     /// World-metre position (`+tx → +X`, `+ty → −Y`, +Z up) — the same
     /// Blender-canonical frame the terrain and sprite geometry live in.
     /// [`Engine::iso_to_world`] places it; `gather_lights` converts it to the
-    /// shader's light space before upload.  It is **not** the sheared screen
-    /// space and not the squashed `iso_to_cartesian` space.
+    /// shader's light space before upload.  It is **not** the screen camera
+    /// space.
     pub position: Vec3,
     /// Linear RGB colour.
     pub color: [f32; 3],
