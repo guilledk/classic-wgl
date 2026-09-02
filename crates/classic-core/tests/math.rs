@@ -109,3 +109,59 @@ fn iso_camera_matrix_preserves_horizontal_dimetric_shape() {
         );
     }
 }
+
+#[test]
+fn iso_world_matrix_reproduces_tile_screen() {
+    // The zero-drift bridge: `iso_world_matrix` applied to a world-metre vertex
+    // must equal the current `S(scale) · iso_to_cartesian_4()` applied to the
+    // tile vertex `(tx, ty, h·PPM_TARGET)`, bit-for-bit (before the shear).
+    let scale = glam::Vec3::new(45.0, 45.0, 1.0);
+    let world = math::iso_world_matrix(scale);
+    let old_iso = glam::Mat4::from_scale(scale) * math::iso_to_cartesian_4();
+
+    for &(tx, ty, h) in
+        &[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (3.0, 2.0, 5.0), (200.0, 200.0, 10.0)]
+    {
+        let new_screen = world.transform_point3(math::iso_world_pos(tx, ty, h));
+        let old_screen = old_iso.transform_point3(glam::Vec3::new(
+            tx,
+            ty,
+            h * classic_core::tilemap::PPM_TARGET,
+        ));
+        for (axis, (a, b)) in ["x", "y", "z"].iter().zip([
+            (new_screen.x, old_screen.x),
+            (new_screen.y, old_screen.y),
+            (new_screen.z, old_screen.z),
+        ]) {
+            assert!((a - b).abs() < 1e-3, "{axis} drift at ({tx},{ty},{h}): new={a} old={b}");
+        }
+    }
+}
+
+#[test]
+fn iso_world_light_matrix_reproduces_tile_light() {
+    // Same zero-drift guarantee for light space: `iso_world_light_matrix`
+    // applied to world metres equals the current `S(scale) · Rz(-45°)` applied
+    // to the tile vertex `(tx, ty, h·PPM_TARGET)`.
+    let scale = glam::Vec3::new(45.0, 45.0, 1.0);
+    let world_light = math::iso_world_light_matrix(scale);
+    let old_light = glam::Mat4::from_scale(scale) * math::iso_to_light_4();
+
+    for &(tx, ty, h) in
+        &[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (3.0, 2.0, 5.0), (200.0, 200.0, 10.0)]
+    {
+        let new_light = world_light.transform_point3(math::iso_world_pos(tx, ty, h));
+        let old_light_pos = old_light.transform_point3(glam::Vec3::new(
+            tx,
+            ty,
+            h * classic_core::tilemap::PPM_TARGET,
+        ));
+        for (axis, (a, b)) in ["x", "y", "z"].iter().zip([
+            (new_light.x, old_light_pos.x),
+            (new_light.y, old_light_pos.y),
+            (new_light.z, old_light_pos.z),
+        ]) {
+            assert!((a - b).abs() < 1e-3, "{axis} drift at ({tx},{ty},{h}): new={a} old={b}");
+        }
+    }
+}

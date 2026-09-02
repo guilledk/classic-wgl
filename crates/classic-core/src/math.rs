@@ -121,6 +121,43 @@ pub fn iso_camera_matrix() -> Mat4 {
     Mat4::from_cols(right.extend(0.0), up.extend(0.0), back.extend(0.0), glam::Vec4::W).transpose()
 }
 
+/// World metres → squashed-cartesian **screen pixels** (before the `y -= ppm·z`
+/// shear), reproducing the current `iso_matrix` path for world-metre vertices.
+///
+/// The current renderer builds screen space as `S(scale) · iso_to_cartesian_4()`
+/// applied to *tile* vertices `(tx, ty, z_px)`.  A world-metre vertex is
+/// `v = (tx·TILE_M, −ty·TILE_M, h_m)` with `z_px = h_m·PPM_TARGET`, i.e.
+/// `tile = D⁻¹ · v` for `D⁻¹ = diag(1/TILE_M, −1/TILE_M, PPM_TARGET)`.  So the
+/// world-metre screen transform is `S(scale) · iso_to_cartesian_4() · D⁻¹`.
+/// The caller still applies the `y -= ppm·z` shear (or folds it in) afterwards.
+///
+/// This is the **zero-visual-drift** bridge used to move the tilemap and sprite
+/// pipelines to world metres without changing a single rendered pixel.
+pub fn iso_world_matrix(scale: Vec3) -> Mat4 {
+    let d_inv = Mat4::from_scale(Vec3::new(
+        1.0 / crate::tilemap::TILE_M,
+        -1.0 / crate::tilemap::TILE_M,
+        crate::tilemap::PPM_TARGET,
+    ));
+    Mat4::from_scale(scale) * iso_to_cartesian_4() * d_inv
+}
+
+/// World metres → **light space** (px, metric +Z up), reproducing the current
+/// `light_matrix` path for world-metre vertices (origin handled by the caller).
+///
+/// Light space is `Rz(-45°) · diag(1,-1,1) · world · ppm`; re-expressing the
+/// current `S(scale) · Rz(-45°)` (applied to tile vertices) for world metres
+/// gives `S(scale) · iso_to_light_4() · D⁻¹` (see [`iso_world_matrix`] for
+/// `D⁻¹`).
+pub fn iso_world_light_matrix(scale: Vec3) -> Mat4 {
+    let d_inv = Mat4::from_scale(Vec3::new(
+        1.0 / crate::tilemap::TILE_M,
+        -1.0 / crate::tilemap::TILE_M,
+        crate::tilemap::PPM_TARGET,
+    ));
+    Mat4::from_scale(scale) * iso_to_light_4() * d_inv
+}
+
 pub fn deg_to_rad(deg: f32) -> f32 {
     deg * std::f32::consts::PI / 180.0
 }
