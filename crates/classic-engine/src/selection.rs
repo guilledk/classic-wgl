@@ -15,10 +15,10 @@ use classic_core::collision::polygon_from_verts;
 use classic_core::components::{
     ColliderData, DebugName, IsoSprite, IsoVehicle, Selectable, Tilemap,
 };
-use classic_core::math::{iso_world_matrix, iso_world_pos};
-use classic_core::tilemap::{bilinear_height, PPM_TARGET};
+use classic_core::math::{iso_camera_px, iso_world_pos};
+use classic_core::tilemap::bilinear_height;
 use classic_core::{RoleKind, Transform};
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Vec2, Vec3};
 
 use crate::Engine;
 
@@ -195,11 +195,11 @@ impl Engine {
     }
 
     /// Build the world-space footprint polygon for a selectable entity (iso
-    /// footprint corners → world cartesian, height-lifted like the sprite model).
+    /// footprint corners → camera-view pixels, height-lifted like the sprite
+    /// model).
     fn selectable_world_polygon(
         &self,
         tm_entity: hecs::Entity,
-        world_matrix: &Mat4,
         tilemap_pos: Vec3,
         pos: Vec2,
         footprint: &[Vec2],
@@ -214,9 +214,7 @@ impl Engine {
             let py = pos.y + pt.y;
             let h = bilinear_height(hd, sx, sy, px, py);
             let world = iso_world_pos(px, py, h) + tilemap_pos;
-            let mut v = world_matrix.transform_point3(world);
-            v.y -= PPM_TARGET * world.z;
-            world_verts.push(v);
+            world_verts.push(iso_camera_px(world));
         }
         Some(polygon_from_verts(world_verts))
     }
@@ -228,9 +226,9 @@ impl Engine {
     pub fn sync_selectable_colliders(&mut self) {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return };
 
-        let (world_matrix, tilemap_pos) = {
+        let tilemap_pos = {
             let Some(tm_tf) = self.world.get::<&Transform>(tm_entity).ok() else { return };
-            (iso_world_matrix(tm_tf.scale), tm_tf.position)
+            tm_tf.position
         };
 
         // Phase 1: gather (name, world polygon) for every visible selectable.
@@ -249,13 +247,9 @@ impl Engine {
                 }
                 let pos = Vec2::new(tf.position.x, tf.position.y);
                 let footprint = self.selectable_footprint(entity);
-                if let Some(shape) = self.selectable_world_polygon(
-                    tm_entity,
-                    &world_matrix,
-                    tilemap_pos,
-                    pos,
-                    &footprint,
-                ) {
+                if let Some(shape) =
+                    self.selectable_world_polygon(tm_entity, tilemap_pos, pos, &footprint)
+                {
                     updates.push((self.debug_name(entity), shape));
                 }
             }

@@ -7,21 +7,22 @@ in vec2 map_coord;
 in float tile_id;
 in vec3 normal;
 
-// World metres -> squashed-cartesian screen pixels (before the shear).
-// `vertex_pos` is now authored in world metres, so this replaces the old
-// tile-space `iso_matrix` (see `classic_core::math::iso_world_matrix`).
+// World metres -> camera view space (metres): `iso_camera_matrix`.
 uniform mat4 world_matrix;
 uniform mat4 model_matrix;
 uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
 uniform mat3 normal_matrix;
-// World metres -> light space (px, metric +Z up).  Replaces the old tile-space
-// `light_matrix` (see `classic_core::math::iso_world_light_matrix`).
+// World metres -> light space (px, metric +Z up): `iso_world_light_matrix`.
 uniform mat4 light_matrix;
 
 uniform vec2 map_size;
 uniform vec2 tile_pixel_size;
-uniform vec2 depth_scale;
+// Camera view-depth bounds `[near, far]` (metres).  `near` is the closest view
+// depth (most positive `dot(back, world)`), `far` the farthest; `near > far`
+// numerically.
+uniform vec2 depth_span;
+// Pixels per metre (`PPM_TARGET`) — the raster scale of the camera view.
 uniform float ppm;
 
 out mediump vec2 vMapCoord;
@@ -31,17 +32,14 @@ out highp vec3 vLightPos;
 
 void main(void ) {
     vec3 world = (model_matrix * vec4(vertex_pos, 1.0)).xyz;
-    // Screen space: the isometric projection plus the shear that makes height
-    // visible.  Height is carried in world metres, so the shear is `- ppm * z`
-    // (the old `- z` on a pixel-space vertex).
-    vec4 worldPos = world_matrix * vec4(world, 1.0);
-    worldPos.y -= ppm * vertex_pos.z;
-    vec4 clipPos = projection_matrix * camera_matrix * worldPos;
-    // Canonical iso depth in window space `[0, 1]`: `vertex_pos.x +
-    // vertex_pos.y = TILE_M · (tx − ty)` and `vertex_pos.z` is already metres,
-    // so `depth_scale` carries the world-metre divisors
-    // (`classic_core::math::iso_world_depth_scale`).
-    highp float isoDepth = (vertex_pos.x + vertex_pos.y) / depth_scale.x + 0.5 + vertex_pos.z / depth_scale.y;
+    // Camera view: `(right·w, up·w, back·w)` in metres.
+    vec4 view = world_matrix * vec4(world, 1.0);
+    // Screen pixels before pan/zoom.  The camera `up` axis projects to the
+    // negative old-cartesian y, hence the `-view.y`.
+    vec4 screenPos = vec4(view.x * ppm, -view.y * ppm, 0.0, 1.0);
+    vec4 clipPos = projection_matrix * camera_matrix * screenPos;
+    // Camera view depth in window space `[0, 1]` (0 = nearest, 1 = farthest).
+    highp float isoDepth = (depth_span.x - view.z) / (depth_span.x - depth_span.y);
     clipPos.z = isoDepth * 2.0 - 1.0;
     gl_Position = clipPos;
     vMapCoord = map_coord;

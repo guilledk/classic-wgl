@@ -36,7 +36,8 @@ use classic_core::components::{
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{
-    iso_world_depth_scale, iso_world_light_matrix, iso_world_matrix, iso_world_pos,
+    iso_basis, iso_camera_matrix, iso_view_depth, iso_world_light_matrix, iso_world_pos, DEPTH_FAR,
+    DEPTH_NEAR,
 };
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
@@ -82,14 +83,12 @@ struct TilemapGpu {
 }
 
 /// Per-texture depth-mask metadata, keyed by the color texture name.  When a
-/// manifest texture declares a `depth` map, the engine uploads the grayscale
-/// PNG under `depth_tex` and records the `depth_range` (isoDepth units spanned
-/// by the map's `[0, 1]` grayscale) so the render loop can write per-pixel
-/// `gl_FragDepth` for that sprite.
+/// manifest texture declares a `depth` map, the engine uploads it under
+/// `depth_tex`; the sheet stores the camera view depth directly (window
+/// `[0, 1]`), so the render loop writes it to `gl_FragDepth` as-is.
 #[derive(Clone, Debug)]
 struct TextureDepth {
     depth_tex: String,
-    depth_range: f32,
 }
 
 /// A pending GPU-compressed (`.basis`) texture upload: one unique `src` sheet
@@ -117,14 +116,13 @@ struct IsoDraw {
     /// Packed-atlas UV params, or `None` for the uniform-grid path.
     uv: Option<IsoUv>,
     depth_corners: [f32; 4],
-    depth_map: Option<(String, f32)>,
-    depth_base: f32,
+    depth_map: Option<String>,
     normal_map: Option<String>,
     ghost_group: u32,
     color: [f32; 4],
     /// Whether the sprite is currently RTS-selected (draws a silhouette edge).
     selected: bool,
-    /// World -> squashed-cartesian screen px (before the `y -= ppm·z` shear).
+    /// World -> camera view space (metres): `iso_camera_matrix`.
     world_matrix: Mat4,
     /// World -> light space (px, metric +Z up).
     light_matrix: Mat4,
@@ -169,9 +167,9 @@ pub(crate) struct ResolvedFrame {
     /// Per-sheet normal-map GL texture name (`"{sheet_name}-normal"`), set when
     /// the frame's sheet declares a `normal` companion.
     pub(crate) normal_tex: Option<String>,
-    /// Per-sheet depth-map GL texture name + depth range, set when the frame's
-    /// sheet declares a `depth` companion.
-    pub(crate) depth_tex: Option<(String, f32)>,
+    /// Per-sheet depth-map GL texture name, set when the frame's sheet declares
+    /// a `depth` companion (stores camera view depth directly).
+    pub(crate) depth_tex: Option<String>,
 }
 
 /// The namespace-resolvable resource categories, mirroring the guest SDK's
@@ -242,7 +240,7 @@ pub struct Engine {
     pub frame_tables: HashMap<String, FrameTable>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
     /// Per-texture depth-mask metadata keyed by color texture name (loaded
-    /// from the manifest's `depth` / `depth_range` fields).
+    /// from the manifest's `depth` field).
     texture_depths: HashMap<String, TextureDepth>,
     /// Per-texture normal-map texture name keyed by color texture name (loaded
     /// from the manifest's `normal` field).  Sprites with a normal map are
@@ -587,8 +585,7 @@ impl Engine {
                     let key = self.entity_key(&entry.name);
                     let depth_tex = format!("{key}-depth");
                     self.load_texture_luma8(&depth_tex, bytes);
-                    self.texture_depths
-                        .insert(key, TextureDepth { depth_tex, depth_range: entry.depth_range });
+                    self.texture_depths.insert(key, TextureDepth { depth_tex });
                 }
             }
         }
@@ -1595,18 +1592,24 @@ impl Engine {
         // intersecting the ray with the terrain height field.
         let tm_entity = entity;
         self.on_update(move |engine| {
-            let (scale, height_data, size_x, size_y) = {
+            let (height_data, size_x, size_y) = {
                 let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-                let tf = engine.world.get::<&Transform>(tm_entity).unwrap();
-                (tf.scale, tm.height_data.clone(), tm.size_x, tm.size_y)
+                (tm.height_data.clone(), tm.size_x, tm.size_y)
             };
 
-            // Un-project the mouse to the world-metre ground plane (`z = 0`).
+            // Un-project the mouse to the world-metre ground plane (`z = 0`)
+            // through the orthographic camera: undo pan/zoom, then intersect the
+            // camera view ray with the ground plane.
             let mp = engine.input.mouse_pos;
             let mut screen = Vec3::new(mp.x, mp.y, 0.0);
             screen += engine.camera.fix();
             screen /= engine.camera.scale;
-            let ground = iso_world_matrix(scale).inverse().transform_point3(screen);
+            let (right, up, back) = iso_basis();
+            let view_x = screen.x / PPM_TARGET;
+            let view_y = -screen.y / PPM_TARGET;
+            // world.z = up.z·view_y + back.z·view_z == 0  =>  view_z = -up.z·view_y/back.z.
+            let view_z = -up.z * view_y / back.z;
+            let ground = right * view_x + up * view_y + back * view_z;
 
             // The ground point's tile coordinates shift along the depth axis by
             // the terrain height (parallax).  Iterate the fixed point until the
@@ -1615,7 +1618,7 @@ impl Engine {
             let ty0 = -ground.y / TILE_M;
             let mut tx = tx0;
             let mut ty = ty0;
-            let parallax = PPM_TARGET * std::f32::consts::SQRT_2 / scale.x.max(0.001);
+            let parallax = 2.0 * (3.0f32 / 8.0).sqrt() / TILE_M;
             for _ in 0..8 {
                 let h = sample_height_mesh(&height_data, size_x, size_y, tx, ty);
                 if h <= 0.0 {
@@ -1962,15 +1965,14 @@ impl Engine {
         self.inventory_ui.set_target(target);
     }
 
-    /// Project an iso tile coordinate (at ground height) to squashed-cartesian
-    /// screen space, using the world-metre pipeline.  Returns `None` when no
-    /// Tilemap-role entity exists.
+    /// Project an iso tile coordinate (at ground height) to camera-view screen
+    /// pixels (before pan/zoom), the same space `camera.position` lives in.
+    /// Returns `None` when no Tilemap-role entity exists.
     pub fn iso_to_screen(&self, x: f32, y: f32) -> Option<(f32, f32)> {
-        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
-        let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
+        self.entity_by_role(RoleKind::Tilemap)?;
         let world = iso_world_pos(x, y, 0.0);
-        let p = iso_world_matrix(tm_tf.scale).transform_point3(world);
-        Some((p.x, p.y))
+        let view = iso_camera_matrix().transform_point3(world);
+        Some((view.x * PPM_TARGET, -view.y * PPM_TARGET))
     }
 
     /// The world → screen transform for the current frame, derived from the
@@ -1990,8 +1992,8 @@ impl Engine {
 
         let h = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y);
         let world = iso_world_pos(x, y, h) + tm_tf.position;
-        let mut screen = iso_world_matrix(tm_tf.scale).transform_point3(world);
-        screen.y -= PPM_TARGET * world.z;
+        let view = iso_camera_matrix().transform_point3(world);
+        let screen = Vec3::new(view.x * PPM_TARGET, -view.y * PPM_TARGET, 0.0);
 
         let (vw, vh) = self.viewport_size();
         let cam = self.world_to_screen_matrix(vw, vh);
@@ -3613,19 +3615,15 @@ impl Engine {
                 tex_dim,
                 anchor_px,
             );
-            let world_matrix = classic_core::math::iso_world_matrix(tilemap_tf.scale);
+            let world_matrix = iso_camera_matrix();
             let light_matrix = classic_core::math::iso_world_light_matrix(tilemap_tf.scale);
             let normal_matrix = classic_core::math::iso_world_normal_matrix(tilemap_tf.scale);
-            let depth_scale = iso_world_depth_scale(tilemap.size_x, tilemap.size_y);
-            let depth_corners =
-                Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint, depth_scale);
+            let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
             // Per-sheet normal/depth companions (from the resolved frame's
             // sheet) win; fall back to the per-texture `entry.normal`/`depth`
             // manifest fields for assets not on a shared atlas.
             let depth_map = frame_ref.as_ref().and_then(|fr| fr.depth_tex.clone()).or_else(|| {
-                self.texture_depths
-                    .get(&iso_sprite.texture)
-                    .map(|d| (d.depth_tex.clone(), d.depth_range))
+                self.texture_depths.get(&iso_sprite.texture).map(|d| d.depth_tex.clone())
             });
             let normal_map = frame_ref
                 .as_ref()
@@ -3641,7 +3639,6 @@ impl Engine {
                 uv,
                 depth_corners,
                 depth_map,
-                depth_base: Self::compute_iso_base_depth(tf.position, depth_scale),
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
@@ -3783,7 +3780,7 @@ impl Engine {
                 if is_nav {
                     let Some(ref gpu) = self.nav_gpu else { continue };
                     if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
-                        let world_matrix = classic_core::math::iso_world_matrix(tf.scale);
+                        let world_matrix = iso_camera_matrix();
                         let lm = classic_core::math::iso_world_light_matrix(tf.scale);
                         let normal_matrix = classic_core::math::iso_world_normal_matrix(tf.scale);
                         let nav_ts = gfx
@@ -3814,7 +3811,6 @@ impl Engine {
                                 frame: None,
                                 color: None,
                                 depth: None,
-                                depth_range: None,
                                 normal: None,
                                 screen: Some(nav_rect),
                             });
@@ -3836,7 +3832,7 @@ impl Engine {
                                 ambient: self.light_ambient,
                                 light_dir: self.light_dir,
                                 light_color: self.light_color,
-                                depth_scale: iso_world_depth_scale(nav.size_x, nav.size_y),
+                                depth_span: [DEPTH_NEAR, DEPTH_FAR],
                                 ppm: PPM_TARGET,
                                 light_matrix: lm,
                                 normal_matrix,
@@ -3860,7 +3856,7 @@ impl Engine {
                 };
                 // Build the iso matrix (rasterisation) and the light matrix
                 // (everything else) — see `light_matrix`.
-                let world_matrix = classic_core::math::iso_world_matrix(tf.scale);
+                let world_matrix = iso_camera_matrix();
                 let lm = classic_core::math::iso_world_light_matrix(tf.scale);
 
                 let normal_matrix = classic_core::math::iso_world_normal_matrix(tf.scale);
@@ -3892,7 +3888,6 @@ impl Engine {
                         frame: None,
                         color: None,
                         depth: None,
-                        depth_range: None,
                         normal: None,
                         screen: Some(tm_rect),
                     });
@@ -3915,7 +3910,7 @@ impl Engine {
                         ambient: self.light_ambient,
                         light_dir: self.light_dir,
                         light_color: self.light_color,
-                        depth_scale: iso_world_depth_scale(tm.size_x, tm.size_y),
+                        depth_span: [DEPTH_NEAR, DEPTH_FAR],
                         ppm: PPM_TARGET,
                         light_matrix: lm,
                         normal_matrix,
@@ -3933,12 +3928,12 @@ impl Engine {
         // `RenderSettings` (shared by both sprite passes) carries the light
         // preset; the world/light/normal matrices ride on each `IsoDraw` (per
         // sprite tilemap), and `RenderSettings.light_matrix`/`normal_matrix`/
-        // `depth_scale` are therefore unused by the sprite draws.
+        // `depth_span` are therefore unused by the sprite draws.
         let sprite_settings = RenderSettings {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
             light_color: self.light_color,
-            depth_scale: [0.0, 0.0],
+            depth_span: [DEPTH_NEAR, DEPTH_FAR],
             ppm: PPM_TARGET,
             light_matrix: Mat4::IDENTITY,
             normal_matrix: Mat3::IDENTITY,
@@ -3955,8 +3950,7 @@ impl Engine {
                     texture: Some(&draw.texture),
                     frame: Some(draw.frame),
                     color: None,
-                    depth: draw.depth_map.as_ref().map(|(t, _)| t.as_str()),
-                    depth_range: draw.depth_map.as_ref().map(|(_, r)| *r),
+                    depth: draw.depth_map.as_deref(),
                     normal: draw.normal_map.as_deref(),
                     screen: Some(golden::project_rect(&cam, &draw.model, false)),
                 });
@@ -3970,8 +3964,7 @@ impl Engine {
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
-                draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
-                draw.depth_base,
+                draw.depth_map.as_deref(),
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
                 &sprite_settings,
@@ -3995,8 +3988,7 @@ impl Engine {
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
-                draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
-                draw.depth_base,
+                draw.depth_map.as_deref(),
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
                 &sprite_settings,
@@ -4073,7 +4065,6 @@ impl Engine {
                             frame: Some(sprite.frame),
                             color: None,
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(
                                 &cam,
@@ -4121,7 +4112,6 @@ impl Engine {
                             frame: None,
                             color: Some(rect.color),
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(&cam, &model, rect.ignore_cam)),
                         });
@@ -4199,7 +4189,6 @@ impl Engine {
                             frame: Some(sprite.frame),
                             color: None,
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(&cam, &model, true)),
                         });
@@ -4324,7 +4313,6 @@ impl Engine {
                             frame: None,
                             color: Some(sdf.color),
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(&cam, &model, sdf.ignore_cam)),
                         });
@@ -4937,7 +4925,7 @@ impl Engine {
         let uv = table.uv_rect(frame)?;
         let (normal_tex, depth_name) =
             table.companions.get(frame.sheet as usize).cloned().unwrap_or((None, None));
-        let depth_tex = depth_name.map(|d| (d, sheet.depth_range));
+        let depth_tex = depth_name;
         Some(ResolvedFrame {
             sheet_name: sheet.name.clone(),
             uv_rect: uv,
@@ -4975,10 +4963,10 @@ impl Engine {
     ///
     /// The quad is authored in **Blender-world metres**: its width runs along
     /// the isometric "right" direction `(1/√2, −1/√2, 0)` and its height runs
-    /// down world −Z, so under `iso_world_matrix` + the `y -= ppm·z` shear it
-    /// rasterises to the same screen-aligned rectangle the old billboard drew.
-    /// Lighting and shadowing now operate on true standing geometry (no
-    /// `sprite_anchor` unproject).
+    /// down world −Z, so under the orthographic camera it rasterises to the
+    /// same screen-aligned rectangle the old billboard drew.  Lighting and
+    /// shadowing operate on true standing geometry (no `sprite_anchor`
+    /// unproject).
     ///
     /// `tex_dim` is the source-cell quad size in pixels; `anchor_px` is the
     /// ground-contact point in that same pixel space (the quad is shifted so it
@@ -5032,27 +5020,16 @@ impl Engine {
             * Mat4::from_translation(Vec3::new(-ua, -wa, 0.0))
     }
 
-    /// Compute the anchor-plane iso depth for a sprite position (the depth a
-    /// depth map's 0.5 grayscale corresponds to), in **window space** `[0, 1]`.
-    /// Matches the `base_depth` term in [`Self::compute_iso_depth_corners`].
-    /// `pos` is the sprite's tile position (x/y in tiles, z in metres);
-    /// `depth_scale` is the world-metre depth scale (see
-    /// [`classic_core::math::iso_world_depth_scale`]).
-    fn compute_iso_base_depth(pos: Vec3, depth_scale: [f32; 2]) -> f32 {
-        let world = iso_world_pos(pos.x, pos.y, pos.z);
-        (world.x + world.y) / depth_scale[0] + 0.5 + world.z / depth_scale[1]
+    /// Camera view depth of a world point, normalised to **window space**
+    /// `[0, 1]` (`0` = nearest, `1` = farthest).
+    fn world_depth(world: Vec3) -> f32 {
+        (DEPTH_NEAR - iso_view_depth(world)) / (DEPTH_NEAR - DEPTH_FAR)
     }
 
     /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.
-    /// `depth_scale` is the tilemap's world-metre depth scale, kept identical to
-    /// the terrain's `depth_scale` uniform so sprite occlusion matches the
-    /// tilemap.
-    fn compute_iso_depth_corners(
-        pos: Vec3,
-        footprint: &[glam::Vec2],
-        depth_scale: [f32; 2],
-    ) -> [f32; 4] {
-        let base_depth = Self::compute_iso_base_depth(pos, depth_scale);
+    /// `pos` is the sprite's tile position (x/y in tiles, z in metres).
+    fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2]) -> [f32; 4] {
+        let base_depth = Self::world_depth(iso_world_pos(pos.x, pos.y, pos.z));
         let default_footprint = [
             glam::Vec2::new(0.5, -0.5),
             glam::Vec2::new(0.5, 0.5),
@@ -5065,8 +5042,7 @@ impl Engine {
         for i in 0..4 {
             let pt = &footprint[i];
             let world = iso_world_pos(pos.x + pt.x, pos.y + pt.y, pos.z);
-            let d = (world.x + world.y) / depth_scale[0] + 0.5 + world.z / depth_scale[1];
-            raw_depths[i] = d.min(base_depth);
+            raw_depths[i] = Self::world_depth(world).min(base_depth);
         }
 
         let min_fp = raw_depths.iter().cloned().fold(f32::MAX, f32::min);
@@ -5269,12 +5245,13 @@ mod tests {
     }
 
     #[test]
-    fn compute_iso_base_depth_matches_anchor_plane_formula() {
+    fn world_depth_matches_camera_view_depth() {
+        // The window-space depth must be the camera view depth normalised over
+        // `DEPTH_NEAR`/`DEPTH_FAR`: `(DEPTH_NEAR - dot(back, world)) / span`.
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
-        let scale = iso_world_depth_scale(200, 200);
-        // World-metre depth: `(tx − ty)·TILE_M / scale[0] + 0.5 + z / scale[1]`.
-        let expected = (100.0 - 20.0) * TILE_M / scale[0] + 0.5 + 64.0 / scale[1];
-        assert!((Engine::compute_iso_base_depth(pos, scale) - expected).abs() < 1e-9);
+        let world = iso_world_pos(pos.x, pos.y, pos.z);
+        let expected = (DEPTH_NEAR - iso_view_depth(world)) / (DEPTH_NEAR - DEPTH_FAR);
+        assert!((Engine::world_depth(world) - expected).abs() < 1e-9);
     }
 
     #[test]
