@@ -237,7 +237,8 @@ pub struct IsoSprite {
     pub tile_set_size: Vec2,
     /// Anchor point in [0..1] range (e.g. `[0.5, 0.98]` = centre-bottom / feet).
     pub anchor: Vec2,
-    /// Visual offset selected by the current animation frame, in iso units.
+    /// Visual offset selected by the current animation frame, in Blender-world
+    /// metres: horizontal drift in x/y, altitude in z.
     #[serde(skip)]
     pub frame_offset: Vec3,
     /// Footprint vertices in iso tile coords: `[NE, SE, SW, NW]`.
@@ -288,7 +289,8 @@ pub struct IsoAgent {
     pub frame_name: Option<String>,
     pub tile_set_size: Vec2,
     pub anchor: Vec2,
-    /// Visual offset selected by the current animation frame, in iso units.
+    /// Visual offset selected by the current animation frame, in Blender-world
+    /// metres: horizontal drift in x/y, altitude in z.
     #[serde(skip)]
     pub frame_offset: Vec3,
     #[serde(default = "default_footprint")]
@@ -333,7 +335,8 @@ pub struct Animator {
     pub counter: f32,
     #[serde(skip)]
     pub frame: f32,
-    /// Visual offset selected by the current animation frame, in iso units.
+    /// Visual offset selected by the current animation frame, in Blender-world
+    /// metres: horizontal drift in x/y, altitude in z.
     #[serde(skip)]
     pub offset: Vec3,
     /// Whether the animation loops.  Serialized so ROMs can start one-shot
