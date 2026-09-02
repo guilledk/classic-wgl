@@ -2177,6 +2177,7 @@ mod tests {
 
     /// The real LRV sidecar anchors (8 directions per part) from `lrv.json`,
     /// returned as a `(def, anchors-artifact)` pair.
+    #[allow(clippy::type_complexity)]
     fn lrv_def_real() -> (VehicleDef, VehicleAnchors) {
         let part = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| {
             (
