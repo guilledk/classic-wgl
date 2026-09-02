@@ -52,3 +52,60 @@ fn rad_to_deg_and_back() {
     let back = math::deg_to_rad(deg);
     assert!((back - rad).abs() < 0.001);
 }
+
+#[test]
+fn iso_camera_matrix_is_orthonormal() {
+    let view = math::iso_camera_matrix();
+    // An orthonormal view's transpose is its inverse.
+    let product = view * view.transpose();
+    let id = glam::Mat4::IDENTITY;
+    for r in 0..4 {
+        for c in 0..4 {
+            assert!(
+                (product.col(c)[r] - id.col(c)[r]).abs() < 1e-5,
+                "view is not orthonormal at ({r},{c}): {:?}",
+                product
+            );
+        }
+    }
+}
+
+#[test]
+fn iso_camera_matrix_preserves_horizontal_dimetric_shape() {
+    // The new world-space iso camera must reproduce the current squashed
+    // cartesian + `y -= z` shear pipeline for the *horizontal* plane (h = 0):
+    // the 2:1 dimetric tile footprint must land on the same screen pixels.
+    //
+    // The height term is deliberately NOT asserted here.  The current shear
+    // lifts height at 1:1 (`up.z = 1.0`), whereas the true 30° basis uses
+    // `up.z = cos(30°) ≈ 0.866`; folding in that correction is a separate,
+    // clearly-scoped commit ("32 vs 45").  This test guards the *shape* (the
+    // 2:1 dimetric angle/scale), not bit-identity — see the coordinate-system
+    // plan, ratified decision #1.
+    use classic_core::tilemap::{PPM_TARGET, TILE_PX};
+
+    let view = math::iso_camera_matrix();
+    let iso_matrix =
+        glam::Mat4::from_scale(glam::Vec3::new(TILE_PX, TILE_PX, 1.0)) * math::iso_to_cartesian_4();
+
+    for &(tx, ty) in
+        &[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (3.0, 2.0), (10.0, -4.0), (200.0, 200.0)]
+    {
+        // Current screen position (pixels, top-left origin, h = 0).
+        let cart = iso_matrix.transform_point3(glam::Vec3::new(tx, ty, 0.0));
+        // New world (metres) → view (right/up) → pixels, top-left origin.
+        let v = view.transform_point3(math::iso_world_pos(tx, ty, 0.0));
+        assert!(
+            (v.x * PPM_TARGET - cart.x).abs() < 0.5,
+            "x drift at ({tx},{ty}): new={} current={}",
+            v.x * PPM_TARGET,
+            cart.x
+        );
+        assert!(
+            (-v.y * PPM_TARGET - cart.y).abs() < 0.5,
+            "y drift at ({tx},{ty}): new={} current={}",
+            -v.y * PPM_TARGET,
+            cart.y
+        );
+    }
+}
