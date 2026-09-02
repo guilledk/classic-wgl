@@ -123,9 +123,12 @@ struct IsoDraw {
     color: [f32; 4],
     /// Whether the sprite is currently RTS-selected (draws a silhouette edge).
     selected: bool,
-    /// The sprite's ground anchor as `(sheared y, light-space height)`, used
-    /// to unproject billboard fragments into light space for shadowing.
-    sprite_anchor: [f32; 3],
+    /// World -> squashed-cartesian screen px (before the `y -= ppm·z` shear).
+    world_matrix: Mat4,
+    /// World -> light space (px, metric +Z up).
+    light_matrix: Mat4,
+    /// World normal -> light space.
+    normal_matrix: Mat3,
 }
 
 impl IsoDraw {
@@ -3615,7 +3618,7 @@ impl Engine {
                 }
             };
 
-            let (model, sprite_anchor) = Self::compute_iso_sprite_model(
+            let model = Self::compute_iso_sprite_model(
                 &iso_sprite,
                 &tf,
                 &tilemap_tf,
@@ -3623,6 +3626,9 @@ impl Engine {
                 tex_dim,
                 anchor_px,
             );
+            let world_matrix = classic_core::math::iso_world_matrix(tilemap_tf.scale);
+            let light_matrix = classic_core::math::iso_world_light_matrix(tilemap_tf.scale);
+            let normal_matrix = classic_core::math::iso_world_normal_matrix(tilemap_tf.scale);
             let h_depth = horizontal_depth_scale(tilemap.size_x, tilemap.size_y);
             let depth_corners =
                 Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint, h_depth);
@@ -3653,21 +3659,22 @@ impl Engine {
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
-                sprite_anchor,
+                world_matrix,
+                light_matrix,
+                normal_matrix,
             });
         }
 
         // Fit the directional shadow matrix to the primary tilemap's extents
-        // plus the sprite casters' billboards (so their shadows aren't clipped
+        // plus the sprite casters' world quads (so their shadows aren't clipped
         // at the light box's near plane).  Still before the `gfx` mutable borrow.
         let shadow_pass: Option<shadow::LightMatrix> = if config.shadows {
             self.entity_by_role(RoleKind::Tilemap).and_then(|e| {
                 let tm = self.world.get::<&Tilemap>(e).ok()?;
                 let tf = self.world.get::<&Transform>(e).ok()?;
-                let lm = light_matrix(tf.position, tf.scale);
-                let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max) * tm.height_scale;
-                let casters: Vec<(Mat4, [f32; 3])> =
-                    iso_draws.iter().map(|d| (d.model, d.sprite_anchor)).collect();
+                let lm = classic_core::math::iso_world_light_matrix(tf.scale);
+                let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max);
+                let casters: Vec<Mat4> = iso_draws.iter().map(|d| d.model).collect();
                 Some(shadow::fit_directional_light_matrix(
                     &lm,
                     tm.size_x as f32,
@@ -3737,10 +3744,10 @@ impl Engine {
                     for draw in &iso_draws {
                         gfx.draw_shadow_sprite(
                             &draw.model,
+                            &draw.light_matrix,
                             &m.view_proj,
                             &draw.texture,
                             draw.region(),
-                            &draw.sprite_anchor,
                         );
                     }
                     gfx.end_shadow_pass();
@@ -3849,7 +3856,6 @@ impl Engine {
                                 ppm: PPM_TARGET,
                                 light_matrix: lm,
                                 normal_matrix,
-                                sprite_normal_matrix: classic_core::math::blender_to_light_3(),
                                 shadow: shadow_settings,
                             },
                             false,
@@ -3932,7 +3938,6 @@ impl Engine {
                         ppm: PPM_TARGET,
                         light_matrix: lm,
                         normal_matrix,
-                        sprite_normal_matrix: classic_core::math::blender_to_light_3(),
                         shadow: shadow_settings,
                     },
                     self.show_grid,
@@ -3945,12 +3950,9 @@ impl Engine {
         // Phase 2: isometric normal passes — draw on top of terrain, writing
         // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
         // `RenderSettings` (shared by both sprite passes) carries the light
-        // preset.  Sprite normals come from a baked map rather than the mesh,
-        // so the *terrain* `normal_matrix` is unused here (the struct needs a
-        // value); `sprite_normal_matrix` is the one that matters — it rotates
-        // the baked Blender-world normal into light space.  `light_matrix` is
-        // likewise unused (sprites reconstruct their light-space position from
-        // `sprite_anchor`).
+        // preset; the world/light/normal matrices ride on each `IsoDraw` (per
+        // sprite tilemap), and `RenderSettings.light_matrix`/`normal_matrix` are
+        // therefore unused by the sprite draws.
         let sprite_settings = RenderSettings {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
@@ -3959,7 +3961,6 @@ impl Engine {
             ppm: PPM_TARGET,
             light_matrix: Mat4::IDENTITY,
             normal_matrix: Mat3::IDENTITY,
-            sprite_normal_matrix: classic_core::math::blender_to_light_3(),
             shadow: shadow_settings,
         };
         for draw in &iso_draws {
@@ -3982,6 +3983,9 @@ impl Engine {
             gfx.draw_iso_sprite(
                 &draw.model,
                 &cam,
+                &draw.world_matrix,
+                &draw.light_matrix,
+                &draw.normal_matrix,
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
@@ -3989,7 +3993,6 @@ impl Engine {
                 draw.depth_base,
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
-                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Normal,
@@ -4005,6 +4008,9 @@ impl Engine {
             gfx.draw_iso_sprite(
                 &draw.model,
                 &cam,
+                &draw.world_matrix,
+                &draw.light_matrix,
+                &draw.normal_matrix,
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
@@ -4012,7 +4018,6 @@ impl Engine {
                 draw.depth_base,
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
-                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Ghost,
@@ -4985,10 +4990,18 @@ impl Engine {
         Vec2::new((component_anchor.x * cw - bx0) / fw, (component_anchor.y * ch - by0) / fh)
     }
 
-    /// Compute the model matrix for an IsoSprite.
-    /// `tex_dim` is the quad size in pixels; `anchor_px` is the ground-contact
-    /// point in that same pixel space (the quad is shifted so it lands on the
-    /// sprite's position).
+    /// Compute the world-metre model matrix for an IsoSprite.
+    ///
+    /// The quad is authored in **Blender-world metres**: its width runs along
+    /// the isometric "right" direction `(1/√2, −1/√2, 0)` and its height runs
+    /// down world −Z, so under `iso_world_matrix` + the `y -= ppm·z` shear it
+    /// rasterises to the same screen-aligned rectangle the old billboard drew.
+    /// Lighting and shadowing now operate on true standing geometry (no
+    /// `sprite_anchor` unproject).
+    ///
+    /// `tex_dim` is the source-cell quad size in pixels; `anchor_px` is the
+    /// ground-contact point in that same pixel space (the quad is shifted so it
+    /// lands on the sprite's position).
     fn compute_iso_sprite_model(
         iso_sprite: &IsoSprite,
         sprite_tf: &Transform,
@@ -4996,13 +5009,7 @@ impl Engine {
         tilemap: &Tilemap,
         tex_dim: (f32, f32),
         anchor_px: Vec2,
-    ) -> (Mat4, [f32; 3]) {
-        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
-
-        let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
-        cart_pos += iso_sprite.frame_offset;
-        cart_pos += tilemap_tf.position;
-
+    ) -> Mat4 {
         let h = sample_height_mesh(
             &tilemap.height_data,
             tilemap.size_x,
@@ -5010,47 +5017,48 @@ impl Engine {
             sprite_tf.position.x,
             sprite_tf.position.y,
         );
-        cart_pos.y -= h * tilemap.height_scale;
-        // Carry the terrain height in world z (matching the tilemap shader's
-        // `worldPos.z = vertex_pos.z`) so sprite fragments share the terrain's
-        // light/shadow space, not just its y-lift.
-        cart_pos.z = h * tilemap.height_scale;
-
-        let anchor_delta = Vec3::new(-anchor_px.x, -anchor_px.y, 0.0);
-
-        let model = Mat4::from_translation(cart_pos)
-            * Mat4::from_scale(sprite_tf.scale)
-            * Mat4::from_translation(anchor_delta)
-            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0));
-
-        // The sprite's ground anchor, bridging the two spaces:
-        //
-        //   x = sheared screen y   — where the quad actually sits on screen
-        //   y = light-space height — the sprite's base, +Z up
-        //   z = light-space y      — metric, un-squashed, un-sheared
-        //
-        // A billboard is a screen-aligned quad: its tall axis is *screen* up,
-        // which in an isometric view means world **+Z**, not world -Y.  The
-        // shaders use this triple to unproject billboard fragments back into
-        // light space so sprites light, cast and receive shadows as standing
-        // geometry rather than as decals lying flat on the ground.
-        //
-        // The light-space y used to be recovered in the shader as
-        // `anchor.x + anchor.y` (un-shearing the screen y with the height).
-        // That silently folded a flying sprite's *altitude* — which the
-        // animation `offset` channel packs into screen y — into its light-space
-        // **y**, so a descending rocket was lit as though it were lying on the
-        // ground far to the north.  `frame_offset.z` carries the altitude
-        // separately (0 for every non-flying asset, so this is a no-op for
-        // them) and it is applied to the height instead.
+        // Altitude lives in `frame_offset.z` once animation offsets are
+        // re-expressed in metres (step C); it is still folded into
+        // `frame_offset.y` today, so this is 0 for every current asset.
         let altitude = iso_sprite.frame_offset.z;
-        let light = light_matrix(tilemap_tf.position, tilemap_tf.scale)
-            .transform_point3(Vec3::new(sprite_tf.position.x, sprite_tf.position.y, 0.0));
-        // `frame_offset.y` is pre-sheared (`drift_y - altitude`), so the pure
-        // horizontal drift is `frame_offset.y + altitude`.
-        let drift_y =
-            classic_core::math::cartesian_y_to_light(iso_sprite.frame_offset.y + altitude);
-        (model, [cart_pos.y, cart_pos.z + altitude, light.y + drift_y])
+
+        // The current animation `frame_offset` is authored in squashed-cartesian
+        // screen pixels; un-project it into world metres so it composes with the
+        // world-quad basis below.  `iso_world_matrix(scale)` maps world -> screen,
+        // so its inverse carries a screen displacement back into world metres.
+        let inv_world = classic_core::math::iso_world_matrix(tilemap_tf.scale).inverse();
+        let frame_offset_world = inv_world.transform_point3(iso_sprite.frame_offset);
+
+        // Ground anchor in Blender-world metres (terrain height + altitude).
+        let world_pos = classic_core::math::iso_world_pos(
+            sprite_tf.position.x,
+            sprite_tf.position.y,
+            h + altitude,
+        ) + frame_offset_world
+            + tilemap_tf.position;
+
+        // Quad dimensions in metres: source-cell pixels map to metres at
+        // `PPM_TARGET` px/m along both screen axes.
+        let w = tex_dim.0 * sprite_tf.scale.x / PPM_TARGET;
+        let hh = tex_dim.1 * sprite_tf.scale.y / PPM_TARGET;
+
+        // Anchor in normalized `[0,1]` quad space.
+        let ua = anchor_px.x / tex_dim.0.max(f32::EPSILON);
+        let wa = anchor_px.y / tex_dim.1.max(f32::EPSILON);
+
+        // Billboard basis: width along `(1/√2, −1/√2, 0)`, height down world
+        // −Z (the sheet's v=0 top lands at higher z, v=1 feet at the anchor).
+        let billboard = Mat4::from_cols(
+            Vec4::new(std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0),
+            Vec4::new(0.0, 0.0, -1.0, 0.0),
+            Vec4::new(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0),
+            Vec4::W,
+        );
+
+        Mat4::from_translation(world_pos)
+            * billboard
+            * Mat4::from_scale(Vec3::new(w, hh, 1.0))
+            * Mat4::from_translation(Vec3::new(-ua, -wa, 0.0))
     }
 
     /// Compute the anchor-plane iso depth for a sprite position (the depth a
@@ -5367,6 +5375,110 @@ mod tests {
         // Without a Tilemap-role entity, the mapping is unavailable.
         let empty = Engine::new_for_test();
         assert!(empty.iso_to_world(0.0, 0.0, 0.0).is_none());
+    }
+
+    /// The world-quad sprite model must rasterise to the same screen pixels as
+    /// the pre-refactor screen-space billboard (zero visual drift), for the
+    /// canonical 64 px/m scenes.
+    #[test]
+    fn sprite_world_model_reproduces_old_screen_quad() {
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::new(45.0, 45.0, 1.0),
+            size_x: 4,
+            size_y: 4,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 16],
+            height_data: vec![2.0f32; 25], // 2-metre plateau
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+            selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        };
+        let tilemap_tf = Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0));
+
+        let iso_sprite = IsoSprite {
+            position: Vec3::new(3.5, 2.5, 0.0),
+            scale: Vec3::new(1.5, 2.0, 1.0),
+            texture: "tex".into(),
+            tilemap: "tilemap".into(),
+            frame: 0.0,
+            frame_name: None,
+            tile_set_size: Vec2::new(8.0, 8.0),
+            anchor: Vec2::new(0.5, 0.98),
+            frame_offset: Vec3::new(10.0, -20.0, 0.0),
+            footprint: vec![
+                Vec2::new(0.5, -0.5),
+                Vec2::new(0.5, 0.5),
+                Vec2::new(-0.5, 0.5),
+                Vec2::new(-0.5, -0.5),
+            ],
+            ghost_group: 0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        };
+        let sprite_tf = Transform::new(iso_sprite.position, iso_sprite.scale);
+        let tex_dim = (48.0, 96.0);
+        let anchor_px = Vec2::new(24.0, 94.0);
+
+        let new_model = Engine::compute_iso_sprite_model(
+            &iso_sprite,
+            &sprite_tf,
+            &tilemap_tf,
+            &tilemap,
+            tex_dim,
+            anchor_px,
+        );
+
+        // The pre-refactor screen-space model for the same inputs.
+        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
+        let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
+        cart_pos += iso_sprite.frame_offset;
+        cart_pos += tilemap_tf.position;
+        let h = sample_height_mesh(
+            &tilemap.height_data,
+            tilemap.size_x,
+            tilemap.size_y,
+            sprite_tf.position.x,
+            sprite_tf.position.y,
+        );
+        cart_pos.y -= h * tilemap.height_scale;
+        cart_pos.z = h * tilemap.height_scale;
+        let old_model = Mat4::from_translation(cart_pos)
+            * Mat4::from_scale(sprite_tf.scale)
+            * Mat4::from_translation(Vec3::new(-anchor_px.x, -anchor_px.y, 0.0))
+            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0));
+
+        let world_matrix = classic_core::math::iso_world_matrix(tilemap_tf.scale);
+        for (u, w) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            let v = Vec3::new(u, w, 0.0);
+            let old_screen = old_model.transform_point3(v);
+            let world = new_model.transform_point3(v);
+            let mut new_screen = world_matrix.transform_point3(world);
+            new_screen.y -= PPM_TARGET * world.z;
+            assert!(
+                (new_screen.x - old_screen.x).abs() < 1e-3,
+                "x drift at ({u},{w}): {} vs {}",
+                new_screen.x,
+                old_screen.x
+            );
+            assert!(
+                (new_screen.y - old_screen.y).abs() < 1e-3,
+                "y drift at ({u},{w}): {} vs {}",
+                new_screen.y,
+                old_screen.y
+            );
+            // z is deliberately *not* compared: the old billboard was flat in
+            // screen z (its height lived in screen y), while the world quad
+            // carries height in world z so the shader can shear it into screen
+            // y and light space.  The clip z is overridden by the iso-depth
+            // corners regardless.
+        }
     }
 
     fn push_channel(v: &mut Vec<u8>, name: &str, component: u8, keys: &[(u32, &[f32])]) {
