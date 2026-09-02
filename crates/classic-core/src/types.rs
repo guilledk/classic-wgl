@@ -80,6 +80,15 @@ pub struct TextureManifestEntry {
 }
 
 /// One sheet (texture) referenced by a [`FrameTable`].
+///
+/// Cross-language frame-table contract: `SpriteSheetEntry`/`AtlasFrame`/
+/// `FrameTable` (here, serde) and `Sheet`/`Frame`/`FrameTable` in classic-assets
+/// (`render/schema.py`, msgspec) must stay field-compatible — the `frames.json`
+/// sidecar is the wire contract between the classic-assets packer and this
+/// loader.  The field set/order is the single invariant; the drift net is the
+/// Rust test `pack_scene_bundles_per_sheet_normal_and_depth` (classic-roms
+/// xtask) plus the byte-identity gate (a cold build must reproduce
+/// byte-identical `.rom`s).
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct SpriteSheetEntry {
     /// Texture name (resolved to an asset handle at load time).
@@ -297,27 +306,15 @@ pub struct VehiclePartDef {
 
 /// A vehicle's Blender-exported anchors data artifact: each part's per-direction
 /// ground-origin anchor, `[ax, ay]` normalized to the frame (x from left, y from
-/// top).
+/// top), keyed by part/tire name.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct VehicleAnchors {
     #[serde(default)]
     pub version: u32,
-    pub name: String,
     #[serde(default)]
-    pub directions: u32,
+    pub parts: std::collections::BTreeMap<String, Vec<[f32; 2]>>,
     #[serde(default)]
-    pub parts: Vec<VehicleAnchorsPart>,
-    #[serde(default)]
-    pub tires: Vec<VehicleAnchorsPart>,
-}
-
-/// One part's anchors within a [`VehicleAnchors`] artifact.
-#[derive(Clone, Debug, serde::Deserialize)]
-pub struct VehicleAnchorsPart {
-    pub name: String,
-    #[serde(default)]
-    pub texture: String,
-    pub anchors: Vec<[f32; 2]>,
+    pub tires: std::collections::BTreeMap<String, Vec<[f32; 2]>>,
 }
 
 /// Per-scene vehicle stat tuning, keyed by (namespace-qualified) vehicle name.
@@ -608,15 +605,13 @@ mod tests {
     fn vehicle_anchors_deserializes_and_overrides_apply() {
         let json = serde_json::json!({
             "version": 1,
-            "name": "lrv",
-            "directions": 8,
-            "parts": [ { "name": "body", "texture": "lrvBody", "anchors": [[0.5, 0.6618]] } ],
-            "tires": [ { "name": "tire_fl", "texture": "lrvTireFl", "anchors": [[0.1, 0.2]] } ]
+            "parts": { "body": [[0.5, 0.6618]] },
+            "tires": { "tire_fl": [[0.1, 0.2]] }
         });
         let anchors: VehicleAnchors = serde_json::from_value(json).unwrap();
         assert_eq!(anchors.parts.len(), 1);
-        assert_eq!(anchors.parts[0].anchors, vec![[0.5, 0.6618]]);
-        assert_eq!(anchors.tires[0].name, "tire_fl");
+        assert_eq!(anchors.parts.get("body"), Some(&vec![[0.5, 0.6618]]));
+        assert_eq!(anchors.tires.get("tire_fl"), Some(&vec![[0.1, 0.2]]));
 
         let ov: VehicleOverrides = serde_json::from_value(serde_json::json!({
             "turn_rate_deg_per_sec": 55.0,
