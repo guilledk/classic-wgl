@@ -116,6 +116,9 @@ struct IsoDraw {
     /// Packed-atlas UV params, or `None` for the uniform-grid path.
     uv: Option<IsoUv>,
     depth_corners: [f32; 4],
+    /// The sprite's ground-anchor window depth `[0, 1]` (the depth-map gray is
+    /// baked origin-relative, so the fragment offsets it by this anchor depth).
+    depth_base: f32,
     depth_map: Option<String>,
     normal_map: Option<String>,
     ghost_group: u32,
@@ -3615,6 +3618,10 @@ impl Engine {
                 tex_dim,
                 anchor_px,
             );
+            // The model's translation column is the sprite's ground anchor in
+            // world metres; its window depth is the anchor offset the (origin-
+            // relative) depth map is re-anchored against in the fragment shader.
+            let depth_base = Self::world_depth(model.w_axis.truncate());
             let world_matrix = iso_camera_matrix();
             let light_matrix = classic_core::math::iso_world_light_matrix(tilemap_tf.scale);
             let normal_matrix = classic_core::math::iso_world_normal_matrix(tilemap_tf.scale);
@@ -3638,6 +3645,7 @@ impl Engine {
                 tile_set_size: [iso_sprite.tile_set_size.x, iso_sprite.tile_set_size.y],
                 uv,
                 depth_corners,
+                depth_base,
                 depth_map,
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,
@@ -3964,6 +3972,7 @@ impl Engine {
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
+                draw.depth_base,
                 draw.depth_map.as_deref(),
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
@@ -3988,6 +3997,7 @@ impl Engine {
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
+                draw.depth_base,
                 draw.depth_map.as_deref(),
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
