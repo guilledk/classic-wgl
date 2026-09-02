@@ -1564,7 +1564,7 @@ impl Engine {
 
         let height_scale = height_scale.unwrap_or(tile_pixel_size[0] as f32);
         self.base_height_scale = height_scale;
-        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights, height_scale);
+        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights);
 
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &tiles);
 
@@ -4665,16 +4665,16 @@ impl Engine {
         }
 
         // Use parent tilemap's actual height data so nav tiles sit on terrain surface.
-        let (heights, height_scale) = self
+        let heights = self
             .entity_by_role(RoleKind::Tilemap)
             .and_then(|e| self.world.get::<&Tilemap>(e).ok())
-            .map(|tm| (tm.height_data.clone(), tm.height_scale))
-            .filter(|(h, _)| h.len() == (size_x as usize + 1) * (size_y as usize + 1))
-            .unwrap_or_else(|| (vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)], 64.0));
+            .map(|tm| tm.height_data.clone())
+            .filter(|h| h.len() == (size_x as usize + 1) * (size_y as usize + 1))
+            .unwrap_or_else(|| vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)]);
 
         let Some(gfx) = self.gfx.as_mut() else { return };
 
-        let (mesh_data, vcount) = build_mesh(size_x, size_y, &nav_data, &heights, height_scale);
+        let (mesh_data, vcount) = build_mesh(size_x, size_y, &nav_data, &heights);
         let mesh_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
 
@@ -4813,15 +4813,15 @@ impl Engine {
         // does.  Rebuilding the overlay on a flat grid instead left it
         // detached from the surface after any nav edit — unnoticeable on the
         // flat demo map, glaring over a crater field.
-        let (hs, heights) = self
+        let heights = self
             .entity_by_role(RoleKind::Tilemap)
             .and_then(|e| self.world.get::<&Tilemap>(e).ok())
-            .map(|tm| (tm.height_scale, tm.height_data.clone()))
-            .filter(|(_, h)| h.len() == (sx as usize + 1) * (sy as usize + 1))
-            .unwrap_or_else(|| (64.0, vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)]));
+            .map(|tm| tm.height_data.clone())
+            .filter(|h| h.len() == (sx as usize + 1) * (sy as usize + 1))
+            .unwrap_or_else(|| vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)]);
         let Some(gfx) = self.gfx.as_mut() else { return };
 
-        let (mesh_data, vcount) = build_mesh(sx, sy, &data, &heights, hs);
+        let (mesh_data, vcount) = build_mesh(sx, sy, &data, &heights);
         let mesh_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
         let (tile_pixels, tw, th) = build_tile_texture(sx, sy, &data);
@@ -4838,7 +4838,7 @@ impl Engine {
             );
             return;
         };
-        let (size_x, size_y, tiles, heights, height_scale) = {
+        let (size_x, size_y, tiles, heights) = {
             let tm = match self.world.get::<&Tilemap>(tm_entity) {
                 Ok(t) => t,
                 Err(_) => {
@@ -4849,7 +4849,7 @@ impl Engine {
                     return;
                 }
             };
-            (tm.size_x, tm.size_y, tm.data.clone(), tm.height_data.clone(), tm.height_scale)
+            (tm.size_x, tm.size_y, tm.data.clone(), tm.height_data.clone())
         };
 
         let gfx = match self.gfx.as_mut() {
@@ -4863,7 +4863,7 @@ impl Engine {
             }
         };
 
-        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights, height_scale);
+        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights);
         let mesh_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
 
