@@ -20,6 +20,9 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Worker-ize the web transcode: `.basis` sheets transcode in a dedicated web
   `Worker` (async) with a synchronous main-thread fallback, so large sheets no
   longer block the frame loop.
+- Golden layout map: emit a deterministic, GPU-free `baseline.layout.txt` (one
+  line per draw item with its screen-space rect) alongside the golden trace, so
+  text-only models can introspect a rendered frame.
 
 ## [0.1.1] - 2026-09-01
 
