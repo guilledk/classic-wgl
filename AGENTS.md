@@ -308,6 +308,7 @@ plans/
 | `CLASSIC_GOLDEN_PNG` | Enable pixel PNG capture | off |
 | `CLASSIC_GOLDEN_TOL` | Pixel channel tolerance | 2 |
 | `CLASSIC_GOLDEN_DIR` | Golden baseline directory (per-scene) | `tests/golden/baseline` |
+| `CLASSIC_GOLDEN_LAYOUT` | Emit the text layout map (`baseline.layout.txt`); `0` disables | on with `CLASSIC_GOLDEN` |
 | `CLASSIC_SHADOWS` | `0` disables the directional shadow map | on |
 | `CLASSIC_SHADOW_DEBUG` | Render raw sun visibility (white lit / black occluded) | off |
 | `CLASSIC_NO_UI` | Skip the demo editor/HUD/overlay layer (clean lit scene) | off |

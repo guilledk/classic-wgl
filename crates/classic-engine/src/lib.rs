@@ -3798,6 +3798,17 @@ impl Engine {
                             .get(&nav.tile_set)
                             .map(|t| [t.size.0 as f32 / 8.0, t.size.1 as f32 / 8.0])
                             .unwrap_or([2.0, 1.0]);
+                        let nav_rect = golden::project_rect(
+                            &cam,
+                            &(Mat4::from_translation(tf.position)
+                                * iso_matrix
+                                * Mat4::from_scale(Vec3::new(
+                                    nav.size_x as f32,
+                                    nav.size_y as f32,
+                                    1.0,
+                                ))),
+                            false,
+                        );
                         if let Some(ref mut t) = self.trace {
                             let name = name_by_entity.get(entity).copied().unwrap_or("");
                             t.push(golden::TraceItemParams {
@@ -3812,6 +3823,7 @@ impl Engine {
                                 depth: None,
                                 depth_range: None,
                                 normal: None,
+                                screen: Some(nav_rect),
                             });
                         }
                         gfx.draw_tilemap(
@@ -3872,6 +3884,14 @@ impl Engine {
                     tm.tile_set_pixel_size[1] as f32 / tile_pixel_size[1],
                 ];
 
+                let tm_rect = golden::project_rect(
+                    &cam,
+                    &(Mat4::from_translation(tf.position)
+                        * iso_matrix
+                        * Mat4::from_scale(Vec3::new(tm.size_x as f32, tm.size_y as f32, 1.0))),
+                    false,
+                );
+
                 if let Some(ref mut t) = self.trace {
                     let name = name_by_entity.get(entity).copied().unwrap_or("");
                     t.push(golden::TraceItemParams {
@@ -3886,6 +3906,7 @@ impl Engine {
                         depth: None,
                         depth_range: None,
                         normal: None,
+                        screen: Some(tm_rect),
                     });
                 }
 
@@ -3957,6 +3978,7 @@ impl Engine {
                     depth: draw.depth_map.as_ref().map(|(t, _)| t.as_str()),
                     depth_range: draw.depth_map.as_ref().map(|(_, r)| *r),
                     normal: draw.normal_map.as_deref(),
+                    screen: Some(golden::project_rect(&cam, &draw.model, false)),
                 });
             }
             gfx.draw_iso_sprite(
@@ -4069,6 +4091,11 @@ impl Engine {
                             depth: None,
                             depth_range: None,
                             normal: None,
+                            screen: Some(golden::project_rect(
+                                &cam,
+                                &sprite_model,
+                                sprite.ignore_cam,
+                            )),
                         });
                     }
                     let region = match &uv {
@@ -4112,6 +4139,7 @@ impl Engine {
                             depth: None,
                             depth_range: None,
                             normal: None,
+                            screen: Some(golden::project_rect(&cam, &model, rect.ignore_cam)),
                         });
                     }
                     let cam_mat = if rect.ignore_cam { Mat4::IDENTITY } else { cam };
@@ -4189,6 +4217,7 @@ impl Engine {
                             depth: None,
                             depth_range: None,
                             normal: None,
+                            screen: Some(golden::project_rect(&cam, &model, true)),
                         });
                     }
                     gfx.draw_sprite(
@@ -4313,6 +4342,7 @@ impl Engine {
                             depth: None,
                             depth_range: None,
                             normal: None,
+                            screen: Some(golden::project_rect(&cam, &model, sdf.ignore_cam)),
                         });
                     }
                     let sdf_cam = if sdf.ignore_cam { Mat4::IDENTITY } else { cam };
@@ -4406,6 +4436,38 @@ impl Engine {
                     }
                 }
                 _ => {}
+            }
+
+            // --- text layout map (deterministic, GPU-free; not part of the
+            // line-by-line golden comparison) ---
+            if config.golden_layout {
+                let layout = golden::serialize_layout(&trace);
+                match config.golden_mode.as_str() {
+                    "update" => {
+                        let _ = std::fs::create_dir_all(&baseline_dir);
+                        let layout_path = baseline_dir.join("baseline.layout.txt");
+                        if let Err(e) = std::fs::write(&layout_path, &layout) {
+                            classic_core::cl_warn!(
+                                classic_core::instrument::Chan::Golden,
+                                "golden: failed to write {}: {e}",
+                                layout_path.display()
+                            );
+                        } else {
+                            classic_core::cl_info!(
+                                classic_core::instrument::Chan::Golden,
+                                "golden: wrote {}",
+                                layout_path.display()
+                            );
+                        }
+                    }
+                    "check" => {
+                        let artifact_dir = cwd.join("target/classic-test");
+                        let _ = std::fs::create_dir_all(&artifact_dir);
+                        let layout_path = artifact_dir.join("baseline.layout.txt");
+                        let _ = std::fs::write(&layout_path, &layout);
+                    }
+                    _ => {}
+                }
             }
 
             // --- pixel golden ---
