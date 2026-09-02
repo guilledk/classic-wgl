@@ -671,6 +671,22 @@ impl Engine {
         boot::BootPlan { loaded, sink, steps, basis_jobs, cursor: 0, decoded: HashMap::new() }
     }
 
+    /// Compile the shader catalog into a fresh [`Gfx`] and build the hydration
+    /// [`boot::BootPlan`] in one step — the front half of [`Engine::load_roms`],
+    /// exposed so an incremental caller can interleave [`Engine::boot_step`]s
+    /// across frames.  The returned plan borrows `loaded` + `sink` (not `&self`).
+    pub fn begin_boot_gfx<'a>(
+        &mut self,
+        gl: Rc<glow::Context>,
+        loaded: &'a classic_rom::LoadedRoms,
+        sink: &'a dyn classic_rom::BootSink,
+    ) -> boot::BootPlan<'a> {
+        if let Some(root) = loaded.root_rom() {
+            self.ensure_gfx(gl, &root.manifest, sink);
+        }
+        self.begin_boot(loaded, sink)
+    }
+
     /// Register a ROM's non-GL metadata: texture names, depth/normal companion
     /// bookkeeping, animations, frame tables, animation channels, vehicles, and
     /// data artifacts.  Called by the [`boot::BootStep::RegisterMetadata`] step
@@ -893,6 +909,17 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Upload the plan's pending `.basis` textures through the web transcoder
+    /// worker (awaited).  Called after [`Engine::boot_step`] drains the plan.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn upload_pending_basis(
+        &mut self,
+        plan: &mut boot::BootPlan<'_>,
+        sink: &dyn classic_rom::BootSink,
+    ) {
+        self.upload_basis_async(std::mem::take(&mut plan.basis_jobs), sink).await;
     }
 
     /// Hydrate the engine from a single ROM (the legacy path).  Wraps the ROM

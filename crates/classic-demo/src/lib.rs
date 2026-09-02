@@ -242,8 +242,10 @@ pub async fn init_engine_multi_async(
 /// The shared post-load tail of [`init_engine_multi`] (and its async variant):
 /// cursor/camera/animator prefabs, default lighting, the background guest
 /// worker, the ROM guests, terrain commit, colliders, and the editor/HUD host
-/// layer.
-fn finish_init_engine(
+/// layer.  Public so an incremental caller (e.g. the web app interleaving
+/// [`classic_engine::Engine::boot_step`]s across frames) can finish boot after
+/// its plan drains.
+pub fn finish_init_engine(
     e: &mut Engine,
     loaded: &LoadedRoms,
     compiled: &CompiledModules,

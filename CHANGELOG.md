@@ -35,6 +35,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   decompress, texture decode, and wasmtime module compile on a background thread
   (streaming `BootEvent` over `mpsc`) while the main thread drains events and
   uploads decoded textures; the headless/golden boot stays synchronous.
+- Interleaved web hydration: compile shaders + build the boot plan up front,
+  then drain a time-budgeted slice of boot steps per animation frame (instead
+  of stalling the first frame), keeping the browser responsive and the DOM boot
+  overlay on screen while the large atlases decode.
 
 ### Changed
 
