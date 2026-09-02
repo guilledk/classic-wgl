@@ -18,6 +18,9 @@ uniform highp vec2 trim_offset;
 uniform highp vec2 source_size;
 uniform highp vec2 content_size;
 uniform float use_depth_map;
+/// The sprite's ground-anchor window depth `[0, 1]` (see the `gl_FragDepth`
+/// re-anchor below).
+uniform float depth_base;
 // Whether this draw participates in scene lighting at all.  The 2D/baked
 // `draw_sprite` path (cursor, HUD, UI) sets 0: it never writes a light-space
 // position, so its `vLightPos` is meaningless.  This used to be implied by
@@ -209,10 +212,18 @@ void main(void ) {
 
     color.rgb *= tint;
     if (use_depth_map > 0.5) {
-        // The depth sheet stores the camera view depth directly (window
-        // `[0, 1]`), so `gl_FragDepth` needs no `depth_base`/`depth_range`
-        // reconstruction.
-        gl_FragDepth = texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r;
+        // The depth sheet stores the camera view depth relative to the Blender
+        // bake origin (`gray ≈ 0.5` at the asset's ground anchor), so offset it
+        // by the sprite's absolute ground-anchor depth to land on its real map
+        // depth.  `depth_base` is the sprite's window-space anchor depth (the
+        // model translation re-projected through the camera).
+        //
+        // TODO(classic-assets): bake the depth sheet *relative to the ground
+        // anchor* (`0.5` at the anchor, no implicit Blender-origin offset), so
+        // this `- 0.5` is a clean relative-centering rather than an assumed
+        // origin shift.
+        gl_FragDepth = depth_base
+            + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5);
     }
 
     // Normal from the sheet's normal-map companion, rotated from the Blender
