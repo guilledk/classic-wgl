@@ -200,6 +200,12 @@ When adding a new end-to-end test scenario, follow this workflow:
    that `begin_frame` always resets state, and that entity spawning
    order is deterministic across init stages).
 
+8. **Read the layout map** — a `CLASSIC_GOLDEN=update` run writes
+   `{golden_dir}/baseline.layout.txt`; a `check` run writes
+   `target/classic-test/baseline.layout.txt`.  Skim it to confirm a
+   sprite/text landed in the expected screen rect without pixel vision
+   (see §6 "Layout map").
+
 ### Interactive debugging
 
 Set `CLASSIC_TEST_FAILFAST=1` to exit on the first assertion failure (there is
@@ -280,6 +286,11 @@ name), `model` (16-element matrix via `glam::Mat4::to_cols_array()`, i.e.
 column-major), `camera_ignored` (bool), and optional `texture`, `frame`,
 `color`.
 
+Each `TraceItem` also carries a `screen` rect (`[x, y, w, h]`, top-left
+origin pixels) computed in pure Rust via `golden::project_rect` — but it is
+`#[serde(skip)]`'d, so it never appears in the JSONL and never affects the
+line-by-line golden comparison.  It only feeds the layout map below.
+
 ### Operation
 
 - **Capture timing**: `golden_capture_frame` defaults to `last_test_step.frame + 1`.
@@ -297,6 +308,25 @@ column-major), `camera_ignored` (bool), and optional `texture`, `frame`,
 - **Baseline location**: `tests/golden/baseline/baseline.trace.jsonl`
   (70 lines, covering 5 `IsoSprite`, 54 `SdfText`, 1 `Sprite`, 1
   `Tilemap`, 7 `UiRect`, 1 `UiSprite`).
+
+### Layout map (CLASSIC_GOLDEN_LAYOUT)
+
+Alongside the trace, the harness emits a **layout map** — a deterministic,
+GPU-free text rendering of *what is drawn where* — so a text-only model can
+"look at" the frame without reading pixels.  It is on by default whenever
+`CLASSIC_GOLDEN` is set (disable with `CLASSIC_GOLDEN_LAYOUT=0`).
+
+- **On `update`**: written to `{CLASSIC_GOLDEN_DIR}/baseline.layout.txt`.
+- **On `check`**: written to `target/classic-test/baseline.layout.txt`
+  (always, not only on mismatch), so an author can read it on a passing run.
+
+Format: a `#`-prefixed header line (frame, viewport, camera pos/scale), a
+`#`-prefixed column header, then one fixed-width line per draw item sorted by
+`order` — `name`, `kind`, `order`, `x y w h` (screen rect), `texture`, `color`.
+The `screen` rect is the axis-aligned bounding box of the item's unit quad
+after `(camera or identity) · model`; for `Tilemap` it is the projected
+iso-extent diamond (`(0,0)..(size_x,size_y)` through `model · iso_matrix`).
+This is not part of `compare_traces`, so it cannot fail a golden run.
 
 ### Pixel golden (CLASSIC_GOLDEN_PNG)
 

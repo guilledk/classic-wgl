@@ -51,11 +51,17 @@ pub struct EnvConfig {
     /// CLASSIC_SHADOW_DUMP: write the directional shadow depth map to
     /// `<dump_dir>/shadow_depth.png` on the golden-capture frame.
     pub shadow_dump: bool,
+    /// CLASSIC_GOLDEN_LAYOUT: emit the text layout map (`baseline.layout.txt`)
+    /// alongside the golden trace.  Defaults on whenever CLASSIC_GOLDEN is set;
+    /// `0` disables it.
+    pub golden_layout: bool,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
     let test: String = read("CLASSIC_TEST");
     let test_active = !test.is_empty() && test != "0";
+    let golden_mode: String = read("CLASSIC_GOLDEN");
+    let golden_layout = !golden_mode.is_empty() && read("CLASSIC_GOLDEN_LAYOUT") != "0";
     EnvConfig {
         max_frames: read("CLASSIC_FRAMES").parse().ok(),
         fixed_dt: read("CLASSIC_FIXED_DT").parse().ok().or_else(|| {
@@ -68,7 +74,7 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         forced_width: read("CLASSIC_WIDTH").parse().ok(),
         forced_height: read("CLASSIC_HEIGHT").parse().ok(),
         ui_debug: read_bool("CLASSIC_UI_DEBUG"),
-        golden_mode: read("CLASSIC_GOLDEN"),
+        golden_mode,
         golden_png: read_bool("CLASSIC_GOLDEN_PNG"),
         golden_tol: read("CLASSIC_GOLDEN_TOL").parse().ok().unwrap_or(2),
         headless: read_bool("CLASSIC_HEADLESS"),
@@ -97,6 +103,7 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         no_ui: read_bool("CLASSIC_NO_UI"),
         shadow_debug: read_bool("CLASSIC_SHADOW_DEBUG"),
         shadow_dump: read_bool("CLASSIC_SHADOW_DUMP"),
+        golden_layout,
         test,
     }
 });
