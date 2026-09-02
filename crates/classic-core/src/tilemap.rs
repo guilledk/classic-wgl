@@ -249,35 +249,7 @@ fn push_wall(
 /// `classic_core::tilemap::bilinear_height`.
 pub use classic_pathfinder::bilinear_height;
 
-/// Horizontal depth divisor in the canonical iso-depth formula
-/// `iso_depth(tx, ty, z) = (tx - ty) / HORIZONTAL_DEPTH_SCALE + 0.5 + z / D`.
-/// One unit of `tx - ty` spans this many iso-depth steps.
-///
-/// Legacy fixed value (== [`horizontal_depth_scale`] for a 200×200 map).
-/// Prefer [`horizontal_depth_scale`] so larger maps are not clipped at the
-/// NE/SW corners.
-pub const HORIZONTAL_DEPTH_SCALE: f32 = 400.0;
-
-/// Horizontal depth divisor for a tilemap of `size_x × size_y`, in the
-/// canonical iso-depth formula
-/// `iso_depth(tx, ty, z) = (tx - ty) / scale + 0.5 + z / D`.
-///
-/// `tx - ty` spans `[-size_y, size_x]`, so `scale = 2 · max(size_x, size_y)`
-/// keeps the horizontal term within `[-0.5, +0.5]` (window depth `[0, 1]`)
-/// for every tile.  A fixed scale smaller than this clips the NE (`tx - ty` at
-/// its maximum) and SW (`tx - ty` at its minimum) corners, since window depth
-/// outside `[0, 1]` maps to clip-z outside `[-1, 1]`.
-pub fn horizontal_depth_scale(size_x: i32, size_y: i32) -> f32 {
-    // Depth-mapped sprites bake their per-pixel grayscale with the legacy
-    // `HORIZONTAL_DEPTH_SCALE` (400) horizontal divisor, so the divisor must
-    // never fall *below* 400 or a small map's sprite depth map misaligns with
-    // the terrain (front corners ghost, rear corners read as nearer).  Keep
-    // `2·max(size)` only when it exceeds 400 (large maps whose `tx−ty` span
-    // would otherwise clip the NE/SW corners).
-    (2.0 * size_x.max(size_y).max(1) as f32).max(HORIZONTAL_DEPTH_SCALE)
-}
-
-/// Pixels per metre: the fixed conversion the render/depth space uses between
+/// Pixels per metre: the fixed conversion the raster space uses between
 /// world metres and tileset pixels.  `height_data` is authored in **metres**
 /// (the exporter's unit); the mesh and sprite positioning convert metres to
 /// screen pixels via `* PPM_TARGET`.
@@ -295,24 +267,6 @@ pub const TILE_PX: f32 = 45.0;
 /// metres) finally share one unit — resolving the long-standing "32 vs 45"
 /// horizontal/height incommensurability.
 pub const TILE_M: f32 = TILE_PX / PPM_TARGET;
-
-/// Height depth divisor in the canonical iso-depth formula, for `z` in
-/// **metres** (`height_data`, after re-expression from tileset pixels).
-///
-/// Derived from the exporter's 30°-elevation view axis (see
-/// `classic-assets` / `make_lrv_spritesheet.py`): the camera basis is
-/// `back = right × up = (−√(3/8), −√(3/8), +1/2)`, so one metre of height
-/// contributes `back.z = 0.5` of view depth while one tile of `tx - ty`
-/// contributes `√(3/8) · (TILE_PX / PPM_TARGET)`.  The height term is
-/// **positive** (`+ z / D`): `back.z = +0.5` means taller terrain is farther,
-/// i.e. larger depth.
-///
-/// The mesh/sprite `z` is carried in tileset pixels; the depth formula converts
-/// it back to metres via `z_m = z_px / PPM_TARGET`, so the pixel-space divisor
-/// is `HEIGHT_DEPTH_SCALE_M · PPM_TARGET ≈ 22045.4`:
-///
-/// `z_m / 344.46 = (z_px / 64) / 344.46 = z_px / 22045.4`
-pub const HEIGHT_DEPTH_SCALE_M: f32 = 344.46;
 
 /// Sample terrain height at iso-space position `(px, py)` using the same
 /// triangle-linear interpolation as [`build_mesh`] (top faces split into

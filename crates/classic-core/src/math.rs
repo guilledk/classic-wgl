@@ -115,6 +115,33 @@ pub fn iso_world_normal_matrix(scale: Vec3) -> Mat3 {
     Mat3::from_mat4(Mat4::from_scale(scale) * iso_to_light).inverse().transpose() * d
 }
 
+/// World-metre iso-depth scale for a tilemap of `size_x × size_y`, consumed by
+/// the tilemap vertex shader and the sprite depth corners:
+/// `depth = 0.5 + (v.x + v.y)/scale[0] + v.z/scale[1]` (window space `[0, 1]`).
+///
+/// `scale[0]` is the horizontal divisor in world metres.  The sprite depth
+/// sheets bake their per-pixel grayscale against a fixed 400-tile horizontal
+/// divisor (classic-assets `render/materials.py`), so the divisor is floored at
+/// `TILE_M · 400` and grown to the map diagonal (`TILE_M · 2·max(size)`) for
+/// maps larger than 200×200, whose `tx − ty` span would otherwise clip the
+/// NE/SW corners.
+///
+/// `scale[1]` is the height divisor in metres, derived from the 30°-elevation
+/// camera back axis (`back = (−√(3/8), −√(3/8), +1/2)`): one metre of height
+/// contributes `back.z = 0.5` of view depth while one tile of `tx − ty`
+/// contributes `√(3/8)·TILE_M`, so the height divisor is
+/// `2·√(3/8)·TILE_M·400` (`344.46`).
+///
+/// Both divisors are re-baked to plain camera view depth in step E; until then
+/// they keep the legacy depth-sheet interlock, so depth stays bit-for-bit
+/// stable across the world-metre refactor.
+pub fn iso_world_depth_scale(size_x: i32, size_y: i32) -> [f32; 2] {
+    // Horizontal divisor: floored at the 400-tile divisor the sprite depth
+    // sheets bake against, then grown to the map diagonal for large maps.
+    let horizontal_tiles = (2.0 * size_x.max(size_y).max(1) as f32).max(400.0);
+    [crate::tilemap::TILE_M * horizontal_tiles, 344.46]
+}
+
 pub fn deg_to_rad(deg: f32) -> f32 {
     deg * std::f32::consts::PI / 180.0
 }

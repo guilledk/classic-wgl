@@ -35,12 +35,13 @@ use classic_core::components::{
     Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
-use classic_core::math::{iso_world_light_matrix, iso_world_matrix, iso_world_pos};
+use classic_core::math::{
+    iso_world_depth_scale, iso_world_light_matrix, iso_world_matrix, iso_world_pos,
+};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{
-    bilinear_height, build_mesh, build_tile_texture, horizontal_depth_scale, sample_height_mesh,
-    HEIGHT_DEPTH_SCALE_M, HORIZONTAL_DEPTH_SCALE, PPM_TARGET, TILE_M,
+    bilinear_height, build_mesh, build_tile_texture, sample_height_mesh, PPM_TARGET, TILE_M,
 };
 use classic_core::types::AnimChannel;
 use classic_core::types::AnimationData;
@@ -3615,9 +3616,9 @@ impl Engine {
             let world_matrix = classic_core::math::iso_world_matrix(tilemap_tf.scale);
             let light_matrix = classic_core::math::iso_world_light_matrix(tilemap_tf.scale);
             let normal_matrix = classic_core::math::iso_world_normal_matrix(tilemap_tf.scale);
-            let h_depth = horizontal_depth_scale(tilemap.size_x, tilemap.size_y);
+            let depth_scale = iso_world_depth_scale(tilemap.size_x, tilemap.size_y);
             let depth_corners =
-                Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint, h_depth);
+                Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint, depth_scale);
             // Per-sheet normal/depth companions (from the resolved frame's
             // sheet) win; fall back to the per-texture `entry.normal`/`depth`
             // manifest fields for assets not on a shared atlas.
@@ -3640,7 +3641,7 @@ impl Engine {
                 uv,
                 depth_corners,
                 depth_map,
-                depth_base: Self::compute_iso_base_depth(tf.position, h_depth),
+                depth_base: Self::compute_iso_base_depth(tf.position, depth_scale),
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
@@ -3835,10 +3836,7 @@ impl Engine {
                                 ambient: self.light_ambient,
                                 light_dir: self.light_dir,
                                 light_color: self.light_color,
-                                depth_scale: [
-                                    TILE_M * horizontal_depth_scale(nav.size_x, nav.size_y),
-                                    HEIGHT_DEPTH_SCALE_M,
-                                ],
+                                depth_scale: iso_world_depth_scale(nav.size_x, nav.size_y),
                                 ppm: PPM_TARGET,
                                 light_matrix: lm,
                                 normal_matrix,
@@ -3917,10 +3915,7 @@ impl Engine {
                         ambient: self.light_ambient,
                         light_dir: self.light_dir,
                         light_color: self.light_color,
-                        depth_scale: [
-                            TILE_M * horizontal_depth_scale(tm.size_x, tm.size_y),
-                            HEIGHT_DEPTH_SCALE_M,
-                        ],
+                        depth_scale: iso_world_depth_scale(tm.size_x, tm.size_y),
                         ppm: PPM_TARGET,
                         light_matrix: lm,
                         normal_matrix,
@@ -3937,13 +3932,13 @@ impl Engine {
         // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
         // `RenderSettings` (shared by both sprite passes) carries the light
         // preset; the world/light/normal matrices ride on each `IsoDraw` (per
-        // sprite tilemap), and `RenderSettings.light_matrix`/`normal_matrix` are
-        // therefore unused by the sprite draws.
+        // sprite tilemap), and `RenderSettings.light_matrix`/`normal_matrix`/
+        // `depth_scale` are therefore unused by the sprite draws.
         let sprite_settings = RenderSettings {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
             light_color: self.light_color,
-            depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_M],
+            depth_scale: [0.0, 0.0],
             ppm: PPM_TARGET,
             light_matrix: Mat4::IDENTITY,
             normal_matrix: Mat3::IDENTITY,
@@ -5040,17 +5035,24 @@ impl Engine {
     /// Compute the anchor-plane iso depth for a sprite position (the depth a
     /// depth map's 0.5 grayscale corresponds to), in **window space** `[0, 1]`.
     /// Matches the `base_depth` term in [`Self::compute_iso_depth_corners`].
-    /// `h_depth` is the tilemap's horizontal depth scale (see
-    /// [`classic_core::tilemap::horizontal_depth_scale`]).
-    fn compute_iso_base_depth(pos: Vec3, h_depth: f32) -> f32 {
-        (pos.x - pos.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_M
+    /// `pos` is the sprite's tile position (x/y in tiles, z in metres);
+    /// `depth_scale` is the world-metre depth scale (see
+    /// [`classic_core::math::iso_world_depth_scale`]).
+    fn compute_iso_base_depth(pos: Vec3, depth_scale: [f32; 2]) -> f32 {
+        let world = iso_world_pos(pos.x, pos.y, pos.z);
+        (world.x + world.y) / depth_scale[0] + 0.5 + world.z / depth_scale[1]
     }
 
-    /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.  `h_depth` is the tilemap's horizontal depth
-    /// scale, kept identical to the terrain's `depth_scale.x` uniform so sprite
-    /// occlusion matches the tilemap.
-    fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2], h_depth: f32) -> [f32; 4] {
-        let base_depth = Self::compute_iso_base_depth(pos, h_depth);
+    /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.
+    /// `depth_scale` is the tilemap's world-metre depth scale, kept identical to
+    /// the terrain's `depth_scale` uniform so sprite occlusion matches the
+    /// tilemap.
+    fn compute_iso_depth_corners(
+        pos: Vec3,
+        footprint: &[glam::Vec2],
+        depth_scale: [f32; 2],
+    ) -> [f32; 4] {
+        let base_depth = Self::compute_iso_base_depth(pos, depth_scale);
         let default_footprint = [
             glam::Vec2::new(0.5, -0.5),
             glam::Vec2::new(0.5, 0.5),
@@ -5062,7 +5064,8 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / h_depth + 0.5 + pos.z / HEIGHT_DEPTH_SCALE_M;
+            let world = iso_world_pos(pos.x + pt.x, pos.y + pt.y, pos.z);
+            let d = (world.x + world.y) / depth_scale[0] + 0.5 + world.z / depth_scale[1];
             raw_depths[i] = d.min(base_depth);
         }
 
@@ -5268,10 +5271,10 @@ mod tests {
     #[test]
     fn compute_iso_base_depth_matches_anchor_plane_formula() {
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
-        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE + 0.5 + 64.0 / HEIGHT_DEPTH_SCALE_M;
-        assert!(
-            (Engine::compute_iso_base_depth(pos, HORIZONTAL_DEPTH_SCALE) - expected).abs() < 1e-9
-        );
+        let scale = iso_world_depth_scale(200, 200);
+        // World-metre depth: `(tx − ty)·TILE_M / scale[0] + 0.5 + z / scale[1]`.
+        let expected = (100.0 - 20.0) * TILE_M / scale[0] + 0.5 + 64.0 / scale[1];
+        assert!((Engine::compute_iso_base_depth(pos, scale) - expected).abs() < 1e-9);
     }
 
     #[test]

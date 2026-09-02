@@ -1,28 +1,29 @@
-use classic_core::tilemap::{bilinear_height, horizontal_depth_scale, sample_height_mesh};
+use classic_core::math::iso_world_depth_scale;
+use classic_core::tilemap::{bilinear_height, sample_height_mesh, TILE_M};
 
 #[test]
-fn horizontal_depth_scale_covers_map_diagonal() {
-    // 200×200 (the demo) matches the legacy fixed constant exactly.
-    assert_eq!(horizontal_depth_scale(200, 200), 400.0);
+fn iso_world_depth_scale_covers_map_diagonal() {
+    // 200×200 (the demo) matches the fixed 400-tile divisor in world metres.
+    assert_eq!(iso_world_depth_scale(200, 200)[0], TILE_M * 400.0);
     // 400×400 (the lunar scene) doubles it so the NE/SW corners are not clipped.
-    assert_eq!(horizontal_depth_scale(400, 400), 800.0);
-    // Small maps (48×48 container/lrvtest) must NOT fall below 400: the depth
-    // maps are baked with the legacy 400 divisor, so a smaller divisor
+    assert_eq!(iso_world_depth_scale(400, 400)[0], TILE_M * 800.0);
+    // Small maps (48×48 container/lrvtest) must NOT fall below the 400-tile
+    // divisor: the depth maps are baked with it, so a smaller divisor
     // misaligns sprite depth maps with the terrain (front corners ghost).
-    assert_eq!(horizontal_depth_scale(48, 48), 400.0);
+    assert_eq!(iso_world_depth_scale(48, 48)[0], TILE_M * 400.0);
 
-    // The full tile diagonal must stay within window depth [0, 1]:
-    //   iso_depth(tx, ty, z) = (tx - ty) / scale + 0.5 + (z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
+    // The full world-metre diagonal must stay within window depth [0, 1]:
+    //   depth(v) = (v.x + v.y)/scale[0] + 0.5 + v.z/scale[1]
     for &(sx, sy) in &[(200, 200), (400, 400), (600, 600), (400, 200)] {
-        let scale = horizontal_depth_scale(sx, sy);
-        let ne = (sx as f32) / scale + 0.5;
-        let sw = -(sy as f32) / scale + 0.5;
-        assert!(ne <= 1.0, "NE depth {ne} clipped (scale {scale})");
-        assert!(sw >= 0.0, "SW depth {sw} clipped (scale {scale})");
+        let scale = iso_world_depth_scale(sx, sy);
+        let ne = (sx as f32 * TILE_M) / scale[0] + 0.5;
+        let sw = -(sy as f32 * TILE_M) / scale[0] + 0.5;
+        assert!(ne <= 1.0, "NE depth {ne} clipped (scale {scale:?})");
+        assert!(sw >= 0.0, "SW depth {sw} clipped (scale {scale:?})");
     }
 
     // Degenerate maps must not divide by zero.
-    assert!(horizontal_depth_scale(0, 0) > 0.0);
+    assert!(iso_world_depth_scale(0, 0)[0] > 0.0);
 }
 
 #[test]
