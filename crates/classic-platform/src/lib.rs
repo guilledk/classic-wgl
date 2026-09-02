@@ -109,6 +109,7 @@ pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 
 pub mod rom;
 pub use rom::resolve_rom_source;
+pub use rom::LogBootSink;
 #[cfg(not(target_arch = "wasm32"))]
 pub use rom::{load_rom_bytes, resolve_rom, resolve_roms};
 #[cfg(target_arch = "wasm32")]

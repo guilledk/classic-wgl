@@ -1,5 +1,14 @@
 use std::sync::LazyLock;
 
+/// The boot loading-screen mode (`CLASSIC_LOADER`).  `Visual`/`Console` gate
+/// the in-engine loader; `Off` (the default) keeps the synchronous silent boot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoaderMode {
+    Off,
+    Console,
+    Visual,
+}
+
 /// Hoisted per-process env-var configuration, parsed once via `LazyLock`.
 /// Replaces the per-frame `std::env::var()` calls spread throughout the engine.
 pub struct EnvConfig {
@@ -55,6 +64,10 @@ pub struct EnvConfig {
     /// alongside the golden trace.  Defaults on whenever CLASSIC_GOLDEN is set;
     /// `0` disables it.
     pub golden_layout: bool,
+    /// CLASSIC_LOADER: boot loading-screen mode (`console` / `visual` / `off`).
+    pub loader_mode: LoaderMode,
+    /// CLASSIC_BOOT_LOG: always log the boot event stream to the `boot` channel.
+    pub boot_log: bool,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -104,6 +117,12 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         shadow_debug: read_bool("CLASSIC_SHADOW_DEBUG"),
         shadow_dump: read_bool("CLASSIC_SHADOW_DUMP"),
         golden_layout,
+        loader_mode: match read("CLASSIC_LOADER").trim() {
+            "console" => LoaderMode::Console,
+            "visual" => LoaderMode::Visual,
+            _ => LoaderMode::Off,
+        },
+        boot_log: read_bool("CLASSIC_BOOT_LOG"),
         test,
     }
 });

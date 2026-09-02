@@ -11,7 +11,7 @@
 //! native (`fs::read` / blocking `ureq`), [`resolve_rom_async`] on web
 //! (async `fetch`).
 
-use classic_rom::{AssetBytes, Rom, RomSource};
+use classic_rom::{AssetBytes, BootEvent, BootSink, Rom, RomSource};
 
 /// Build a lookup closure from a static `name -> URL/path` table.
 ///
@@ -79,22 +79,31 @@ pub fn resolve_rom(
 /// recursively resolved through `index`, or a direct URL/path/data source
 /// whose manifest `deps` are then resolved the same way.  ROMs are
 /// cycle-checked, de-duplicated, and returned in topological order (deps
-/// before dependents).
+/// before dependents).  Boot progress is streamed to `sink`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn resolve_roms(
     spec: &str,
     index: &dyn Fn(&str) -> Option<String>,
+    sink: &dyn BootSink,
 ) -> anyhow::Result<classic_rom::LoadedRoms> {
+    sink.on_event(BootEvent::ResolveStarted { spec: spec.to_string() });
+
     let named_load = |name: &str| {
         let source = resolve_rom_source(&format!("rom:{name}"), index)?;
         let bytes = load_rom_bytes(&source)?;
-        rom_from_bytes(&bytes)
+        sink.on_event(BootEvent::RomFetched { name: name.to_string(), bytes: bytes.len() });
+        rom_from_bytes(&bytes, name, sink)
     };
 
     match classic_rom::parse_rom_spec(spec) {
         RomSource::Embedded(name) => classic_rom::LoadedRoms::resolve(&name, named_load),
         other => {
-            let root_rom = rom_from_bytes(&load_rom_bytes(&other)?)?;
+            let root_bytes = load_rom_bytes(&other)?;
+            sink.on_event(BootEvent::RomFetched {
+                name: "root".to_string(),
+                bytes: root_bytes.len(),
+            });
+            let root_rom = rom_from_bytes(&root_bytes, "root", sink)?;
             let root_name = rom_name(&root_rom);
             let mut root_loaded = false;
             classic_rom::LoadedRoms::resolve(&root_name, |name| {
@@ -109,10 +118,13 @@ pub fn resolve_roms(
     }
 }
 
-/// Parse a fully-loaded [`Rom`] from archive bytes.
-fn rom_from_bytes(bytes: &[u8]) -> anyhow::Result<Rom> {
+/// Parse a fully-loaded [`Rom`] from archive bytes, emitting
+/// `RomDecompressed` (after archive open) and `RomParsed` (from [`Rom::load`])
+/// to `sink` under the given `name`.
+fn rom_from_bytes(bytes: &[u8], name: &str, sink: &dyn BootSink) -> anyhow::Result<Rom> {
     let archive = classic_rom::RomArchive::from_bytes(bytes)?;
-    Rom::load(&archive)
+    sink.on_event(BootEvent::RomDecompressed { name: name.to_string(), entries: archive.len() });
+    Rom::load(&archive, sink)
 }
 
 /// The resolver name for a directly-loaded (non-`rom:`) root ROM: its
@@ -173,6 +185,7 @@ async fn load_named_rom_async(
     name: &str,
     index: &dyn Fn(&str) -> Option<String>,
     index_url: &str,
+    sink: &dyn BootSink,
 ) -> anyhow::Result<Rom> {
     let source = resolve_rom_source(&format!("rom:{name}"), index)?;
     let bytes = match source {
@@ -183,7 +196,8 @@ async fn load_named_rom_async(
         RomSource::Data(bytes) => AssetBytes::Owned(bytes),
         RomSource::Embedded(_) => unreachable!("resolve_rom_source resolves names first"),
     };
-    rom_from_bytes(&bytes)
+    sink.on_event(BootEvent::RomFetched { name: name.to_string(), bytes: bytes.len() });
+    rom_from_bytes(&bytes, name, sink)
 }
 
 /// Resolve a ROM selector to a multi-ROM dependency DAG on web.
@@ -192,22 +206,31 @@ async fn load_named_rom_async(
 /// recursively through `index` (each ROM fetched + Cache-API-cached keyed by
 /// the `sha256` published in `index_url`), direct URL/path roots contribute
 /// their manifest `deps`.  Cycle-checked, de-duplicated, topologically ordered.
+/// Boot progress is streamed to `sink`.
 #[cfg(target_arch = "wasm32")]
 pub async fn resolve_roms_async(
     spec: &str,
     index: &dyn Fn(&str) -> Option<String>,
     index_url: &str,
+    sink: &dyn BootSink,
 ) -> anyhow::Result<classic_rom::LoadedRoms> {
+    sink.on_event(BootEvent::ResolveStarted { spec: spec.to_string() });
+
     match classic_rom::parse_rom_spec(spec) {
         RomSource::Embedded(name) => {
             classic_rom::LoadedRoms::resolve_async(&name, |n| {
                 let index_url = index_url.to_string();
-                async move { load_named_rom_async(&n, index, &index_url).await }
+                async move { load_named_rom_async(&n, index, &index_url, sink).await }
             })
             .await
         }
         other => {
-            let root_rom = rom_from_bytes(&load_rom_bytes_async(other).await?)?;
+            let root_bytes = load_rom_bytes_async(other).await?;
+            sink.on_event(BootEvent::RomFetched {
+                name: "root".to_string(),
+                bytes: root_bytes.len(),
+            });
+            let root_rom = rom_from_bytes(&root_bytes, "root", sink)?;
             let root_name = rom_name(&root_rom);
             let mut root_loaded = false;
             classic_rom::LoadedRoms::resolve_async(&root_name, |name| {
@@ -221,7 +244,7 @@ pub async fn resolve_roms_async(
                     if is_root {
                         Ok(root_rom)
                     } else {
-                        load_named_rom_async(&name, index, &index_url).await
+                        load_named_rom_async(&name, index, &index_url, sink).await
                     }
                 }
             })
@@ -357,4 +380,98 @@ async fn cache_put(cache: &web_sys::Cache, key: &str, response: &web_sys::Respon
 
     let promise = cache.put_with_str(key, response);
     let _ = JsFuture::from(promise).await;
+}
+
+/// A [`BootSink`] that logs each event to the `boot` instrument channel.
+/// Opted into via `CLASSIC_BOOT_LOG` / `CLASSIC_LOADER=console`; the no-op
+/// [`classic_rom::NullBootSink`] is the default.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LogBootSink;
+
+impl BootSink for LogBootSink {
+    fn on_event(&self, event: BootEvent) {
+        match &event {
+            BootEvent::BootFailed { .. } => {
+                classic_core::cl_error!(
+                    classic_core::instrument::Chan::Boot,
+                    "{}",
+                    event.describe()
+                );
+            }
+            _ => {
+                classic_core::cl_info!(
+                    classic_core::instrument::Chan::Boot,
+                    "{}",
+                    event.describe()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use classic_rom::{ResourceSet, RomManifest};
+
+    fn make_rom(name: &str, deps: &[&str]) -> classic_rom::Rom {
+        let deps_json = deps.iter().map(|d| format!("\"{d}\"")).collect::<Vec<_>>().join(",");
+        let manifest_json = format!(
+            r#"{{"format_version":1,"entrypoint":"{name}","deps":[{deps_json}],
+                "shaders":[],"textures":[],"animations":[]}}"#
+        );
+        let manifest: RomManifest = serde_json::from_str(&manifest_json).unwrap();
+        classic_rom::Rom {
+            manifest,
+            manifest_json,
+            resources: ResourceSet::default(),
+            state: "{\"entities\":{}}".into(),
+        }
+    }
+
+    fn write_rom(dir: &std::path::Path, name: &str, rom: &classic_rom::Rom) -> String {
+        let path = dir.join(format!("{name}.rom"));
+        std::fs::write(&path, rom.pack_zip().unwrap()).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn resolve_roms_streams_boot_events_for_a_dag() {
+        let dir = std::env::temp_dir().join(format!("classic-rom-boot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let common = make_rom("common", &[]);
+        let scene = make_rom("scene", &["common"]);
+        let common_path = write_rom(&dir, "common", &common);
+        let scene_path = write_rom(&dir, "scene", &scene);
+
+        let index = |name: &str| -> Option<String> {
+            match name {
+                "scene" => Some(scene_path.clone()),
+                "common" => Some(common_path.clone()),
+                _ => None,
+            }
+        };
+
+        let sink = classic_rom::VecBootSink::new();
+        let loaded = resolve_roms("rom:scene", &index, &sink).unwrap();
+
+        // The resolved DAG is topological: deps precede the dependent.
+        let order: Vec<&str> = loaded.order.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(order, vec!["common", "scene"]);
+
+        let events = sink.events();
+        // Resolve starts first, and both ROMs are parsed.
+        assert!(matches!(events.first(), Some(BootEvent::ResolveStarted { .. })));
+        let parsed: std::collections::BTreeSet<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                BootEvent::RomParsed { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(parsed, std::collections::BTreeSet::from(["common", "scene"]));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
