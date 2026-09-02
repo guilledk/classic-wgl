@@ -18,21 +18,25 @@ out highp vec2 vTexCoord;
 out highp vec3 vLightPos;
 
 void main(void ) {
-    // `model_matrix` maps the unit quad into Blender-world metres; the world
-    // and light matrices are the same ones the tilemap shader uses, so sprites
-    // and terrain share one screen and one light space.
-    highp vec3 world = (model_matrix * vertex_pos).xyz;
-    highp vec4 worldPos = world_matrix * vec4(world, 1.0);
-    worldPos.y -= ppm * world.z;
-    vec4 clipPos = projection_matrix * camera_matrix * worldPos;
+    vTexCoord = tex_coord;
     if (use_iso_depth > 0.5) {
+        // Iso sprites are authored in Blender-world metres and share the
+        // tilemap's world/light matrices, so sprites and terrain live in one
+        // screen and one light space.
+        highp vec3 world = (model_matrix * vertex_pos).xyz;
+        highp vec4 worldPos = world_matrix * vec4(world, 1.0);
+        worldPos.y -= ppm * world.z;
+        vec4 clipPos = projection_matrix * camera_matrix * worldPos;
         float bottomDepth = mix(iso_depth_corners.x, iso_depth_corners.y, vertex_pos.x);
         float topDepth = mix(iso_depth_corners.z, iso_depth_corners.w, vertex_pos.x);
         float cornerDepth = mix(topDepth, bottomDepth, vertex_pos.y);
         // `cornerDepth` is window-space `[0, 1]`; map to clip z.
         clipPos.z = cornerDepth * 2.0 - 1.0;
+        gl_Position = clipPos;
+        vLightPos = (light_matrix * vec4(world, 1.0)).xyz;
+    } else {
+        // 2D screen-space sprites (cursor, HUD, UI): plain screen transform.
+        gl_Position = projection_matrix * camera_matrix * model_matrix * vertex_pos;
+        vLightPos = vec3(0.0);
     }
-    gl_Position = clipPos;
-    vTexCoord = tex_coord;
-    vLightPos = (light_matrix * vec4(world, 1.0)).xyz;
 }
