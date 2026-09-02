@@ -60,10 +60,11 @@ impl Rom {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
-        for (path, bytes) in self.entries() {
+        self.for_each_entry(|path, bytes| {
             writer.start_file(path, opts)?;
-            writer.write_all(&bytes)?;
-        }
+            writer.write_all(bytes)?;
+            Ok(())
+        })?;
         Ok(writer.finish()?.into_inner())
     }
 
@@ -71,77 +72,83 @@ impl Rom {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn pack_tar_zst(&self) -> anyhow::Result<Vec<u8>> {
         let mut tar = tar::Builder::new(Vec::new());
-        for (path, bytes) in self.entries() {
+        self.for_each_entry(|path, bytes| {
             let mut header = tar::Header::new_gnu();
             header.set_mode(0o644);
             header.set_size(bytes.len() as u64);
-            tar.append_data(&mut header, &path, bytes.as_slice())?;
-        }
+            tar.append_data(&mut header, path, bytes)?;
+            Ok(())
+        })?;
         let tar_bytes = tar.into_inner()?;
         Ok(zstd::bulk::compress(&tar_bytes, 19)?)
     }
 
-    /// The flat list of `(path, bytes)` archive entries, in manifest-first order.
-    fn entries(&self) -> Vec<(String, Vec<u8>)> {
-        let mut out = Vec::new();
-        out.push((MANIFEST_ENTRY.to_string(), self.manifest_json.as_bytes().to_vec()));
-        out.push((self.manifest.state.clone(), self.state.as_bytes().to_vec()));
+    /// Visit every archive entry `(path, bytes)` in manifest-first order,
+    /// borrowing the bytes straight from the resource set (no intermediate
+    /// clone).  `pack_zip`/`pack_tar_zst` stream these directly into their
+    /// writers instead of materialising a `Vec<(String, Vec<u8>)>`.
+    fn for_each_entry(
+        &self,
+        mut f: impl FnMut(&str, &[u8]) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        f(MANIFEST_ENTRY, self.manifest_json.as_bytes())?;
+        f(self.manifest.state.as_str(), self.state.as_bytes())?;
 
         for entry in &self.manifest.manifest.textures {
             if let Some(bytes) = self.resources.textures().get(&entry.name) {
-                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
+                f(crate::rom_path(&entry.src), bytes)?;
             }
             if let (Some(path), Some(bytes)) =
                 (&entry.frames, self.resources.frames().get(&entry.name))
             {
-                out.push((crate::rom_path(path).to_string(), bytes.clone()));
+                f(crate::rom_path(path), bytes)?;
             }
         }
         for entry in &self.manifest.manifest.textures {
             if let Some(path) = &entry.depth {
                 if let Some(bytes) = self.resources.depths().get(&entry.name) {
-                    out.push((crate::rom_path(path).to_string(), bytes.clone()));
+                    f(crate::rom_path(path), bytes)?;
                 }
             }
             if let Some(path) = &entry.normal {
                 if let Some(bytes) = self.resources.normals().get(&entry.name) {
-                    out.push((crate::rom_path(path).to_string(), bytes.clone()));
+                    f(crate::rom_path(path), bytes)?;
                 }
             }
         }
         for entry in &self.manifest.manifest.sdf_fonts {
             if let Some(metrics) = self.resources.fonts().get(&entry.name) {
-                out.push((crate::rom_path(&entry.metrics).to_string(), metrics.clone()));
+                f(crate::rom_path(&entry.metrics), metrics)?;
             }
         }
         for entry in &self.manifest.code {
             if let Some(src) = self.resources.code().get(&entry.name) {
-                out.push((crate::rom_path(&entry.src).to_string(), src.clone()));
+                f(crate::rom_path(&entry.src), src)?;
             }
         }
         for entry in &self.manifest.manifest.animations {
             if let Some(metadata) = self.resources.animations().get(&entry.name) {
                 if let Some(path) = &entry.metadata {
-                    out.push((crate::rom_path(path).to_string(), metadata.clone()));
+                    f(crate::rom_path(path), metadata)?;
                 }
             }
         }
         for entry in &self.manifest.grids {
             if let Some(bytes) = self.resources.grids().get(&entry.name) {
-                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
+                f(crate::rom_path(&entry.src), bytes)?;
             }
         }
         for entry in &self.manifest.manifest.vehicles {
             if let Some(bytes) = self.resources.vehicles().get(&entry.name) {
-                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
+                f(crate::rom_path(&entry.src), bytes)?;
             }
         }
         for entry in &self.manifest.manifest.data {
             if let Some(bytes) = self.resources.data().get(&entry.name) {
-                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
+                f(crate::rom_path(&entry.src), bytes)?;
             }
         }
-        out
+        Ok(())
     }
 }
 
