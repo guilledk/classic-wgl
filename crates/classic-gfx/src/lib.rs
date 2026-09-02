@@ -1478,7 +1478,7 @@ impl Gfx {
         &self,
         model: &Mat4,
         camera: &Mat4,
-        iso_matrix: &Mat4,
+        world_matrix: &Mat4,
         tile_data_tex: &glow::Texture,
         tileset_name: &str,
         tile_set_size: &[f32; 2],
@@ -1516,7 +1516,7 @@ impl Gfx {
         s.uniform_1i(gl, "map_data", 0);
         s.uniform_1i(gl, "tile_set", 1);
         self.bind_view(s, camera, model, false);
-        s.uniform_mat4(gl, "iso_matrix", iso_matrix);
+        s.uniform_mat4(gl, "world_matrix", world_matrix);
         s.uniform_vec2(gl, "tile_set_size", tile_set_size);
         s.uniform_vec2(gl, "tile_pixel_size", tile_pixel_size);
         s.uniform_vec2(gl, "depth_scale", &settings.depth_scale);
@@ -1751,7 +1751,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             fragment: "iso_tilemap.frag",
             attr: &["vertex_pos", "map_coord", "tile_id", "normal"],
             unif: &[
-                "iso_matrix",
+                "world_matrix",
                 "model_matrix",
                 "light_matrix",
                 "camera_matrix",

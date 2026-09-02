@@ -165,3 +165,38 @@ fn iso_world_light_matrix_reproduces_tile_light() {
         }
     }
 }
+
+#[test]
+fn iso_world_normal_matrix_reproduces_tile_normal() {
+    // The world normal is `normalize(D⁻¹ · tile_normal)`; the world normal
+    // matrix must map it to the same light-space direction as the current
+    // `inverse_transpose(S(scale)·Rz(-45°))` maps the tile normal.  `D` does
+    // not commute with the rotation, so the plain
+    // `inverse_transpose(iso_world_light_matrix)` would be subtly wrong here.
+    use classic_core::tilemap::{PPM_TARGET, TILE_M};
+
+    let scale = glam::Vec3::new(45.0, 45.0, 1.0);
+    let old_nm = glam::Mat3::from_mat4(glam::Mat4::from_scale(scale) * math::iso_to_light_4())
+        .inverse()
+        .transpose();
+    let new_nm = math::iso_world_normal_matrix(scale);
+    let d_inv = glam::Vec3::new(1.0 / TILE_M, -1.0 / TILE_M, PPM_TARGET);
+
+    for &tile_normal in &[
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.5, 0.5, 1.0],
+        [0.0, 0.5, 1.0],
+        [0.25, -0.5, 1.0],
+    ] {
+        let tn = glam::Vec3::from_array(tile_normal);
+        let world_normal = (tn * d_inv).normalize();
+        let old_light = (old_nm * tn).normalize();
+        let new_light = (new_nm * world_normal).normalize();
+        assert!(
+            (old_light - new_light).length() < 1e-3,
+            "tile={tile_normal:?} old={old_light:?} new={new_light:?}"
+        );
+    }
+}
