@@ -10,25 +10,18 @@
 //! | Space | Transform | Up axis | Metric? | Used by |
 //! |---|---|---|---|---|
 //! | **light** | `iso_world_light_matrix * world` = `S(scale) · Rz(-45°) · D⁻¹` | `+Z` | **yes** | `light_dir`, `vNormal`, `vLightPos`, `Light::position`, this module |
-//! | **screen** | `model · world_matrix · vertex`, then `y -= ppm·z` | `(0,-1,1)/√2` | no | rasterised geometry only |
+//! | **screen** | `iso_camera_px(world)` | n/a (2D) | no | rasterised geometry only |
 //!
-//! Two distortions separate them, and *both* have shipped as bugs.
-//!
-//! The `y -= vertex.z` shear is what makes height read as height in an
-//! isometric view, but it leaves the result carrying height in *both* y and z.
-//! Projecting that along a `light_dir` authored with +Z up presented the sun at
-//! ~2.7° instead of 30° — a near-degenerate grazing angle that cast nothing.
-//!
-//! The `diag(1, 0.5, 1)` inside `iso_matrix` is the isometric 2:1
-//! foreshortening.  It makes the space **non-metric**: one tile spans 45 px
-//! along x but 22.5 px along y, so `length`, `normalize` and `dot` — every
-//! operation lighting is built from — silently mean something else along y.
-//! Light space drops it, which is why `light_matrix` is `S(scale) · Rz(-45°)`
-//! and not `S(scale) · iso_to_cartesian_4()`.
+//! Light space drops the tile→world `D⁻¹ = diag(1/TILE_M, −1/TILE_M, PPM_TARGET)`
+//! so `length`, `normalize` and `dot` mean the same thing in every direction;
+//! the screen camera's 2:1 dimetric image is a separate raster concern.
 //!
 //! `light_dir` is authored with +Z up (`classic-demo/src/lighting.rs` sets
-//! `d.z = sin(elevation)`) and `normal_matrix` is `(mat3(light_matrix))⁻ᵀ`, so
-//! both live here.  The shadow map must too.
+//! `d.z = sin(elevation)`), and `normal_matrix` is
+//! `iso_world_normal_matrix` = `inverse_transpose(S(scale)·Rz(−45°)) · D` —
+//! **not** `inverse_transpose(mat3(iso_world_light_matrix))`, since `D` does not
+//! commute with the rotation.  All of it lives in light space; the shadow map
+//! must too.
 
 use glam::{Mat4, Vec3, Vec4};
 

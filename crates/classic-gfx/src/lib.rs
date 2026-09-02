@@ -547,10 +547,11 @@ pub struct RenderSettings {
     pub depth_span: [f32; 2],
     pub ppm: f32,
     /// World -> light space (`iso_world_light_matrix`), the metric frame every
-    /// lighting quantity lives in.  Deliberately *not* `model_matrix *
-    /// iso_matrix`: that carries the isometric `diag(1, 0.5, 1)` squash.  Built
-    /// by `classic_engine`; consumed by the tilemap draw only (sprites receive
-    /// their own per-tilemap matrix on each draw).
+    /// lighting quantity lives in.  Independent of the screen camera: it drops
+    /// the tile→world squash (`Rz(−45°)`) so `length`/`normalize`/`dot` are
+    /// metric in every direction.  Built by `classic_engine`; consumed by the
+    /// tilemap draw only (sprites receive their own per-tilemap matrix on each
+    /// draw).
     pub light_matrix: Mat4,
     /// Terrain normal matrix: `iso_world_normal_matrix`.  Unused by the sprite
     /// draws (their normals come from a baked map and ride their own per-tilemap
