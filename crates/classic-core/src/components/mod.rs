@@ -398,10 +398,10 @@ pub struct IsoVehicle {
     /// def at spawn).
     #[serde(skip)]
     pub pitch_max: f32,
-    /// Front-rear axle distance in screen pixels (derived from the wheel
-    /// offsets and tile scale at spawn).
+    /// Front-rear axle distance in world metres (derived from the wheel
+    /// offsets and tile metre length at spawn).
     #[serde(skip)]
-    pub wheelbase_px: f32,
+    pub wheelbase_m: f32,
     /// Continuous body roll angle (radians), signed left-up positive.  Driven
     /// by the same spring-damper as pitch.
     #[serde(skip)]
@@ -421,10 +421,10 @@ pub struct IsoVehicle {
     /// def at spawn).
     #[serde(skip)]
     pub roll_max: f32,
-    /// Left-right axle distance in screen pixels (derived from the wheel
-    /// offsets and tile scale at spawn).
+    /// Left-right axle distance in world metres (derived from the wheel
+    /// offsets and tile metre length at spawn).
     #[serde(skip)]
-    pub track_px: f32,
+    pub track_m: f32,
     /// Collision footprint for pathfinding: integer tile offsets from the body
     /// anchor cell (copied from the vehicle def at spawn).  A* erodes the nav
     /// grid by this footprint before searching (issue #35).
@@ -439,12 +439,12 @@ pub struct IsoVehicle {
     /// spawn).  `0` disables jumps.
     #[serde(skip)]
     pub safe_fall_px: f32,
-    /// Max upward wheel compression (pixels) above the body plane.  A wheel
+    /// Max upward wheel compression (metres) above the body plane.  A wheel
     /// whose terrain rises more than this is clamped, and the body plane lifts
     /// instead.  Derived from the vehicle def at spawn (see `spawn_vehicle`).
     #[serde(skip)]
     pub wheel_travel_up: f32,
-    /// Max downward wheel droop (pixels) below the body plane before a wheel
+    /// Max downward wheel droop (metres) below the body plane before a wheel
     /// hangs.  Derived from the vehicle def at spawn (see `spawn_vehicle`).
     #[serde(skip)]
     pub wheel_travel_down: f32,
@@ -483,19 +483,19 @@ pub struct IsoVehicle {
     /// the anchors at spawn time (`[4 wheels][8 dirs][tx, ty]`).
     #[serde(skip)]
     pub wheel_tile_offsets: [[[f32; 2]; 8]; 4],
-    /// Body height above the supporting terrain, in screen-pixel units
-    /// (same units as `Engine::height_at`).
+    /// Body height above the supporting terrain, in world metres (same units as
+    /// `Engine::height_at`).
     #[serde(skip)]
     pub altitude: f32,
-    /// Body vertical velocity, in pixels per second.
+    /// Body vertical velocity, in metres per second.
     #[serde(skip)]
     pub vel_z: f32,
-    /// Smoothed per-wheel terrain height (pixels), `[fl, fr, rl, rr]`, clamped
+    /// Smoothed per-wheel terrain height (metres), `[fl, fr, rl, rr]`, clamped
     /// to a travel envelope around the body plane (`wheel_travel_up` /
     /// `wheel_travel_down`) so wheels never ride over the body or sink.
     #[serde(skip)]
     pub wheel_h: [f32; 4],
-    /// Per-wheel smoothing velocity (pixels/second).
+    /// Per-wheel smoothing velocity (metres/second).
     #[serde(skip)]
     pub wheel_v: [f32; 4],
     /// A* waypoints the host follows (guest-set via `vehicle_goto`), in integer
@@ -544,18 +544,18 @@ impl Default for IsoVehicle {
             pitch_index: 0,
             pitch_levels: 1,
             pitch_max: 20.0f32.to_radians(),
-            wheelbase_px: 0.0,
+            wheelbase_m: 0.0,
             roll: 0.0,
             roll_vel: 0.0,
             roll_index: 0,
             roll_levels: 1,
             roll_max: 20.0f32.to_radians(),
-            track_px: 0.0,
+            track_m: 0.0,
             path_footprint: vec![(0, 0)],
             turn_rate: 720.0f32.to_radians(),
             safe_fall_px: 0.0,
-            wheel_travel_up: 10.0,
-            wheel_travel_down: 20.0,
+            wheel_travel_up: 10.0 / 64.0,
+            wheel_travel_down: 20.0 / 64.0,
             tilt_dead_zone: 0.0,
             steer_index: 0,
             steer_levels: 1,
