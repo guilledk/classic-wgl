@@ -36,13 +36,14 @@ use classic_core::components::{
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{
-    iso_basis, iso_camera_matrix, iso_view_depth, iso_world_light_matrix, iso_world_pos, DEPTH_FAR,
+    iso_basis, iso_camera_matrix, iso_camera_ray, iso_view_depth, iso_world_pos, Ray, DEPTH_FAR,
     DEPTH_NEAR,
 };
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{
-    bilinear_height, build_mesh, build_tile_texture, sample_height_mesh, PPM_TARGET, TILE_M,
+    bilinear_height, build_mesh, build_tile_texture, raycast_terrain, sample_height_mesh,
+    PPM_TARGET, TILE_M,
 };
 use classic_core::types::AnimChannel;
 use classic_core::types::AnimationData;
@@ -52,7 +53,7 @@ use classic_core::types::SdfFontMetrics;
 use classic_core::{Camera, RoleKind, SpriteRender, Transform};
 use classic_gfx::{Gfx, GlBuffer, GlTexture, IsoSpritePass, RenderSettings, SpriteRegion};
 use classic_platform::InputState;
-use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
@@ -127,10 +128,6 @@ struct IsoDraw {
     selected: bool,
     /// World -> camera view space (metres): `iso_camera_matrix`.
     world_matrix: Mat4,
-    /// World -> light space (px, metric +Z up).
-    light_matrix: Mat4,
-    /// World normal -> light space.
-    normal_matrix: Mat3,
 }
 
 impl IsoDraw {
@@ -405,7 +402,7 @@ impl Engine {
             input: InputState::new(),
             show_grid: false,
             light_ambient: [0.15, 0.15, 0.2],
-            light_dir: [0.45, -0.35, 0.82],
+            light_dir: [0.566_422, -0.070_803, 0.821_068],
             light_color: [1.0, 0.95, 0.85],
             light_handles: light::LightHandles::new(),
             animations: HashMap::new(),
@@ -1594,9 +1591,10 @@ impl Engine {
         // intersecting the ray with the terrain height field.
         let tm_entity = entity;
         self.on_update(move |engine| {
-            let (height_data, size_x, size_y) = {
+            let (height_data, size_x, size_y, tilemap_pos) = {
                 let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-                (tm.height_data.clone(), tm.size_x, tm.size_y)
+                let tf = engine.world.get::<&Transform>(tm_entity).unwrap();
+                (tm.height_data.clone(), tm.size_x, tm.size_y, tf.position)
             };
 
             // Un-project the mouse to the world-metre ground plane (`z = 0`)
@@ -1613,29 +1611,23 @@ impl Engine {
             let view_z = -up.z * view_y / back.z;
             let ground = right * view_x + up * view_y + back * view_z;
 
-            // The ground point's tile coordinates shift along the depth axis by
-            // the terrain height (parallax).  Iterate the fixed point until the
-            // sampled height stabilises — a ray/height-field intersection.
-            let tx0 = ground.x / TILE_M;
-            let ty0 = -ground.y / TILE_M;
-            let mut tx = tx0;
-            let mut ty = ty0;
-            let parallax = 2.0 * (3.0f32 / 8.0).sqrt() / TILE_M;
-            for _ in 0..8 {
-                let h = sample_height_mesh(&height_data, size_x, size_y, tx, ty);
-                if h <= 0.0 {
-                    break;
-                }
-                let z_off = h * parallax;
-                tx = tx0 - z_off;
-                ty = ty0 + z_off;
-            }
+            // Cast the orthographic camera ray from the near depth plane into
+            // the scene and intersect it with the terrain height field.  The
+            // first surface the ray hits is the one the camera actually sees —
+            // a slope in front occludes terrain behind it.  Colliders can later
+            // stop the same ray.  The height field is authored in the tilemap's
+            // local frame, so the ray is shifted by the tilemap's world offset.
+            let ray = iso_camera_ray(screen.truncate());
+            let local_ray = Ray::new(ray.origin - tilemap_pos, ray.dir);
+            let hit =
+                raycast_terrain(local_ray, &height_data, size_x, size_y, DEPTH_NEAR - DEPTH_FAR)
+                    .unwrap_or(ground - tilemap_pos);
 
-            // Ground the height: `mouse_iso_pos` becomes a full (x, y, z)
-            // position where `z` is the terrain height (metres) under the
-            // cursor, sampled with the same triangle-linear interpolation as
-            // the rendered mesh.
-            let z = sample_height_mesh(&height_data, size_x, size_y, tx, ty);
+            // `mouse_iso_pos` becomes a full (x, y, z) where (x, y) are tile
+            // coordinates and `z` the terrain height (metres) under the cursor.
+            let tx = hit.x / TILE_M;
+            let ty = -hit.y / TILE_M;
+            let z = hit.z;
 
             if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(tm_entity) {
                 tm.mouse_iso_pos = Vec3::new(tx, ty, z);
@@ -2663,21 +2655,11 @@ impl Engine {
     }
 
     /// Gather the active lights from the world, resolving parent attachments to
-    /// world-metre positions and then converting each to light space for the
-    /// shader UBO.  A parented light treats `Light.position` as a world-metre
-    /// offset from the parent entity's ground point (`iso_to_world`); an
-    /// unparented light's position is already world metres.
+    /// **world-metre** positions (the same space the lit shaders evaluate them
+    /// in).  A parented light treats `Light.position` as a world-metre offset
+    /// from the parent's ground point (`iso_to_world`); an unparented light's
+    /// position is already world metres.
     pub fn gather_lights(&self) -> Vec<Light> {
-        // World → light space for the UBO upload (`iso_world_light_matrix`).
-        let world_to_light = {
-            let scale = self
-                .entity_by_role(RoleKind::Tilemap)
-                .and_then(|e| self.world.get::<&Transform>(e).ok())
-                .map(|tf| tf.scale)
-                .unwrap_or(Vec3::new(45.0, 45.0, 1.0));
-            iso_world_light_matrix(scale)
-        };
-
         let mut lights = Vec::new();
         for (_e, light) in self.world.query::<&Light>().iter() {
             let mut l = light.clone();
@@ -2726,9 +2708,13 @@ impl Engine {
                     }
                 }
             }
-            // World metres → light space for the shader's `evaluateLight`.
-            l.position = world_to_light.transform_point3(l.position);
             lights.push(l);
+        }
+        // `Light.radius` is authored in legacy light-space px (64 px/metre, the
+        // pre-unification unit the shader used); convert it to world metres so
+        // `dist / radius` in the shader compares like-for-like with `position`.
+        for l in &mut lights {
+            l.radius /= PPM_TARGET;
         }
         // `MAX_LIGHTS` bounds the UBO block, but `gather_lights` reads every
         // `Light` entity — including `state.json`-declared and directly-spawned
@@ -2764,38 +2750,6 @@ impl Engine {
             return a.frame_offset;
         }
         Vec3::ZERO
-    }
-
-    /// Project a **light-space** position into the renderer's screen space
-    /// (the space the overlay hooks draw in, i.e. after the isometric squash
-    /// and the `y -= z` height shear, before the camera matrix).
-    ///
-    /// Light space is `T(origin) · S(scale) · Rz(-45°)` of tile space, so the
-    /// round-trip light → tile → screen collapses to a single diagonal:
-    /// `screen = (x, 0.5·y, z)` of `(light − origin)`, then `y -= z`.  Used by
-    /// the light-debug overlay to place markers without re-deriving the
-    /// tilemap transform.
-    pub fn light_to_screen(&self, light: Vec3) -> Vec3 {
-        let origin = self
-            .entity_by_role(RoleKind::Tilemap)
-            .and_then(|e| self.world.get::<&Transform>(e).ok())
-            .map(|tf| tf.position)
-            .unwrap_or(Vec3::ZERO);
-        let rel = light - origin;
-        Vec3::new(origin.x + rel.x, origin.y + rel.y * 0.5 - rel.z, origin.z + rel.z)
-    }
-
-    /// Convert a **light-space** position back to tile coordinates (the inverse
-    /// of [`Self::iso_to_world`]'s `light_matrix`), for sampling the terrain
-    /// height directly under a light.  Returns `(tile_x, tile_y)`.
-    pub fn light_to_tile(&self, light: Vec3) -> Option<Vec2> {
-        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
-        let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
-        let rel = light - tm_tf.position;
-        let a = rel.x / tm_tf.scale.x.max(1e-6);
-        let b = rel.y / tm_tf.scale.y.max(1e-6);
-        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
-        Some(Vec2::new((a - b) * inv_sqrt2, (a + b) * inv_sqrt2))
     }
 
     /// Spawn a named screen-space solid-color rectangle (a HUD element).
@@ -3622,8 +3576,6 @@ impl Engine {
             // relative) depth map is re-anchored against in the fragment shader.
             let depth_base = Self::world_depth(model.w_axis.truncate());
             let world_matrix = iso_camera_matrix();
-            let light_matrix = classic_core::math::iso_world_light_matrix(tilemap_tf.scale);
-            let normal_matrix = classic_core::math::iso_world_normal_matrix(tilemap_tf.scale);
             let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
             // Per-sheet normal/depth companions (from the resolved frame's
             // sheet) win; fall back to the per-texture `entry.normal`/`depth`
@@ -3651,8 +3603,6 @@ impl Engine {
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
                 world_matrix,
-                light_matrix,
-                normal_matrix,
             });
         }
 
@@ -3663,11 +3613,10 @@ impl Engine {
             self.entity_by_role(RoleKind::Tilemap).and_then(|e| {
                 let tm = self.world.get::<&Tilemap>(e).ok()?;
                 let tf = self.world.get::<&Transform>(e).ok()?;
-                let lm = classic_core::math::iso_world_light_matrix(tf.scale);
                 let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max);
                 let casters: Vec<Mat4> = iso_draws.iter().map(|d| d.model).collect();
                 Some(shadow::fit_directional_light_matrix(
-                    &lm,
+                    tf.position,
                     tm.size_x as f32,
                     tm.size_y as f32,
                     z_max,
@@ -3716,11 +3665,10 @@ impl Engine {
                         let Ok(tf) = self.world.get::<&Transform>(*entity) else {
                             continue;
                         };
-                        let lm = classic_core::math::iso_world_light_matrix(tf.scale);
                         let name = name_by_entity.get(entity).copied().unwrap_or("");
                         if let Some(gpu) = self.tilemap_gpu.get(name) {
                             gfx.draw_shadow_tilemap(
-                                &lm,
+                                &Mat4::from_translation(tf.position),
                                 &m.view_proj,
                                 gpu.vertex_count as i32,
                                 &gpu.mesh_buf,
@@ -3735,7 +3683,6 @@ impl Engine {
                     for draw in &iso_draws {
                         gfx.draw_shadow_sprite(
                             &draw.model,
-                            &draw.light_matrix,
                             &m.view_proj,
                             &draw.texture,
                             draw.region(),
@@ -3788,8 +3735,6 @@ impl Engine {
                     let Some(ref gpu) = self.nav_gpu else { continue };
                     if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
                         let world_matrix = iso_camera_matrix();
-                        let lm = classic_core::math::iso_world_light_matrix(tf.scale);
-                        let normal_matrix = classic_core::math::iso_world_normal_matrix(tf.scale);
                         let nav_ts = gfx
                             .textures
                             .get(&nav.tile_set)
@@ -3841,8 +3786,6 @@ impl Engine {
                                 light_color: self.light_color,
                                 depth_span: [DEPTH_NEAR, DEPTH_FAR],
                                 ppm: PPM_TARGET,
-                                light_matrix: lm,
-                                normal_matrix,
                                 shadow: shadow_settings,
                             },
                             false,
@@ -3861,12 +3804,8 @@ impl Engine {
                 let Some(gpu) = self.tilemap_gpu.get(entity_name) else {
                     continue;
                 };
-                // Build the iso matrix (rasterisation) and the light matrix
-                // (everything else) — see `light_matrix`.
+                // The rasterisation camera; lighting is done in world space.
                 let world_matrix = iso_camera_matrix();
-                let lm = classic_core::math::iso_world_light_matrix(tf.scale);
-
-                let normal_matrix = classic_core::math::iso_world_normal_matrix(tf.scale);
 
                 let tps = tm.tile_pixel_size;
                 let tile_pixel_size = [tps[0] as f32, tps[1] as f32];
@@ -3919,8 +3858,6 @@ impl Engine {
                         light_color: self.light_color,
                         depth_span: [DEPTH_NEAR, DEPTH_FAR],
                         ppm: PPM_TARGET,
-                        light_matrix: lm,
-                        normal_matrix,
                         shadow: shadow_settings,
                     },
                     self.show_grid,
@@ -3933,17 +3870,13 @@ impl Engine {
         // Phase 2: isometric normal passes — draw on top of terrain, writing
         // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
         // `RenderSettings` (shared by both sprite passes) carries the light
-        // preset; the world/light/normal matrices ride on each `IsoDraw` (per
-        // sprite tilemap), and `RenderSettings.light_matrix`/`normal_matrix`/
-        // `depth_span` are therefore unused by the sprite draws.
+        // preset; the world camera matrix rides on each `IsoDraw`.
         let sprite_settings = RenderSettings {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
             light_color: self.light_color,
             depth_span: [DEPTH_NEAR, DEPTH_FAR],
             ppm: PPM_TARGET,
-            light_matrix: Mat4::IDENTITY,
-            normal_matrix: Mat3::IDENTITY,
             shadow: shadow_settings,
         };
         for draw in &iso_draws {
@@ -3966,8 +3899,6 @@ impl Engine {
                 &draw.model,
                 &cam,
                 &draw.world_matrix,
-                &draw.light_matrix,
-                &draw.normal_matrix,
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
@@ -3991,8 +3922,6 @@ impl Engine {
                 &draw.model,
                 &cam,
                 &draw.world_matrix,
-                &draw.light_matrix,
-                &draw.normal_matrix,
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
@@ -5505,8 +5434,7 @@ mod tests {
         assert_eq!(gathered.len(), 1);
 
         let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
-        let world_to_light = iso_world_light_matrix(Vec3::new(45.0, 45.0, 1.0));
-        let expected = world_to_light.transform_point3(base + local);
+        let expected = base + local;
         assert!((gathered[0].position - expected).length() < 1e-2);
 
         // An unparented light stays at its authored (world) position.
@@ -5515,8 +5443,9 @@ mod tests {
         engine.world.spawn((Light { position: world_pos, parent: None, ..light.clone() },));
         let gathered = engine.gather_lights();
         assert_eq!(gathered.len(), 1);
-        let expected = world_to_light.transform_point3(world_pos);
-        assert!((gathered[0].position - expected).length() < 1e-2);
+        assert!((gathered[0].position - world_pos).length() < 1e-2);
+        // `radius` is authored in legacy light-space px and converted to metres.
+        assert!((gathered[0].radius - light.radius / PPM_TARGET).abs() < 1e-3);
 
         // A dangling parent must *not* silently turn the offset into an
         // absolute position — the light is dropped (and a warning logged).
@@ -5598,11 +5527,9 @@ mod tests {
 
         let gathered = engine.gather_lights();
         let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
-        // `frame_offset` is world metres; fold it into the base, then to light
-        // space (the same world→light conversion `gather_lights` applies).
-        let scale = Vec3::new(45.0, 45.0, 1.0);
-        let world_to_light = iso_world_light_matrix(scale);
-        let expected = world_to_light.transform_point3(base + frame_offset + offset);
+        // `frame_offset` is world metres; fold it into the base.  `gather_lights`
+        // returns world space now (lighting is done in world metres).
+        let expected = base + frame_offset + offset;
         assert!(
             (gathered[0].position - expected).length() < 1e-2,
             "got {} expected {}",

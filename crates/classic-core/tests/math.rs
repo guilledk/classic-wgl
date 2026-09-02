@@ -8,11 +8,6 @@ fn old_iso_to_cartesian_4() -> glam::Mat4 {
         * glam::Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
 }
 
-/// The pre-world-metre tile → light transform: `Rz(-45°)` (no isometric squash).
-fn old_iso_to_light_4() -> glam::Mat4 {
-    glam::Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
-}
-
 #[test]
 fn deg_to_rad_and_back() {
     let deg: f32 = 90.0;
@@ -112,68 +107,5 @@ fn iso_view_depth_normalizes_over_near_far() {
         assert!((dot - back.dot(world)).abs() < 1e-6);
         let depth = (math::DEPTH_NEAR - dot) / (math::DEPTH_NEAR - math::DEPTH_FAR);
         assert!((0.0..=1.0).contains(&depth), "depth {depth} out of [0,1]");
-    }
-}
-
-#[test]
-fn iso_world_light_matrix_reproduces_tile_light() {
-    // Same zero-drift guarantee for light space: `iso_world_light_matrix`
-    // applied to world metres equals the current `S(scale) · Rz(-45°)` applied
-    // to the tile vertex `(tx, ty, h·PPM_TARGET)`.
-    let scale = glam::Vec3::new(45.0, 45.0, 1.0);
-    let world_light = math::iso_world_light_matrix(scale);
-    let old_light = glam::Mat4::from_scale(scale) * old_iso_to_light_4();
-
-    for &(tx, ty, h) in
-        &[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (3.0, 2.0, 5.0), (200.0, 200.0, 10.0)]
-    {
-        let new_light = world_light.transform_point3(math::iso_world_pos(tx, ty, h));
-        let old_light_pos = old_light.transform_point3(glam::Vec3::new(
-            tx,
-            ty,
-            h * classic_core::tilemap::PPM_TARGET,
-        ));
-        for (axis, (a, b)) in ["x", "y", "z"].iter().zip([
-            (new_light.x, old_light_pos.x),
-            (new_light.y, old_light_pos.y),
-            (new_light.z, old_light_pos.z),
-        ]) {
-            assert!((a - b).abs() < 1e-3, "{axis} drift at ({tx},{ty},{h}): new={a} old={b}");
-        }
-    }
-}
-
-#[test]
-fn iso_world_normal_matrix_reproduces_tile_normal() {
-    // The world normal is `normalize(D⁻¹ · tile_normal)`; the world normal
-    // matrix must map it to the same light-space direction as the current
-    // `inverse_transpose(S(scale)·Rz(-45°))` maps the tile normal.  `D` does
-    // not commute with the rotation, so the plain
-    // `inverse_transpose(iso_world_light_matrix)` would be subtly wrong here.
-    use classic_core::tilemap::{PPM_TARGET, TILE_M};
-
-    let scale = glam::Vec3::new(45.0, 45.0, 1.0);
-    let old_nm = glam::Mat3::from_mat4(glam::Mat4::from_scale(scale) * old_iso_to_light_4())
-        .inverse()
-        .transpose();
-    let new_nm = math::iso_world_normal_matrix(scale);
-    let d_inv = glam::Vec3::new(1.0 / TILE_M, -1.0 / TILE_M, PPM_TARGET);
-
-    for &tile_normal in &[
-        [0.0, 0.0, 1.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.5, 0.5, 1.0],
-        [0.0, 0.5, 1.0],
-        [0.25, -0.5, 1.0],
-    ] {
-        let tn = glam::Vec3::from_array(tile_normal);
-        let world_normal = (tn * d_inv).normalize();
-        let old_light = (old_nm * tn).normalize();
-        let new_light = (new_nm * world_normal).normalize();
-        assert!(
-            (old_light - new_light).length() < 1e-3,
-            "tile={tile_normal:?} old={old_light:?} new={new_light:?}"
-        );
     }
 }

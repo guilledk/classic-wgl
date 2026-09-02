@@ -8,8 +8,6 @@ uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
 // World metres -> camera view space (metres): `iso_camera_matrix`.
 uniform mat4 world_matrix;
-// World metres -> light space (px, metric +Z up).
-uniform mat4 light_matrix;
 uniform float ppm;
 uniform float use_iso_depth;
 uniform vec4 iso_depth_corners;
@@ -21,8 +19,8 @@ void main(void ) {
     vTexCoord = tex_coord;
     if (use_iso_depth > 0.5) {
         // Iso sprites are authored in Blender-world metres and share the
-        // tilemap's world/light matrices, so sprites and terrain live in one
-        // screen and one light space.
+        // tilemap's world matrix, so sprites and terrain live in one screen
+        // and one lighting (world) space.
         highp vec3 world = (model_matrix * vertex_pos).xyz;
         highp vec4 view = world_matrix * vec4(world, 1.0);
         highp vec4 screenPos = vec4(view.x * ppm, -view.y * ppm, 0.0, 1.0);
@@ -33,7 +31,7 @@ void main(void ) {
         // `cornerDepth` is window-space `[0, 1]`; map to clip z.
         clipPos.z = cornerDepth * 2.0 - 1.0;
         gl_Position = clipPos;
-        vLightPos = (light_matrix * vec4(world, 1.0)).xyz;
+        vLightPos = world;
     } else {
         // 2D screen-space sprites (cursor, HUD, UI): plain screen transform.
         gl_Position = projection_matrix * camera_matrix * model_matrix * vertex_pos;

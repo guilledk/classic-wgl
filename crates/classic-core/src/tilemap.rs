@@ -327,3 +327,134 @@ pub fn build_tile_texture(size_x: i32, size_y: i32, tiles: &[u32]) -> (Vec<u8>, 
     }
     (pixels, w, h)
 }
+
+/// Cast a world-space [`Ray`] against the terrain height field and return the
+/// first hit point (nearest the ray origin), or `None` if the ray never crosses
+/// the surface within `max_dist` metres.
+///
+/// Terrain is modelled as the solid surface `z = height(x, y)` above the
+/// `z = 0` plane, sampled with [`sample_height_mesh`] (the same triangle-linear
+/// interpolation the mesh uses).  The ray is marched in fixed [`TILE_M`]-sized
+/// world-metre steps; the first step that moves to the far side of the surface
+/// brackets the crossing, which is then refined by bisection.  This is the
+/// terrain-only form of the general raycast — colliders would add stop
+/// conditions inside the same march loop.
+///
+/// `heights` has shape `(size_x + 1) × (size_y + 1)`, as in [`sample_height_mesh`].
+pub fn raycast_terrain(
+    ray: crate::math::Ray,
+    heights: &[f32],
+    size_x: i32,
+    size_y: i32,
+    max_dist: f32,
+) -> Option<glam::Vec3> {
+    // World metres → tile coords, mirroring `iso_world_pos`'s inverse
+    // (`iso_world_pos(tx, ty, h) = (tx·TILE_M, −ty·TILE_M, h)`).
+    let height_at = |world: glam::Vec3| -> f32 {
+        sample_height_mesh(heights, size_x, size_y, world.x / TILE_M, -world.y / TILE_M)
+    };
+
+    let step = TILE_M;
+    let steps = (max_dist / step).ceil().max(1.0) as usize;
+
+    let mut t0 = 0.0;
+    let mut d0 = ray.at(t0).z - height_at(ray.at(t0));
+    // The origin is already on the surface.
+    if d0.abs() < 1e-6 {
+        return Some(ray.at(t0));
+    }
+
+    for _ in 0..steps {
+        let t1 = (t0 + step).min(max_dist);
+        let p1 = ray.at(t1);
+        let d1 = p1.z - height_at(p1);
+        if d1 * d0 <= 0.0 {
+            // Crossing between t0 and t1: bisect on the sign of
+            // `p.z − height_at(p)`, keeping `lo` below and `hi` above the surface.
+            let (mut lo, mut hi) = if d0 < 0.0 { (t0, t1) } else { (t1, t0) };
+            for _ in 0..24 {
+                let mid = (lo + hi) * 0.5;
+                let d = ray.at(mid).z - height_at(ray.at(mid));
+                if d < 0.0 {
+                    lo = mid;
+                } else if d > 0.0 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                    hi = mid;
+                    break;
+                }
+            }
+            return Some(ray.at((lo + hi) * 0.5));
+        }
+        t0 = t1;
+        d0 = d1;
+        if t1 >= max_dist {
+            break;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::{iso_camera_px, iso_camera_ray, iso_world_pos, DEPTH_FAR, DEPTH_NEAR};
+
+    fn heights(size_x: i32, size_y: i32, h: fn(f32, f32) -> f32) -> Vec<f32> {
+        (0..=size_y).flat_map(|ty| (0..=size_x).map(move |tx| h(tx as f32, ty as f32))).collect()
+    }
+
+    #[test]
+    fn raycast_terrain_round_trips_through_camera() {
+        // A gentle ramp so the ray crosses the surface exactly once.
+        let (size_x, size_y) = (16, 16);
+        let hd = heights(size_x, size_y, |_tx, ty| 0.5 + 0.1 * ty);
+
+        for (tx, ty) in [(3.0, 4.0), (8.0, 12.0), (14.0, 2.0)] {
+            let surface = iso_world_pos(tx, ty, 0.5 + 0.1 * ty);
+            let px = iso_camera_px(surface);
+            let ray = iso_camera_ray(px.truncate());
+            let hit = raycast_terrain(ray, &hd, size_x, size_y, DEPTH_NEAR - DEPTH_FAR)
+                .expect("ray must hit the ramp");
+            assert!((hit - surface).length() < 1e-3, "hit {hit:?} != surface {surface:?}");
+        }
+    }
+
+    #[test]
+    fn raycast_terrain_flat_is_exact() {
+        let (size_x, size_y) = (8, 8);
+        let hd = heights(size_x, size_y, |_, _| 1.0);
+        let surface = iso_world_pos(4.0, 4.0, 1.0);
+        let px = iso_camera_px(surface);
+        let ray = iso_camera_ray(px.truncate());
+        let hit = raycast_terrain(ray, &hd, size_x, size_y, DEPTH_NEAR - DEPTH_FAR).unwrap();
+        assert!((hit - surface).length() < 1e-3, "hit {hit:?} != surface {surface:?}");
+    }
+
+    #[test]
+    fn raycast_terrain_prefers_front_surface() {
+        // A front plateau (small tx, h = 4) with a valley behind it (large tx,
+        // h = 0).  The camera ray must stop at the plateau, not the occluded
+        // valley floor — i.e. the ray is cast from the camera side, not from
+        // the ground plane.
+        let (size_x, size_y) = (16, 16);
+        let hd = heights(size_x, size_y, |tx, _ty| {
+            if tx <= 4.0 {
+                4.0
+            } else if tx >= 6.0 {
+                0.0
+            } else {
+                4.0 - 2.0 * (tx - 4.0)
+            }
+        });
+        let surface = iso_world_pos(2.0, 8.0, 4.0);
+        let px = iso_camera_px(surface);
+        let ray = iso_camera_ray(px.truncate());
+        let hit = raycast_terrain(ray, &hd, size_x, size_y, DEPTH_NEAR - DEPTH_FAR).unwrap();
+        assert!(
+            (hit - surface).length() < 1e-2,
+            "hit {hit:?} should be the front plateau, not the valley behind it"
+        );
+    }
+}

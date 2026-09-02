@@ -8,7 +8,7 @@ use classic_core::components::{
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{iso_camera_px, iso_world_pos};
-use classic_core::tilemap::bilinear_height;
+use classic_core::tilemap::{sample_height_mesh, TILE_M};
 use classic_engine::Engine;
 use classic_gfx::GlBuffer;
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -437,7 +437,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                 for pt in &iso_sprite.footprint {
                     let px = tf.position.x + pt.x;
                     let py = tf.position.y + pt.y;
-                    let h = bilinear_height(&hd, size_x, size_y, px, py);
+                    let h = sample_height_mesh(&hd, size_x, size_y, px, py);
 
                     let world = iso_world_pos(px, py, h) + tilemap_pos;
                     let v = iso_camera_px(world);
@@ -455,7 +455,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
 
                 let ax = tf.position.x;
                 let ay = tf.position.y;
-                let ah = bilinear_height(&hd, size_x, size_y, ax, ay);
+                let ah = sample_height_mesh(&hd, size_x, size_y, ax, ay);
 
                 let anchor_cart = iso_camera_px(iso_world_pos(ax, ay, ah) + tilemap_pos);
 
@@ -477,7 +477,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                         ];
                         let mut ring_verts: Vec<f32> = Vec::with_capacity(12);
                         for &(ix, iy) in &ring_iso {
-                            let h = bilinear_height(&hd, size_x, size_y, ix, iy);
+                            let h = sample_height_mesh(&hd, size_x, size_y, ix, iy);
                             let world = iso_world_pos(ix, iy, h) + tilemap_pos;
                             let v = iso_camera_px(world);
                             ring_verts.extend_from_slice(&[v.x, v.y, v.z]);
@@ -517,7 +517,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                     continue;
                 }
                 let to_world = |px: f32, py: f32| -> [f32; 3] {
-                    let h = bilinear_height(&hd, size_x, size_y, px, py);
+                    let h = sample_height_mesh(&hd, size_x, size_y, px, py);
                     let world = iso_world_pos(px, py, h) + tilemap_pos;
                     let v = iso_camera_px(world);
                     [v.x, v.y, v.z]
@@ -566,7 +566,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
             // Candidate path from the reachability probe (a drop-preview target),
             // drawn as an orange strip so the player can see the planned route.
             let to_world = |px: f32, py: f32| -> [f32; 3] {
-                let h = bilinear_height(&hd, size_x, size_y, px, py);
+                let h = sample_height_mesh(&hd, size_x, size_y, px, py);
                 let world = iso_world_pos(px, py, h) + tilemap_pos;
                 let v = iso_camera_px(world);
                 [v.x, v.y, v.z]
@@ -598,28 +598,30 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
     // visible at a glance.
     if state.borrow().debug_lights {
         let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap);
-        let (hd, size_x, size_y, hs) = if let Some(tm_e) = tm_entity {
+        let (hd, size_x, size_y, tilemap_pos) = if let Some(tm_e) = tm_entity {
             let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
-            (tm.height_data.clone(), tm.size_x, tm.size_y, tm.height_scale)
+            let tm_tf = engine.world.get::<&Transform>(tm_e).unwrap();
+            (tm.height_data.clone(), tm.size_x, tm.size_y, tm_tf.position)
         } else {
-            (Vec::new(), 0, 0, 0.0)
+            (Vec::new(), 0, 0, Vec3::ZERO)
         };
 
-        // Compute screen positions before mutably borrowing `gfx`.
+        // Compute screen positions before mutably borrowing `gfx`.  Everything
+        // here is in world metres and projected through the unified orthographic
+        // camera (`iso_camera_px`), so the marker lines up with the cursor on
+        // flat ground and tracks terrain height correctly over slopes.
         let markers: Vec<([f32; 3], [f32; 3])> = engine
             .gather_lights()
             .iter()
             .map(|light| {
-                let light_screen = engine.light_to_screen(light.position);
-                let terrain_z = engine
-                    .light_to_tile(light.position)
-                    .map(|tile| bilinear_height(&hd, size_x, size_y, tile.x, tile.y) * hs)
-                    .unwrap_or(0.0);
-                let terrain_screen = engine.light_to_screen(Vec3::new(
-                    light.position.x,
-                    light.position.y,
-                    terrain_z,
-                ));
+                let world = light.position; // world metres
+                let light_screen = iso_camera_px(world);
+                // Terrain surface directly under the light: same horizontal
+                // world x/y, mesh-sampled height for z.
+                let rel = world - tilemap_pos;
+                let tile = Vec2::new(rel.x / TILE_M, -rel.y / TILE_M);
+                let h = sample_height_mesh(&hd, size_x, size_y, tile.x, tile.y);
+                let terrain_screen = iso_camera_px(Vec3::new(world.x, world.y, h));
                 let ls = [light_screen.x, light_screen.y, light_screen.z];
                 let ts = [terrain_screen.x, terrain_screen.y, terrain_screen.z];
                 (ts, ls)
