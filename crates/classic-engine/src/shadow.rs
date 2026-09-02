@@ -480,36 +480,6 @@ mod tests {
         );
     }
 
-    /// **Space contract.**  The CPU (`Engine::iso_to_world`, which places every
-    /// `Light`) and the GPU (`light_matrix`, which places every terrain
-    /// fragment) must evaluate the *same* transform.
-    ///
-    /// They used to compose the tile scale on opposite sides — `iso · S` on the
-    /// CPU versus `S · iso` in the shader — which agree only while the tile
-    /// scale is xy-isotropic.  Both scenes happen to use `[45, 45, 1]`, so the
-    /// divergence was invisible and waiting.
-    #[test]
-    fn light_matrix_composes_scale_on_the_shader_side() {
-        let scale = Vec3::new(45.0, 30.0, 1.0); // deliberately anisotropic
-        let origin = Vec3::new(12.5, -8.0, 0.0);
-        let lm = crate::light_matrix(origin, scale);
-
-        let expected = Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
-            * Mat4::from_scale(scale)
-            * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4);
-        let p = Vec3::new(7.0, 3.0, 0.0);
-        assert!((lm.transform_point3(p) - expected.transform_point3(p)).length() < 1e-3);
-
-        // The other order is genuinely different — proving the test has teeth.
-        let swapped = Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
-            * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
-            * Mat4::from_scale(scale);
-        assert!(
-            (lm.transform_point3(p) - swapped.transform_point3(p)).length() > 1.0,
-            "S·Rz and Rz·S agree here, so this test cannot detect the swap"
-        );
-    }
-
     /// **Space contract.**  A flying sprite's altitude must land in light-space
     /// **z**, not y.  Lifting the whole quad along world +Z raises its
     /// light-space height by the same amount and leaves its depth alone.

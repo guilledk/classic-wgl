@@ -5080,29 +5080,6 @@ impl Default for Engine {
     }
 }
 
-/// The tile → **light space** transform for a tilemap: `T(origin) · S(scale) ·
-/// Rz(-45°)`.
-///
-/// This is the legacy tile-space bridge; the world-metre path uses
-/// [`classic_core::math::iso_world_light_matrix`] instead (which
-/// [`Engine::iso_to_world`] and `gather_lights` now round-trip through).  It is
-/// kept only for the shadow-space scale-order test until step D deletes it.
-///
-/// It differs from the renderer's `iso_matrix` (`S(scale) ·
-/// iso_to_cartesian_4()`) by exactly the `diag(1, 0.5, 1)` isometric squash —
-/// see [`classic_core::math::iso_to_light_4`] for why lighting must not carry
-/// it.  The tilemap origin is a cartesian pixel offset, so its `y` is
-/// un-squashed here to match.
-///
-/// Note the operand order `S · Rz`, not `Rz · S`: the two differ whenever the
-/// tile scale is not xy-isotropic, and the CPU path used to compose them the
-/// other way round from the shader.
-pub fn light_matrix(origin: Vec3, scale: Vec3) -> Mat4 {
-    Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
-        * Mat4::from_scale(scale)
-        * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_4)
-}
-
 /// Decode a little-endian `u32` grid byte blob.
 fn decode_u32(bytes: &[u8]) -> Vec<u32> {
     bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
