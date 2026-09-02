@@ -34,7 +34,7 @@ use classic_core::cl_info;
 use classic_core::instrument::Chan;
 use classic_engine::Engine;
 use classic_guest::{create_runtime, GuestLimits, GuestRuntime};
-use classic_rom::{LoadedRoms, Rom};
+use classic_rom::{BootEvent, BootSink, LoadedRoms, Rom};
 
 use crate::state::{DemoState, DemoStateRef};
 
@@ -49,12 +49,16 @@ pub fn init_guest(
     wasm: &[u8],
     limits: &GuestLimits,
     namespace: &str,
+    rom: &str,
+    sink: &dyn BootSink,
 ) {
     // The deterministic harness forces synchronous workers so frame output is
     // independent of background-thread scheduling.
     e.set_synchronous_workers(limits.synchronous_workers);
+    sink.on_event(BootEvent::GuestCompiling { rom: rom.to_string() });
     match create_runtime(wasm, limits) {
         Ok(mut rt) => {
+            sink.on_event(BootEvent::GuestInstantiated { rom: rom.to_string() });
             rt.set_namespace(namespace);
             if let Err(err) = rt.init(e) {
                 cl_error!(Chan::Guest, "guest init failed: {err}");
@@ -84,7 +88,7 @@ pub fn init_guest(
 /// topological order (deps first), so a dependent scene's guest `init` can
 /// reference dependency entities at init and per-frame `update`s run deps
 /// before dependents.
-pub fn init_guests(e: &mut Engine, state: &DemoStateRef, loaded: &LoadedRoms) {
+pub fn init_guests(e: &mut Engine, state: &DemoStateRef, loaded: &LoadedRoms, sink: &dyn BootSink) {
     let env = classic_engine::env_config::EnvConfig::get();
     for entry in &loaded.order {
         let Some(wasm) = entry.rom.resources.code().get("main") else { continue };
@@ -97,7 +101,7 @@ pub fn init_guests(e: &mut Engine, state: &DemoStateRef, loaded: &LoadedRoms) {
             synchronous_workers: env.test_active() || env.golden_active(),
             ..GuestLimits::default()
         };
-        init_guest(e, state, wasm, &limits, &ns);
+        init_guest(e, state, wasm, &limits, &ns, &entry.name, sink);
     }
 }
 
@@ -107,20 +111,28 @@ pub fn init_guests(e: &mut Engine, state: &DemoStateRef, loaded: &LoadedRoms) {
 /// dependents); each ROM's guest owns its own scene look, and the shared host
 /// layer (editor HUD, widgets, lighting default, hooks, test runner) is
 /// installed on top.
-pub fn init_engine_multi(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
+pub fn init_engine_multi(
+    gl: Rc<glow::Context>,
+    loaded: &LoadedRoms,
+    sink: &dyn BootSink,
+) -> Engine {
     let mut e = Engine::new();
-    e.load_roms(gl, loaded);
-    finish_init_engine(&mut e, loaded);
+    e.load_roms(gl, loaded, sink);
+    finish_init_engine(&mut e, loaded, sink);
     e
 }
 
 /// Web-only async bootstrap: awaits the worker-ized `.basis` transcode during
 /// `load_roms_async`, then installs the shared host layer synchronously.
 #[cfg(target_arch = "wasm32")]
-pub async fn init_engine_multi_async(gl: Rc<glow::Context>, loaded: &LoadedRoms) -> Engine {
+pub async fn init_engine_multi_async(
+    gl: Rc<glow::Context>,
+    loaded: &LoadedRoms,
+    sink: &dyn BootSink,
+) -> Engine {
     let mut e = Engine::new();
-    e.load_roms_async(gl, loaded).await;
-    finish_init_engine(&mut e, loaded);
+    e.load_roms_async(gl, loaded, sink).await;
+    finish_init_engine(&mut e, loaded, sink);
     e
 }
 
@@ -128,7 +140,7 @@ pub async fn init_engine_multi_async(gl: Rc<glow::Context>, loaded: &LoadedRoms)
 /// cursor/camera/animator prefabs, default lighting, the background guest
 /// worker, the ROM guests, terrain commit, colliders, and the editor/HUD host
 /// layer.
-fn finish_init_engine(e: &mut Engine, loaded: &LoadedRoms) {
+fn finish_init_engine(e: &mut Engine, loaded: &LoadedRoms, sink: &dyn BootSink) {
     let state: DemoStateRef = Rc::new(RefCell::new(DemoState::default()));
 
     prefabs::init_cursor(e);
@@ -156,7 +168,7 @@ fn finish_init_engine(e: &mut Engine, loaded: &LoadedRoms) {
     // ROM guest code.  Each guest owns its terrain — a generating guest
     // bulk-uploads the grids, a hand-authored guest commits its inline state —
     // and then owns its own view setup.
-    init_guests(e, &state, loaded);
+    init_guests(e, &state, loaded, sink);
 
     // Static scene (no guest): commit the ROM-authored grids so the tilemap
     // renders without a guest driving `commit_terrain`.
@@ -239,5 +251,5 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
             rom: rom.clone(),
         }],
     };
-    init_engine_multi(gl, &loaded)
+    init_engine_multi(gl, &loaded, &classic_rom::NullBootSink)
 }

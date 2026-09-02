@@ -46,6 +46,7 @@ pub enum Chan {
     Golden,
     Dump,
     Platform,
+    Boot,
     Guest,
 }
 
@@ -225,6 +226,7 @@ pub fn chan_name(chan: Chan) -> &'static str {
         Chan::Golden => "golden",
         Chan::Dump => "dump",
         Chan::Platform => "platform",
+        Chan::Boot => "boot",
         Chan::Guest => "guest",
     }
 }
@@ -250,7 +252,7 @@ pub fn channel_help() {
         Chan::Frame, Chan::Input, Chan::Ui, Chan::Layout, Chan::Collision, Chan::Click,
         Chan::Render, Chan::Gfx, Chan::GlState, Chan::Text, Chan::Iso, Chan::Nav,
         Chan::Terrain, Chan::Path, Chan::Ecs, Chan::State, Chan::Editor, Chan::Asset, Chan::Camera,
-        Chan::Anim, Chan::Test, Chan::Golden, Chan::Dump, Chan::Platform, Chan::Guest,
+        Chan::Anim, Chan::Test, Chan::Golden, Chan::Dump, Chan::Platform, Chan::Boot, Chan::Guest,
     ];
 
     eprint!("CLASSIC_LOG channels ({total} total):", total = CHAN_COUNT);
@@ -319,6 +321,7 @@ fn resolve_channels(name: &str, _negate: bool) -> Vec<Chan> {
         "golden" => vec![Chan::Golden],
         "dump" => vec![Chan::Dump],
         "platform" => vec![Chan::Platform],
+        "boot" => vec![Chan::Boot],
         "guest" => vec![Chan::Guest],
         // Alias groups for convenience
         "physics" => vec![Chan::Collision, Chan::Click],

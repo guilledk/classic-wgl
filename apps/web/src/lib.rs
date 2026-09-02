@@ -111,13 +111,28 @@ pub fn main() {
 /// published in `roms.json`.  Arbitrary URLs/paths are resolved the same way
 /// (their manifest `deps` are fetched through the registry).
 #[cfg(target_arch = "wasm32")]
-async fn resolve_web_roms(spec: &str) -> anyhow::Result<classic_rom::LoadedRoms> {
+async fn resolve_web_roms(
+    spec: &str,
+    sink: &dyn classic_rom::BootSink,
+) -> anyhow::Result<classic_rom::LoadedRoms> {
     classic_platform::resolve_roms_async(
         spec,
         &classic_platform::rom::static_lookup(ROM_URLS),
         "https://classic-roms.com/roms.json",
+        sink,
     )
     .await
+}
+
+/// Choose the boot sink for this session: a logging sink when the loader is
+/// enabled or `CLASSIC_BOOT_LOG` is set, otherwise the no-op sink.
+#[cfg(target_arch = "wasm32")]
+fn boot_sink() -> Box<dyn classic_rom::BootSink> {
+    if query_param("classic_loader").is_some() || query_param("boot_log").is_some() {
+        Box::new(classic_platform::LogBootSink)
+    } else {
+        Box::new(classic_rom::NullBootSink)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -131,9 +146,15 @@ async fn run() -> anyhow::Result<()> {
     let label = query_param("rom").unwrap_or_else(|| "demo".to_string());
     let mut overlay = BootOverlay::new(&format!("downloading scene `{label}`…"));
 
-    let loaded = match resolve_web_roms(&spec).await {
+    let boot_start = std::time::Instant::now();
+    let sink = boot_sink();
+    let loaded = match resolve_web_roms(&spec, sink.as_ref()).await {
         Ok(loaded) => loaded,
         Err(err) => {
+            sink.on_event(classic_rom::BootEvent::BootFailed {
+                phase: "resolve",
+                error: format!("{err:#}"),
+            });
             overlay.error(&format!("failed to load scene `{label}`:\n{err}"));
             return Err(err);
         }
@@ -155,7 +176,8 @@ async fn run() -> anyhow::Result<()> {
     // Bootstrap the engine asynchronously: the `.basis` transcode runs in a
     // dedicated Worker (awaited here) so it never blocks the main thread.
     let gl = platform.gl();
-    let mut engine = classic_demo::init_engine_multi_async(gl, &loaded).await;
+    let mut engine = classic_demo::init_engine_multi_async(gl, &loaded, sink.as_ref()).await;
+    sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed() });
 
     platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {
         engine.frame(input, vw, vh, delta);

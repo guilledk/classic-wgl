@@ -8,6 +8,7 @@
 use std::io::Write;
 
 use crate::archive::RomArchive;
+use crate::boot::{BootEvent, BootSink};
 use crate::manifest::RomManifest;
 use crate::resource::ResourceSet;
 
@@ -32,11 +33,23 @@ impl Rom {
     /// Read a ROM from an archive.  Expects the manifest at [`MANIFEST_ENTRY`]
     /// and the entity state at the manifest-declared `state` entry, plus every
     /// manifest-declared resource inlined.
-    pub fn load(archive: &RomArchive) -> anyhow::Result<Self> {
+    ///
+    /// Emits a [`BootEvent::RomParsed`] to `sink` on success.
+    pub fn load(archive: &RomArchive, sink: &dyn BootSink) -> anyhow::Result<Self> {
         let manifest_json = archive.read_string(MANIFEST_ENTRY)?;
         let manifest: RomManifest = serde_json::from_str(&manifest_json)?;
         let resources = ResourceSet::from_archive(archive, &manifest)?;
         let state = archive.read_string(&manifest.state)?;
+
+        sink.on_event(BootEvent::RomParsed {
+            name: if manifest.entrypoint.is_empty() {
+                "root".to_string()
+            } else {
+                manifest.entrypoint.clone()
+            },
+            resources: resources.len(),
+        });
+
         Ok(Self { manifest, manifest_json, resources, state })
     }
 
@@ -187,7 +200,7 @@ mod tests {
         let rom = test_rom();
         let bytes = rom.pack().unwrap();
         let archive = RomArchive::from_bytes(&bytes).unwrap();
-        let loaded = Rom::load(&archive).unwrap();
+        let loaded = Rom::load(&archive, &crate::NullBootSink).unwrap();
 
         assert_eq!(loaded.state, rom.state);
         assert_eq!(loaded.manifest.entrypoint, "demo");
@@ -219,7 +232,7 @@ mod tests {
         let rom = test_rom();
         let bytes = rom.pack_zip().unwrap();
         let archive = RomArchive::from_bytes(&bytes).unwrap();
-        let loaded = Rom::load(&archive).unwrap();
+        let loaded = Rom::load(&archive, &crate::NullBootSink).unwrap();
         assert_eq!(loaded.state, rom.state);
         assert_eq!(
             loaded.resources.get(ResourceKind::Texture, "humanoid"),
@@ -237,7 +250,7 @@ mod tests {
         let bytes = writer.finish().unwrap().into_inner();
 
         let archive = RomArchive::from_bytes(&bytes).unwrap();
-        assert!(Rom::load(&archive).is_err());
+        assert!(Rom::load(&archive, &crate::NullBootSink).is_err());
     }
 
     #[test]
@@ -266,7 +279,7 @@ mod tests {
 
         let bytes = rom.pack().unwrap();
         let archive = RomArchive::from_bytes(&bytes).unwrap();
-        let loaded = Rom::load(&archive).unwrap();
+        let loaded = Rom::load(&archive, &crate::NullBootSink).unwrap();
 
         assert_eq!(loaded.resources.get(ResourceKind::Depth, "lrvBody"), Some(b"depth".as_slice()));
         assert_eq!(loaded.resources.get(ResourceKind::Depth, "tree"), None);
@@ -298,7 +311,7 @@ mod tests {
 
         let bytes = rom.pack().unwrap();
         let archive = RomArchive::from_bytes(&bytes).unwrap();
-        let loaded = Rom::load(&archive).unwrap();
+        let loaded = Rom::load(&archive, &crate::NullBootSink).unwrap();
 
         assert_eq!(
             loaded.resources.get(ResourceKind::Normal, "lrvBody"),

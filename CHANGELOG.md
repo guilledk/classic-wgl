@@ -23,6 +23,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Golden layout map: emit a deterministic, GPU-free `baseline.layout.txt` (one
   line per draw item with its screen-space rect) alongside the golden trace, so
   text-only models can introspect a rendered frame.
+- Boot progress events: a `BootEvent`/`BootSink` stream (no-op, test, and log
+  sinks) threaded through ROM resolve, archive open, resource load, and guest
+  init, plus a `CLASSIC_LOADER`/`CLASSIC_BOOT_LOG` config and a `boot` log
+  channel.
 
 ### Changed
 
