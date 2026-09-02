@@ -51,15 +51,11 @@ pub struct TextureManifestEntry {
     pub name: String,
     pub src: String,
     /// Optional per-pixel depth map (a grayscale texture with the same tile
-    /// layout as this texture; 0.5 = anchor plane, 1.0 = closest, 0.0 =
-    /// farthest).  When present, the sprite writes `gl_FragDepth` and is
-    /// occluded per-pixel instead of by draw order.
+    /// layout as this texture; window `[0, 1]`, 0 = nearest, 1 = farthest).
+    /// When present, the sprite writes `gl_FragDepth` and is occluded
+    /// per-pixel instead of by draw order.
     #[serde(default)]
     pub depth: Option<String>,
-    /// Depth range (isoDepth units) that the depth map's grayscale [0, 1]
-    /// spans, emitted by the exporter.
-    #[serde(default)]
-    pub depth_range: f32,
     /// Optional per-pixel normal map (RGB = world-space normal remapped
     /// `[-1,1] → [0,1]`, same tile layout as this texture).  When present,
     /// the sprite shades with a runtime Lambertian term (`ambient_color +
@@ -103,12 +99,10 @@ pub struct SpriteSheetEntry {
     #[serde(default)]
     pub normal: Option<String>,
     /// Optional per-sheet depth-map PNG packed in the same rect layout as this
-    /// sheet (grayscale `gl_FragDepth` mask; 0.5 = anchor plane).
+    /// sheet (grayscale `gl_FragDepth` mask; window `[0, 1]`, 0 = nearest,
+    /// 1 = farthest).
     #[serde(default)]
     pub depth: Option<String>,
-    /// Depth range (isoDepth units) the sheet's depth-map grayscale spans.
-    #[serde(default)]
-    pub depth_range: f32,
 }
 
 /// A single frame inside a packed sprite atlas.
