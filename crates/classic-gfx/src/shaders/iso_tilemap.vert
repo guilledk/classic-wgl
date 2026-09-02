@@ -37,10 +37,10 @@ void main(void ) {
     vec4 worldPos = world_matrix * vec4(world, 1.0);
     worldPos.y -= ppm * vertex_pos.z;
     vec4 clipPos = projection_matrix * camera_matrix * worldPos;
-    // Canonical iso depth in window space `[0, 1]`, re-expressed for world
-    // metres: `vertex_pos.x + vertex_pos.y = TILE_M · (tx − ty)`, and
-    // `vertex_pos.z` is already metres — so `depth_scale.x` carries
-    // `TILE_M · horizontal_depth_scale`.
+    // Canonical iso depth in window space `[0, 1]`: `vertex_pos.x +
+    // vertex_pos.y = TILE_M · (tx − ty)` and `vertex_pos.z` is already metres,
+    // so `depth_scale` carries the world-metre divisors
+    // (`classic_core::math::iso_world_depth_scale`).
     highp float isoDepth = (vertex_pos.x + vertex_pos.y) / depth_scale.x + 0.5 + vertex_pos.z / depth_scale.y;
     clipPos.z = isoDepth * 2.0 - 1.0;
     gl_Position = clipPos;
