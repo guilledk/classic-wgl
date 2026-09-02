@@ -264,19 +264,18 @@ pub fn derive_vehicle_slope_nav(
     heights: &[f32],
     size_x: i32,
     size_y: i32,
-    height_scale: f32,
-    tile_scale: f32,
-    wheelbase_px: f32,
-    track_px: f32,
+    tile_m: f32,
+    wheelbase_m: f32,
+    track_m: f32,
     max_pitch: f32,
     max_roll: f32,
 ) -> Vec<i32> {
     let mut out = vec![0i32; (size_x * size_y) as usize];
-    if wheelbase_px <= 0.0 || track_px <= 0.0 {
+    if wheelbase_m <= 0.0 || track_m <= 0.0 {
         return out;
     }
-    let half_wb = (wheelbase_px / tile_scale.max(1e-6)) * 0.5;
-    let half_tr = (track_px / tile_scale.max(1e-6)) * 0.5;
+    let half_wb = (wheelbase_m / tile_m.max(1e-6)) * 0.5;
+    let half_tr = (track_m / tile_m.max(1e-6)) * 0.5;
     let max_pitch_tan = libm::tanf(max_pitch);
     let max_roll_tan = libm::tanf(max_roll);
 
@@ -297,8 +296,8 @@ pub fn derive_vehicle_slope_nav(
                     bilinear_height(heights, size_x, size_y, cx + lx * half_tr, cy + ly * half_tr);
                 let right =
                     bilinear_height(heights, size_x, size_y, cx - lx * half_tr, cy - ly * half_tr);
-                let pitch = (front - rear).abs() * height_scale / wheelbase_px;
-                let roll = (left - right).abs() * height_scale / track_px;
+                let pitch = (front - rear).abs() / wheelbase_m;
+                let roll = (left - right).abs() / track_m;
                 if pitch <= max_pitch_tan && roll <= max_roll_tan {
                     walkable = true;
                     break;
@@ -338,12 +337,11 @@ fn turn_penalty(
 /// `walkable` is the combined grid (`structural` AND slope-feasible): `1` = a
 /// normal walk.  `structural` is obstacle-free walkability, used only to check
 /// that a jump's landing zone is not inside an obstacle.  `heights` is the
-/// vertex grid `(size_x+1) × (size_y+1)`.  A *downward* step whose drop (in
-/// pixels, `drop_units · height_scale`) is within `safe_fall_px` is allowed as
-/// a jump even when `walkable` marks the target blocked (a small cliff the
-/// suspension can absorb), provided the target is lower and obstacle-free; its
-/// cost is scaled by `jump_cost` (≥ 1.0 discourages jumps).  `safe_fall_px ≤ 0`
-/// disables jumps.
+/// vertex grid `(size_x+1) × (size_y+1)`, in metres.  A *downward* step whose
+/// drop (in metres) is within `safe_fall_m` is allowed as a jump even when
+/// `walkable` marks the target blocked (a small cliff the suspension can
+/// absorb), provided the target is lower and obstacle-free; its cost is scaled
+/// by `jump_cost` (≥ 1.0 discourages jumps).  `safe_fall_m ≤ 0` disables jumps.
 ///
 /// `turn_cost` (≥ 0) adds a per-step penalty proportional to the heading change
 /// between the incoming and outgoing direction (per 45°), so A* prefers gentle
@@ -359,13 +357,12 @@ pub fn find_path_for_footprint_with_jumps(
     from: GridCell,
     to: GridCell,
     footprint: &[GridCell],
-    height_scale: f32,
-    safe_fall_px: f32,
+    safe_fall_m: f32,
     jump_cost: f32,
     turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
     let mut walk_eroded = erode_for_footprint(walkable, size_x, size_y, footprint);
-    let struct_eroded = if safe_fall_px > 0.0 {
+    let struct_eroded = if safe_fall_m > 0.0 {
         erode_for_footprint(structural, size_x, size_y, footprint)
     } else {
         Vec::new()
@@ -392,10 +389,9 @@ pub fn find_path_for_footprint_with_jumps(
         if walk_eroded[idx] == 1 {
             return Some(base + turn_penalty);
         }
-        if safe_fall_px > 0.0 && struct_eroded[idx] == 1 {
-            let drop = (cell_height(current.0, current.1) - cell_height(neighbour.0, neighbour.1))
-                * height_scale;
-            if drop > 0.0 && drop <= safe_fall_px {
+        if safe_fall_m > 0.0 && struct_eroded[idx] == 1 {
+            let drop = cell_height(current.0, current.1) - cell_height(neighbour.0, neighbour.1);
+            if drop > 0.0 && drop <= safe_fall_m {
                 return Some(base * jump_cost + turn_penalty);
             }
         }
@@ -412,27 +408,22 @@ pub struct VehicleNavSnapshot {
     pub size_y: i32,
     /// Obstacle-free walkability (`1` = open, `0` = blocked), row-major.
     pub structural: Vec<i32>,
-    /// Vertex height grid `(size_x + 1) × (size_y + 1)`, row-major.
+    /// Vertex height grid `(size_x + 1) × (size_y + 1)`, row-major, in metres.
     pub heights: Vec<f32>,
-    /// Pixels per metre — the tilemap `height_scale`, converting the metre
-    /// `heights` grid to screen pixels for slope/fall comparisons.
-    pub height_scale: f32,
-    /// World size of a tile edge (the tilemap `scale.x`), used to convert the
-    /// pixel wheelbase/track back into tile units for slope sampling.
-    pub tile_scale: f32,
+    /// World metres per tile edge, converting the metre wheelbase/track back
+    /// into tile units for slope sampling.
+    pub tile_m: f32,
 }
 
 impl VehicleNavSnapshot {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         size_x: i32,
         size_y: i32,
         structural: Vec<i32>,
         heights: Vec<f32>,
-        height_scale: f32,
-        tile_scale: f32,
+        tile_m: f32,
     ) -> Self {
-        Self { size_x, size_y, structural, heights, height_scale, tile_scale }
+        Self { size_x, size_y, structural, heights, tile_m }
     }
 }
 
@@ -450,9 +441,9 @@ pub fn find_vehicle_path_snapshot(
     footprint: &[GridCell],
     pitch_max: f32,
     roll_max: f32,
-    wheelbase_px: f32,
-    track_px: f32,
-    safe_fall_px: f32,
+    wheelbase_m: f32,
+    track_m: f32,
+    safe_fall_m: f32,
     jump_cost: f32,
     turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
@@ -460,10 +451,9 @@ pub fn find_vehicle_path_snapshot(
         &snapshot.heights,
         snapshot.size_x,
         snapshot.size_y,
-        snapshot.height_scale,
-        snapshot.tile_scale,
-        wheelbase_px,
-        track_px,
+        snapshot.tile_m,
+        wheelbase_m,
+        track_m,
         pitch_max,
         roll_max,
     );
@@ -473,7 +463,7 @@ pub fn find_vehicle_path_snapshot(
         from,
         to,
         footprint,
-        safe_fall_px,
+        safe_fall_m,
         jump_cost,
         turn_cost,
     )
@@ -489,7 +479,7 @@ pub fn find_vehicle_path_with_slope(
     from: GridCell,
     to: GridCell,
     footprint: &[GridCell],
-    safe_fall_px: f32,
+    safe_fall_m: f32,
     jump_cost: f32,
     turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
@@ -504,8 +494,7 @@ pub fn find_vehicle_path_with_slope(
         from,
         to,
         footprint,
-        snapshot.height_scale,
-        safe_fall_px,
+        safe_fall_m,
         jump_cost,
         turn_cost,
     )
@@ -632,15 +621,15 @@ impl PathfinderState {
         footprint: &[GridCell],
         pitch_max: f32,
         roll_max: f32,
-        wheelbase_px: f32,
-        track_px: f32,
-        safe_fall_px: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+        safe_fall_m: f32,
         jump_cost: f32,
         turn_cost: f32,
     ) -> Option<Vec<GridCell>> {
         let snap = self.vehicle.as_ref()?;
         let key =
-            [pitch_max.to_bits(), roll_max.to_bits(), wheelbase_px.to_bits(), track_px.to_bits()];
+            [pitch_max.to_bits(), roll_max.to_bits(), wheelbase_m.to_bits(), track_m.to_bits()];
         let slope: Vec<i32> = match self
             .vehicle_slope_cache
             .as_ref()
@@ -652,10 +641,9 @@ impl PathfinderState {
                     &snap.heights,
                     snap.size_x,
                     snap.size_y,
-                    snap.height_scale,
-                    snap.tile_scale,
-                    wheelbase_px,
-                    track_px,
+                    snap.tile_m,
+                    wheelbase_m,
+                    track_m,
                     pitch_max,
                     roll_max,
                 );
@@ -669,7 +657,7 @@ impl PathfinderState {
             from,
             to,
             footprint,
-            safe_fall_px,
+            safe_fall_m,
             jump_cost,
             turn_cost,
         )
@@ -824,11 +812,17 @@ mod tests {
         h
     }
 
+    /// World metres per tile edge (`TILE_PX / PPM_TARGET = 45 / 64`), matching
+    /// the engine's canonical tile scale.
+    fn tile_m() -> f32 {
+        45.0 / 64.0
+    }
+
     /// Slope-nav params for a vehicle with ~2-tile wheelbase, 1-tile track,
     /// 20° pitch/roll limits (matching the LRV tuning).
     fn slope_params() -> (f32, f32, f32, f32) {
         let twenty_deg = 20.0 * core::f32::consts::PI / 180.0;
-        (45.0 * 2.0, 45.0 * 1.0, twenty_deg, twenty_deg)
+        (tile_m() * 2.0, tile_m(), twenty_deg, twenty_deg)
     }
 
     #[test]
@@ -837,23 +831,23 @@ mod tests {
         let n = (size + 1) as usize;
         let heights = vec![1.0f32; n * n];
         let (wb, tr, pitch, roll) = slope_params();
-        let nav = derive_vehicle_slope_nav(&heights, size, size, 32.0, 45.0, wb, tr, pitch, roll);
+        let nav = derive_vehicle_slope_nav(&heights, size, size, tile_m(), wb, tr, pitch, roll);
         assert!(nav.iter().all(|&v| v == 1));
     }
 
     #[test]
     fn vehicle_slope_nav_allows_gentle_and_blocks_steep() {
         let size = 16;
-        // A 0.375 units/tile ramp is within 20° over a 2-tile wheelbase.
-        let gentle = ramp_heights(size, 0.375);
+        // A 0.1875 m/tile ramp is within 20° over a 2-tile wheelbase.
+        let gentle = ramp_heights(size, 0.1875);
         let (wb, tr, pitch, roll) = slope_params();
-        let nav = derive_vehicle_slope_nav(&gentle, size, size, 32.0, 45.0, wb, tr, pitch, roll);
-        assert!(nav.iter().all(|&v| v == 1), "0.375/tile should be drivable");
+        let nav = derive_vehicle_slope_nav(&gentle, size, size, tile_m(), wb, tr, pitch, roll);
+        assert!(nav.iter().all(|&v| v == 1), "0.1875 m/tile should be drivable");
 
-        // A 1.0 units/tile ramp exceeds 20° (pitch = atan(1·32/45) ≈ 35°).
-        let steep = ramp_heights(size, 1.0);
-        let nav = derive_vehicle_slope_nav(&steep, size, size, 32.0, 45.0, wb, tr, pitch, roll);
-        assert!(nav.iter().all(|&v| v == 0), "1.0/tile should exceed the pitch limit");
+        // A 0.5 m/tile ramp exceeds 20° (pitch = atan(0.5 / tile_m) ≈ 35°).
+        let steep = ramp_heights(size, 0.5);
+        let nav = derive_vehicle_slope_nav(&steep, size, size, tile_m(), wb, tr, pitch, roll);
+        assert!(nav.iter().all(|&v| v == 0), "0.5 m/tile should exceed the pitch limit");
     }
 
     #[test]
@@ -871,14 +865,14 @@ mod tests {
             }
         }
         let (wb, tr, pitch, roll) = slope_params();
-        let nav = derive_vehicle_slope_nav(&heights, w, h, 32.0, 45.0, wb, tr, pitch, roll);
+        let nav = derive_vehicle_slope_nav(&heights, w, h, tile_m(), wb, tr, pitch, roll);
         // The flat tile just past the cliff (x=2) is walkable.
         assert_eq!(nav[(2 + 4 * w) as usize], 1, "flat tile beside the cliff should be walkable");
         // The high plateau (x=0) is also flat and walkable.
         assert_eq!(nav[(4 * w) as usize], 1);
     }
 
-    /// A 5x5 scene with a 2-unit cliff between a high plateau (x<2) and a low
+    /// A 5x5 scene with a 2-metre cliff between a high plateau (x<2) and a low
     /// plateau (x>=2).  `walkable` marks the cliff-face column (x=1) blocked;
     /// `structural` is all-walkable.
     fn cliff_grids() -> (Vec<i32>, Vec<i32>, Vec<f32>) {
@@ -902,7 +896,7 @@ mod tests {
     #[test]
     fn jump_crosses_a_small_cliff() {
         let (walkable, structural, heights) = cliff_grids();
-        // 1-unit drop at height_scale 32 = 32 px; safe_fall 64 px allows it.
+        // 1-metre drop; safe_fall 1.0 m allows it.
         let path = find_path_for_footprint_with_jumps(
             &walkable,
             &structural,
@@ -912,8 +906,7 @@ mod tests {
             (0, 2),
             (4, 2),
             &[(0, 0)],
-            32.0,
-            64.0,
+            1.0,
             1.3,
             0.0,
         );
@@ -932,7 +925,6 @@ mod tests {
             (0, 2),
             (4, 2),
             &[(0, 0)],
-            32.0,
             0.0,
             1.3,
             0.0,
@@ -943,7 +935,7 @@ mod tests {
     #[test]
     fn no_jump_when_drop_too_large() {
         let (walkable, structural, heights) = cliff_grids();
-        // 1-unit drop = 32 px exceeds a 16 px safe fall.
+        // 1-metre drop exceeds a 0.25 m safe fall.
         let path = find_path_for_footprint_with_jumps(
             &walkable,
             &structural,
@@ -953,8 +945,7 @@ mod tests {
             (0, 2),
             (4, 2),
             &[(0, 0)],
-            32.0,
-            16.0,
+            0.25,
             1.3,
             0.0,
         );
@@ -974,8 +965,7 @@ mod tests {
             (4, 2),
             (0, 2),
             &[(0, 0)],
-            32.0,
-            64.0,
+            1.0,
             1.3,
             0.0,
         );
@@ -987,23 +977,22 @@ mod tests {
         let (w, h) = (4, 4);
         let structural = vec![1_i32; (w * h) as usize];
         let heights = vec![1.0f32; ((w + 1) * (h + 1)) as usize];
-        let snap = VehicleNavSnapshot::new(w, h, structural.clone(), heights.clone(), 32.0, 45.0);
+        let snap = VehicleNavSnapshot::new(w, h, structural.clone(), heights.clone(), tile_m());
         assert_eq!(snap.size_x, w);
         assert_eq!(snap.size_y, h);
         assert_eq!(snap.structural, structural);
         assert_eq!(snap.heights, heights);
-        assert_eq!(snap.height_scale, 32.0);
-        assert_eq!(snap.tile_scale, 45.0);
+        assert_eq!(snap.tile_m, tile_m());
     }
 
     #[test]
     fn vehicle_path_snapshot_matches_manual_pipeline() {
         let size = 16;
         let structural = vec![1_i32; (size * size) as usize];
-        let heights = ramp_heights(size, 0.375);
+        let heights = ramp_heights(size, 0.1875);
         let (wb, tr, pitch, roll) = slope_params();
         let snap =
-            VehicleNavSnapshot::new(size, size, structural.clone(), heights.clone(), 32.0, 45.0);
+            VehicleNavSnapshot::new(size, size, structural.clone(), heights.clone(), tile_m());
 
         let via_snapshot = find_vehicle_path_snapshot(
             &snap,
@@ -1014,12 +1003,12 @@ mod tests {
             roll,
             wb,
             tr,
-            64.0,
+            1.0,
             1.3,
             0.0,
         );
 
-        let slope = derive_vehicle_slope_nav(&heights, size, size, 32.0, 45.0, wb, tr, pitch, roll);
+        let slope = derive_vehicle_slope_nav(&heights, size, size, tile_m(), wb, tr, pitch, roll);
         let walkable: Vec<i32> =
             structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
         let manual = find_path_for_footprint_with_jumps(
@@ -1031,8 +1020,7 @@ mod tests {
             (0, 0),
             (15, 15),
             &[(0, 0)],
-            32.0,
-            64.0,
+            1.0,
             1.3,
             0.0,
         );
@@ -1044,7 +1032,7 @@ mod tests {
         let size = 16;
         let structural = vec![1_i32; (size * size) as usize];
         let heights = vec![1.0f32; ((size + 1) * (size + 1)) as usize];
-        let snap = VehicleNavSnapshot::new(size, size, structural, heights, 32.0, 45.0);
+        let snap = VehicleNavSnapshot::new(size, size, structural, heights, tile_m());
         let (wb, tr, pitch, roll) = slope_params();
         let path = find_vehicle_path_snapshot(
             &snap,
@@ -1066,8 +1054,8 @@ mod tests {
     fn vehicle_path_snapshot_blocks_steep_ramp() {
         let size = 16;
         let structural = vec![1_i32; (size * size) as usize];
-        let heights = ramp_heights(size, 1.0); // exceeds the 20° pitch limit
-        let snap = VehicleNavSnapshot::new(size, size, structural, heights, 32.0, 45.0);
+        let heights = ramp_heights(size, 0.5); // exceeds the 20° pitch limit
+        let snap = VehicleNavSnapshot::new(size, size, structural, heights, tile_m());
         let (wb, tr, pitch, roll) = slope_params();
         let path = find_vehicle_path_snapshot(
             &snap,
@@ -1082,7 +1070,7 @@ mod tests {
             1.3,
             0.0,
         );
-        assert!(path.is_none(), "a 1.0/tile ramp exceeds the pitch limit");
+        assert!(path.is_none(), "a 0.5 m/tile ramp exceeds the pitch limit");
     }
 
     #[test]
@@ -1099,18 +1087,17 @@ mod tests {
             size,
             vec![1; (size * size) as usize],
             vec![1.0; n * n],
-            32.0,
-            45.0,
+            tile_m(),
         ));
         assert!(state
             .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3, 0.0)
             .is_some());
 
-        // Steep terrain (1.0/tile): no path — the slope grid was re-derived.
+        // Steep terrain (0.5 m/tile): no path — the slope grid was re-derived.
         let mut steep = vec![0.0f32; n * n];
         for y in 0..n {
             for x in 0..n {
-                steep[y * n + x] = x as f32;
+                steep[y * n + x] = 0.5 * x as f32;
             }
         }
         state.set_vehicle(VehicleNavSnapshot::new(
@@ -1118,8 +1105,7 @@ mod tests {
             size,
             vec![1; (size * size) as usize],
             steep,
-            32.0,
-            45.0,
+            tile_m(),
         ));
         assert!(state
             .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3, 0.0)
@@ -1146,7 +1132,7 @@ mod tests {
         let size = 8;
         let structural = vec![1_i32; (size * size) as usize];
         let heights = vec![1.0f32; ((size + 1) * (size + 1)) as usize];
-        let snap = VehicleNavSnapshot::new(size, size, structural, heights, 32.0, 45.0);
+        let snap = VehicleNavSnapshot::new(size, size, structural, heights, tile_m());
         let (wb, tr, pitch, roll) = slope_params();
         let path = find_vehicle_path_snapshot(
             &snap,

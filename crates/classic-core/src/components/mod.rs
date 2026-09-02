@@ -437,11 +437,11 @@ pub struct IsoVehicle {
     /// vehicle def at spawn).  Drives the bounded-turn follow controller.
     #[serde(skip)]
     pub turn_rate: f32,
-    /// Max safe drop (pixels) the suspension absorbs; the A* may route a
+    /// Max safe drop (metres) the suspension absorbs; the A* may route a
     /// downward jump within this distance (copied from the vehicle def at
     /// spawn).  `0` disables jumps.
     #[serde(skip)]
-    pub safe_fall_px: f32,
+    pub safe_fall_m: f32,
     /// Max upward wheel compression (metres) above the body plane.  A wheel
     /// whose terrain rises more than this is clamped, and the body plane lifts
     /// instead.  Derived from the vehicle def at spawn (see `spawn_vehicle`).
@@ -556,7 +556,7 @@ impl Default for IsoVehicle {
             track_m: 0.0,
             path_footprint: vec![(0, 0)],
             turn_rate: 720.0f32.to_radians(),
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             wheel_travel_up: 10.0 / 64.0,
             wheel_travel_down: 20.0 / 64.0,
             tilt_dead_zone: 0.0,

@@ -633,7 +633,7 @@ impl Engine {
             track_m,
             path_footprint: footprint,
             turn_rate: def.turn_rate_deg_per_sec.to_radians(),
-            safe_fall_px: def.safe_fall_px,
+            safe_fall_m: def.safe_fall_m,
             wheel_travel_up,
             wheel_travel_down,
             tilt_dead_zone,
@@ -1016,7 +1016,7 @@ impl Engine {
             );
             return VehicleGotoSubmit::NoVehicle;
         };
-        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px, turn_cost) = {
+        let (footprint, pitch_max, roll_max, wheelbase_m, track_m, safe_fall_m, turn_cost) = {
             let Ok(v) = self.world.get::<&IsoVehicle>(ve) else {
                 return VehicleGotoSubmit::NoVehicle;
             };
@@ -1033,9 +1033,9 @@ impl Engine {
                 v.path_footprint.clone(),
                 v.pitch_max,
                 v.roll_max,
-                v.wheelbase_m * PPM_TARGET,
-                v.track_m * PPM_TARGET,
-                v.safe_fall_px,
+                v.wheelbase_m,
+                v.track_m,
+                v.safe_fall_m,
                 v.turn_cost,
             )
         };
@@ -1061,9 +1061,9 @@ impl Engine {
                     footprint,
                     pitch_max,
                     roll_max,
-                    wheelbase_px,
-                    track_px,
-                    safe_fall_px,
+                    wheelbase_m,
+                    track_m,
+                    safe_fall_m,
                     JUMP_COST,
                     turn_cost,
                 );
@@ -1075,9 +1075,9 @@ impl Engine {
                 &footprint,
                 pitch_max,
                 roll_max,
-                wheelbase_px,
-                track_px,
-                safe_fall_px,
+                wheelbase_m,
+                track_m,
+                safe_fall_m,
                 JUMP_COST,
                 turn_cost,
             ) {
@@ -1163,15 +1163,15 @@ impl Engine {
     /// answer without re-running A*, and a target change resubmits.
     pub fn vehicle_probe(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
         let Some(&ve) = self.names.get(name) else { return -2 };
-        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px, turn_cost) = {
+        let (footprint, pitch_max, roll_max, wheelbase_m, track_m, safe_fall_m, turn_cost) = {
             let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return -2 };
             (
                 v.path_footprint.clone(),
                 v.pitch_max,
                 v.roll_max,
-                v.wheelbase_m * PPM_TARGET,
-                v.track_m * PPM_TARGET,
-                v.safe_fall_px,
+                v.wheelbase_m,
+                v.track_m,
+                v.safe_fall_m,
                 v.turn_cost,
             )
         };
@@ -1220,9 +1220,9 @@ impl Engine {
                 &footprint,
                 pitch_max,
                 roll_max,
-                wheelbase_px,
-                track_px,
-                safe_fall_px,
+                wheelbase_m,
+                track_m,
+                safe_fall_m,
                 JUMP_COST,
                 turn_cost,
             );
@@ -1250,9 +1250,9 @@ impl Engine {
                 footprint,
                 pitch_max,
                 roll_max,
-                wheelbase_px,
-                track_px,
-                safe_fall_px,
+                wheelbase_m,
+                track_m,
+                safe_fall_m,
                 JUMP_COST,
                 turn_cost,
             );
@@ -1605,7 +1605,7 @@ mod tests {
             roll_levels: 1,
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -1783,7 +1783,7 @@ mod tests {
             roll_levels: 3,
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -1859,7 +1859,7 @@ mod tests {
             roll_levels: 1,
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -2044,7 +2044,7 @@ mod tests {
             roll_levels: 1,
             roll_max_deg: 20.0,
             path_footprint: None,
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -2258,7 +2258,7 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: None,
             turn_rate_deg_per_sec: 90.0,
-            safe_fall_px: 96.0,
+            safe_fall_m: 1.5,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -2300,7 +2300,7 @@ mod tests {
         let mut engine = Engine::new_for_test();
         let size = 48;
         let mut tm = flat_tilemap(size, size);
-        tm.height_scale = 32.0; // matches commit_terrain(32.0) in lrv-guest
+        tm.height_scale = 64.0; // matches commit_terrain(64.0) in lrv-guest
         if let Some(h) = heights {
             tm.height_data = h;
         }
@@ -2322,7 +2322,7 @@ mod tests {
 
         let (mut def, anchors) = lrv_def(90.0);
         def.path_footprint = Some(rect_footprint(3, 2)); // 7x5, matches auto-derive
-        def.safe_fall_px = 96.0;
+        def.safe_fall_m = 1.5;
         insert_lrv(&mut engine, (def, anchors));
 
         engine
@@ -2346,17 +2346,17 @@ mod tests {
         // like the lrvtest map: the flat base and ramp faces must stay reachable.
         let size = 48;
         let n = (size + 1) as usize;
-        let mut heights = vec![1.0f32; n * n];
-        // East ramp: x in 33..=41, y in 20..=29, rise 3 units over 8 tiles.
+        let mut heights = vec![0.5f32; n * n];
+        // East ramp: x in 33..=41, y in 20..=29, rise 1.5 m over 8 tiles.
         for y in 20..=29 {
             for x in 33..=41 {
-                heights[y * n + x] = heights[y * n + x].max(1.0 + 3.0 * (x - 33) as f32 / 8.0);
+                heights[y * n + x] = heights[y * n + x].max(0.5 + 1.5 * (x - 33) as f32 / 8.0);
             }
         }
-        // Curb: x in 20..=36, y in 42..=47, +1 unit.
+        // Curb: x in 20..=36, y in 42..=47, +0.5 m.
         for x in 20..=36 {
             for y in 42..=47 {
-                heights[y * n + x] = heights[y * n + x].max(2.0);
+                heights[y * n + x] = heights[y * n + x].max(1.0);
             }
         }
 
@@ -2516,9 +2516,9 @@ mod tests {
         let body = *engine.names.get("lrv").unwrap();
         let v = engine.world.get::<&IsoVehicle>(body).unwrap();
 
-        // The body plane lifts with the wheels (well above the flat 1.0-metre
+        // The body plane lifts with the wheels (well above the flat 0.5-metre
         // base) and noses up on the east ramp.
-        assert!(v.altitude > 1.5, "body did not lift on the ramp: {}", v.altitude);
+        assert!(v.altitude > 0.75, "body did not lift on the ramp: {}", v.altitude);
         assert!(v.pitch > 0.0, "body did not nose up on the east ramp: {}", v.pitch);
 
         // Every wheel stays within the travel envelope around the body plane, so
@@ -2543,67 +2543,67 @@ mod tests {
         }
     }
 
-    /// The full `lrvtest` ramp-course height field, mirroring
-    /// `gen_lrvtest_map` in classic-roms: base 1.0, a central hill, four
-    /// cardinal + four diagonal ramps, and a raised curb.
+    /// The full `lrvtest` ramp-course height field, mirroring `gen_lrvtest_map`
+    /// in classic-roms (already re-expressed to metres): base 0.5 m, a central
+    /// hill, four cardinal + four diagonal ramps, and a raised curb.
     fn lrvtest_heights() -> Vec<f32> {
         let size = 48usize;
         let n = size + 1;
-        let mut h = vec![1.0f32; n * n];
+        let mut h = vec![0.5f32; n * n];
         let idx = |x: usize, y: usize| y * n + x;
 
-        // Central hill: +2 peak at (24,24), radius 5.
+        // Central hill: +1 m peak at (24,24), radius 5.
         for y in 0..n {
             for x in 0..n {
                 let dx = x as f32 - 24.0;
                 let dy = y as f32 - 24.0;
                 let d = (dx * dx + dy * dy).sqrt();
                 if d < 5.0 {
-                    let bump = 2.0 * (1.0 - d / 5.0);
-                    h[idx(x, y)] = h[idx(x, y)].max(1.0 + bump);
+                    let bump = 1.0 * (1.0 - d / 5.0);
+                    h[idx(x, y)] = h[idx(x, y)].max(0.5 + bump);
                 }
             }
         }
         // Cardinal ramps.
         for y in 20..=29 {
             for x in 33..=41 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (x - 33) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (x - 33) as f32 / 8.0);
             }
             for x in 7..=15 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (15 - x) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (15 - x) as f32 / 8.0);
             }
         }
         for x in 20..=29 {
             for y in 33..=41 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (y - 33) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (y - 33) as f32 / 8.0);
             }
             for y in 7..=15 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (15 - y) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (15 - y) as f32 / 8.0);
             }
         }
         // Diagonal ramps.
         for x in 33..=41 {
             for y in 33..=41 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * ((x + y) as f32 - 66.0) / 16.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * ((x + y) as f32 - 66.0) / 16.0);
             }
             for y in 7..=15 {
                 h[idx(x, y)] =
-                    h[idx(x, y)].max(1.0 + 3.0 * (x as f32 + (15.0 - y as f32) - 40.0) / 16.0);
+                    h[idx(x, y)].max(0.5 + 1.5 * (x as f32 + (15.0 - y as f32) - 40.0) / 16.0);
             }
         }
         for x in 7..=15 {
             for y in 7..=15 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (30.0 - (x + y) as f32) / 16.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (30.0 - (x + y) as f32) / 16.0);
             }
             for y in 33..=41 {
                 h[idx(x, y)] =
-                    h[idx(x, y)].max(1.0 + 3.0 * (15.0 - x as f32 + y as f32 - 40.0) / 16.0);
+                    h[idx(x, y)].max(0.5 + 1.5 * (15.0 - x as f32 + y as f32 - 40.0) / 16.0);
             }
         }
         // Curb.
         for x in 20..=36 {
             for y in 42..=47 {
-                h[idx(x, y)] = h[idx(x, y)].max(2.0);
+                h[idx(x, y)] = h[idx(x, y)].max(1.0);
             }
         }
         h
@@ -2642,14 +2642,14 @@ mod tests {
             matches!(goto_sync(&mut engine, "lrv", 10, 10), VehicleGotoPoll::Accepted(_)),
             "nw diagonal ramp face should path"
         );
-        // The 1-unit curb is a ~14.5° pitch over the wheelbase — within the
+        // The 0.5 m curb is a ~14.5° pitch over the wheelbase — within the
         // 20° limit, so the vehicle can drive over it.
         assert!(
             matches!(goto_sync(&mut engine, "lrv", 28, 45), VehicleGotoPoll::Accepted(_)),
-            "1-unit curb should be traversable"
+            "0.5 m curb should be traversable"
         );
 
-        // The ramp's 3-unit cliff sides are a ~38° pitch over the wheelbase —
+        // The ramp's 1.5 m cliff sides are a ~38° pitch over the wheelbase —
         // beyond the 20° limit, so the vehicle can't stand on them.
         assert!(
             matches!(goto_sync(&mut engine, "lrv", 7, 29), VehicleGotoPoll::NoPath),

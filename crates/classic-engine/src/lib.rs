@@ -440,8 +440,7 @@ impl Engine {
                 0,
                 Vec::new(),
                 Vec::new(),
-                0.0,
-                45.0,
+                TILE_M,
             )),
             sync_vehicle_paths: HashMap::new(),
             vehicle_path_entities: HashMap::new(),
@@ -2252,9 +2251,9 @@ impl Engine {
         footprint: &[(i32, i32)],
         pitch_max: f32,
         roll_max: f32,
-        wheelbase_px: f32,
-        track_px: f32,
-        safe_fall_px: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+        safe_fall_m: f32,
         jump_cost: f32,
         turn_cost: f32,
     ) -> Option<Vec<(i32, i32)>> {
@@ -2267,20 +2266,20 @@ impl Engine {
             footprint,
             pitch_max,
             roll_max,
-            wheelbase_px,
-            track_px,
-            safe_fall_px,
+            wheelbase_m,
+            track_m,
+            safe_fall_m,
             jump_cost,
             turn_cost,
         );
         classic_core::cl_info!(
             classic_core::instrument::Chan::Path,
-            "find_vehicle_path {} -> {}: footprint={} tiles, pitch={:.3}rad fall={}px, found={}",
+            "find_vehicle_path {} -> {}: footprint={} tiles, pitch={:.3}rad fall={}m, found={}",
             format!("{from:?}"),
             format!("{to:?}"),
             footprint.len(),
             pitch_max.min(roll_max),
-            safe_fall_px,
+            safe_fall_m,
             result.is_some(),
         );
         result
@@ -2309,7 +2308,7 @@ impl Engine {
         self.nav_snapshot = snapshot;
 
         // Rebuild + push the vehicle nav snapshot (structural nav + heights +
-        // height/tile scale) so the worker can run vehicle A* off-thread too.
+        // tile metre length) so the worker can run vehicle A* off-thread too.
         if let Some(vehicle_snapshot) = self.build_vehicle_nav_snapshot(&obstacles) {
             if let Some(worker) = self.pathfinder.as_mut() {
                 worker.set_vehicle_snapshot(Arc::clone(&vehicle_snapshot));
@@ -2365,7 +2364,8 @@ impl Engine {
 
     /// Build the [`pathfinder::VehicleNavSnapshot`] the worker uses for vehicle
     /// A*, from the live `NavMesh` (structural nav) and `Tilemap` (heights +
-    /// scales).  Returns `None` when either component is missing.
+    /// the fixed `TILE_M` tile metre length).  Returns `None` when either
+    /// component is missing.
     fn build_vehicle_nav_snapshot(
         &self,
         obstacles: &[i32],
@@ -2385,8 +2385,7 @@ impl Engine {
             size_y,
             structural,
             tm.height_data.clone(),
-            tm.height_scale,
-            tm.scale.x,
+            TILE_M,
         )))
     }
 
@@ -5690,14 +5689,14 @@ mod tests {
 
         let overrides: std::collections::HashMap<String, classic_core::types::VehicleOverrides> =
             serde_json::from_value(serde_json::json!({
-                "lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0, "safe_fall_px": 96.0}
+                "lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0, "safe_fall_m": 1.5}
             }))
             .unwrap();
         e.apply_vehicle_overrides(&overrides);
 
         let merged = &e.vehicles["lunar-common::lrv"];
         assert_eq!(merged.turn_rate_deg_per_sec, 55.0);
-        assert_eq!(merged.safe_fall_px, 96.0);
+        assert_eq!(merged.safe_fall_m, 1.5);
         // Non-overridden fields keep the shared def's values.
         assert_eq!(merged.name, "lrv");
         assert_eq!(merged.parts.len(), 1);

@@ -250,11 +250,11 @@ pub struct VehicleDef {
     /// movement approximates the old instant-turn behaviour for simple defs.
     #[serde(default)]
     pub turn_rate_deg_per_sec: f32,
-    /// Max drop (in pixels) the suspension absorbs without damage.  The A* may
+    /// Max drop (in metres) the suspension absorbs without damage.  The A* may
     /// route a downward "jump" over a small cliff whose drop is within this
     /// distance; larger drops are impassable (issue #35).  `0` disables jumps.
     #[serde(default)]
-    pub safe_fall_px: f32,
+    pub safe_fall_m: f32,
     /// Number of steering angles rendered for the front tires (1 = no steering).
     /// A steering-tire sheet stacks `steer_levels` direction blocks vertically,
     /// so its `tile_set_size` is `[columns, rows · steer_levels]`.
@@ -319,7 +319,7 @@ pub struct VehicleOverrides {
     #[serde(default)]
     pub turn_rate_deg_per_sec: Option<f32>,
     #[serde(default)]
-    pub safe_fall_px: Option<f32>,
+    pub safe_fall_m: Option<f32>,
     #[serde(default)]
     pub steer_rate_deg_per_sec: Option<f32>,
     #[serde(default)]
@@ -335,8 +335,8 @@ impl VehicleOverrides {
         if let Some(v) = self.turn_rate_deg_per_sec {
             def.turn_rate_deg_per_sec = v;
         }
-        if let Some(v) = self.safe_fall_px {
-            def.safe_fall_px = v;
+        if let Some(v) = self.safe_fall_m {
+            def.safe_fall_m = v;
         }
         if let Some(v) = self.steer_rate_deg_per_sec {
             def.steer_rate_deg_per_sec = v;
@@ -571,7 +571,7 @@ mod tests {
             "roll_max_deg": 20.0,
             "cell": [331, 331],
             "turn_rate_deg_per_sec": 90.0,
-            "safe_fall_px": 96.0,
+            "safe_fall_m": 1.5,
             "anchors": "lrv_anchors",
             "parts": [
                 { "name": "body", "texture": "lrvBody" }
@@ -580,7 +580,7 @@ mod tests {
         let def: VehicleDef = serde_json::from_value(json).expect("deserialize authored def");
         assert_eq!(def.name, "lrv");
         assert_eq!(def.turn_rate_deg_per_sec, 90.0);
-        assert_eq!(def.safe_fall_px, 96.0);
+        assert_eq!(def.safe_fall_m, 1.5);
         assert_eq!(def.anchors, "lrv_anchors");
         assert!(def.path_footprint.is_none(), "absent path_footprint -> None (auto-derive)");
 
@@ -609,7 +609,7 @@ mod tests {
 
         let ov: VehicleOverrides = serde_json::from_value(serde_json::json!({
             "turn_rate_deg_per_sec": 55.0,
-            "safe_fall_px": 96.0
+            "safe_fall_m": 1.5
         }))
         .unwrap();
         let mut def = VehicleDef {
@@ -625,7 +625,7 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: None,
             turn_rate_deg_per_sec: 720.0,
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 5,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -636,7 +636,7 @@ mod tests {
         };
         ov.apply_to(&mut def);
         assert_eq!(def.turn_rate_deg_per_sec, 55.0);
-        assert_eq!(def.safe_fall_px, 96.0);
+        assert_eq!(def.safe_fall_m, 1.5);
         assert_eq!(def.steer_rate_deg_per_sec, 360.0);
     }
 

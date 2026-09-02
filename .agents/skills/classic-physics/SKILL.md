@@ -355,7 +355,7 @@ grid search (no heading state, no state lattice), but with four layered gates:
   headings; a tile is walkable if *some* heading keeps `|pitch| ≤ pitch_max` and
   `|roll| ≤ roll_max`.
 - **Jump**: `find_path_for_footprint_with_jumps` allows a *downward* step whose
-  drop (px) is within `safe_fall_px` even when the slope grid marks it blocked,
+  drop (metres) is within `safe_fall_m` even when the slope grid marks it blocked,
   scaled by `jump_cost`.
 - **Turn cost**: the `a_star` step-cost closure now takes the *previous* cell —
   `FnMut(prev: Option<GridCell>, current, neighbour)` — and `turn_penalty` adds
