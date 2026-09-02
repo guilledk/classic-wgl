@@ -24,6 +24,22 @@ Rust port.  Everything from coordinate math through tilemap mesh generation,
 depth occlusion, sprite rendering, agent animation, nav mesh overlay, and the
 render sort order is covered here.
 
+> **⚠️ Coordinate-system unification (post-2026-09).**  The renderer now lives
+> in one Blender-canonical **world-metre** space; the whole isometric projection
+> is the single orthographic camera [`iso_camera_matrix`] and depth is the camera
+> view depth [`iso_view_depth`] normalised over `DEPTH_NEAR`/`DEPTH_FAR`.  The
+> canonical math is **`crates/classic-core/src/math.rs`** (doc comments) plus the
+> shaders `iso_tilemap.vert` / `direct_tex.vert` / `sheet.frag`.  Sections below
+> that still mention the *old* tile-space model — `cartesian_to_iso_4`,
+> `iso_to_cartesian_4`, `iso_matrix`, `height_scale`, `depth_scale`,
+> `HEIGHT_DEPTH_SCALE_M`, `HORIZONTAL_DEPTH_SCALE`, `DEPTH_RANGE`, `proxy_axis`,
+> `depth_range`, or `cart_pos.y -= …` — are **stale** and describe the pre-
+> unification seven-space model.  The depth formula (§3) and the per-pixel depth
+> (§14) and normal-matrix/`iso_to_world` (§12) sections have been updated; the
+> transform (§2), mouse-to-iso (§5), mesh (§6) and sprite-model (§8) sections are
+> still being migrated — prefer `math.rs` there.  See
+> `plans/opencode/coordinate-system.md` for the full cheat-sheet.
+
 All code lives in three crates:
 
 | Crate | Role |
@@ -101,98 +117,71 @@ let cart_to_iso = cartesian_to_iso_4() * Mat4::from_scale(inv_scale);
 
 ## 3. Depth Formula
 
-Depth in the classic-wgl iso renderer is **not** the standard GL depth-buffer
-value.  Instead, `gl_Position.z` is overridden in both the tilemap vertex
-shader and the IsoSprite image-sheet vertex shader with a synthetic iso-depth
-value.  The depth is computed in **window space** `[0, 1]`, then mapped to
-clip z via `d * 2.0 - 1.0` so the fixed-function clip→window mapping round-trips.
+Depth is the single orthographic camera's **view depth** normalised to window
+`[0, 1]` — no synthetic tile-space `tx − ty`, no separate height divisor, no
+per-map horizontal scale.  The camera basis `back = right × up =
+(−√(3/8), −√(3/8), +0.5)` points **toward** the camera, so view depth
+`dot(back, world)` *decreases* with distance: the nearest map corner (SW) is the
+most positive, the farthest (NE) the most negative.
 
-The canonical formula (one definition, in `classic-core::tilemap`):
+The canonical formula (one definition, `classic-core::math`):
 
-```
-iso_depth(tx, ty, z) = (tx - ty) / horizontal_depth_scale + 0.5 + (z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
-  horizontal_depth_scale  = max(HORIZONTAL_DEPTH_SCALE, 2 · max(size_x, size_y))
-                            (tiles per 1.0 iso-depth)
-  HORIZONTAL_DEPTH_SCALE  = 400.0 (legacy fixed divisor; == horizontal_depth_scale for a 200×200 map)
-  HEIGHT_DEPTH_SCALE_M    = 344.46 (z in metres; the metre-space height divisor)
-  PPM_TARGET              = 64.0   (px/m; converts the px mesh/sprite z back to metres)
+```text
+iso_view_depth(world) = dot(back, world)                         // metres
+depth (window [0,1])  = (DEPTH_NEAR − iso_view_depth) / (DEPTH_NEAR − DEPTH_FAR)
+DEPTH_NEAR = 220.0, DEPTH_FAR = −220.0                            // fixed global bounds
 ```
 
-**`horizontal_depth_scale` must never fall below 400.**  Depth-mapped sprites
-bake their per-pixel grayscale with the legacy fixed `HORIZONTAL_DEPTH_SCALE`
-(400) horizontal divisor — `classic-assets` `render/materials.py::proxy_axis`
-uses `1/(tile_m · 400)` — so a smaller divisor (e.g. `2·48 = 96` on the
-container/lrvtest maps) makes the sprite's horizontal depth component
-`400/smaller` × too small relative to the terrain: the near (front) corners read
-as *deeper* than the terrain (ghosted) and the far corners read as *nearer*
-(solid) — inverted corner occlusion.  Keep `2·max(size)` only when it exceeds
-400 (large maps whose `tx−ty` span would clip the NE/SW corners, e.g. the lunar
-400×400 → 800).  This is the bug the `shipping-container-cargo` session fixed.
+`DEPTH_NEAR` (closest) is positive and `DEPTH_FAR` (farthest) negative —
+numerically `near > far` — so the normalised depth is
+`(DEPTH_NEAR − dot) / (DEPTH_NEAR − DEPTH_FAR)`, **not** `(dot − near) /
+(far − near)`.  `0` = nearest, `1` = farthest (standard window depth).  The
+bounds are fixed so every scene shares one range; a 400×400 map spans
+`±√(3/8)·400·TILE_M ≈ ±172` view-depth metres, and the tallest sprite (the ~47 m
+rocket) adds `0.5·47 ≈ 24` toward the near side — `220` covers both with margin.
+Mirrored by classic-assets `render/presets.py::DEPTH_NEAR`/`DEPTH_FAR`.
 
-The height term is **`+ z / D`**: the camera basis `back.z = +0.5` means taller
-terrain is *farther* (larger depth).  An earlier sign error (`- z / D`) made
-taller terrain appear *closer*, breaking ghosting at slope corners in a
-camera-position-dependent way.
-
-The height axis is re-expressed in **metres** (the exporter's unit): `height_data`
-is metres and `height_scale` is px/m (`PPM_TARGET` = 64).  The mesh/sprite `z`
-is carried in tileset pixels (`z_px = height_data · height_scale`); the depth
-formula converts it back to metres via `/ PPM_TARGET` before dividing by the
-metre divisor.  The constants are shared with the shaders via the `depth_scale`
-(`vec2(horizontal_depth_scale, HEIGHT_DEPTH_SCALE_M)`) and `ppm`
-(`PPM_TARGET`) uniforms, so there are no GLSL literals to keep in sync.
+Height is carried in **world metres** on the mesh/sprite `z` (never a pixel
+offset): the tilemap builds vertices as `(tx·TILE_M, −ty·TILE_M, h_m)`, and
+`height_data` is metres.  The depth bounds are passed to the shaders as the
+`depth_span` uniform (`vec2(DEPTH_NEAR, DEPTH_FAR)`) — no GLSL depth literals.
 
 ### Tilemap vertex shader (`iso_tilemap.vert`)
 
 ```glsl
-// Light space (+Z up): what all lighting and the shadow map use.
-vec4 lightPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
-// Screen space: the isometric shear, for rasterisation only.
-vec4 worldPos = lightPos;
-worldPos.y -= vertex_pos.z;
-
-highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
+// World metres -> camera view space (metres): `iso_camera_matrix`.
+vec4 view = world_matrix * vec4(world, 1.0);
+// Screen pixels before pan/zoom (the camera `up` axis projects to -y).
+vec4 screenPos = vec4(view.x * ppm, -view.y * ppm, 0.0, 1.0);
+// Camera view depth in window space [0, 1] (0 = nearest, 1 = farthest).
+highp float isoDepth = (depth_span.x - view.z) / (depth_span.x - depth_span.y);
 clipPos.z = isoDepth * 2.0 - 1.0;
-
-vLightPos = lightPos.xyz;   // the only position varying emitted
+vLightPos = (light_matrix * vec4(world, 1.0)).xyz;   // metric light space, +Z up
 ```
 
 Key aspects:
 
-1. **Height offset on Y:** `worldPos.y -= vertex_pos.z` — height (Z) is subtracted
-   from the screen-space Y coordinate.  This produces the correct vertical
-   displacement for elevated tiles.
-   **⚠️ This shear is for rasterisation only.**  It leaves height in *both* y
-   and z, so the resulting space has up axis `(0,-1,1)/√2`.  Never use it for
-   lighting, normals, light positions or the shadow map — those all live in the
-   unsheared **light space** (`lightPos`, +Z up), which is why `vLightPos` is
-   the only position varying the shader emits.  See `classic-gfx` §17.
-2. **Depth axis is `tx - ty`:**  The map's depth direction runs along the
-   `(1, -1)` diagonal in iso space.  Tiles with larger `tx - ty` are farther
-   from the camera.
-3. **Window space, no clamp:**  the value is `depth_scale`-derived window depth;
+1. **No shear.**  There is no `y -= vertex.z`; the screen position comes straight
+   from the camera `right`/`up` view components (`view.x`, `view.y`), and depth
+   from the `back` component (`view.z`).  Height reads as height because
+   `up.z = cos30°` projects world `z` into the screen `y`.
+2. **Depth axis is `back`.**  `view.z = dot(back, world)` is camera view depth;
+   a larger `dot` is nearer.  Normalised to window `[0, 1]` over the fixed
+   `depth_span = [DEPTH_NEAR, DEPTH_FAR]`.
+3. **Window space, no clamp:**  the value is `depth_span`-derived window depth;
    geometry beyond `[0, 1]` is clipped by the fixed function (`z_clip ∉ [-1, 1]`).
-   `+0.5` centres the range.
-4. The height divisor is `HEIGHT_DEPTH_SCALE_M = 344.46` in metres (`344.46` is
-   `iso_depth_factor / back.z`).  The mesh `vertex_pos.z` is pixels, so the
-   shader converts `z_m = z_px / ppm` (`ppm = PPM_TARGET = 64` px/m) before the
-   division — numerically `z_px / 22045.4`.
-5. `isoDepth` is computed in `highp` (not the shader's `mediump float` default)
-   to match the highp sprite/depth-map path and the 24-bit depth buffer.
+4. **Light space is separate.**  `light_matrix` (`iso_world_light_matrix`) maps
+   world metres to metric light space (+Z up, px) for `vLightPos` — independent
+   of the screen camera (see §12).
+5. `isoDepth` is computed in `highp` to match the highp sprite/depth-map path and
+   the 24-bit depth buffer.
 
 ### CPU-side equivalent (`compute_iso_depth_corners`)
 
 The IsoSprite renderer needs depth values for each of the 4 footprint corners
-(see Section 8).  The CPU-side formula mirrors the shader (via
-`compute_iso_base_depth`), in **window space**, with **no** `-0.005` bias:
-
-```rust
-let d = (pos.x + pt.x - pos.y - pt.y) / h_depth + 0.5 + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
-```
-
-The old `-0.005` sprite-only bias was removed during depth-scale unification
-(it placed sprites ~2 tiles behind their feet and broke ghosting at slope
-corners).
+(see Section 8).  The CPU side mirrors the shader via
+`Self::world_depth(world) = (DEPTH_NEAR − iso_view_depth(world)) /
+(DEPTH_NEAR − DEPTH_FAR)` — the same window-space depth, no bias term.
 
 ### `DrawKind::IsoSprite` sort order uses `tx - ty`
 
@@ -567,8 +556,8 @@ vertically (the exporter renders the body tilted about its ground origin on a
 - `Engine::update_vehicles` (`classic-engine/src/vehicle.rs`) drives the body as
   a single **chassis plane** `(altitude, pitch, roll)` fit to the four wheel
   contacts and spring-smoothed, then quantizes pitch/roll against
-  `pitch_max`/`roll_max` to pick the frame; `frame_offset.y` still carries the
-  suspension/jump delta.  Each wheel is a per-wheel suspension spring clamped to
+  `pitch_max`/`roll_max` to pick the frame; `frame_offset.z` carries the
+  suspension/jump altitude (x/y are horizontal drift — world metres).  Each wheel is a per-wheel suspension spring clamped to
   a travel envelope (`wheel_travel_up`/`wheel_travel_down`, derived from the def
   geometry at spawn) around the body plane, so wheels never ride over the body —
   the plane lifts/tilts to absorb terrain instead.  A soft dead-zone
@@ -773,14 +762,18 @@ let d = Vec3::new(
 
 ### Normal matrix
 
-The tilemap shader receives a `normalMatrix` uniform computed as:
+The tilemap shader receives a `normalMatrix` uniform computed from the world→light
+normal matrix:
 
 ```rust
-let iso3 = Mat3::from_mat4(iso_matrix);
-let normal_matrix = iso3.inverse().transpose();
+let normal_matrix = classic_core::math::iso_world_normal_matrix(tilemap_tf.scale);
 ```
 
-This corrects normals for the non-uniform 2:1 scale of the isometric transform.
+`iso_world_normal_matrix` is `inverse_transpose(S(scale)·Rz(−45°)) · D` (where
+`D = diag(TILE_M, −TILE_M, 1/PPM_TARGET)`), **not**
+`inverse_transpose(mat3(iso_world_light_matrix))` — `D` does not commute with the
+rotation, and the wrong order subtly re-axes slope lighting.  World normals are
+`normalize(D⁻¹ · tile_normal)`.
 
 ### Dynamic point lights (UBO)
 
@@ -790,18 +783,14 @@ skill (§16 "Dynamic lights") for the buffer layout and the `classic-ecs` skill
 for the `Light` component.  Only two points matter for iso placement:
 
 - **`Engine::iso_to_world(x, y, elevation)`** is the single conversion from an
-  iso tile to a **light-space** position: `p_xy =
-  iso_to_cartesian_4() * S(tilemap.scale) * (x,y,0) + tilemap.position`, then
-  `p.z = (h+elevation)·height_scale`.  `elevation` is metres above the terrain
-  (same units as `height_data`); `height_scale` is px/metre.
+  iso tile to a **light-space** position:
+  `iso_world_pos(x, y, height_at(x, y) + elevation) + tilemap.position`.
+  `elevation` is metres above the terrain (same units as `height_data`).
   **Height goes in `z` alone.**  Light space is +Z up — the same space
   `light_dir` and `vNormal` live in.  This function used to also apply the
   renderer's isometric shear (`p.y -= z_px`), which put lights in screen space
   while the normals they are dotted against stayed in light space; `dot(n, L)`
   then mixed spaces.  See `classic-gfx` §17.
-- The conversion is safe only when `tilemap.scale.x == tilemap.scale.y`
-  (the two scenes use `[45,45,1]`); `iso_to_cartesian_4() * S(scale)` and
-  `S(scale) * iso_to_cartesian_4()` differ for non-uniform x/y scale.
 
 Point lights are **unoccluded** (no point-light shadows).  A bare point light on
 terrain reads as a symmetric "sphere"; that's expected until point-light shadows
@@ -829,25 +818,23 @@ The ghost pass uses a hardcoded `ghostAlpha = 0.4`.  Adjust
 
 ### Per-pixel depth maps (per-sheet)
 
-A texture may declare a grayscale depth map (`depth` + `depth_range` in the
-manifest, keyed per **sheet**).  When
-present, the sprite writes `gl_FragDepth` from the map in `sheet.frag`, so
-overlapping sprites occlude each other per-pixel rather than by draw order, and
-the ghost pass becomes `GREATER` against the depth buffer.  Sprites sharing a
-non-zero `ghost_group` (a vehicle's body + wheels) never ghost through each
-other (stencil `NOTEQUAL`).  Depth maps are emitted by the Blender exporter
-(`classic-assets` `render/materials.py`), encoded `gray = 0.5 - dot/range`
-(gray `0.5` == the ground anchor == `depth_base`), and packed by the ROM
-`xtask`.  All depth maps share one global `DEPTH_RANGE` (classic-assets
-`presets.DEPTH_RANGE`) so several assets can pack into a single depth sheet.
+A texture may declare a grayscale depth map (`depth` in the manifest, keyed per
+**sheet**).  When present, the sprite writes `gl_FragDepth` from the map in
+`sheet.frag`, so overlapping sprites occlude each other per-pixel rather than by
+draw order, and the ghost pass becomes `GREATER` against the depth buffer.
+Sprites sharing a non-zero `ghost_group` (a vehicle's body + wheels) never ghost
+through each other (stencil `NOTEQUAL`).  Depth maps are emitted by the Blender
+exporter (`classic-assets` `render/materials.py`), baked as camera view depth
+`gray = (DEPTH_NEAR − dot(back, world)) / (DEPTH_NEAR − DEPTH_FAR)`.
 
-**The depth map's horizontal component is baked with the fixed
-`HORIZONTAL_DEPTH_SCALE` = 400** (`proxy_axis` returns `1/(tile_m · 400)` for
-x/y), so the engine's `horizontal_depth_scale(map)` must be ≥ 400 (see §3) or
-the sprite's near/far corner occlusion inverts.  `gray = 0.5 − dot/0.05`, where
-`dot = axis · (position − anchor)` equals the iso-depth offset of the pixel
-relative to the anchor; the shader decodes
-`gl_FragDepth = depth_base + (0.5 − gray) · depth_range`.
+The sheet bakes `gray` **relative to the Blender origin** (`gray ≈ 0.5` at the
+asset's ground anchor), so `sheet.frag` re-anchors per sprite:
+`gl_FragDepth = depth_base + (gray − 0.5)`, where `depth_base` is the sprite's
+own window-space anchor depth (`world_depth(model.w_axis.truncate())`, the
+*render* height) passed as a `sheet.frag` uniform.  **TODO** (noted in
+`sheet.frag` + `render/materials.py`): bake the sheet *relative to the ground
+anchor* so `gray = 0.5` is exactly the anchor and the `− 0.5` stops carrying an
+implicit Blender-origin assumption.
 
 ### Per-pixel normal maps (per-sheet)
 

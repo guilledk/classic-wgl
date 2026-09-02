@@ -488,7 +488,7 @@ the root cause of every shadow bug found so far.  Regression signatures:
 | Speckled / diagonally-striped ground | acne; receiver normal-offset bias regressed |
 | Sprites stippled in the debug view | billboard self-shadowing; sprite slope-scaled offset regressed |
 | Shadows detached from caster bases | peter-panning; bias too large |
-| Shadows vanish as sun elevation drops | positions are being projected in screen space again |
+| Shadows vanish as sun elevation drops | positions are being projected in screen space again (light space must use `iso_world_light_matrix`) |
 | Sprite shadows collapse to a puddle at their feet | billboard unprojection broke |
 
 ---
