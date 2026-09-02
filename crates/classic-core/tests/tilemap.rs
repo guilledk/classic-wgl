@@ -6,7 +6,7 @@ fn mesh_capacity_bound_is_tight_and_sufficient() {
     for (sx, sy) in [(1, 1), (8, 8), (16, 4), (64, 96)] {
         let tiles = vec![1u32; (sx * sy) as usize];
         let heights = vec![1.0f32; ((sx + 1) * (sy + 1)) as usize];
-        let (data, vcount) = classic_core::tilemap::build_mesh(sx, sy, &tiles, &heights, 32.0);
+        let (data, vcount) = classic_core::tilemap::build_mesh(sx, sy, &tiles, &heights);
 
         // Every tile is non-empty here, so this is the true worst case.
         let bound = (sx as usize * sy as usize * 6) + 2 * (sx as usize + sy as usize) * 6;
@@ -27,7 +27,7 @@ fn flat_terrain_normals_are_all_up() {
     let sy = 8;
     let tiles = vec![1u32; (sx * sy) as usize];
     let heights = vec![1.0f32; ((sx + 1) * (sy + 1)) as usize];
-    let (data, vcount) = classic_core::tilemap::build_mesh(sx, sy, &tiles, &heights, 32.0);
+    let (data, vcount) = classic_core::tilemap::build_mesh(sx, sy, &tiles, &heights);
     assert_eq!(data.len(), vcount * 9);
     for v in 0..vcount {
         let n = &data[v * 9 + 6..v * 9 + 9];

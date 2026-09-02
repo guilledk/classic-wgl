@@ -20,13 +20,7 @@ pub struct TileVertex {
 ///
 /// Returns the interleaved vertex data as a flat `[f32]` and the vertex count.
 /// Each vertex is 9 floats.  Drawn as non-indexed `TRIANGLES`.
-pub fn build_mesh(
-    size_x: i32,
-    size_y: i32,
-    tiles: &[u32],
-    heights: &[f32],
-    height_scale: f32,
-) -> (Vec<f32>, usize) {
+pub fn build_mesh(size_x: i32, size_y: i32, tiles: &[u32], heights: &[f32]) -> (Vec<f32>, usize) {
     assert_eq!(heights.len(), ((size_x + 1) * (size_y + 1)) as usize); // +1 for edge samples
     assert!(tiles.len() >= (size_x * size_y) as usize);
 
@@ -66,7 +60,11 @@ pub fn build_mesh(
     // On a level map every face normal is already +Z, so the averaged result
     // is bit-identical to the per-face value and existing flat scenes are
     // unaffected.
-    let vnormals = build_vertex_normals(size_x, size_y, height_scale, &at);
+    // World-space tile lattice: `(tx·TILE_M, −ty·TILE_M, h)`.
+    let wx = |t: i32| t as f32 * TILE_M;
+    let wy = |t: i32| -t as f32 * TILE_M;
+
+    let vnormals = build_vertex_normals(size_x, size_y, &at);
     let vn = |tx: i32, ty: i32| -> [f32; 3] {
         vnormals
             [ty.clamp(0, size_y) as usize * (size_x as usize + 1) + tx.clamp(0, size_x) as usize]
@@ -85,10 +83,11 @@ pub fn build_mesh(
                 continue;
             }
 
-            let z_nw = h_nw * height_scale;
-            let z_ne = h_ne * height_scale;
-            let z_sw = h_sw * height_scale;
-            let z_se = h_se * height_scale;
+            // Height is already world metres (no `* height_scale`).
+            let z_nw = h_nw;
+            let z_ne = h_ne;
+            let z_sw = h_sw;
+            let z_se = h_se;
 
             let mx0 = mx[tx as usize];
             let mx1 = mx[tx as usize + 1];
@@ -104,38 +103,38 @@ pub fn build_mesh(
             // Face tileId = -steepness (always ≤ 0.5 for fragment shader to route to tileset).
             let z_max = z_nw.max(z_ne).max(z_sw).max(z_se);
             let z_min = z_nw.min(z_ne).min(z_sw).min(z_se);
-            let steepness = ((z_max - z_min) / height_scale.max(0.001)).min(1.0);
+            let steepness = ((z_max - z_min) / TILE_M).min(1.0);
             let face_tid = -steepness;
 
-            push_vert(&mut data, tx as f32, ty as f32, z_nw, mx0, my0, face_tid, n_nw);
-            push_vert(&mut data, tx as f32 + 1.0, ty as f32, z_ne, mx1, my0, face_tid, n_ne);
-            push_vert(&mut data, tx as f32, ty as f32 + 1.0, z_sw, mx0, my1, face_tid, n_sw);
-            push_vert(&mut data, tx as f32 + 1.0, ty as f32, z_ne, mx1, my0, face_tid, n_ne);
-            push_vert(&mut data, tx as f32 + 1.0, ty as f32 + 1.0, z_se, mx1, my1, face_tid, n_se);
-            push_vert(&mut data, tx as f32, ty as f32 + 1.0, z_sw, mx0, my1, face_tid, n_sw);
+            push_vert(&mut data, wx(tx), wy(ty), z_nw, mx0, my0, face_tid, n_nw);
+            push_vert(&mut data, wx(tx + 1), wy(ty), z_ne, mx1, my0, face_tid, n_ne);
+            push_vert(&mut data, wx(tx), wy(ty + 1), z_sw, mx0, my1, face_tid, n_sw);
+            push_vert(&mut data, wx(tx + 1), wy(ty), z_ne, mx1, my0, face_tid, n_ne);
+            push_vert(&mut data, wx(tx + 1), wy(ty + 1), z_se, mx1, my1, face_tid, n_se);
+            push_vert(&mut data, wx(tx), wy(ty + 1), z_sw, mx0, my1, face_tid, n_sw);
 
             // Wall faces — only at map borders (outer cliff sides).
             let wall_tid = tid.max(1) as f32;
-            let h_this = (z_nw + z_ne + z_sw + z_se) / (4.0 * height_scale.max(0.001));
+            let h_this = (z_nw + z_ne + z_sw + z_se) / 4.0;
 
-            // East wall (right border)
+            // East wall (right border): outward +tx → +X.
             if tx + 1 >= size_x && h_this > 0.0 {
                 let n = [1.0, 0.0, 0.0];
                 push_wall(&mut data, tx as f32 + 1.0, ty as f32, z_ne, z_se, mx1, my0, wall_tid, n);
             }
-            // South wall (bottom border)
+            // South wall (bottom border): outward +ty → −Y.
             if ty + 1 >= size_y && h_this > 0.0 {
-                let n = [0.0, 1.0, 0.0];
+                let n = [0.0, -1.0, 0.0];
                 push_wall(&mut data, tx as f32, ty as f32 + 1.0, z_sw, z_se, mx0, my1, wall_tid, n);
             }
-            // West wall (left border)
+            // West wall (left border): outward −tx → −X.
             if tx == 0 && h_this > 0.0 {
                 let n = [-1.0, 0.0, 0.0];
                 push_wall(&mut data, tx as f32, ty as f32, z_nw, z_sw, mx0, my0, wall_tid, n);
             }
-            // North wall (top border)
+            // North wall (top border): outward −ty → +Y.
             if ty == 0 && h_this > 0.0 {
-                let n = [0.0, -1.0, 0.0];
+                let n = [0.0, 1.0, 0.0];
                 push_wall(&mut data, tx as f32, ty as f32, z_nw, z_ne, mx0, my0, wall_tid, n);
             }
         }
@@ -148,30 +147,32 @@ pub fn build_mesh(
 /// Accumulate the two triangle normals of every tile onto its four corner
 /// vertices, then normalise.  Produces the smooth shading normals used by the
 /// top faces.
-fn build_vertex_normals(
-    size_x: i32,
-    size_y: i32,
-    height_scale: f32,
-    at: &impl Fn(i32, i32) -> f32,
-) -> Vec<[f32; 3]> {
+fn build_vertex_normals(size_x: i32, size_y: i32, at: &impl Fn(i32, i32) -> f32) -> Vec<[f32; 3]> {
     let stride = size_x as usize + 1;
     let mut acc = vec![[0f32; 3]; stride * (size_y as usize + 1)];
 
+    // Metric world position: `(tx·TILE_M, −ty·TILE_M, h)`.
+    let pos =
+        |tx: i32, ty: i32| glam::Vec3::new(tx as f32 * TILE_M, -ty as f32 * TILE_M, at(tx, ty));
+
     for ty in 0..size_y {
         for tx in 0..size_x {
-            let z_nw = at(tx, ty) * height_scale;
-            let z_ne = at(tx + 1, ty) * height_scale;
-            let z_sw = at(tx, ty + 1) * height_scale;
-            let z_se = at(tx + 1, ty + 1) * height_scale;
+            let nw = pos(tx, ty);
+            let ne = pos(tx + 1, ty);
+            let sw = pos(tx, ty + 1);
+            let se = pos(tx + 1, ty + 1);
 
-            let n1 = tri_normal((1.0, 0.0, z_ne - z_nw), (0.0, 1.0, z_sw - z_nw));
-            let n2 = tri_normal((0.0, 1.0, z_se - z_ne), (-1.0, 1.0, z_sw - z_ne));
+            // Two triangles (NW→NE→SW, NE→SE→SW).  The `+ty → −Y` flip makes
+            // the up normal `(sw−nw) × (ne−nw)` (and the analogous cross for the
+            // second triangle) — both +Z on flat terrain.
+            let n1 = (sw - nw).cross(ne - nw).normalize();
+            let n2 = (sw - ne).cross(se - ne).normalize();
 
-            let mut add = |vx: i32, vy: i32, n: [f32; 3]| {
+            let mut add = |vx: i32, vy: i32, n: glam::Vec3| {
                 let i = vy as usize * stride + vx as usize;
-                acc[i][0] += n[0];
-                acc[i][1] += n[1];
-                acc[i][2] += n[2];
+                acc[i][0] += n.x;
+                acc[i][1] += n.y;
+                acc[i][2] += n.z;
             };
             // Triangle 1 touches NW, NE, SW; triangle 2 touches NE, SE, SW.
             add(tx, ty, n1);
@@ -213,8 +214,8 @@ fn push_vert(
 #[allow(clippy::too_many_arguments)]
 fn push_wall(
     data: &mut Vec<f32>,
-    x: f32,
-    y: f32,
+    tx: f32,
+    ty: f32,
     z_lo: f32,
     z_hi: f32,
     mxv: f32,
@@ -223,24 +224,20 @@ fn push_wall(
     normal: [f32; 3],
 ) {
     let n = normal;
-    // Two triangles: lo, mid, hi, lo, hi, mid (twisted quad = 6 verts)
-    let mid_x = x + 0.5;
-    let mid_y = y + 0.5;
+    // Two triangles: lo, mid, hi, lo, hi, mid (twisted quad = 6 verts).  The
+    // corner is converted from tile space to world metres.
+    let wx = tx * TILE_M;
+    let wy = -ty * TILE_M;
+    let mid_x = (tx + 0.5) * TILE_M;
+    let mid_y = -(ty + 0.5) * TILE_M;
     let mid_z = (z_lo + z_hi) / 2.0;
 
-    push_vert(data, x, y, z_lo, mxv, myv, tid, n);
+    push_vert(data, wx, wy, z_lo, mxv, myv, tid, n);
     push_vert(data, mid_x, mid_y, mid_z, mxv, myv, tid, n);
-    push_vert(data, x, y, z_hi, mxv, myv, tid, n);
-    push_vert(data, x, y, z_lo, mxv, myv, tid, n);
-    push_vert(data, x, y, z_hi, mxv, myv, tid, n);
+    push_vert(data, wx, wy, z_hi, mxv, myv, tid, n);
+    push_vert(data, wx, wy, z_lo, mxv, myv, tid, n);
+    push_vert(data, wx, wy, z_hi, mxv, myv, tid, n);
     push_vert(data, mid_x, mid_y, mid_z, mxv, myv, tid, n);
-}
-
-fn tri_normal(d1: (f32, f32, f32), d2: (f32, f32, f32)) -> [f32; 3] {
-    let a = glam::Vec3::new(d1.0, d1.1, d1.2);
-    let b = glam::Vec3::new(d2.0, d2.1, d2.2);
-    let n = a.cross(b).normalize();
-    [n.x, n.y, n.z]
 }
 
 /// Bilinear interpolation of height data at an iso-space position (px, py).
