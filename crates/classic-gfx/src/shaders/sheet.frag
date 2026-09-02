@@ -21,19 +21,18 @@ uniform float use_depth_map;
 uniform highp float depth_base;
 uniform highp float depth_range;
 // Whether this draw participates in scene lighting at all.  The 2D/baked
-// `draw_sprite` path (cursor, HUD, UI) sets 0: it has no `sprite_anchor`, so
-// its `vLightPos` is meaningless.  This used to be implied by
+// `draw_sprite` path (cursor, HUD, UI) sets 0: it never writes a light-space
+// position, so its `vLightPos` is meaningless.  This used to be implied by
 // `use_normal_map == 0`, which also silently unlit every *world* sprite that
 // happens to ship without a normal map.
 uniform float use_lighting;
 uniform float use_normal_map;
-// Blender world space -> light space, `Rz(-45deg) * diag(1,-1,1)`.  Sprite
-// normal maps are baked in Blender world space (`render/materials.py` emits
-// `Geometry.Normal` with no view transform), which is metric and axis-aligned
-// to the tile grid — NOT to light space.  Consuming them raw, as this shader
-// did, is exact only for up-facing normals and is ~153 degrees wrong for
-// normals along the tile axes: tall sprites came out lit on the wrong side.
-uniform mat3 sprite_normal_matrix;
+// World normal -> light space (`iso_world_normal_matrix`).  Sprite normal maps
+// are baked in Blender world space (`render/materials.py` emits
+// `Geometry.Normal` with no view transform) — the same metric world space the
+// terrain normals now live in — so they share the terrain's normal matrix
+// rather than a sprite-specific rotation.
+uniform mat3 normal_matrix;
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
@@ -236,7 +235,7 @@ void main(void ) {
     // Normal-offset bias needs a direction even where the sprite is emissive or
     // has no normal map; away from the terrain (+Z) is the safe default.
     vec3 n = dot(rawNormal, rawNormal) > 0.001
-        ? normalize(sprite_normal_matrix * rawNormal)
+        ? normalize(normal_matrix * rawNormal)
         : vec3(0.0, 0.0, 1.0);
 
     // Bring-up diagnostic (CLASSIC_SHADOW_DEBUG): sun visibility only.  The

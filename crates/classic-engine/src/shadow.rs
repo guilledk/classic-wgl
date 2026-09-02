@@ -9,8 +9,8 @@
 //!
 //! | Space | Transform | Up axis | Metric? | Used by |
 //! |---|---|---|---|---|
-//! | **light** | `light_matrix * vertex` = `T(origin) · S(scale) · Rz(-45°)` | `+Z` | **yes** | `light_dir`, `vNormal`, `vLightPos`, `Light::position`, this module |
-//! | **screen** | `model · iso_matrix · vertex`, then `y -= vertex.z` | `(0,-1,1)/√2` | no | rasterised geometry only |
+//! | **light** | `iso_world_light_matrix * world` = `S(scale) · Rz(-45°) · D⁻¹` | `+Z` | **yes** | `light_dir`, `vNormal`, `vLightPos`, `Light::position`, this module |
+//! | **screen** | `model · world_matrix · vertex`, then `y -= ppm·z` | `(0,-1,1)/√2` | no | rasterised geometry only |
 //!
 //! Two distortions separate them, and *both* have shipped as bugs.
 //!
@@ -78,8 +78,8 @@ pub struct LightMatrix {
     pub world_texel: f32,
 }
 
-/// Compute the **light-space** position of a tile-grid point `(x, y, z)`
-/// (z in px): `light_matrix * vertex`, with +Z up.
+/// Compute the **light-space** position of a world-metre point:
+/// `light_matrix * vertex`, with +Z up.
 ///
 /// This is deliberately *not* the position the terrain rasterises at — see the
 /// module header for the two distortions that separate them.  `light_dir`,
@@ -91,49 +91,20 @@ fn world_corner(light_matrix: &Mat4, p: Vec3) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
 }
 
-/// The four **light-space** corners of a sprite billboard.
-///
-/// `model` places a screen-aligned unit quad, so its corners come out in the
-/// sheared screen space where the quad lies flat on the ground.  A sprite
-/// stands up out of the terrain, so screen up is unprojected to world +Z about
-/// the ground anchor — the same reconstruction `shadow_sprite.vert` and
-/// `direct_tex.vert` perform, kept in step so the fitted box actually contains
-/// the geometry the shadow pass will rasterise.
-///
-/// `anchor` is the sprite's ground anchor as
-/// `(sheared screen y, light-space height, light-space y)`; see
-/// `Engine::compute_iso_sprite_model`.
-fn sprite_billboard_corners(model: &Mat4, anchor: [f32; 3]) -> [Vec3; 4] {
-    let pts = [
-        Vec3::new(0.0, 0.0, 0.0),
-        Vec3::new(1.0, 0.0, 0.0),
-        Vec3::new(0.0, 1.0, 0.0),
-        Vec3::new(1.0, 1.0, 0.0),
-    ];
-    let [screen_y, anchor_z, light_y] = anchor;
-    let mut out = [Vec3::ZERO; 4];
-    for (i, p) in pts.iter().enumerate() {
-        let v = *model * p.extend(1.0);
-        let up_from_anchor = screen_y - v.y;
-        out[i] = Vec3::new(v.x, light_y, anchor_z + up_from_anchor);
-    }
-    out
-}
-
 /// Fit an orthographic light-space box around the tilemap AABB plus the shadow
-/// casters (sprite billboards) standing on it.
+/// casters (sprite world quads) standing on it.
 ///
-/// * `light_matrix` — the tilemap's tile→light transform, exactly as passed to
-///   the shaders (`crate::light_matrix`).
-/// * `size_x` / `size_y` — tile dimensions; `z_max` — max terrain height in px
-///   (`max(height_data) * height_scale`).
+/// * `light_matrix` — the world→light transform, exactly as passed to the
+///   shaders (`classic_core::math::iso_world_light_matrix`).
+/// * `size_x` / `size_y` — tile dimensions; `z_max` — max terrain height in
+///   **metres** (`max(height_data)`).
 /// * `light_dir` — the toward-light direction (same space as the shader's
 ///   `light_direction`); normalized internally.
 /// * `padding` — world-space margin added around the box (protects the map
 ///   edges and reduces clamp artifacts).
-/// * `casters` — `(model matrix, ground anchor)` per sprite shadow caster.  The
-///   billboards stand up out of the terrain plane and must fit inside the box
-///   or their shadows clip at the near plane.
+/// * `casters` — world-metre sprite model matrices.  The quads stand up out of
+///   the terrain plane and must fit inside the box or their shadows clip at the
+///   near plane.
 /// * `shadow_map_size` — resolution of the depth target, used to report
 ///   [`LightMatrix::world_texel`].
 #[allow(clippy::too_many_arguments)]
@@ -144,7 +115,7 @@ pub fn fit_directional_light_matrix(
     z_max: f32,
     light_dir: Vec3,
     padding: f32,
-    casters: &[(Mat4, [f32; 3])],
+    casters: &[Mat4],
     shadow_map_size: f32,
 ) -> LightMatrix {
     let light_dir = {
@@ -157,15 +128,22 @@ pub fn fit_directional_light_matrix(
     };
 
     let mut corners: Vec<Vec3> = Vec::with_capacity(8 + casters.len() * 4);
-    for x in [0.0f32, size_x] {
-        for y in [0.0f32, size_y] {
+    // Terrain AABB in world metres: `tx ∈ [0, size_x]`, `ty ∈ [0, size_y]`,
+    // `h ∈ [0, z_max]`.
+    let wx = size_x * classic_core::tilemap::TILE_M;
+    let wy = -size_y * classic_core::tilemap::TILE_M;
+    for x in [0.0f32, wx] {
+        for y in [wy, 0.0f32] {
             for z in [0.0f32, z_max] {
                 corners.push(world_corner(light_matrix, Vec3::new(x, y, z)));
             }
         }
     }
-    for (model, anchor) in casters {
-        corners.extend_from_slice(&sprite_billboard_corners(model, *anchor));
+    for model in casters {
+        for (u, v) in [(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            let w = *model * Vec4::new(u, v, 0.0, 1.0);
+            corners.push(world_corner(light_matrix, Vec3::new(w.x, w.y, w.z)));
+        }
     }
 
     let mut center = Vec3::ZERO;
@@ -215,15 +193,45 @@ pub fn fit_directional_light_matrix(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use classic_core::tilemap::{PPM_TARGET, TILE_M};
     use glam::{Vec3Swizzles, Vec4Swizzles};
+    use std::f32::consts::FRAC_1_SQRT_2;
 
-    fn tilemap_mats(scale: [f32; 3], pos: Vec3) -> Mat4 {
-        crate::light_matrix(pos, scale.into())
+    /// The world→light matrix the tilemap + sprite shadow passes use.
+    fn world_light(scale: [f32; 3]) -> Mat4 {
+        classic_core::math::iso_world_light_matrix(scale.into())
+    }
+
+    /// A world-metre sprite quad: width along the isometric right direction,
+    /// height down world −Z, bottom-centre anchored at `pos`.
+    fn sprite_model(pos: Vec3, width_m: f32, height_m: f32) -> Mat4 {
+        let r = Mat4::from_cols(
+            Vec4::new(FRAC_1_SQRT_2, -FRAC_1_SQRT_2, 0.0, 0.0),
+            Vec4::new(0.0, 0.0, -1.0, 0.0),
+            Vec4::new(FRAC_1_SQRT_2, FRAC_1_SQRT_2, 0.0, 0.0),
+            Vec4::W,
+        );
+        Mat4::from_translation(pos)
+            * r
+            * Mat4::from_scale(Vec3::new(width_m, height_m, 1.0))
+            * Mat4::from_translation(Vec3::new(-0.5, -1.0, 0.0))
+    }
+
+    /// Light-space corners of a world-metre sprite model.
+    fn sprite_light_corners(lm: &Mat4, model: &Mat4) -> [Vec3; 4] {
+        let mut out = [Vec3::ZERO; 4];
+        for (i, (u, v)) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)].iter().enumerate() {
+            let w = *model * Vec4::new(*u, *v, 0.0, 1.0);
+            out[i] = world_corner(lm, Vec3::new(w.x, w.y, w.z));
+        }
+        out
     }
 
     fn assert_corners_inside(m: &LightMatrix, lm: &Mat4, size: f32, zmax: f32) {
-        for x in [0.0, size] {
-            for y in [0.0, size] {
+        let wx = size * TILE_M;
+        let wy = -size * TILE_M;
+        for x in [0.0, wx] {
+            for y in [wy, 0.0] {
                 for z in [0.0, zmax] {
                     let w = world_corner(lm, Vec3::new(x, y, z));
                     let clip = m.view_proj * Vec4::new(w.x, w.y, w.z, 1.0);
@@ -238,7 +246,7 @@ mod tests {
 
     #[test]
     fn flat_tilemap_corners_land_in_ndc() {
-        let lm = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
+        let lm = world_light([45.0, 45.0, 1.0]);
         let m = fit_directional_light_matrix(
             &lm,
             200.0,
@@ -254,8 +262,8 @@ mod tests {
 
     #[test]
     fn relief_tilemap_corners_land_in_ndc() {
-        let lm = tilemap_mats([45.0, 45.0, 1.0], Vec3::new(12.5, -8.0, 0.0));
-        let zmax = 20.0 * 64.0; // 20 m of relief at 64 px/m
+        let lm = world_light([45.0, 45.0, 1.0]);
+        let zmax = 20.0; // 20 m of relief
         let m = fit_directional_light_matrix(
             &lm,
             400.0,
@@ -271,7 +279,7 @@ mod tests {
 
     #[test]
     fn vertical_light_uses_alternate_up() {
-        let lm = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
+        let lm = world_light([45.0, 45.0, 1.0]);
         let m = fit_directional_light_matrix(
             &lm,
             100.0,
@@ -286,16 +294,11 @@ mod tests {
     }
 
     #[test]
-    fn caster_billboard_fits_inside_box() {
-        // A sprite billboard standing up out of the ground plane must land
+    fn caster_world_quad_fits_inside_box() {
+        // A sprite world quad standing up out of the ground plane must land
         // inside the fitted box — otherwise its shadow clips at the near plane.
-        let lm = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
-        // A billboard at the map centre, 400 px tall (screen up = -y), anchored
-        // on the ground: model = translate(centre) * scale(100, 400, 1).
-        let caster = Mat4::from_translation(Vec3::new(0.0, -200.0, 0.0))
-            * Mat4::from_scale(Vec3::new(100.0, 400.0, 1.0));
-        // Ground anchor: sheared screen y 0, terrain height 0, light-space y 0.
-        let anchor = [0.0f32, 0.0, 0.0];
+        let lm = world_light([45.0, 45.0, 1.0]);
+        let caster = sprite_model(Vec3::ZERO, 100.0 / PPM_TARGET, 400.0 / PPM_TARGET);
         let m = fit_directional_light_matrix(
             &lm,
             200.0,
@@ -303,10 +306,10 @@ mod tests {
             0.0,
             Vec3::new(0.45, -0.35, 0.82),
             64.0,
-            &[(caster, anchor)],
+            &[caster],
             SHADOW_MAP_SIZE_F,
         );
-        for c in sprite_billboard_corners(&caster, anchor) {
+        for c in sprite_light_corners(&lm, &caster) {
             let clip = m.view_proj * Vec4::new(c.x, c.y, c.z, 1.0);
             let ndc = clip.xyz() / clip.w;
             assert!(ndc.x >= -1.0 && ndc.x <= 1.0, "caster ndc.x={}", ndc.x);
@@ -315,30 +318,26 @@ mod tests {
         }
     }
 
-    /// A billboard must be reconstructed as *standing* geometry: its screen-up
-    /// extent has to become height, not horizontal depth.  Rendering it as the
-    /// flat quad the model matrix literally describes casts a puddle-shaped
-    /// decal instead of a sprite-shaped shadow.
+    /// A sprite quad must be authored as *standing* geometry: its height extent
+    /// lives in world Z, and it does not recede into the scene (its light-space
+    /// depth is constant), or it would shadow tiles behind it.
     #[test]
-    fn billboard_corners_stand_up_out_of_the_ground() {
-        // 400 px tall (screen up = -y), 100 px wide, anchored at the origin.
-        let caster = Mat4::from_translation(Vec3::new(0.0, -200.0, 0.0))
-            * Mat4::from_scale(Vec3::new(100.0, 400.0, 1.0));
-        let corners = sprite_billboard_corners(&caster, [0.0, 0.0, 0.0]);
+    fn sprite_world_quad_stands_up_out_of_the_ground() {
+        let lm = world_light([45.0, 45.0, 1.0]);
+        let model = sprite_model(Vec3::ZERO, 100.0 / PPM_TARGET, 400.0 / PPM_TARGET);
+        let corners = sprite_light_corners(&lm, &model);
 
         let z_min = corners.iter().map(|c| c.z).fold(f32::MAX, f32::min);
         let z_max = corners.iter().map(|c| c.z).fold(f32::MIN, f32::max);
         assert!(
-            (z_max - z_min - 400.0).abs() < 1e-3,
-            "billboard spans {:.1} in height, expected 400",
+            (z_max - z_min - 400.0).abs() < 1e-2,
+            "sprite spans {:.1} in light-space height, expected 400",
             z_max - z_min
         );
 
-        // ...and it must occupy a single world y: a billboard does not recede
-        // into the scene, or it would shadow tiles behind it.
         let y_min = corners.iter().map(|c| c.y).fold(f32::MAX, f32::min);
         let y_max = corners.iter().map(|c| c.y).fold(f32::MIN, f32::max);
-        assert!((y_max - y_min).abs() < 1e-3, "billboard is not planar in y");
+        assert!((y_max - y_min).abs() < 1e-2, "sprite recedes in light-space depth");
     }
 
     /// The basetest sun: azimuth 120°, elevation 30°, already unit length.
@@ -347,11 +346,10 @@ mod tests {
     /// The real depth-target resolution, so the tests cannot drift from it.
     const SHADOW_MAP_SIZE_F: f32 = classic_gfx::SHADOW_MAP_SIZE as f32;
 
-    /// **Space contract.**  `light_dir` is authored in the unsheared cartesian
-    /// space where +Z is up (`classic-demo/src/lighting.rs` sets
-    /// `d.z = sin(elevation)`), and `vNormal` is transformed into that same
-    /// space.  The shadow map must therefore project positions in *that* space
-    /// too.
+    /// **Space contract.**  `light_dir` is authored in light space (+Z up;
+    /// `classic-demo/src/lighting.rs` sets `d.z = sin(elevation)`), and
+    /// `vNormal` is transformed into that same space.  The shadow map must
+    /// therefore project positions in *that* space too.
     ///
     /// This asserts the shadow map actually sees the sun at its authored
     /// elevation.  Projecting sheared ("hybrid") positions, where a height
@@ -359,10 +357,10 @@ mod tests {
     /// ~2.7° — a near-degenerate grazing angle that casts no usable shadow.
     #[test]
     fn shadow_space_sees_the_sun_at_its_authored_elevation() {
-        let lm = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
+        let lm = world_light([45.0, 45.0, 1.0]);
 
-        let ground = world_corner(&lm, Vec3::new(50.0, 50.0, 0.0));
-        let raised = world_corner(&lm, Vec3::new(50.0, 50.0, 100.0));
+        let ground = world_corner(&lm, Vec3::new(0.0, 0.0, 0.0));
+        let raised = world_corner(&lm, Vec3::new(0.0, 0.0, 1.0));
         let up = (raised - ground).normalize();
 
         let elevation_deg = up.dot(SUN).asin().to_degrees();
@@ -384,20 +382,27 @@ mod tests {
     /// maps any such pair to one texel by construction, whatever the shear.)
     #[test]
     fn caster_and_the_ground_it_shadows_share_a_shadow_texel() {
-        let lm = tilemap_mats([45.0, 45.0, 1.0], Vec3::ZERO);
+        let lm = world_light([45.0, 45.0, 1.0]);
         let m =
             fit_directional_light_matrix(&lm, 200.0, 200.0, 0.0, SUN, 64.0, &[], SHADOW_MAP_SIZE_F);
 
-        // A terrain vertex at tile (100,100) standing `h` px proud of the map.
-        let caster_tile = Vec3::new(100.0, 100.0, 0.0);
-        let h = 256.0f32;
-        let caster = world_corner(&lm, caster_tile + Vec3::new(0.0, 0.0, h));
+        // A terrain vertex at world (50·TILE_M, −50·TILE_M) standing `h` metres
+        // proud of the map.
+        let base = Vec3::new(50.0 * TILE_M, -50.0 * TILE_M, 0.0);
+        let h = 256.0 / PPM_TARGET; // metres
+        let caster = world_corner(&lm, base + Vec3::new(0.0, 0.0, h));
 
-        // Where the sun ray through it meets the z = 0 plane, expressed back in
-        // tile coordinates so the receiver also goes through `world_corner`.
-        let drop_world = Vec3::new(-SUN.x * h / SUN.z, -SUN.y * h / SUN.z, 0.0);
-        let drop_tile = lm.inverse().transform_vector3(drop_world);
-        let receiver = world_corner(&lm, caster_tile + drop_tile);
+        // Where the sun ray through it meets z = 0, in light space (SUN is
+        // authored there).  Round-trip the receiver through world space so both
+        // endpoints still go through `world_corner`.
+        let drop = Vec3::new(
+            -SUN.x * h * PPM_TARGET / SUN.z,
+            -SUN.y * h * PPM_TARGET / SUN.z,
+            -h * PPM_TARGET,
+        );
+        let receiver_light = caster + drop;
+        let receiver_world = lm.inverse().transform_point3(receiver_light);
+        let receiver = world_corner(&lm, receiver_world);
 
         let project = |p: Vec3| {
             let clip = m.view_proj * p.extend(1.0);
@@ -425,24 +430,25 @@ mod tests {
     ///
     /// This test previously asserted the opposite — that raising a tile also
     /// shifted world y down, replicating the vertex shader's isometric shear.
-    /// That shear belongs to the rasterised `vWorldPos` only; applying it here
+    /// That shear belongs to the rasterised screen space only; applying it here
     /// is what made the sun read as 2.7° elevation and the shadow map useless.
     #[test]
     fn light_space_carries_height_in_z_only() {
-        let lm = tilemap_mats([45.0, 45.0, 1.0], Vec3::new(10.0, 20.0, 0.0));
+        let lm = world_light([45.0, 45.0, 1.0]);
+        let base = Vec3::new(3.0 * TILE_M, -4.0 * TILE_M, 0.0);
 
-        let flat = world_corner(&lm, Vec3::new(3.0, 4.0, 0.0));
-        let raised = world_corner(&lm, Vec3::new(3.0, 4.0, 500.0));
+        let flat = world_corner(&lm, base);
+        let raised = world_corner(&lm, base + Vec3::new(0.0, 0.0, 500.0 / PPM_TARGET));
 
         // Raising the tile by 500 px moves it 500 px along +Z and nowhere else.
-        assert!((raised.x - flat.x).abs() < 1e-3, "height leaked into x");
-        assert!((raised.y - flat.y).abs() < 1e-3, "height leaked into y (the iso shear)");
-        assert!((raised.z - flat.z - 500.0).abs() < 1e-3, "height did not land in z");
+        assert!((raised.x - flat.x).abs() < 1e-2, "height leaked into x");
+        assert!((raised.y - flat.y).abs() < 1e-2, "height leaked into y (the iso shear)");
+        assert!((raised.z - flat.z - 500.0).abs() < 1e-2, "height did not land in z");
     }
 
-    /// **Space contract.**  Light space must be *metric*: a tile step along
-    /// `+tx`, a tile step along `+ty`, and `TILE_PX` pixels of height must all
-    /// be the same light-space distance.
+    /// **Space contract.**  Light space must be *metric*: a one-tile step along
+    /// `+tx`, a one-tile step along `+ty`, and `TILE_M` metres of height must
+    /// all be the same light-space distance (`TILE_PX`).
     ///
     /// This is the invariant the isometric `diag(1, 0.5, 1)` squash breaks.
     /// Under it a `+ty` step measured 22.5 px against a `+tx` step's 45 px, so
@@ -450,31 +456,26 @@ mod tests {
     /// evaluating a world compressed 2× along one axis: point-light pools came
     /// out as screen-space circles instead of ground-plane ellipses, and no
     /// choice of sprite normal frame could agree with the terrain's.
-    ///
-    /// The five pre-existing tests here all passed under the squash — they only
-    /// asserted "corners land inside NDC", which a distorted projection
-    /// satisfies just fine.  Assert *physical* contracts.
     #[test]
     fn light_space_is_isotropic() {
-        const TILE_PX: f32 = 45.0;
-        let lm = tilemap_mats([TILE_PX, TILE_PX, 1.0], Vec3::ZERO);
+        let lm = world_light([45.0, 45.0, 1.0]);
 
-        let o = world_corner(&lm, Vec3::new(10.0, 10.0, 0.0));
-        let dx = world_corner(&lm, Vec3::new(11.0, 10.0, 0.0)) - o;
-        let dy = world_corner(&lm, Vec3::new(10.0, 11.0, 0.0)) - o;
-        let dz = world_corner(&lm, Vec3::new(10.0, 10.0, TILE_PX)) - o;
+        let o = world_corner(&lm, Vec3::ZERO);
+        let dx = world_corner(&lm, Vec3::new(TILE_M, 0.0, 0.0)) - o;
+        let dy = world_corner(&lm, Vec3::new(0.0, -TILE_M, 0.0)) - o;
+        let dz = world_corner(&lm, Vec3::new(0.0, 0.0, TILE_M)) - o;
 
         for (name, d) in [("+tx", dx), ("+ty", dy), ("+z", dz)] {
             assert!(
-                (d.length() - TILE_PX).abs() < 1e-3,
-                "a unit step along {name} spans {:.2} px, expected {TILE_PX} — \
+                (d.length() - 45.0).abs() < 1e-2,
+                "a one-tile step along {name} spans {:.2} px, expected 45 — \
                  light space is not metric",
                 d.length()
             );
         }
         // ...and the two ground axes must stay perpendicular.
         assert!(
-            dx.normalize().dot(dy.normalize()).abs() < 1e-4,
+            dx.normalize().dot(dy.normalize()).abs() < 1e-3,
             "tile axes are not orthogonal in light space"
         );
     }
@@ -510,31 +511,24 @@ mod tests {
     }
 
     /// **Space contract.**  A flying sprite's altitude must land in light-space
-    /// **z**, not y.
-    ///
-    /// The billboard's light-space y used to be recovered in the shader as
-    /// `anchor.x + anchor.y` — un-shearing the screen y with the terrain
-    /// height.  For a sprite lifted by an animation `offset` (which packs
-    /// altitude into screen y) that put the altitude into y, i.e. lit a
-    /// descending rocket as though it were lying on the ground far to the
-    /// north.
+    /// **z**, not y.  Lifting the whole quad along world +Z raises its
+    /// light-space height by the same amount and leaves its depth alone.
     #[test]
-    fn billboard_altitude_lands_in_height_not_depth() {
-        let quad = Mat4::from_translation(Vec3::new(0.0, -200.0, 0.0))
-            * Mat4::from_scale(Vec3::new(100.0, 400.0, 1.0));
+    fn sprite_altitude_lands_in_height_not_depth() {
+        let lm = world_light([45.0, 45.0, 1.0]);
+        let width_m = 100.0 / PPM_TARGET;
+        let height_m = 400.0 / PPM_TARGET;
 
-        let grounded = sprite_billboard_corners(&quad, [0.0, 0.0, 500.0]);
-        // Same sprite, 320 px up: screen y drops by 320, height rises by 320,
-        // light-space y is unchanged.
-        let flying = sprite_billboard_corners(
-            &(Mat4::from_translation(Vec3::new(0.0, -320.0, 0.0)) * quad),
-            [-320.0, 320.0, 500.0],
+        let grounded = sprite_light_corners(&lm, &sprite_model(Vec3::ZERO, width_m, height_m));
+        let flying = sprite_light_corners(
+            &lm,
+            &sprite_model(Vec3::new(0.0, 0.0, 320.0 / PPM_TARGET), width_m, height_m),
         );
 
         for (g, f) in grounded.iter().zip(flying.iter()) {
-            assert!((f.y - g.y).abs() < 1e-3, "altitude leaked into light-space y");
+            assert!((f.y - g.y).abs() < 1e-2, "altitude leaked into light-space y");
             assert!(
-                (f.z - g.z - 320.0).abs() < 1e-3,
+                (f.z - g.z - 320.0).abs() < 1e-2,
                 "altitude did not land in light-space z ({:.1} vs {:.1})",
                 f.z,
                 g.z

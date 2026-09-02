@@ -544,20 +544,16 @@ pub struct RenderSettings {
     pub light_color: [f32; 3],
     pub depth_scale: [f32; 2],
     pub ppm: f32,
-    /// Tile -> light space (`T(origin) * S(tile_scale) * Rz(-45deg)`), the
-    /// metric frame every lighting quantity lives in.  Deliberately *not*
-    /// `model_matrix * iso_matrix`: that carries the isometric
-    /// `diag(1, 0.5, 1)` squash.  Built by `classic_engine::light_matrix`;
-    /// consumed by the tilemap draw only (sprites reconstruct their light-space
-    /// position from `sprite_anchor`).
+    /// World -> light space (`iso_world_light_matrix`), the metric frame every
+    /// lighting quantity lives in.  Deliberately *not* `model_matrix *
+    /// iso_matrix`: that carries the isometric `diag(1, 0.5, 1)` squash.  Built
+    /// by `classic_engine`; consumed by the tilemap draw only (sprites receive
+    /// their own per-tilemap matrix on each draw).
     pub light_matrix: Mat4,
-    /// Terrain normal matrix: `inverse_transpose(mat3(light_matrix))`.  Unused
-    /// by the sprite draws (their normals come from a baked map).
+    /// Terrain normal matrix: `iso_world_normal_matrix`.  Unused by the sprite
+    /// draws (their normals come from a baked map and ride their own per-tilemap
+    /// matrix on each draw).
     pub normal_matrix: Mat3,
-    /// Sprite normal matrix: rotates a baked Blender-world-space normal into
-    /// light space (`classic_core::math::blender_to_light_3`).  Unused by the
-    /// tilemap draw (its normals are mesh-derived).
-    pub sprite_normal_matrix: Mat3,
     /// Optional directional shadow map.  When `Some`, the lit shaders sample the
     /// depth texture and multiply the **sun diffuse** term by the shadow factor
     /// (ambient + point lights stay unshadowed).  When `None`, `use_shadow` is
@@ -891,16 +887,16 @@ impl Gfx {
         }
     }
 
-    /// Draw one sprite billboard into the shadow map.  The colour texture's
+    /// Draw one sprite world quad into the shadow map.  The colour texture's
     /// alpha is the silhouette (transparent pixels discard), so the sprite casts
     /// a shaped shadow rather than a full quad.
     pub fn draw_shadow_sprite(
         &self,
         model: &Mat4,
+        light_matrix: &Mat4,
         view_proj: &Mat4,
         texture_name: &str,
         region: SpriteRegion<'_>,
-        sprite_anchor: &[f32; 3],
     ) {
         let gl = &self.gl;
         let s = self.shader("shadowSprite");
@@ -910,8 +906,8 @@ impl Gfx {
         t.bind(gl, 0);
         s.uniform_1i(gl, "tex_sampler", 0);
         s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_mat4(gl, "light_matrix", light_matrix);
         s.uniform_mat4(gl, "light_view_proj", view_proj);
-        s.uniform_vec3(gl, "sprite_anchor", Vec3::from_array(*sprite_anchor));
         match region {
             SpriteRegion::Grid { frame, tile_set_size } => {
                 s.uniform_1f(gl, "tile_id_flat", frame);
@@ -1201,6 +1197,9 @@ impl Gfx {
         &self,
         model: &Mat4,
         camera: &Mat4,
+        world_matrix: &Mat4,
+        light_matrix: &Mat4,
+        normal_matrix: &Mat3,
         texture_name: &str,
         region: SpriteRegion<'_>,
         iso_depth_corners: &[f32; 4],
@@ -1208,7 +1207,6 @@ impl Gfx {
         depth_base: f32,
         normal_map: Option<&str>,
         tint: &[f32; 3],
-        sprite_anchor: &[f32; 3],
         settings: &RenderSettings,
         ghost_alpha: f32,
         selected: bool,
@@ -1224,6 +1222,10 @@ impl Gfx {
 
         s.uniform_1i(gl, "tex_sampler", 0);
         self.bind_view(s, camera, model, false);
+        s.uniform_mat4(gl, "world_matrix", world_matrix);
+        s.uniform_mat4(gl, "light_matrix", light_matrix);
+        s.uniform_mat3(gl, "normal_matrix", normal_matrix);
+        s.uniform_1f(gl, "ppm", settings.ppm);
 
         // Silhouette outline: the sheet-UV offset of `outline_radius` content
         // pixels, so a selected sprite's transparent edge samples its own cell's
@@ -1293,8 +1295,6 @@ impl Gfx {
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         s.uniform_vec3(gl, "tint", Vec3::from_array(*tint));
-        s.uniform_vec3(gl, "sprite_anchor", Vec3::from_array(*sprite_anchor));
-        s.uniform_mat3(gl, "sprite_normal_matrix", &settings.sprite_normal_matrix);
         s.uniform_1f(gl, "use_lighting", 1.0);
         self.bind_shadow(s, settings);
 
@@ -1322,6 +1322,9 @@ impl Gfx {
         &self,
         model: &Mat4,
         camera: &Mat4,
+        world_matrix: &Mat4,
+        light_matrix: &Mat4,
+        normal_matrix: &Mat3,
         texture_name: &str,
         region: SpriteRegion<'_>,
         iso_depth_corners: &[f32; 4],
@@ -1329,7 +1332,6 @@ impl Gfx {
         depth_base: f32,
         normal_map: Option<&str>,
         tint: &[f32; 3],
-        sprite_anchor: &[f32; 3],
         settings: &RenderSettings,
         ghost_group: u32,
         pass: IsoSpritePass,
@@ -1345,6 +1347,9 @@ impl Gfx {
         self.bind_iso_sprite(
             model,
             camera,
+            world_matrix,
+            light_matrix,
+            normal_matrix,
             texture_name,
             region,
             iso_depth_corners,
@@ -1352,7 +1357,6 @@ impl Gfx {
             depth_base,
             normal_map,
             tint,
-            sprite_anchor,
             settings,
             ghost_alpha,
             selected,
@@ -1665,6 +1669,10 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "model_matrix",
                 "camera_matrix",
                 "projection_matrix",
+                "world_matrix",
+                "light_matrix",
+                "normal_matrix",
+                "ppm",
                 "tex_sampler",
                 "tile_id_flat",
                 "tile_set_size",
@@ -1683,12 +1691,10 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "normal_sampler",
                 "use_normal_map",
                 "use_lighting",
-                "sprite_normal_matrix",
                 "ambient_color",
                 "light_direction",
                 "light_color",
                 "tint",
-                "sprite_anchor",
                 "shadow_map",
                 "light_view_proj",
                 "shadow_bias",
@@ -1733,8 +1739,8 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             attr: &["vertex_pos", "tex_coord"],
             unif: &[
                 "model_matrix",
+                "light_matrix",
                 "light_view_proj",
-                "sprite_anchor",
                 "tex_sampler",
                 "tile_id_flat",
                 "tile_set_size",
