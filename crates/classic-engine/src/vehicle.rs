@@ -14,7 +14,7 @@
 use classic_core::components::{
     DebugName, IsoSprite, IsoVehicle, RoleKind, Selectable, Tilemap, Transform,
 };
-use classic_core::math::cartesian_to_iso_4;
+use classic_core::math::iso_world_matrix;
 use classic_core::pathfinder::PathPoll;
 use classic_core::tilemap::{sample_height_mesh, PPM_TARGET, TILE_M};
 use glam::{Vec2, Vec3};
@@ -347,13 +347,13 @@ fn derive_wheel_offsets(
     tile_scale: f32,
 ) -> [[[f32; 2]; 8]; 4] {
     let mut offsets = [[[0.0f32; 2]; 8]; 4];
-    let inv_scale = 1.0 / tile_scale.max(0.001);
+    let world_inv = iso_world_matrix(Vec3::new(tile_scale, tile_scale, 1.0)).inverse();
     for (i, anchors) in wheel_anchors.iter().enumerate() {
         for d in 0..8 {
             let dx = (anchors[d][0] - body_anchors[d][0]) * cell[0];
             let dy = (anchors[d][1] - body_anchors[d][1]) * cell[1];
-            let iso = cartesian_to_iso_4().transform_point3(Vec3::new(dx, dy, 0.0));
-            offsets[i][d] = [iso.x * inv_scale, iso.y * inv_scale];
+            let world = world_inv.transform_point3(Vec3::new(dx, dy, 0.0));
+            offsets[i][d] = [world.x / TILE_M, -world.y / TILE_M];
         }
     }
     offsets
@@ -1349,7 +1349,7 @@ impl Engine {
 mod tests {
     use super::*;
     use classic_core::components::{NavMesh, Role};
-    use classic_core::math::iso_to_cartesian_4;
+    use classic_core::math::iso_world_pos;
     use classic_core::types::{FrameTable, VehicleAnchors, VehicleDef, VehiclePartDef};
 
     /// Build a `VehicleAnchors` from `(name, anchors)` pairs — the name→anchors
@@ -1578,13 +1578,11 @@ mod tests {
                 (wheels[i][0][1] - body[0][1]) * cell[1],
                 0.0,
             );
-            let iso = iso_to_cartesian_4().transform_point3(Vec3::new(
-                tile_scale * offsets[i][0][0],
-                tile_scale * offsets[i][0][1],
-                0.0,
-            ));
-            assert!((iso.x - delta.x).abs() < 1e-3, "wheel {i} x {iso} vs {delta}");
-            assert!((iso.y - delta.y).abs() < 1e-3, "wheel {i} y {iso} vs {delta}");
+            let world = iso_world_pos(offsets[i][0][0], offsets[i][0][1], 0.0);
+            let screen =
+                iso_world_matrix(Vec3::new(tile_scale, tile_scale, 1.0)).transform_point3(world);
+            assert!((screen.x - delta.x).abs() < 1e-3, "wheel {i} x {screen} vs {delta}");
+            assert!((screen.y - delta.y).abs() < 1e-3, "wheel {i} y {screen} vs {delta}");
         }
     }
 
