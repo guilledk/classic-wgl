@@ -55,11 +55,10 @@ out vec4 fragColor;
 // --- BEGIN SHARED LIGHTING (must stay byte-identical to iso_tilemap.frag;
 // --- pinned by `lit_shaders_share_the_lighting_block`) ---
 //
-// `p` and `l.pos_radius.xyz` are both **metric light space** (+Z up, `ppm` px
-// per metre on every axis — see `classic_core::math::iso_to_light_4`), so
-// `length` is a true distance and `dot(n, L)` a true cosine.  They previously
-// lived in the isometric space, which compresses y by 2x; every point light
-// was therefore an ellipsoid evaluated as if it were a sphere.
+// `p` and `l.pos_radius.xyz` are both **metric world space** (+Z up, metres),
+// so `length` is a true distance and `dot(n, L)` a true cosine.  They previously
+// lived in the isometric screen space, which compresses y by 2x; every point
+// light was therefore an ellipsoid evaluated as if it were a sphere.
 vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     vec3 toLight = l.pos_radius.xyz - p;
     float dist = length(toLight);
@@ -114,7 +113,7 @@ float shadowSample(vec2 suv, float fragDepth) {
     return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
 }
 
-// `n` is the receiver's surface normal in light space.  Nudging the sample
+// `n` is the receiver's surface normal in world space.  Nudging the sample
 // point along it by ~a texel keeps a surface from sampling the very texel it
 // wrote, which is what causes shadow acne, without detaching the shadow from
 // its caster the way a large depth bias would.

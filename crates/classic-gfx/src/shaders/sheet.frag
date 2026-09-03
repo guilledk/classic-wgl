@@ -18,22 +18,19 @@ uniform highp vec2 trim_offset;
 uniform highp vec2 source_size;
 uniform highp vec2 content_size;
 uniform float use_depth_map;
-uniform highp float depth_base;
-uniform highp float depth_range;
+/// The sprite's ground-anchor window depth `[0, 1]` (see the `gl_FragDepth`
+/// re-anchor below).
+uniform float depth_base;
 // Whether this draw participates in scene lighting at all.  The 2D/baked
-// `draw_sprite` path (cursor, HUD, UI) sets 0: it has no `sprite_anchor`, so
-// its `vLightPos` is meaningless.  This used to be implied by
+// `draw_sprite` path (cursor, HUD, UI) sets 0: it never writes a light-space
+// position, so its `vLightPos` is meaningless.  This used to be implied by
 // `use_normal_map == 0`, which also silently unlit every *world* sprite that
 // happens to ship without a normal map.
 uniform float use_lighting;
 uniform float use_normal_map;
-// Blender world space -> light space, `Rz(-45deg) * diag(1,-1,1)`.  Sprite
-// normal maps are baked in Blender world space (`render/materials.py` emits
-// `Geometry.Normal` with no view transform), which is metric and axis-aligned
-// to the tile grid — NOT to light space.  Consuming them raw, as this shader
-// did, is exact only for up-facing normals and is ~153 degrees wrong for
-// normals along the tile axes: tall sprites came out lit on the wrong side.
-uniform mat3 sprite_normal_matrix;
+// Sprite normal maps are baked in Blender world space (`render/materials.py`
+// emits `Geometry.Normal` with no view transform) — the same metric world space
+// the terrain normals live in — so they are used as-is, with no normal matrix.
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
@@ -75,11 +72,10 @@ out vec4 fragColor;
 // --- BEGIN SHARED LIGHTING (must stay byte-identical to iso_tilemap.frag;
 // --- pinned by `lit_shaders_share_the_lighting_block`) ---
 //
-// `p` and `l.pos_radius.xyz` are both **metric light space** (+Z up, `ppm` px
-// per metre on every axis — see `classic_core::math::iso_to_light_4`), so
-// `length` is a true distance and `dot(n, L)` a true cosine.  They previously
-// lived in the isometric space, which compresses y by 2x; every point light
-// was therefore an ellipsoid evaluated as if it were a sphere.
+// `p` and `l.pos_radius.xyz` are both **metric world space** (+Z up, metres),
+// so `length` is a true distance and `dot(n, L)` a true cosine.  They previously
+// lived in the isometric screen space, which compresses y by 2x; every point
+// light was therefore an ellipsoid evaluated as if it were a sphere.
 vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     vec3 toLight = l.pos_radius.xyz - p;
     float dist = length(toLight);
@@ -130,7 +126,7 @@ float shadowSample(vec2 suv, float fragDepth) {
     return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
 }
 
-// `n` is the receiver's surface normal in light space.  Nudging the sample
+// `n` is the receiver's surface normal in world space.  Nudging the sample
 // point along it by ~a texel keeps a surface from sampling the very texel it
 // wrote, which is what causes shadow acne, without detaching the shadow from
 // its caster the way a large depth bias would.
@@ -212,16 +208,24 @@ void main(void ) {
 
     color.rgb *= tint;
     if (use_depth_map > 0.5) {
-        highp float gray = texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r;
-        // `depth_base` and `depth_range` are both window-space iso depths, so
-        // `gl_FragDepth` (also window-space) needs no clip→window remap.
-        gl_FragDepth = depth_base + (0.5 - gray) * depth_range;
+        // The depth sheet stores the camera view depth relative to the Blender
+        // bake origin (`gray ≈ 0.5` at the asset's ground anchor), so offset it
+        // by the sprite's absolute ground-anchor depth to land on its real map
+        // depth.  `depth_base` is the sprite's window-space anchor depth (the
+        // model translation re-projected through the camera).
+        //
+        // TODO(classic-assets): bake the depth sheet *relative to the ground
+        // anchor* (`0.5` at the anchor, no implicit Blender-origin offset), so
+        // this `- 0.5` is a clean relative-centering rather than an assumed
+        // origin shift.
+        gl_FragDepth = depth_base
+            + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5);
     }
 
-    // Normal from the sheet's normal-map companion, rotated from the Blender
-    // world space it was baked in into light space.  A (0.5,0.5,0.5) texel
-    // decodes to (0,0,0) and marks an *emissive* region (e.g. the rocket
-    // flame), which keeps flat albedo and skips shading entirely.
+    // Normal from the sheet's normal-map companion, used in world space (the
+    // Blender space it was baked in).  A (0.5,0.5,0.5) texel decodes to
+    // (0,0,0) and marks an *emissive* region (e.g. the rocket flame), which
+    // keeps flat albedo and skips shading entirely.
     //
     // `emissive` is that sentinel and nothing else.  It used to also swallow
     // "this sprite has no normal map at all", which left such sprites with no
@@ -236,7 +240,7 @@ void main(void ) {
     // Normal-offset bias needs a direction even where the sprite is emissive or
     // has no normal map; away from the terrain (+Z) is the safe default.
     vec3 n = dot(rawNormal, rawNormal) > 0.001
-        ? normalize(sprite_normal_matrix * rawNormal)
+        ? normalize(rawNormal)
         : vec3(0.0, 0.0, 1.0);
 
     // Bring-up diagnostic (CLASSIC_SHADOW_DEBUG): sun visibility only.  The

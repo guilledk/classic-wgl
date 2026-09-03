@@ -237,7 +237,8 @@ pub struct IsoSprite {
     pub tile_set_size: Vec2,
     /// Anchor point in [0..1] range (e.g. `[0.5, 0.98]` = centre-bottom / feet).
     pub anchor: Vec2,
-    /// Visual offset selected by the current animation frame, in iso units.
+    /// Visual offset selected by the current animation frame, in Blender-world
+    /// metres: horizontal drift in x/y, altitude in z.
     #[serde(skip)]
     pub frame_offset: Vec3,
     /// Footprint vertices in iso tile coords: `[NE, SE, SW, NW]`.
@@ -288,7 +289,8 @@ pub struct IsoAgent {
     pub frame_name: Option<String>,
     pub tile_set_size: Vec2,
     pub anchor: Vec2,
-    /// Visual offset selected by the current animation frame, in iso units.
+    /// Visual offset selected by the current animation frame, in Blender-world
+    /// metres: horizontal drift in x/y, altitude in z.
     #[serde(skip)]
     pub frame_offset: Vec3,
     #[serde(default = "default_footprint")]
@@ -333,7 +335,8 @@ pub struct Animator {
     pub counter: f32,
     #[serde(skip)]
     pub frame: f32,
-    /// Visual offset selected by the current animation frame, in iso units.
+    /// Visual offset selected by the current animation frame, in Blender-world
+    /// metres: horizontal drift in x/y, altitude in z.
     #[serde(skip)]
     pub offset: Vec3,
     /// Whether the animation loops.  Serialized so ROMs can start one-shot
@@ -398,10 +401,10 @@ pub struct IsoVehicle {
     /// def at spawn).
     #[serde(skip)]
     pub pitch_max: f32,
-    /// Front-rear axle distance in screen pixels (derived from the wheel
-    /// offsets and tile scale at spawn).
+    /// Front-rear axle distance in world metres (derived from the wheel
+    /// offsets and tile metre length at spawn).
     #[serde(skip)]
-    pub wheelbase_px: f32,
+    pub wheelbase_m: f32,
     /// Continuous body roll angle (radians), signed left-up positive.  Driven
     /// by the same spring-damper as pitch.
     #[serde(skip)]
@@ -421,10 +424,10 @@ pub struct IsoVehicle {
     /// def at spawn).
     #[serde(skip)]
     pub roll_max: f32,
-    /// Left-right axle distance in screen pixels (derived from the wheel
-    /// offsets and tile scale at spawn).
+    /// Left-right axle distance in world metres (derived from the wheel
+    /// offsets and tile metre length at spawn).
     #[serde(skip)]
-    pub track_px: f32,
+    pub track_m: f32,
     /// Collision footprint for pathfinding: integer tile offsets from the body
     /// anchor cell (copied from the vehicle def at spawn).  A* erodes the nav
     /// grid by this footprint before searching (issue #35).
@@ -434,17 +437,17 @@ pub struct IsoVehicle {
     /// vehicle def at spawn).  Drives the bounded-turn follow controller.
     #[serde(skip)]
     pub turn_rate: f32,
-    /// Max safe drop (pixels) the suspension absorbs; the A* may route a
+    /// Max safe drop (metres) the suspension absorbs; the A* may route a
     /// downward jump within this distance (copied from the vehicle def at
     /// spawn).  `0` disables jumps.
     #[serde(skip)]
-    pub safe_fall_px: f32,
-    /// Max upward wheel compression (pixels) above the body plane.  A wheel
+    pub safe_fall_m: f32,
+    /// Max upward wheel compression (metres) above the body plane.  A wheel
     /// whose terrain rises more than this is clamped, and the body plane lifts
     /// instead.  Derived from the vehicle def at spawn (see `spawn_vehicle`).
     #[serde(skip)]
     pub wheel_travel_up: f32,
-    /// Max downward wheel droop (pixels) below the body plane before a wheel
+    /// Max downward wheel droop (metres) below the body plane before a wheel
     /// hangs.  Derived from the vehicle def at spawn (see `spawn_vehicle`).
     #[serde(skip)]
     pub wheel_travel_down: f32,
@@ -483,19 +486,19 @@ pub struct IsoVehicle {
     /// the anchors at spawn time (`[4 wheels][8 dirs][tx, ty]`).
     #[serde(skip)]
     pub wheel_tile_offsets: [[[f32; 2]; 8]; 4],
-    /// Body height above the supporting terrain, in screen-pixel units
-    /// (same units as `Engine::height_at`).
+    /// Body height above the supporting terrain, in world metres (same units as
+    /// `Engine::height_at`).
     #[serde(skip)]
     pub altitude: f32,
-    /// Body vertical velocity, in pixels per second.
+    /// Body vertical velocity, in metres per second.
     #[serde(skip)]
     pub vel_z: f32,
-    /// Smoothed per-wheel terrain height (pixels), `[fl, fr, rl, rr]`, clamped
+    /// Smoothed per-wheel terrain height (metres), `[fl, fr, rl, rr]`, clamped
     /// to a travel envelope around the body plane (`wheel_travel_up` /
     /// `wheel_travel_down`) so wheels never ride over the body or sink.
     #[serde(skip)]
     pub wheel_h: [f32; 4],
-    /// Per-wheel smoothing velocity (pixels/second).
+    /// Per-wheel smoothing velocity (metres/second).
     #[serde(skip)]
     pub wheel_v: [f32; 4],
     /// A* waypoints the host follows (guest-set via `vehicle_goto`), in integer
@@ -544,18 +547,18 @@ impl Default for IsoVehicle {
             pitch_index: 0,
             pitch_levels: 1,
             pitch_max: 20.0f32.to_radians(),
-            wheelbase_px: 0.0,
+            wheelbase_m: 0.0,
             roll: 0.0,
             roll_vel: 0.0,
             roll_index: 0,
             roll_levels: 1,
             roll_max: 20.0f32.to_radians(),
-            track_px: 0.0,
+            track_m: 0.0,
             path_footprint: vec![(0, 0)],
             turn_rate: 720.0f32.to_radians(),
-            safe_fall_px: 0.0,
-            wheel_travel_up: 10.0,
-            wheel_travel_down: 20.0,
+            safe_fall_m: 0.0,
+            wheel_travel_up: 10.0 / 64.0,
+            wheel_travel_down: 20.0 / 64.0,
             tilt_dead_zone: 0.0,
             steer_index: 0,
             steer_levels: 1,
@@ -760,8 +763,7 @@ pub enum LightKind {
     Spot,
 }
 
-/// A dynamic point/spot light in the shared world space consumed by the lit
-/// shaders (`sheet.frag`, `iso_tilemap.frag`).
+/// A dynamic point/spot light in Blender-canonical **world space** (metres).
 ///
 /// `kind` selects point (omnidirectional) vs spot (directional cone).  Point
 /// lights ignore the spot fields (`dir`, `cone_angle`); the GPU `std140`
@@ -772,20 +774,21 @@ pub enum LightKind {
 pub struct Light {
     #[serde(default)]
     pub kind: LightKind,
-    /// Light-space position (metric, +Z up).  This is the frame every lighting
-    /// quantity lives in — `classic_core::math::iso_to_light_4`, i.e. the
-    /// isometric yaw *without* the `diag(1, 0.5, 1)` isometric squash.  It is
-    /// **not** the sheared screen space (`vWorldPos`) and not the squashed
-    /// `iso_to_cartesian` space — those make `length`/`normalize`/`dot` mean
-    /// something different along y.  The tilemap and sprite shaders derive
-    /// `vLightPos` in this same frame.
+    /// World-metre position (`+tx → +X`, `+ty → −Y`, +Z up) — the same
+    /// Blender-canonical frame the terrain and sprite geometry live in.
+    /// [`Engine::iso_to_world`] places it; lighting evaluates it directly in
+    /// world space (there is no separate light space).  It is **not** the
+    /// screen camera space.
     pub position: Vec3,
     /// Linear RGB colour.
     pub color: [f32; 3],
     /// Scalar multiplier applied to `color`.
     #[serde(default = "default_light_intensity")]
     pub intensity: f32,
-    /// Attenuation radius in world units; `<= 0` disables distance falloff.
+    /// Attenuation radius.  Authored in the legacy light-space unit (px;
+    /// `PPM_TARGET` px per metre) for compatibility with existing lights and
+    /// the guest ABI; `gather_lights` converts it to world metres before the
+    /// UBO upload.  `<= 0` disables distance falloff.
     #[serde(default = "default_light_radius")]
     pub radius: f32,
     /// Spot direction (world space); ignored by point lights.
@@ -795,9 +798,9 @@ pub struct Light {
     #[serde(default)]
     pub cone_angle: f32,
     /// Optional parent entity name.  When set, `position` is interpreted as a
-    /// light-space offset **relative to the parent's ground point** and the
+    /// world-metre offset **relative to the parent's ground point** and the
     /// light follows the parent each frame; when `None`, `position` is an
-    /// absolute light-space position.
+    /// absolute world-metre position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
 }

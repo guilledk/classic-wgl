@@ -14,10 +14,27 @@ use crate::state::{DemoStateRef, EditorState};
 /// Apply a named lighting preset (sunny, cloudy, dawn, night).
 pub fn apply_light_preset(engine: &mut Engine, state: &DemoStateRef, key: &str) {
     let preset = match key {
-        "sunny" => Some(("Sunny Day", [0.15, 0.15, 0.2], [0.453, 0.211, 0.866], [1.0, 0.95, 0.85])),
-        "cloudy" => Some(("Cloudy", [0.35, 0.35, 0.4], [0.0, -0.2, 1.0], [0.7, 0.72, 0.78])),
-        "dawn" => Some(("Dawn / Dusk", [0.2, 0.15, 0.25], [0.5, 0.2, 0.3], [1.0, 0.4, 0.2])),
-        "night" => Some(("Night", [0.1, 0.12, 0.25], [-0.2, -0.5, 0.8], [0.3, 0.4, 0.7])),
+        "sunny" => Some((
+            "Sunny Day",
+            [0.15, 0.15, 0.2],
+            [0.171_147, -0.469_593, 0.866_136],
+            [1.0, 0.95, 0.85],
+        )),
+        "cloudy" => Some((
+            "Cloudy",
+            [0.35, 0.35, 0.4],
+            [0.138_675, 0.138_675, 0.980_581],
+            [0.7, 0.72, 0.78],
+        )),
+        "dawn" => Some((
+            "Dawn / Dusk",
+            [0.2, 0.15, 0.25],
+            [0.344_124, -0.802_955, 0.486_664],
+            [1.0, 0.4, 0.2],
+        )),
+        "night" => {
+            Some(("Night", [0.1, 0.12, 0.25], [0.219_971, 0.513_265, 0.829_561], [0.3, 0.4, 0.7]))
+        }
         _ => None,
     };
     let Some((_name, ambient, dir_unnorm, color)) = preset else {

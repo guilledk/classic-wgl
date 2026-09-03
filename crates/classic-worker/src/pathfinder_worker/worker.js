@@ -7,10 +7,10 @@
 //   { type: "snapshot", sizeX, sizeY, data: Int32Array }      — replace nav grid
 //   { type: "find", id, from: [x, y], to: [x, y] }            — run a search
 //   { type: "vehicleSnapshot", sizeX, sizeY, structural: Int32Array,
-//     heights: Float32Array, heightScale, tileScale }         — replace vehicle nav
+//     heights: Float32Array, tileM }                          — replace vehicle nav
 //   { type: "findVehicle", id, from: [x, y], to: [x, y],
-//     footprint: [[dx, dy], …], pitchMax, rollMax, wheelbasePx, trackPx,
-//     safeFallPx, jumpCost, turnCost }                         — run a vehicle search
+//     footprint: [[dx, dy], …], pitchMax, rollMax, wheelbaseM, trackM,
+//     safeFallM, jumpCost, turnCost }                          — run a vehicle search
 // Replies (to the main thread):
 //   { type: "result", id, path: Int32Array | null }           — flat [x0,y0,…]
 //      where `path` is null when no route exists.
@@ -47,8 +47,7 @@ function handle(msg) {
             msg.structural.length,
             hp,
             msg.heights.length,
-            msg.heightScale,
-            msg.tileScale,
+            msg.tileM,
         );
     } else if (msg.type === "findVehicle") {
         var fp = new Int32Array(msg.footprint.length * 2);
@@ -66,9 +65,9 @@ function handle(msg) {
             msg.footprint.length,
             msg.pitchMax,
             msg.rollMax,
-            msg.wheelbasePx,
-            msg.trackPx,
-            msg.safeFallPx,
+            msg.wheelbaseM,
+            msg.trackM,
+            msg.safeFallM,
             msg.jumpCost,
             msg.turnCost,
         );

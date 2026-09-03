@@ -247,7 +247,7 @@ mod tests {
             "entrypoint": "demo",
             "shaders": [],
             "textures": [
-                {"name": "lrvBody", "src": "/res/lrv_body.png", "depth": "/res/lrv_body_depth.png", "depth_range": 0.05},
+                {"name": "lrvBody", "src": "/res/lrv_body.png", "depth": "/res/lrv_body_depth.png"},
                 {"name": "tree", "src": "/res/tree.png"}
             ],
             "animations": []
@@ -269,7 +269,6 @@ mod tests {
         let loaded = Rom::load(&archive).unwrap();
 
         assert_eq!(loaded.resources.get(ResourceKind::Depth, "lrvBody"), Some(b"depth".as_slice()));
-        assert_eq!(loaded.manifest.manifest.textures[0].depth_range, 0.05);
         assert_eq!(loaded.resources.get(ResourceKind::Depth, "tree"), None);
     }
 

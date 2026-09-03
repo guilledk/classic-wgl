@@ -7,8 +7,8 @@ use classic_core::components::{
     UiNode,
 };
 use classic_core::instrument::Chan;
-use classic_core::math::iso_to_cartesian_4;
-use classic_core::tilemap::bilinear_height;
+use classic_core::math::{iso_camera_px, iso_world_pos};
+use classic_core::tilemap::{sample_height_mesh, TILE_M};
 use classic_engine::Engine;
 use classic_gfx::GlBuffer;
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -427,30 +427,20 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &x_cross, glow::STATIC_DRAW);
 
         if let Some(tm_e) = tm_entity {
-            let (iso_to_cart_world, tilemap_pos, size_x, size_y, hd, hs) = {
+            let (tilemap_pos, size_x, size_y, hd) = {
                 let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
                 let tm_tf = engine.world.get::<&Transform>(tm_e).unwrap();
-                let iso_to_cart = iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale);
-                (
-                    iso_to_cart,
-                    tm_tf.position,
-                    tm.size_x,
-                    tm.size_y,
-                    tm.height_data.clone(),
-                    tm.height_scale,
-                )
+                (tm_tf.position, tm.size_x, tm.size_y, tm.height_data.clone())
             };
             for (_e, (iso_sprite, tf)) in engine.world.query::<(&IsoSprite, &Transform)>().iter() {
                 let mut world_fp: Vec<f32> = Vec::with_capacity(iso_sprite.footprint.len() * 3);
                 for pt in &iso_sprite.footprint {
                     let px = tf.position.x + pt.x;
                     let py = tf.position.y + pt.y;
-                    let h = bilinear_height(&hd, size_x, size_y, px, py);
+                    let h = sample_height_mesh(&hd, size_x, size_y, px, py);
 
-                    let mut v = Vec3::new(px, py, 0.0);
-                    v = iso_to_cart_world.transform_point3(v);
-                    v += tilemap_pos;
-                    v.y -= h * hs;
+                    let world = iso_world_pos(px, py, h) + tilemap_pos;
+                    let v = iso_camera_px(world);
                     world_fp.extend_from_slice(&[v.x, v.y, v.z]);
                 }
 
@@ -465,14 +455,11 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
 
                 let ax = tf.position.x;
                 let ay = tf.position.y;
-                let ah = bilinear_height(&hd, size_x, size_y, ax, ay);
+                let ah = sample_height_mesh(&hd, size_x, size_y, ax, ay);
 
-                let mut anchor_world = Vec3::new(ax, ay, 0.0);
-                anchor_world = iso_to_cart_world.transform_point3(anchor_world);
-                anchor_world += tilemap_pos;
-                anchor_world.y -= ah * hs;
+                let anchor_cart = iso_camera_px(iso_world_pos(ax, ay, ah) + tilemap_pos);
 
-                let anchor_m = Mat4::from_translation(anchor_world);
+                let anchor_m = Mat4::from_translation(anchor_cart);
                 gfx.draw_line_strip(&x_cross_buf, 0, 2, &anchor_m, &cam, &[1.0, 0.0, 1.0, 0.9]);
                 gfx.draw_line_strip(&x_cross_buf, 2, 2, &anchor_m, &cam, &[1.0, 0.0, 1.0, 0.9]);
             }
@@ -490,11 +477,9 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                         ];
                         let mut ring_verts: Vec<f32> = Vec::with_capacity(12);
                         for &(ix, iy) in &ring_iso {
-                            let mut v = Vec3::new(ix, iy, 0.0);
-                            v = iso_to_cart_world.transform_point3(v);
-                            v += tilemap_pos;
-                            let h = bilinear_height(&hd, size_x, size_y, ix, iy);
-                            v.y -= h * hs;
+                            let h = sample_height_mesh(&hd, size_x, size_y, ix, iy);
+                            let world = iso_world_pos(ix, iy, h) + tilemap_pos;
+                            let v = iso_camera_px(world);
                             ring_verts.extend_from_slice(&[v.x, v.y, v.z]);
                         }
                         let rb = GlBuffer::from_slice(
@@ -519,18 +504,10 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
         let Some(gfx) = engine.gfx.as_mut() else { return };
         let cam = engine.camera.matrix();
         if let Some(tm_e) = tm_entity {
-            let (iso_to_cart_world, tilemap_pos, size_x, size_y, hd, hs) = {
+            let (tilemap_pos, size_x, size_y, hd) = {
                 let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
                 let tm_tf = engine.world.get::<&Transform>(tm_e).unwrap();
-                let iso_to_cart = iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale);
-                (
-                    iso_to_cart,
-                    tm_tf.position,
-                    tm.size_x,
-                    tm.size_y,
-                    tm.height_data.clone(),
-                    tm.height_scale,
-                )
+                (tm_tf.position, tm.size_x, tm.size_y, tm.height_data.clone())
             };
             for (e, (vehicle, tf)) in engine.world.query::<(&IsoVehicle, &Transform)>().iter() {
                 if !selected.contains(&e) {
@@ -540,11 +517,9 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                     continue;
                 }
                 let to_world = |px: f32, py: f32| -> [f32; 3] {
-                    let h = bilinear_height(&hd, size_x, size_y, px, py);
-                    let mut v = Vec3::new(px, py, 0.0);
-                    v = iso_to_cart_world.transform_point3(v);
-                    v += tilemap_pos;
-                    v.y -= h * hs;
+                    let h = sample_height_mesh(&hd, size_x, size_y, px, py);
+                    let world = iso_world_pos(px, py, h) + tilemap_pos;
+                    let v = iso_camera_px(world);
                     [v.x, v.y, v.z]
                 };
 
@@ -591,11 +566,9 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
             // Candidate path from the reachability probe (a drop-preview target),
             // drawn as an orange strip so the player can see the planned route.
             let to_world = |px: f32, py: f32| -> [f32; 3] {
-                let h = bilinear_height(&hd, size_x, size_y, px, py);
-                let mut v = Vec3::new(px, py, 0.0);
-                v = iso_to_cart_world.transform_point3(v);
-                v += tilemap_pos;
-                v.y -= h * hs;
+                let h = sample_height_mesh(&hd, size_x, size_y, px, py);
+                let world = iso_world_pos(px, py, h) + tilemap_pos;
+                let v = iso_camera_px(world);
                 [v.x, v.y, v.z]
             };
             for path in &preview_paths {
@@ -625,28 +598,30 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
     // visible at a glance.
     if state.borrow().debug_lights {
         let tm_entity = engine.entity_by_role(classic_core::RoleKind::Tilemap);
-        let (hd, size_x, size_y, hs) = if let Some(tm_e) = tm_entity {
+        let (hd, size_x, size_y, tilemap_pos) = if let Some(tm_e) = tm_entity {
             let tm = engine.world.get::<&Tilemap>(tm_e).unwrap();
-            (tm.height_data.clone(), tm.size_x, tm.size_y, tm.height_scale)
+            let tm_tf = engine.world.get::<&Transform>(tm_e).unwrap();
+            (tm.height_data.clone(), tm.size_x, tm.size_y, tm_tf.position)
         } else {
-            (Vec::new(), 0, 0, 0.0)
+            (Vec::new(), 0, 0, Vec3::ZERO)
         };
 
-        // Compute screen positions before mutably borrowing `gfx`.
+        // Compute screen positions before mutably borrowing `gfx`.  Everything
+        // here is in world metres and projected through the unified orthographic
+        // camera (`iso_camera_px`), so the marker lines up with the cursor on
+        // flat ground and tracks terrain height correctly over slopes.
         let markers: Vec<([f32; 3], [f32; 3])> = engine
             .gather_lights()
             .iter()
             .map(|light| {
-                let light_screen = engine.light_to_screen(light.position);
-                let terrain_z = engine
-                    .light_to_tile(light.position)
-                    .map(|tile| bilinear_height(&hd, size_x, size_y, tile.x, tile.y) * hs)
-                    .unwrap_or(0.0);
-                let terrain_screen = engine.light_to_screen(Vec3::new(
-                    light.position.x,
-                    light.position.y,
-                    terrain_z,
-                ));
+                let world = light.position; // world metres
+                let light_screen = iso_camera_px(world);
+                // Terrain surface directly under the light: same horizontal
+                // world x/y, mesh-sampled height for z.
+                let rel = world - tilemap_pos;
+                let tile = Vec2::new(rel.x / TILE_M, -rel.y / TILE_M);
+                let h = sample_height_mesh(&hd, size_x, size_y, tile.x, tile.y);
+                let terrain_screen = iso_camera_px(Vec3::new(world.x, world.y, h));
                 let ls = [light_screen.x, light_screen.y, light_screen.z];
                 let ts = [terrain_screen.x, terrain_screen.y, terrain_screen.z];
                 (ts, ls)

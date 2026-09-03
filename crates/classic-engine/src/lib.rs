@@ -35,12 +35,15 @@ use classic_core::components::{
     Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::instrument::Chan;
-use classic_core::math::{cartesian_to_iso_4, iso_to_cartesian_4};
+use classic_core::math::{
+    iso_basis, iso_camera_matrix, iso_camera_ray, iso_view_depth, iso_world_pos, Ray, DEPTH_FAR,
+    DEPTH_NEAR,
+};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{
-    bilinear_height, build_mesh, build_tile_texture, horizontal_depth_scale, sample_height_mesh,
-    HEIGHT_DEPTH_SCALE_M, HORIZONTAL_DEPTH_SCALE, PPM_TARGET,
+    bilinear_height, build_mesh, build_tile_texture, raycast_terrain, sample_height_mesh,
+    PPM_TARGET, TILE_M,
 };
 use classic_core::types::AnimChannel;
 use classic_core::types::AnimationData;
@@ -50,7 +53,7 @@ use classic_core::types::SdfFontMetrics;
 use classic_core::{Camera, RoleKind, SpriteRender, Transform};
 use classic_gfx::{Gfx, GlBuffer, GlTexture, IsoSpritePass, RenderSettings, SpriteRegion};
 use classic_platform::InputState;
-use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
@@ -81,14 +84,12 @@ struct TilemapGpu {
 }
 
 /// Per-texture depth-mask metadata, keyed by the color texture name.  When a
-/// manifest texture declares a `depth` map, the engine uploads the grayscale
-/// PNG under `depth_tex` and records the `depth_range` (isoDepth units spanned
-/// by the map's `[0, 1]` grayscale) so the render loop can write per-pixel
-/// `gl_FragDepth` for that sprite.
+/// manifest texture declares a `depth` map, the engine uploads it under
+/// `depth_tex`; the sheet stores the camera view depth directly (window
+/// `[0, 1]`), so the render loop writes it to `gl_FragDepth` as-is.
 #[derive(Clone, Debug)]
 struct TextureDepth {
     depth_tex: String,
-    depth_range: f32,
 }
 
 /// A pending GPU-compressed (`.basis`) texture upload: one unique `src` sheet
@@ -116,16 +117,17 @@ struct IsoDraw {
     /// Packed-atlas UV params, or `None` for the uniform-grid path.
     uv: Option<IsoUv>,
     depth_corners: [f32; 4],
-    depth_map: Option<(String, f32)>,
+    /// The sprite's ground-anchor window depth `[0, 1]` (the depth-map gray is
+    /// baked origin-relative, so the fragment offsets it by this anchor depth).
     depth_base: f32,
+    depth_map: Option<String>,
     normal_map: Option<String>,
     ghost_group: u32,
     color: [f32; 4],
     /// Whether the sprite is currently RTS-selected (draws a silhouette edge).
     selected: bool,
-    /// The sprite's ground anchor as `(sheared y, light-space height)`, used
-    /// to unproject billboard fragments into light space for shadowing.
-    sprite_anchor: [f32; 3],
+    /// World -> camera view space (metres): `iso_camera_matrix`.
+    world_matrix: Mat4,
 }
 
 impl IsoDraw {
@@ -165,9 +167,9 @@ pub(crate) struct ResolvedFrame {
     /// Per-sheet normal-map GL texture name (`"{sheet_name}-normal"`), set when
     /// the frame's sheet declares a `normal` companion.
     pub(crate) normal_tex: Option<String>,
-    /// Per-sheet depth-map GL texture name + depth range, set when the frame's
-    /// sheet declares a `depth` companion.
-    pub(crate) depth_tex: Option<(String, f32)>,
+    /// Per-sheet depth-map GL texture name, set when the frame's sheet declares
+    /// a `depth` companion (stores camera view depth directly).
+    pub(crate) depth_tex: Option<String>,
 }
 
 /// The namespace-resolvable resource categories, mirroring the guest SDK's
@@ -238,7 +240,7 @@ pub struct Engine {
     pub frame_tables: HashMap<String, FrameTable>,
     pub sdf_fonts: HashMap<String, SdfFontMetrics>,
     /// Per-texture depth-mask metadata keyed by color texture name (loaded
-    /// from the manifest's `depth` / `depth_range` fields).
+    /// from the manifest's `depth` field).
     texture_depths: HashMap<String, TextureDepth>,
     /// Per-texture normal-map texture name keyed by color texture name (loaded
     /// from the manifest's `normal` field).  Sprites with a normal map are
@@ -400,7 +402,7 @@ impl Engine {
             input: InputState::new(),
             show_grid: false,
             light_ambient: [0.15, 0.15, 0.2],
-            light_dir: [0.45, -0.35, 0.82],
+            light_dir: [0.566_422, -0.070_803, 0.821_068],
             light_color: [1.0, 0.95, 0.85],
             light_handles: light::LightHandles::new(),
             animations: HashMap::new(),
@@ -435,8 +437,7 @@ impl Engine {
                 0,
                 Vec::new(),
                 Vec::new(),
-                0.0,
-                45.0,
+                TILE_M,
             )),
             sync_vehicle_paths: HashMap::new(),
             vehicle_path_entities: HashMap::new(),
@@ -583,8 +584,7 @@ impl Engine {
                     let key = self.entity_key(&entry.name);
                     let depth_tex = format!("{key}-depth");
                     self.load_texture_luma8(&depth_tex, bytes);
-                    self.texture_depths
-                        .insert(key, TextureDepth { depth_tex, depth_range: entry.depth_range });
+                    self.texture_depths.insert(key, TextureDepth { depth_tex });
                 }
             }
         }
@@ -1243,10 +1243,10 @@ impl Engine {
     ///
     /// The current format (magic `b"KACH"`) carries named, typed, sparse
     /// keyframe channels — `offset` (sprite motion) plus `light.*` channels
-    /// (position/color/intensity/radius/dir/cone) — all pre-scaled into the
-    /// engine's final units by the exporter, so the animator interpolates them
-    /// verbatim.  The `offset` channel is folded into `offset_keyframes` so the
-    /// sprite animator's existing interpolation path keeps working unchanged.
+    /// (position/color/intensity/radius/dir/cone) — all in the engine's final
+    /// units by the exporter, so the animator interpolates them verbatim.  The
+    /// `offset` channel is folded into `offset_keyframes` so the sprite
+    /// animator's existing interpolation path keeps working unchanged.
     pub fn load_animation_channels(&mut self, animation_name: &str, bytes: &[u8]) {
         const MAGIC: &[u8; 4] = b"KACH";
 
@@ -1407,10 +1407,9 @@ impl Engine {
     ///   frame_count × `[f32 x, f32 y, f32 z]` triplets (one per frame).
     ///
     /// `rig_location` is Blender world `(x = drift, y = drift, z = altitude)`
-    /// in metres.  It is converted here to a cartesian screen-space offset:
-    /// the altitude maps onto the vertical (screen-Y, negative = up), and the
-    /// drift maps onto screen X/Y, all scaled by `pixels_per_meter` so the
-    /// rocket's motion matches the sprite's render resolution.
+    /// in metres.  It is stored verbatim as `(drift_x_m, drift_y_m, altitude_m)`
+    /// — the `pixels_per_meter` field is now ignored (the sprite model consumes
+    /// world metres directly, see `compute_iso_sprite_model`).
     pub fn load_animation_offsets(&mut self, animation_name: &str, bytes: &[u8]) {
         const MAGIC: &[u8; 4] = b"KAOS";
 
@@ -1424,7 +1423,6 @@ impl Engine {
                 return;
             }
             let count = u32::from_le_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
-            let ppm = f32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]);
             let mut keyframes = Vec::with_capacity(count);
             let mut o = 13;
             for _ in 0..count {
@@ -1444,11 +1442,7 @@ impl Engine {
                     bytes[o + 15],
                 ]);
                 o += 16;
-                keyframes.push(OffsetKeyframe {
-                    frame,
-                    // Altitude (z) lifts the rocket up = smaller cart_pos.y.
-                    offset: Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array(),
-                });
+                keyframes.push(OffsetKeyframe { frame, offset: Vec3::new(x, y, z).to_array() });
             }
             animation.offset_keyframes = keyframes;
             return;
@@ -1458,7 +1452,6 @@ impl Engine {
             return;
         }
         let frame_count = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-        let ppm = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
 
         let mut offsets = Vec::with_capacity(frame_count);
         for i in 0..frame_count {
@@ -1469,8 +1462,7 @@ impl Engine {
             let x = f32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
             let y = f32::from_le_bytes([bytes[o + 4], bytes[o + 5], bytes[o + 6], bytes[o + 7]]);
             let z = f32::from_le_bytes([bytes[o + 8], bytes[o + 9], bytes[o + 10], bytes[o + 11]]);
-            // Altitude (z) lifts the rocket up = smaller cart_pos.y.
-            offsets.push(Vec3::new(x * ppm, y * ppm - z * ppm, 0.0).to_array());
+            offsets.push(Vec3::new(x, y, z).to_array());
         }
         animation.offsets = offsets;
     }
@@ -1564,7 +1556,7 @@ impl Engine {
 
         let height_scale = height_scale.unwrap_or(tile_pixel_size[0] as f32);
         self.base_height_scale = height_scale;
-        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights, height_scale);
+        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights);
 
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &tiles);
 
@@ -1594,51 +1586,51 @@ impl Engine {
         let name = self.debug_name(entity);
         self.tilemap_gpu.insert(name, TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
 
-        // Register updateMousePos: convert screen coords → iso tile coords
-        // with 3-iteration height parallax solve.
+        // Register updateMousePos: convert screen coords → iso tile coords by
+        // casting the cursor through the world-metre ground plane and
+        // intersecting the ray with the terrain height field.
         let tm_entity = entity;
         self.on_update(move |engine| {
-            let (tile_step, cart_to_iso, height_data, size_x, size_y, height_scale) = {
+            let (height_data, size_x, size_y, tilemap_pos) = {
                 let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-                let scale = tm.scale;
-                let tile_step = scale.x * std::f32::consts::FRAC_1_SQRT_2;
-                let inv_scale = Vec3::new(1.0 / scale.x, 1.0 / scale.y, 1.0);
-                let cart_to_iso = cartesian_to_iso_4() * Mat4::from_scale(inv_scale);
-                (
-                    tile_step,
-                    cart_to_iso,
-                    tm.height_data.clone(),
-                    tm.size_x,
-                    tm.size_y,
-                    tm.height_scale,
-                )
+                let tf = engine.world.get::<&Transform>(tm_entity).unwrap();
+                (tm.height_data.clone(), tm.size_x, tm.size_y, tf.position)
             };
 
+            // Un-project the mouse to the world-metre ground plane (`z = 0`)
+            // through the orthographic camera: undo pan/zoom, then intersect the
+            // camera view ray with the ground plane.
             let mp = engine.input.mouse_pos;
-            let mut iso_pos = Vec3::new(mp.x, mp.y, 0.0);
-            iso_pos += engine.camera.fix();
-            iso_pos /= engine.camera.scale;
-            iso_pos = cart_to_iso.transform_point3(iso_pos);
+            let mut screen = Vec3::new(mp.x, mp.y, 0.0);
+            screen += engine.camera.fix();
+            screen /= engine.camera.scale;
+            let (right, up, back) = iso_basis();
+            let view_x = screen.x / PPM_TARGET;
+            let view_y = -screen.y / PPM_TARGET;
+            // world.z = up.z·view_y + back.z·view_z == 0  =>  view_z = -up.z·view_y/back.z.
+            let view_z = -up.z * view_y / back.z;
+            let ground = right * view_x + up * view_y + back * view_z;
 
-            let orig = iso_pos;
-            for _ in 0..3 {
-                let h = bilinear_height(&height_data, size_x, size_y, iso_pos.x, iso_pos.y);
-                if h <= 0.0 {
-                    break;
-                }
-                let z_offset = (h * height_scale) / tile_step.max(0.001);
-                iso_pos.x = orig.x - z_offset;
-                iso_pos.y = orig.y + z_offset;
-            }
+            // Cast the orthographic camera ray from the near depth plane into
+            // the scene and intersect it with the terrain height field.  The
+            // first surface the ray hits is the one the camera actually sees —
+            // a slope in front occludes terrain behind it.  Colliders can later
+            // stop the same ray.  The height field is authored in the tilemap's
+            // local frame, so the ray is shifted by the tilemap's world offset.
+            let ray = iso_camera_ray(screen.truncate());
+            let local_ray = Ray::new(ray.origin - tilemap_pos, ray.dir);
+            let hit =
+                raycast_terrain(local_ray, &height_data, size_x, size_y, DEPTH_NEAR - DEPTH_FAR)
+                    .unwrap_or(ground - tilemap_pos);
 
-            // Ground the height: `mouse_iso_pos` becomes a full (x, y, z)
-            // position where `z` is the terrain height (metres) under the
-            // cursor, sampled with the same triangle-linear interpolation as
-            // the rendered mesh.
-            iso_pos.z = sample_height_mesh(&height_data, size_x, size_y, iso_pos.x, iso_pos.y);
+            // `mouse_iso_pos` becomes a full (x, y, z) where (x, y) are tile
+            // coordinates and `z` the terrain height (metres) under the cursor.
+            let tx = hit.x / TILE_M;
+            let ty = -hit.y / TILE_M;
+            let z = hit.z;
 
             if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(tm_entity) {
-                tm.mouse_iso_pos = iso_pos;
+                tm.mouse_iso_pos = Vec3::new(tx, ty, z);
             }
         });
     }
@@ -1895,9 +1887,9 @@ impl Engine {
         true
     }
 
-    /// Set a named entity's `IsoSprite` visual offset (`frame_offset`, in world
-    /// pixels; negative Y lifts the sprite on screen).  Lets guests elevate a
-    /// runtime sprite (e.g. a container sliding out of a rocket).  Only valid
+    /// Set a named entity's `IsoSprite` visual offset (`frame_offset`, in
+    /// Blender-world metres: drift in x/y, altitude in z).  Lets guests elevate
+    /// a runtime sprite (e.g. a container sliding out of a rocket).  Only valid
     /// for sprites without an animator or vehicle sim that overwrites
     /// `frame_offset` each frame.
     pub fn set_sprite_offset(&mut self, name: &str, dx: f32, dy: f32, dz: f32) -> bool {
@@ -1967,14 +1959,14 @@ impl Engine {
         self.inventory_ui.set_target(target);
     }
 
-    /// Project an iso tile coordinate to screen space, using the Tilemap-role
-    /// entity's scale.  Returns `None` when no Tilemap-role entity exists.
+    /// Project an iso tile coordinate (at ground height) to camera-view screen
+    /// pixels (before pan/zoom), the same space `camera.position` lives in.
+    /// Returns `None` when no Tilemap-role entity exists.
     pub fn iso_to_screen(&self, x: f32, y: f32) -> Option<(f32, f32)> {
-        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
-        let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
-        let iso = Mat4::from_scale(tm.scale) * cartesian_to_iso_4().inverse();
-        let p = iso.transform_point3(Vec3::new(x, y, 0.0));
-        Some((p.x, p.y))
+        self.entity_by_role(RoleKind::Tilemap)?;
+        let world = iso_world_pos(x, y, 0.0);
+        let view = iso_camera_matrix().transform_point3(world);
+        Some((view.x * PPM_TARGET, -view.y * PPM_TARGET))
     }
 
     /// The world → screen transform for the current frame, derived from the
@@ -1992,35 +1984,24 @@ impl Engine {
         let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;
         let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
 
-        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tm_tf.scale);
-        let mut world = iso_to_cart_world.transform_point3(Vec3::new(x, y, 0.0));
-        world += tm_tf.position;
         let h = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y);
-        world.y -= h * tm.height_scale;
+        let world = iso_world_pos(x, y, h) + tm_tf.position;
+        let view = iso_camera_matrix().transform_point3(world);
+        let screen = Vec3::new(view.x * PPM_TARGET, -view.y * PPM_TARGET, 0.0);
 
         let (vw, vh) = self.viewport_size();
         let cam = self.world_to_screen_matrix(vw, vh);
-        let screen = cam.transform_point3(world);
+        let screen = cam.transform_point3(screen);
         Some((screen.x, screen.y))
     }
 
-    /// Convert an iso tile coordinate to a **light-space** point (the space
-    /// consumed by the lit shaders' `vLightPos` varying, by `light_dir`, by
-    /// `vNormal`, and by [`Light::position`]).
-    ///
-    /// Light space is [`light_matrix`] applied to `(x, y, 0)`, with the surface
-    /// height carried in **z alone** — +Z is up, as in [`crate::shadow`].
-    ///
-    /// Two space bugs have been fixed here.  It once applied the renderer's
-    /// isometric shear (`cart.y -= z_px`), placing lights in sheared screen
-    /// space while the normals they are dotted against lived in light space.
-    /// It then used `iso_to_cartesian_4`, which carries the `diag(1, 0.5, 1)`
-    /// isometric squash — so `length`/`normalize`/`dot` operated in a space
-    /// where y counts half as much as x, and point-light pools came out as
-    /// screen circles instead of ground ellipses.
+    /// Convert an iso tile coordinate to a **world-metre** point (Blender
+    /// canonical: `(tx·TILE_M, −ty·TILE_M, h)`), with the tilemap's
+    /// `Transform.position` treated as a world-metre offset.
     ///
     /// `elevation` is metres above the sampled terrain surface (same units as
-    /// `height_data`; `height_scale` converts metres to world px).  Returns
+    /// `height_data`).  Height lives in **z alone**; the light-space conversion
+    /// (and the isometric screen shear) are the consumer's concern.  Returns
     /// `None` without a Tilemap-role entity.
     pub fn iso_to_world(&self, x: f32, y: f32, elevation: f32) -> Option<Vec3> {
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
@@ -2029,18 +2010,15 @@ impl Engine {
             let tf = self.world.get::<&Transform>(tm_entity).ok()?;
             (tm, tf)
         };
-        let mut p =
-            light_matrix(tm_tf.position, tm_tf.scale).transform_point3(Vec3::new(x, y, 0.0));
         let h = sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y);
-        p.z = (h + elevation) * tm.height_scale;
-        Some(p)
+        Some(iso_world_pos(x, y, h + elevation) + tm_tf.position)
     }
 
-    /// Terrain height (in world z units) at the given iso tile coordinate.
+    /// Terrain height (world metres) at the given iso tile coordinate.
     pub fn height_at(&self, x: f32, y: f32) -> f32 {
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return 0.0 };
         let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return 0.0 };
-        sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y) * tm.height_scale
+        sample_height_mesh(&tm.height_data, tm.size_x, tm.size_y, x, y)
     }
 
     /// Write one tile index at tile coordinate `(x, y)` (bounds-checked).
@@ -2265,9 +2243,9 @@ impl Engine {
         footprint: &[(i32, i32)],
         pitch_max: f32,
         roll_max: f32,
-        wheelbase_px: f32,
-        track_px: f32,
-        safe_fall_px: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+        safe_fall_m: f32,
         jump_cost: f32,
         turn_cost: f32,
     ) -> Option<Vec<(i32, i32)>> {
@@ -2280,20 +2258,20 @@ impl Engine {
             footprint,
             pitch_max,
             roll_max,
-            wheelbase_px,
-            track_px,
-            safe_fall_px,
+            wheelbase_m,
+            track_m,
+            safe_fall_m,
             jump_cost,
             turn_cost,
         );
         classic_core::cl_info!(
             classic_core::instrument::Chan::Path,
-            "find_vehicle_path {} -> {}: footprint={} tiles, pitch={:.3}rad fall={}px, found={}",
+            "find_vehicle_path {} -> {}: footprint={} tiles, pitch={:.3}rad fall={}m, found={}",
             format!("{from:?}"),
             format!("{to:?}"),
             footprint.len(),
             pitch_max.min(roll_max),
-            safe_fall_px,
+            safe_fall_m,
             result.is_some(),
         );
         result
@@ -2322,7 +2300,7 @@ impl Engine {
         self.nav_snapshot = snapshot;
 
         // Rebuild + push the vehicle nav snapshot (structural nav + heights +
-        // height/tile scale) so the worker can run vehicle A* off-thread too.
+        // tile metre length) so the worker can run vehicle A* off-thread too.
         if let Some(vehicle_snapshot) = self.build_vehicle_nav_snapshot(&obstacles) {
             if let Some(worker) = self.pathfinder.as_mut() {
                 worker.set_vehicle_snapshot(Arc::clone(&vehicle_snapshot));
@@ -2378,7 +2356,8 @@ impl Engine {
 
     /// Build the [`pathfinder::VehicleNavSnapshot`] the worker uses for vehicle
     /// A*, from the live `NavMesh` (structural nav) and `Tilemap` (heights +
-    /// scales).  Returns `None` when either component is missing.
+    /// the fixed `TILE_M` tile metre length).  Returns `None` when either
+    /// component is missing.
     fn build_vehicle_nav_snapshot(
         &self,
         obstacles: &[i32],
@@ -2398,8 +2377,7 @@ impl Engine {
             size_y,
             structural,
             tm.height_data.clone(),
-            tm.height_scale,
-            tm.scale.x,
+            TILE_M,
         )))
     }
 
@@ -2677,9 +2655,10 @@ impl Engine {
     }
 
     /// Gather the active lights from the world, resolving parent attachments to
-    /// light-space world positions.  A parented light treats `Light.position`
-    /// as a light-space offset from the parent entity's ground point
-    /// (`iso_to_world`); an unparented light's position is already light space.
+    /// **world-metre** positions (the same space the lit shaders evaluate them
+    /// in).  A parented light treats `Light.position` as a world-metre offset
+    /// from the parent's ground point (`iso_to_world`); an unparented light's
+    /// position is already world metres.
     pub fn gather_lights(&self) -> Vec<Light> {
         let mut lights = Vec::new();
         for (_e, light) in self.world.query::<&Light>().iter() {
@@ -2704,12 +2683,7 @@ impl Engine {
                                 // `compute_iso_sprite_model`: altitude
                                 // (`fo.z`) lands in z, horizontal drift in x/y.
                                 let fo = self.parent_frame_offset(pe);
-                                l.position =
-                                    base + Vec3::new(
-                                        fo.x,
-                                        classic_core::math::cartesian_y_to_light(fo.y + fo.z),
-                                        fo.z,
-                                    ) + l.position;
+                                l.position = base + fo + l.position;
                             }
                             None => classic_core::cl_warn!(
                                 classic_core::instrument::Chan::Render,
@@ -2736,6 +2710,12 @@ impl Engine {
             }
             lights.push(l);
         }
+        // `Light.radius` is authored in legacy light-space px (64 px/metre, the
+        // pre-unification unit the shader used); convert it to world metres so
+        // `dist / radius` in the shader compares like-for-like with `position`.
+        for l in &mut lights {
+            l.radius /= PPM_TARGET;
+        }
         // `MAX_LIGHTS` bounds the UBO block, but `gather_lights` reads every
         // `Light` entity — including `state.json`-declared and directly-spawned
         // ones that never went through `LightHandles`.  Enforce the budget here
@@ -2757,11 +2737,11 @@ impl Engine {
         lights
     }
 
-    /// The visual `frame_offset` (screen-space) of a parent entity, or
-    /// `Vec3::ZERO` when the parent has none (a static sprite).  Animated
-    /// `IsoSprite` / `IsoAgent` entities carry the descent/run offset here;
-    /// `gather_lights` folds it into an attached light's position so the light
-    /// tracks the parent's animated motion.
+    /// The visual `frame_offset` (Blender-world metres: drift in x/y, altitude
+    /// in z) of a parent entity, or `Vec3::ZERO` when the parent has none (a
+    /// static sprite).  Animated `IsoSprite` / `IsoAgent` entities carry the
+    /// descent/run offset here; `gather_lights` folds it into an attached
+    /// light's position so the light tracks the parent's animated motion.
     fn parent_frame_offset(&self, parent: hecs::Entity) -> Vec3 {
         if let Ok(s) = self.world.get::<&IsoSprite>(parent) {
             return s.frame_offset;
@@ -2770,38 +2750,6 @@ impl Engine {
             return a.frame_offset;
         }
         Vec3::ZERO
-    }
-
-    /// Project a **light-space** position into the renderer's screen space
-    /// (the space the overlay hooks draw in, i.e. after the isometric squash
-    /// and the `y -= z` height shear, before the camera matrix).
-    ///
-    /// Light space is `T(origin) · S(scale) · Rz(-45°)` of tile space, so the
-    /// round-trip light → tile → screen collapses to a single diagonal:
-    /// `screen = (x, 0.5·y, z)` of `(light − origin)`, then `y -= z`.  Used by
-    /// the light-debug overlay to place markers without re-deriving the
-    /// tilemap transform.
-    pub fn light_to_screen(&self, light: Vec3) -> Vec3 {
-        let origin = self
-            .entity_by_role(RoleKind::Tilemap)
-            .and_then(|e| self.world.get::<&Transform>(e).ok())
-            .map(|tf| tf.position)
-            .unwrap_or(Vec3::ZERO);
-        let rel = light - origin;
-        Vec3::new(origin.x + rel.x, origin.y + rel.y * 0.5 - rel.z, origin.z + rel.z)
-    }
-
-    /// Convert a **light-space** position back to tile coordinates (the inverse
-    /// of [`Self::iso_to_world`]'s `light_matrix`), for sampling the terrain
-    /// height directly under a light.  Returns `(tile_x, tile_y)`.
-    pub fn light_to_tile(&self, light: Vec3) -> Option<Vec2> {
-        let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
-        let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
-        let rel = light - tm_tf.position;
-        let a = rel.x / tm_tf.scale.x.max(1e-6);
-        let b = rel.y / tm_tf.scale.y.max(1e-6);
-        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
-        Some(Vec2::new((a - b) * inv_sqrt2, (a + b) * inv_sqrt2))
     }
 
     /// Spawn a named screen-space solid-color rectangle (a HUD element).
@@ -3615,7 +3563,7 @@ impl Engine {
                 }
             };
 
-            let (model, sprite_anchor) = Self::compute_iso_sprite_model(
+            let model = Self::compute_iso_sprite_model(
                 &iso_sprite,
                 &tf,
                 &tilemap_tf,
@@ -3623,16 +3571,17 @@ impl Engine {
                 tex_dim,
                 anchor_px,
             );
-            let h_depth = horizontal_depth_scale(tilemap.size_x, tilemap.size_y);
-            let depth_corners =
-                Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint, h_depth);
+            // The model's translation column is the sprite's ground anchor in
+            // world metres; its window depth is the anchor offset the (origin-
+            // relative) depth map is re-anchored against in the fragment shader.
+            let depth_base = Self::world_depth(model.w_axis.truncate());
+            let world_matrix = iso_camera_matrix();
+            let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
             // Per-sheet normal/depth companions (from the resolved frame's
             // sheet) win; fall back to the per-texture `entry.normal`/`depth`
             // manifest fields for assets not on a shared atlas.
             let depth_map = frame_ref.as_ref().and_then(|fr| fr.depth_tex.clone()).or_else(|| {
-                self.texture_depths
-                    .get(&iso_sprite.texture)
-                    .map(|d| (d.depth_tex.clone(), d.depth_range))
+                self.texture_depths.get(&iso_sprite.texture).map(|d| d.depth_tex.clone())
             });
             let normal_map = frame_ref
                 .as_ref()
@@ -3647,29 +3596,27 @@ impl Engine {
                 tile_set_size: [iso_sprite.tile_set_size.x, iso_sprite.tile_set_size.y],
                 uv,
                 depth_corners,
+                depth_base,
                 depth_map,
-                depth_base: Self::compute_iso_base_depth(tf.position, h_depth),
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
-                sprite_anchor,
+                world_matrix,
             });
         }
 
         // Fit the directional shadow matrix to the primary tilemap's extents
-        // plus the sprite casters' billboards (so their shadows aren't clipped
+        // plus the sprite casters' world quads (so their shadows aren't clipped
         // at the light box's near plane).  Still before the `gfx` mutable borrow.
         let shadow_pass: Option<shadow::LightMatrix> = if config.shadows {
             self.entity_by_role(RoleKind::Tilemap).and_then(|e| {
                 let tm = self.world.get::<&Tilemap>(e).ok()?;
                 let tf = self.world.get::<&Transform>(e).ok()?;
-                let lm = light_matrix(tf.position, tf.scale);
-                let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max) * tm.height_scale;
-                let casters: Vec<(Mat4, [f32; 3])> =
-                    iso_draws.iter().map(|d| (d.model, d.sprite_anchor)).collect();
+                let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max);
+                let casters: Vec<Mat4> = iso_draws.iter().map(|d| d.model).collect();
                 Some(shadow::fit_directional_light_matrix(
-                    &lm,
+                    tf.position,
                     tm.size_x as f32,
                     tm.size_y as f32,
                     z_max,
@@ -3718,11 +3665,10 @@ impl Engine {
                         let Ok(tf) = self.world.get::<&Transform>(*entity) else {
                             continue;
                         };
-                        let lm = light_matrix(tf.position, tf.scale);
                         let name = name_by_entity.get(entity).copied().unwrap_or("");
                         if let Some(gpu) = self.tilemap_gpu.get(name) {
                             gfx.draw_shadow_tilemap(
-                                &lm,
+                                &Mat4::from_translation(tf.position),
                                 &m.view_proj,
                                 gpu.vertex_count as i32,
                                 &gpu.mesh_buf,
@@ -3740,7 +3686,6 @@ impl Engine {
                             &m.view_proj,
                             &draw.texture,
                             draw.region(),
-                            &draw.sprite_anchor,
                         );
                     }
                     gfx.end_shadow_pass();
@@ -3789,10 +3734,7 @@ impl Engine {
                 if is_nav {
                     let Some(ref gpu) = self.nav_gpu else { continue };
                     if let Ok(nav) = self.world.get::<&NavMesh>(*entity) {
-                        let iso = cartesian_to_iso_4().inverse();
-                        let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-                        let lm = light_matrix(tf.position, tf.scale);
-                        let normal_matrix = terrain_normal_matrix(&lm);
+                        let world_matrix = iso_camera_matrix();
                         let nav_ts = gfx
                             .textures
                             .get(&nav.tile_set)
@@ -3801,7 +3743,7 @@ impl Engine {
                         let nav_rect = golden::project_rect(
                             &cam,
                             &(Mat4::from_translation(tf.position)
-                                * iso_matrix
+                                * world_matrix
                                 * Mat4::from_scale(Vec3::new(
                                     nav.size_x as f32,
                                     nav.size_y as f32,
@@ -3821,7 +3763,6 @@ impl Engine {
                                 frame: None,
                                 color: None,
                                 depth: None,
-                                depth_range: None,
                                 normal: None,
                                 screen: Some(nav_rect),
                             });
@@ -3829,7 +3770,7 @@ impl Engine {
                         gfx.draw_tilemap(
                             &Mat4::from_translation(tf.position),
                             &cam,
-                            &iso_matrix,
+                            &world_matrix,
                             &gpu.tile_tex,
                             &nav.tile_set,
                             &nav_ts,
@@ -3843,14 +3784,8 @@ impl Engine {
                                 ambient: self.light_ambient,
                                 light_dir: self.light_dir,
                                 light_color: self.light_color,
-                                depth_scale: [
-                                    horizontal_depth_scale(nav.size_x, nav.size_y),
-                                    HEIGHT_DEPTH_SCALE_M,
-                                ],
+                                depth_span: [DEPTH_NEAR, DEPTH_FAR],
                                 ppm: PPM_TARGET,
-                                light_matrix: lm,
-                                normal_matrix,
-                                sprite_normal_matrix: classic_core::math::blender_to_light_3(),
                                 shadow: shadow_settings,
                             },
                             false,
@@ -3869,13 +3804,8 @@ impl Engine {
                 let Some(gpu) = self.tilemap_gpu.get(entity_name) else {
                     continue;
                 };
-                // Build the iso matrix (rasterisation) and the light matrix
-                // (everything else) — see `light_matrix`.
-                let iso = cartesian_to_iso_4().inverse();
-                let iso_matrix = Mat4::from_scale(tf.scale) * iso;
-                let lm = light_matrix(tf.position, tf.scale);
-
-                let normal_matrix = terrain_normal_matrix(&lm);
+                // The rasterisation camera; lighting is done in world space.
+                let world_matrix = iso_camera_matrix();
 
                 let tps = tm.tile_pixel_size;
                 let tile_pixel_size = [tps[0] as f32, tps[1] as f32];
@@ -3887,7 +3817,7 @@ impl Engine {
                 let tm_rect = golden::project_rect(
                     &cam,
                     &(Mat4::from_translation(tf.position)
-                        * iso_matrix
+                        * world_matrix
                         * Mat4::from_scale(Vec3::new(tm.size_x as f32, tm.size_y as f32, 1.0))),
                     false,
                 );
@@ -3904,7 +3834,6 @@ impl Engine {
                         frame: None,
                         color: None,
                         depth: None,
-                        depth_range: None,
                         normal: None,
                         screen: Some(tm_rect),
                     });
@@ -3913,7 +3842,7 @@ impl Engine {
                 gfx.draw_tilemap(
                     &Mat4::from_translation(tf.position),
                     &cam,
-                    &iso_matrix,
+                    &world_matrix,
                     &gpu.tile_tex,
                     &tm.tile_set,
                     &tile_set_size,
@@ -3927,14 +3856,8 @@ impl Engine {
                         ambient: self.light_ambient,
                         light_dir: self.light_dir,
                         light_color: self.light_color,
-                        depth_scale: [
-                            horizontal_depth_scale(tm.size_x, tm.size_y),
-                            HEIGHT_DEPTH_SCALE_M,
-                        ],
+                        depth_span: [DEPTH_NEAR, DEPTH_FAR],
                         ppm: PPM_TARGET,
-                        light_matrix: lm,
-                        normal_matrix,
-                        sprite_normal_matrix: classic_core::math::blender_to_light_3(),
                         shadow: shadow_settings,
                     },
                     self.show_grid,
@@ -3947,21 +3870,13 @@ impl Engine {
         // Phase 2: isometric normal passes — draw on top of terrain, writing
         // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
         // `RenderSettings` (shared by both sprite passes) carries the light
-        // preset.  Sprite normals come from a baked map rather than the mesh,
-        // so the *terrain* `normal_matrix` is unused here (the struct needs a
-        // value); `sprite_normal_matrix` is the one that matters — it rotates
-        // the baked Blender-world normal into light space.  `light_matrix` is
-        // likewise unused (sprites reconstruct their light-space position from
-        // `sprite_anchor`).
+        // preset; the world camera matrix rides on each `IsoDraw`.
         let sprite_settings = RenderSettings {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
             light_color: self.light_color,
-            depth_scale: [HORIZONTAL_DEPTH_SCALE, HEIGHT_DEPTH_SCALE_M],
+            depth_span: [DEPTH_NEAR, DEPTH_FAR],
             ppm: PPM_TARGET,
-            light_matrix: Mat4::IDENTITY,
-            normal_matrix: Mat3::IDENTITY,
-            sprite_normal_matrix: classic_core::math::blender_to_light_3(),
             shadow: shadow_settings,
         };
         for draw in &iso_draws {
@@ -3975,8 +3890,7 @@ impl Engine {
                     texture: Some(&draw.texture),
                     frame: Some(draw.frame),
                     color: None,
-                    depth: draw.depth_map.as_ref().map(|(t, _)| t.as_str()),
-                    depth_range: draw.depth_map.as_ref().map(|(_, r)| *r),
+                    depth: draw.depth_map.as_deref(),
                     normal: draw.normal_map.as_deref(),
                     screen: Some(golden::project_rect(&cam, &draw.model, false)),
                 });
@@ -3984,14 +3898,14 @@ impl Engine {
             gfx.draw_iso_sprite(
                 &draw.model,
                 &cam,
+                &draw.world_matrix,
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
-                draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
                 draw.depth_base,
+                draw.depth_map.as_deref(),
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
-                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Normal,
@@ -4007,14 +3921,14 @@ impl Engine {
             gfx.draw_iso_sprite(
                 &draw.model,
                 &cam,
+                &draw.world_matrix,
                 &draw.texture,
                 draw.region(),
                 &draw.depth_corners,
-                draw.depth_map.as_ref().map(|(t, r)| (t.as_str(), *r)),
                 draw.depth_base,
+                draw.depth_map.as_deref(),
                 draw.normal_map.as_deref(),
                 &[draw.color[0], draw.color[1], draw.color[2]],
-                &draw.sprite_anchor,
                 &sprite_settings,
                 draw.ghost_group,
                 IsoSpritePass::Ghost,
@@ -4089,7 +4003,6 @@ impl Engine {
                             frame: Some(sprite.frame),
                             color: None,
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(
                                 &cam,
@@ -4137,7 +4050,6 @@ impl Engine {
                             frame: None,
                             color: Some(rect.color),
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(&cam, &model, rect.ignore_cam)),
                         });
@@ -4215,7 +4127,6 @@ impl Engine {
                             frame: Some(sprite.frame),
                             color: None,
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(&cam, &model, true)),
                         });
@@ -4340,7 +4251,6 @@ impl Engine {
                             frame: None,
                             color: Some(sdf.color),
                             depth: None,
-                            depth_range: None,
                             normal: None,
                             screen: Some(golden::project_rect(&cam, &model, sdf.ignore_cam)),
                         });
@@ -4665,16 +4575,16 @@ impl Engine {
         }
 
         // Use parent tilemap's actual height data so nav tiles sit on terrain surface.
-        let (heights, height_scale) = self
+        let heights = self
             .entity_by_role(RoleKind::Tilemap)
             .and_then(|e| self.world.get::<&Tilemap>(e).ok())
-            .map(|tm| (tm.height_data.clone(), tm.height_scale))
-            .filter(|(h, _)| h.len() == (size_x as usize + 1) * (size_y as usize + 1))
-            .unwrap_or_else(|| (vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)], 64.0));
+            .map(|tm| tm.height_data.clone())
+            .filter(|h| h.len() == (size_x as usize + 1) * (size_y as usize + 1))
+            .unwrap_or_else(|| vec![1.0f32; (size_x as usize + 1) * (size_y as usize + 1)]);
 
         let Some(gfx) = self.gfx.as_mut() else { return };
 
-        let (mesh_data, vcount) = build_mesh(size_x, size_y, &nav_data, &heights, height_scale);
+        let (mesh_data, vcount) = build_mesh(size_x, size_y, &nav_data, &heights);
         let mesh_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
 
@@ -4813,15 +4723,15 @@ impl Engine {
         // does.  Rebuilding the overlay on a flat grid instead left it
         // detached from the surface after any nav edit — unnoticeable on the
         // flat demo map, glaring over a crater field.
-        let (hs, heights) = self
+        let heights = self
             .entity_by_role(RoleKind::Tilemap)
             .and_then(|e| self.world.get::<&Tilemap>(e).ok())
-            .map(|tm| (tm.height_scale, tm.height_data.clone()))
-            .filter(|(_, h)| h.len() == (sx as usize + 1) * (sy as usize + 1))
-            .unwrap_or_else(|| (64.0, vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)]));
+            .map(|tm| tm.height_data.clone())
+            .filter(|h| h.len() == (sx as usize + 1) * (sy as usize + 1))
+            .unwrap_or_else(|| vec![1.0f32; (sx as usize + 1) * (sy as usize + 1)]);
         let Some(gfx) = self.gfx.as_mut() else { return };
 
-        let (mesh_data, vcount) = build_mesh(sx, sy, &data, &heights, hs);
+        let (mesh_data, vcount) = build_mesh(sx, sy, &data, &heights);
         let mesh_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
         let (tile_pixels, tw, th) = build_tile_texture(sx, sy, &data);
@@ -4838,7 +4748,7 @@ impl Engine {
             );
             return;
         };
-        let (size_x, size_y, tiles, heights, height_scale) = {
+        let (size_x, size_y, tiles, heights) = {
             let tm = match self.world.get::<&Tilemap>(tm_entity) {
                 Ok(t) => t,
                 Err(_) => {
@@ -4849,7 +4759,7 @@ impl Engine {
                     return;
                 }
             };
-            (tm.size_x, tm.size_y, tm.data.clone(), tm.height_data.clone(), tm.height_scale)
+            (tm.size_x, tm.size_y, tm.data.clone(), tm.height_data.clone())
         };
 
         let gfx = match self.gfx.as_mut() {
@@ -4863,7 +4773,7 @@ impl Engine {
             }
         };
 
-        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights, height_scale);
+        let (mesh_data, vcount) = build_mesh(size_x, size_y, &tiles, &heights);
         let mesh_buf =
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
 
@@ -4953,7 +4863,7 @@ impl Engine {
         let uv = table.uv_rect(frame)?;
         let (normal_tex, depth_name) =
             table.companions.get(frame.sheet as usize).cloned().unwrap_or((None, None));
-        let depth_tex = depth_name.map(|d| (d, sheet.depth_range));
+        let depth_tex = depth_name;
         Some(ResolvedFrame {
             sheet_name: sheet.name.clone(),
             uv_rect: uv,
@@ -4987,10 +4897,18 @@ impl Engine {
         Vec2::new((component_anchor.x * cw - bx0) / fw, (component_anchor.y * ch - by0) / fh)
     }
 
-    /// Compute the model matrix for an IsoSprite.
-    /// `tex_dim` is the quad size in pixels; `anchor_px` is the ground-contact
-    /// point in that same pixel space (the quad is shifted so it lands on the
-    /// sprite's position).
+    /// Compute the world-metre model matrix for an IsoSprite.
+    ///
+    /// The quad is authored in **Blender-world metres**: its width runs along
+    /// the isometric "right" direction `(1/√2, −1/√2, 0)` and its height runs
+    /// down world −Z, so under the orthographic camera it rasterises to the
+    /// same screen-aligned rectangle the old billboard drew.  Lighting and
+    /// shadowing operate on true standing geometry (no `sprite_anchor`
+    /// unproject).
+    ///
+    /// `tex_dim` is the source-cell quad size in pixels; `anchor_px` is the
+    /// ground-contact point in that same pixel space (the quad is shifted so it
+    /// lands on the sprite's position).
     fn compute_iso_sprite_model(
         iso_sprite: &IsoSprite,
         sprite_tf: &Transform,
@@ -4998,13 +4916,7 @@ impl Engine {
         tilemap: &Tilemap,
         tex_dim: (f32, f32),
         anchor_px: Vec2,
-    ) -> (Mat4, [f32; 3]) {
-        let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
-
-        let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
-        cart_pos += iso_sprite.frame_offset;
-        cart_pos += tilemap_tf.position;
-
+    ) -> Mat4 {
         let h = sample_height_mesh(
             &tilemap.height_data,
             tilemap.size_x,
@@ -5012,63 +4924,50 @@ impl Engine {
             sprite_tf.position.x,
             sprite_tf.position.y,
         );
-        cart_pos.y -= h * tilemap.height_scale;
-        // Carry the terrain height in world z (matching the tilemap shader's
-        // `worldPos.z = vertex_pos.z`) so sprite fragments share the terrain's
-        // light/shadow space, not just its y-lift.
-        cart_pos.z = h * tilemap.height_scale;
-
-        let anchor_delta = Vec3::new(-anchor_px.x, -anchor_px.y, 0.0);
-
-        let model = Mat4::from_translation(cart_pos)
-            * Mat4::from_scale(sprite_tf.scale)
-            * Mat4::from_translation(anchor_delta)
-            * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0));
-
-        // The sprite's ground anchor, bridging the two spaces:
-        //
-        //   x = sheared screen y   — where the quad actually sits on screen
-        //   y = light-space height — the sprite's base, +Z up
-        //   z = light-space y      — metric, un-squashed, un-sheared
-        //
-        // A billboard is a screen-aligned quad: its tall axis is *screen* up,
-        // which in an isometric view means world **+Z**, not world -Y.  The
-        // shaders use this triple to unproject billboard fragments back into
-        // light space so sprites light, cast and receive shadows as standing
-        // geometry rather than as decals lying flat on the ground.
-        //
-        // The light-space y used to be recovered in the shader as
-        // `anchor.x + anchor.y` (un-shearing the screen y with the height).
-        // That silently folded a flying sprite's *altitude* — which the
-        // animation `offset` channel packs into screen y — into its light-space
-        // **y**, so a descending rocket was lit as though it were lying on the
-        // ground far to the north.  `frame_offset.z` carries the altitude
-        // separately (0 for every non-flying asset, so this is a no-op for
-        // them) and it is applied to the height instead.
+        // `frame_offset` is Blender-world metres: horizontal drift in x/y, the
+        // altitude in z (see `load_animation_offsets`).
         let altitude = iso_sprite.frame_offset.z;
-        let light = light_matrix(tilemap_tf.position, tilemap_tf.scale)
-            .transform_point3(Vec3::new(sprite_tf.position.x, sprite_tf.position.y, 0.0));
-        // `frame_offset.y` is pre-sheared (`drift_y - altitude`), so the pure
-        // horizontal drift is `frame_offset.y + altitude`.
-        let drift_y =
-            classic_core::math::cartesian_y_to_light(iso_sprite.frame_offset.y + altitude);
-        (model, [cart_pos.y, cart_pos.z + altitude, light.y + drift_y])
+        let drift = Vec3::new(iso_sprite.frame_offset.x, iso_sprite.frame_offset.y, 0.0);
+
+        // Ground anchor in Blender-world metres (terrain height + altitude).
+        let world_pos = iso_world_pos(sprite_tf.position.x, sprite_tf.position.y, h + altitude)
+            + drift
+            + tilemap_tf.position;
+
+        // Quad dimensions in metres: source-cell pixels map to metres at
+        // `PPM_TARGET` px/m along both screen axes.
+        let w = tex_dim.0 * sprite_tf.scale.x / PPM_TARGET;
+        let hh = tex_dim.1 * sprite_tf.scale.y / PPM_TARGET;
+
+        // Anchor in normalized `[0,1]` quad space.
+        let ua = anchor_px.x / tex_dim.0.max(f32::EPSILON);
+        let wa = anchor_px.y / tex_dim.1.max(f32::EPSILON);
+
+        // Billboard basis: width along `(1/√2, −1/√2, 0)`, height down world
+        // −Z (the sheet's v=0 top lands at higher z, v=1 feet at the anchor).
+        let billboard = Mat4::from_cols(
+            Vec4::new(std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0),
+            Vec4::new(0.0, 0.0, -1.0, 0.0),
+            Vec4::new(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0),
+            Vec4::W,
+        );
+
+        Mat4::from_translation(world_pos)
+            * billboard
+            * Mat4::from_scale(Vec3::new(w, hh, 1.0))
+            * Mat4::from_translation(Vec3::new(-ua, -wa, 0.0))
     }
 
-    /// Compute the anchor-plane iso depth for a sprite position (the depth a
-    /// depth map's 0.5 grayscale corresponds to), in **window space** `[0, 1]`.
-    /// Matches the `base_depth` term in [`Self::compute_iso_depth_corners`].
-    /// `h_depth` is the tilemap's horizontal depth scale (see
-    /// [`classic_core::tilemap::horizontal_depth_scale`]).
-    fn compute_iso_base_depth(pos: Vec3, h_depth: f32) -> f32 {
-        (pos.x - pos.y) / h_depth + 0.5 + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
+    /// Camera view depth of a world point, normalised to **window space**
+    /// `[0, 1]` (`0` = nearest, `1` = farthest).
+    fn world_depth(world: Vec3) -> f32 {
+        (DEPTH_NEAR - iso_view_depth(world)) / (DEPTH_NEAR - DEPTH_FAR)
     }
 
-    /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.  `h_depth` is the tilemap's horizontal depth
-    /// scale, kept identical to the terrain's `depth_scale.x` uniform so sprite
-    /// occlusion matches the tilemap.
-    fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2], h_depth: f32) -> [f32; 4] {
-        let base_depth = Self::compute_iso_base_depth(pos, h_depth);
+    /// Compute iso depth corners for the footprint, in **window space** `[0, 1]`.
+    /// `pos` is the sprite's tile position (x/y in tiles, z in metres).
+    fn compute_iso_depth_corners(pos: Vec3, footprint: &[glam::Vec2]) -> [f32; 4] {
+        let base_depth = Self::world_depth(iso_world_pos(pos.x, pos.y, pos.z));
         let default_footprint = [
             glam::Vec2::new(0.5, -0.5),
             glam::Vec2::new(0.5, 0.5),
@@ -5080,10 +4979,8 @@ impl Engine {
         let mut raw_depths = [0.0f32; 4];
         for i in 0..4 {
             let pt = &footprint[i];
-            let d = (pos.x + pt.x - pos.y - pt.y) / h_depth
-                + 0.5
-                + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
-            raw_depths[i] = d.min(base_depth);
+            let world = iso_world_pos(pos.x + pt.x, pos.y + pt.y, pos.z);
+            raw_depths[i] = Self::world_depth(world).min(base_depth);
         }
 
         let min_fp = raw_depths.iter().cloned().fold(f32::MAX, f32::min);
@@ -5098,52 +4995,6 @@ impl Default for Engine {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// The tile → **light space** transform for a tilemap: `T(origin) · S(scale) ·
-/// Rz(-45°)`.
-///
-/// This is the single source of truth for light space on the CPU *and* the
-/// GPU: it is uploaded verbatim as the `light_matrix` uniform consumed by
-/// `iso_tilemap.vert` and `shadow_depth.vert`, and it is what
-/// [`Engine::iso_to_world`] evaluates.  `light_matrix_matches_iso_to_world`
-/// pins the two together.
-///
-/// It differs from the renderer's `iso_matrix` (`S(scale) ·
-/// iso_to_cartesian_4()`) by exactly the `diag(1, 0.5, 1)` isometric squash —
-/// see [`classic_core::math::iso_to_light_4`] for why lighting must not carry
-/// it.  The tilemap origin is a cartesian pixel offset, so its `y` is
-/// un-squashed here to match.
-///
-/// Note the operand order `S · Rz`, not `Rz · S`: the two differ whenever the
-/// tile scale is not xy-isotropic, and the CPU path used to compose them the
-/// other way round from the shader.
-pub fn light_matrix(origin: Vec3, scale: Vec3) -> Mat4 {
-    Mat4::from_translation(Vec3::new(origin.x, origin.y * 2.0, origin.z))
-        * Mat4::from_scale(scale)
-        * classic_core::math::iso_to_light_4()
-}
-
-/// Normal matrix for terrain meshes: `inverse_transpose(mat3(light_matrix))`.
-///
-/// The tilemap mesh is authored in **tile space** — `vertex_pos` is
-/// `(tile_x, tile_y, height_px)`, so x and y are tile *indices* while z is
-/// pixels — and `build_vertex_normals` takes cross products in that same
-/// space.  The light transform is `S(tilemap.scale) * Rz(-45°)`, which scales
-/// x and y by the tile pixel size (45) and leaves z alone.
-///
-/// Two bugs have lived here.  First it used the **unscaled** iso matrix,
-/// dropping that factor of 45 from the normals but not from the positions; a
-/// 1 m/tile slope then produced a normal near `(-64, 0, 1)`, i.e. an almost
-/// vertical cliff, and the terrain Lambert term degenerated into a binary slope
-/// mask (issue #77).  Then it used the **squashed** `iso_matrix`, so terrain
-/// normals described a world compressed 2× along y while sprite normals (baked
-/// in metric Blender space) described the real one — the two could not agree.
-///
-/// Building it from [`light_matrix`] makes the slope ratio physical *and*
-/// metric, so terrain and sprites finally share one frame.
-fn terrain_normal_matrix(light_matrix: &Mat4) -> Mat3 {
-    Mat3::from_mat4(*light_matrix).inverse().transpose()
 }
 
 /// Decode a little-endian `u32` grid byte blob.
@@ -5213,12 +5064,13 @@ mod tests {
         let offsets = &engine.animations["rocketLanding"].offsets;
         assert_eq!(offsets.len(), 3);
 
-        // Frame 0: 50 m altitude → 400 units up (negative screen Y).
-        assert!((offsets[0][1] - (-400.0)).abs() < 0.001, "got {:?}", offsets[0]);
-        // Drift x maps directly (scaled by ppm).
-        assert!((offsets[1][0] - (-8.0)).abs() < 0.001, "got {:?}", offsets[1]);
+        // Frame 0: 50 m altitude lands in z (the `ppm` field is now ignored).
+        assert!((offsets[0][2] - 50.0).abs() < 0.001, "got {:?}", offsets[0]);
+        // Drift x/y map verbatim (metres).
+        assert!((offsets[1][0] - (-1.0)).abs() < 0.001, "got {:?}", offsets[1]);
+        assert!((offsets[1][1] - 0.5).abs() < 0.001, "got {:?}", offsets[1]);
         // Altitude 0 → zero vertical offset.
-        assert!((offsets[2][1]).abs() < 0.001, "got {:?}", offsets[2]);
+        assert!((offsets[2][2]).abs() < 0.001, "got {:?}", offsets[2]);
     }
 
     #[test]
@@ -5257,16 +5109,16 @@ mod tests {
         let anim = &engine.animations["rocketLanding"];
         assert!(anim.offsets.is_empty(), "sparse blob must not fill `offsets`");
         assert_eq!(anim.offset_keyframes.len(), 2);
-        // Frame 0: 50 m altitude at ppm=64 → 3200 units up (negative screen Y).
+        // Frame 0: 50 m altitude lands in z (metres).
         assert_eq!(anim.offset_keyframes[0].frame, 0);
         assert!(
-            (anim.offset_keyframes[0].offset[1] - (-3200.0)).abs() < 0.01,
+            (anim.offset_keyframes[0].offset[2] - 50.0).abs() < 0.01,
             "got {:?}",
             anim.offset_keyframes[0]
         );
-        // Frame 240: touchdown → zero vertical offset.
+        // Frame 240: touchdown → zero altitude.
         assert_eq!(anim.offset_keyframes[1].frame, 240);
-        assert!(anim.offset_keyframes[1].offset[1].abs() < 0.01);
+        assert!(anim.offset_keyframes[1].offset[2].abs() < 0.01);
     }
 
     #[test]
@@ -5331,14 +5183,13 @@ mod tests {
     }
 
     #[test]
-    fn compute_iso_base_depth_matches_anchor_plane_formula() {
+    fn world_depth_matches_camera_view_depth() {
+        // The window-space depth must be the camera view depth normalised over
+        // `DEPTH_NEAR`/`DEPTH_FAR`: `(DEPTH_NEAR - dot(back, world)) / span`.
         let pos = glam::Vec3::new(100.0, 20.0, 64.0);
-        let expected = (100.0 - 20.0) / HORIZONTAL_DEPTH_SCALE
-            + 0.5
-            + (64.0 / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
-        assert!(
-            (Engine::compute_iso_base_depth(pos, HORIZONTAL_DEPTH_SCALE) - expected).abs() < 1e-9
-        );
+        let world = iso_world_pos(pos.x, pos.y, pos.z);
+        let expected = (DEPTH_NEAR - iso_view_depth(world)) / (DEPTH_NEAR - DEPTH_FAR);
+        assert!((Engine::world_depth(world) - expected).abs() < 1e-9);
     }
 
     #[test]
@@ -5346,8 +5197,7 @@ mod tests {
         classic_core::register_all_components();
         let mut engine = Engine::new_for_test();
 
-        // A flat 4x4 tilemap at the origin with a uniform 1-metre plateau,
-        // scale [45,45,1] and a 64 px/metre height scale (the lunar PPM).
+        // A flat 4x4 tilemap at the origin with a uniform 1-metre plateau.
         let tilemap = Tilemap {
             position: Vec3::ZERO,
             scale: Vec3::new(45.0, 45.0, 1.0),
@@ -5374,23 +5224,104 @@ mod tests {
         ));
         engine.names.insert("tilemap".into(), entity);
 
-        // Ground level: the light sits at the 1 m surface → z = 1 * 64.
+        // Ground level: the point sits at the 1 m surface → z = 1 (metres).
         let ground = engine.iso_to_world(0.0, 0.0, 0.0).unwrap();
-        assert!((ground.z - 64.0).abs() < 1e-3, "got z {}", ground.z);
+        assert!((ground.z - 1.0).abs() < 1e-3, "got z {}", ground.z);
 
-        // 2 m above: z = 3 * 64.  Elevation is carried in z alone — light space
-        // is +Z up, so raising a light must not move it in x or y.  (This
-        // previously asserted a y lift of 2 * 64, the renderer's isometric
-        // shear, which put lights in a different space from the normals they
-        // are dotted against.)
+        // 2 m above: z = 3.  Elevation is carried in z alone — world space is
+        // +Z up, so raising a light must not move it in x or y.
         let raised = engine.iso_to_world(0.0, 0.0, 2.0).unwrap();
-        assert!((raised.z - 192.0).abs() < 1e-3, "got z {}", raised.z);
+        assert!((raised.z - 3.0).abs() < 1e-3, "got z {}", raised.z);
         assert!((ground.y - raised.y).abs() < 1e-4, "y should not move");
         assert!((ground.x - raised.x).abs() < 1e-4, "x should not move");
 
         // Without a Tilemap-role entity, the mapping is unavailable.
         let empty = Engine::new_for_test();
         assert!(empty.iso_to_world(0.0, 0.0, 0.0).is_none());
+    }
+
+    /// The world-quad sprite model must place the ground anchor at
+    /// `iso_world_pos(x, y, h + altitude) + drift + tilemap.position`: the
+    /// `frame_offset` drift in world x/y, the altitude in world z.
+    #[test]
+    fn sprite_world_model_places_drift_and_altitude_in_world_metres() {
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::new(45.0, 45.0, 1.0),
+            size_x: 4,
+            size_y: 4,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 16],
+            height_data: vec![2.0f32; 25], // 2-metre plateau
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+            selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        };
+        let tilemap_tf = Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0));
+
+        // World-metre frame offset (drift x/y, altitude z) — the step-C encoding.
+        let frame_offset = Vec3::new(0.25, -0.125, 0.5);
+        let iso_sprite = IsoSprite {
+            position: Vec3::new(3.5, 2.5, 0.0),
+            scale: Vec3::new(1.5, 2.0, 1.0),
+            texture: "tex".into(),
+            tilemap: "tilemap".into(),
+            frame: 0.0,
+            frame_name: None,
+            tile_set_size: Vec2::new(8.0, 8.0),
+            anchor: Vec2::new(0.5, 0.98),
+            frame_offset,
+            footprint: vec![
+                Vec2::new(0.5, -0.5),
+                Vec2::new(0.5, 0.5),
+                Vec2::new(-0.5, 0.5),
+                Vec2::new(-0.5, -0.5),
+            ],
+            ghost_group: 0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        };
+        let sprite_tf = Transform::new(iso_sprite.position, iso_sprite.scale);
+        let tex_dim = (48.0, 96.0);
+        let anchor_px = Vec2::new(24.0, 94.0);
+
+        let model = Engine::compute_iso_sprite_model(
+            &iso_sprite,
+            &sprite_tf,
+            &tilemap_tf,
+            &tilemap,
+            tex_dim,
+            anchor_px,
+        );
+
+        // The ground anchor (the quad point at the anchor UV) lands at the
+        // world-metre ground position: terrain height + altitude in z, drift
+        // in x/y.
+        let h = sample_height_mesh(
+            &tilemap.height_data,
+            tilemap.size_x,
+            tilemap.size_y,
+            sprite_tf.position.x,
+            sprite_tf.position.y,
+        );
+        let expected_anchor =
+            iso_world_pos(sprite_tf.position.x, sprite_tf.position.y, h + frame_offset.z)
+                + Vec3::new(frame_offset.x, frame_offset.y, 0.0)
+                + tilemap_tf.position;
+
+        let ua = anchor_px.x / tex_dim.0;
+        let wa = anchor_px.y / tex_dim.1;
+        let anchor_world = model.transform_point3(Vec3::new(ua, wa, 0.0));
+        assert!(
+            (anchor_world - expected_anchor).length() < 1e-3,
+            "anchor {anchor_world:?} != expected {expected_anchor:?}"
+        );
     }
 
     fn push_channel(v: &mut Vec<u8>, name: &str, component: u8, keys: &[(u32, &[f32])]) {
@@ -5430,7 +5361,7 @@ mod tests {
         blob.push(1u8);
         blob.extend_from_slice(&64.0f32.to_le_bytes());
         blob.extend_from_slice(&2u32.to_le_bytes());
-        push_channel(&mut blob, "offset", 3, &[(0, &[0.0, -3200.0, 0.0]), (240, &[0.0, 0.0, 0.0])]);
+        push_channel(&mut blob, "offset", 3, &[(0, &[0.0, 0.0, 50.0]), (240, &[0.0, 0.0, 0.0])]);
         push_channel(&mut blob, "light.intensity", 1, &[(0, &[0.0]), (120, &[1.0]), (240, &[0.0])]);
         engine.load_animation_channels("rocketLanding", &blob);
 
@@ -5439,9 +5370,10 @@ mod tests {
         assert_eq!(anim.channels[0].name, "offset");
         assert_eq!(anim.channels[1].name, "light.intensity");
 
-        // The `offset` channel is folded into `offset_keyframes` (pre-scaled).
+        // The `offset` channel is folded into `offset_keyframes` (world metres:
+        // drift x/y, altitude z).
         assert_eq!(anim.offset_keyframes.len(), 2);
-        assert_eq!(anim.offset_keyframes[0].offset[1], -3200.0);
+        assert_eq!(anim.offset_keyframes[0].offset[2], 50.0);
 
         // Interpolation + clamping of a scalar channel.
         assert_eq!(anim.channel_sample("light.intensity", 60.0), Some(vec![0.5]));
@@ -5503,9 +5435,7 @@ mod tests {
 
         let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
         let expected = base + local;
-        assert!((gathered[0].position.x - expected.x).abs() < 1e-3);
-        assert!((gathered[0].position.y - expected.y).abs() < 1e-3);
-        assert!((gathered[0].position.z - expected.z).abs() < 1e-3);
+        assert!((gathered[0].position - expected).length() < 1e-2);
 
         // An unparented light stays at its authored (world) position.
         let mut engine = Engine::new_for_test();
@@ -5513,7 +5443,9 @@ mod tests {
         engine.world.spawn((Light { position: world_pos, parent: None, ..light.clone() },));
         let gathered = engine.gather_lights();
         assert_eq!(gathered.len(), 1);
-        assert!((gathered[0].position - world_pos).length() < 1e-3);
+        assert!((gathered[0].position - world_pos).length() < 1e-2);
+        // `radius` is authored in legacy light-space px and converted to metres.
+        assert!((gathered[0].radius - light.radius / PPM_TARGET).abs() < 1e-3);
 
         // A dangling parent must *not* silently turn the offset into an
         // absolute position — the light is dropped (and a warning logged).
@@ -5530,7 +5462,7 @@ mod tests {
     fn parented_light_tracks_parent_frame_offset() {
         // A parented light must follow the parent sprite's animated
         // `frame_offset` (altitude → z, horizontal drift → x/y), not just the
-        // tile.  The frame offset is screen-space: y packs `drift_y - altitude`.
+        // tile.  The frame offset is world metres here.
         let mut engine = Engine::new_for_test();
         let tilemap = Tilemap {
             position: Vec3::ZERO,
@@ -5559,6 +5491,8 @@ mod tests {
         engine.names.insert("tilemap".into(), tm);
 
         let parent_tile = Vec3::new(2.0, 2.0, 0.0);
+        // World-metre frame offset (drift x/y, altitude z).
+        let frame_offset = Vec3::new(0.25, -0.125, 0.5);
         let parent = engine.world.spawn((
             Transform::new(parent_tile, Vec3::ONE),
             IsoSprite {
@@ -5573,12 +5507,12 @@ mod tests {
                 footprint: vec![],
                 ghost_group: 0,
                 color: [1.0, 1.0, 1.0, 1.0],
-                frame_offset: Vec3::new(10.0, -100.0, 0.0),
+                frame_offset,
             },
         ));
         engine.names.insert("rocket".into(), parent);
 
-        let offset = Vec3::new(0.0, 0.0, 255.6);
+        let offset = Vec3::new(0.1, 0.2, 2.0);
         let light = Light {
             kind: LightKind::Point,
             position: offset,
@@ -5593,25 +5527,14 @@ mod tests {
 
         let gathered = engine.gather_lights();
         let base = engine.iso_to_world(parent_tile.x, parent_tile.y, 0.0).unwrap();
-        // fo = (10, -100, 0): light drift = (10, 2*(-100+0), 0) = (10, -200, 0).
-        let expected = base + Vec3::new(10.0, -200.0, 0.0) + offset;
+        // `frame_offset` is world metres; fold it into the base.  `gather_lights`
+        // returns world space now (lighting is done in world metres).
+        let expected = base + frame_offset + offset;
         assert!(
-            (gathered[0].position.x - expected.x).abs() < 1e-2,
-            "x: {} vs {}",
-            gathered[0].position.x,
-            expected.x
-        );
-        assert!(
-            (gathered[0].position.y - expected.y).abs() < 1e-2,
-            "y: {} vs {}",
-            gathered[0].position.y,
-            expected.y
-        );
-        assert!(
-            (gathered[0].position.z - expected.z).abs() < 1e-2,
-            "z: {} vs {}",
-            gathered[0].position.z,
-            expected.z
+            (gathered[0].position - expected).length() < 1e-2,
+            "got {} expected {}",
+            gathered[0].position,
+            expected
         );
     }
 
@@ -5693,14 +5616,14 @@ mod tests {
 
         let overrides: std::collections::HashMap<String, classic_core::types::VehicleOverrides> =
             serde_json::from_value(serde_json::json!({
-                "lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0, "safe_fall_px": 96.0}
+                "lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0, "safe_fall_m": 1.5}
             }))
             .unwrap();
         e.apply_vehicle_overrides(&overrides);
 
         let merged = &e.vehicles["lunar-common::lrv"];
         assert_eq!(merged.turn_rate_deg_per_sec, 55.0);
-        assert_eq!(merged.safe_fall_px, 96.0);
+        assert_eq!(merged.safe_fall_m, 1.5);
         // Non-overridden fields keep the shared def's values.
         assert_eq!(merged.name, "lrv");
         assert_eq!(merged.parts.len(), 1);

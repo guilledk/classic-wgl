@@ -14,18 +14,19 @@
 use classic_core::components::{
     DebugName, IsoSprite, IsoVehicle, RoleKind, Selectable, Tilemap, Transform,
 };
-use classic_core::math::cartesian_to_iso_4;
+use classic_core::math::iso_camera_px_inverse;
 use classic_core::pathfinder::PathPoll;
-use classic_core::tilemap::sample_height_mesh;
+use classic_core::tilemap::{sample_height_mesh, PPM_TARGET, TILE_M};
 use glam::{Vec2, Vec3};
 
 use crate::Engine;
 
-/// Vertical acceleration (pixels/s²) — tuned for a floaty-but-bounded hop.
-const MOON_GRAVITY: f32 = 40.0;
-/// Per-wheel suspension spring stiffness (pixels per pixel of deflection / s²).
+/// Vertical acceleration (metres/s²) — the `40 px/s²` hop re-expressed at
+/// `PPM_TARGET` px/m, kept equivalent so the moon-gravity feel is unchanged.
+const MOON_GRAVITY: f32 = 40.0 / PPM_TARGET;
+/// Per-wheel suspension spring stiffness (per-second²; the same in px and m).
 const SUSP_STIFFNESS: f32 = 60.0;
-/// Per-wheel suspension damping.
+/// Per-wheel suspension damping (1/s).
 const SUSP_DAMPING: f32 = 15.0;
 /// Upward wheel compression as a fraction of the derived downward droop.  The
 /// absolute travel limits are derived per-vehicle from the def geometry at
@@ -111,13 +112,13 @@ pub enum PreviewProbeState {
 struct TerrainSnapshot {
     size_x: i32,
     size_y: i32,
-    height_scale: f32,
     heights: Vec<f32>,
 }
 
 impl TerrainSnapshot {
+    /// Terrain height in **world metres** (the unit the vehicle sim now lives in).
     fn height(&self, x: f32, y: f32) -> f32 {
-        sample_height_mesh(&self.heights, self.size_x, self.size_y, x, y) * self.height_scale
+        sample_height_mesh(&self.heights, self.size_x, self.size_y, x, y)
     }
 }
 
@@ -337,22 +338,22 @@ fn anchors8(anchors: &[[f32; 2]]) -> [[f32; 2]; 8] {
 ///
 /// `delta_px = (wheel_anchor - body_anchor) * cell` is the wheel's screen
 /// displacement from the body origin in the sprite's own frame; converting it
-/// through the engine's iso transform yields the tile offset that reproduces
-/// that displacement exactly.
+/// through the orthographic camera (the anchors are baked by the exporter's
+/// 30° `iso_basis` camera at `PPM_TARGET` px/m) yields the tile offset that
+/// reproduces that displacement exactly.
 fn derive_wheel_offsets(
     body_anchors: &[[f32; 2]; 8],
     wheel_anchors: &[[[f32; 2]; 8]; 4],
     cell: [f32; 2],
-    tile_scale: f32,
+    _tile_scale: f32,
 ) -> [[[f32; 2]; 8]; 4] {
     let mut offsets = [[[0.0f32; 2]; 8]; 4];
-    let inv_scale = 1.0 / tile_scale.max(0.001);
     for (i, anchors) in wheel_anchors.iter().enumerate() {
         for d in 0..8 {
             let dx = (anchors[d][0] - body_anchors[d][0]) * cell[0];
             let dy = (anchors[d][1] - body_anchors[d][1]) * cell[1];
-            let iso = cartesian_to_iso_4().transform_point3(Vec3::new(dx, dy, 0.0));
-            offsets[i][d] = [iso.x * inv_scale, iso.y * inv_scale];
+            let world = iso_camera_px_inverse(Vec2::new(dx, dy));
+            offsets[i][d] = [world.x / TILE_M, -world.y / TILE_M];
         }
     }
     offsets
@@ -361,12 +362,14 @@ fn derive_wheel_offsets(
 /// The values pushed into the body + wheel sprites each frame.
 struct VehicleWrite {
     body: [f32; 3],
-    body_offset_y: f32,
+    /// Body lift above its own terrain in **world metres** (`frame_offset.z`).
+    body_altitude: f32,
     body_anchor: [f32; 2],
     direction: u32,
     body_frame: f32,
     wheel_xy: [[f32; 2]; 4],
-    wheel_off_y: [f32; 4],
+    /// Per-wheel lift above its terrain in **world metres** (`frame_offset.z`).
+    wheel_altitude: [f32; 4],
     wheel_z: [f32; 4],
     wheel_anchors: [[f32; 2]; 4],
     steer_index: u32,
@@ -392,7 +395,6 @@ impl Engine {
         Some(TerrainSnapshot {
             size_x: tm.size_x,
             size_y: tm.size_y,
-            height_scale: tm.height_scale,
             heights: tm.height_data.clone(),
         })
     }
@@ -467,9 +469,9 @@ impl Engine {
         let wheel_tile_offsets =
             derive_wheel_offsets(&body_anchors, &wheel_anchors, cell, tile_scale);
 
-        // Front-rear axle distance in screen pixels, from the derived wheel
-        // offsets (front = fl/fr, rear = rl/rr) scaled by the tile scale.
-        let wheelbase_px = {
+        // Front-rear axle distance in world metres, from the derived wheel
+        // offsets (front = fl/fr, rear = rl/rr) scaled by the tile metre length.
+        let wheelbase_m = {
             let front = Vec2::new(
                 (wheel_tile_offsets[0][0][0] + wheel_tile_offsets[1][0][0]) * 0.5,
                 (wheel_tile_offsets[0][0][1] + wheel_tile_offsets[1][0][1]) * 0.5,
@@ -478,10 +480,10 @@ impl Engine {
                 (wheel_tile_offsets[2][0][0] + wheel_tile_offsets[3][0][0]) * 0.5,
                 (wheel_tile_offsets[2][0][1] + wheel_tile_offsets[3][0][1]) * 0.5,
             );
-            (front - rear).length() * tile_scale
+            (front - rear).length() * TILE_M
         };
-        // Left-right axle distance in screen pixels (left = fl/rl, right = fr/rr).
-        let track_px = {
+        // Left-right axle distance in world metres (left = fl/rl, right = fr/rr).
+        let track_m = {
             let left = Vec2::new(
                 (wheel_tile_offsets[0][0][0] + wheel_tile_offsets[2][0][0]) * 0.5,
                 (wheel_tile_offsets[0][0][1] + wheel_tile_offsets[2][0][1]) * 0.5,
@@ -490,7 +492,7 @@ impl Engine {
                 (wheel_tile_offsets[1][0][0] + wheel_tile_offsets[3][0][0]) * 0.5,
                 (wheel_tile_offsets[1][0][1] + wheel_tile_offsets[3][0][1]) * 0.5,
             );
-            (left - right).length() * tile_scale
+            (left - right).length() * TILE_M
         };
 
         // Suspension travel limits derived from the def geometry (not hand-tuned
@@ -502,8 +504,8 @@ impl Engine {
         // tilts on slope it can visibly show.
         let pitch_max = def.pitch_max_deg.to_radians();
         let roll_max = def.roll_max_deg.to_radians();
-        let tilt_reach = 0.5 * wheelbase_px.max(track_px) * pitch_max.max(roll_max).tan();
-        let wheel_travel_down = tilt_reach.max(1.0);
+        let tilt_reach = 0.5 * wheelbase_m.max(track_m) * pitch_max.max(roll_max).tan();
+        let wheel_travel_down = tilt_reach.max(1.0 / PPM_TARGET);
         let wheel_travel_up = wheel_travel_down * COMPRESS_RATIO;
         let tilt_dead_zone =
             if def.pitch_levels > 1 { pitch_max / (def.pitch_levels - 1) as f32 } else { 0.0 };
@@ -517,8 +519,8 @@ impl Engine {
         let footprint: Vec<(i32, i32)> = match &def.path_footprint {
             Some(fp) => fp.clone(),
             None => {
-                let half_x = ((wheelbase_px / tile_scale) * 0.5).ceil() as i32;
-                let half_y = ((track_px / tile_scale) * 0.5).ceil() as i32;
+                let half_x = ((wheelbase_m / TILE_M) * 0.5).ceil() as i32;
+                let half_y = ((track_m / TILE_M) * 0.5).ceil() as i32;
                 let mut fp = Vec::with_capacity(((half_x * 2 + 1) * (half_y * 2 + 1)) as usize);
                 for dy in -half_y..=half_y {
                     for dx in -half_x..=half_x {
@@ -625,13 +627,13 @@ impl Engine {
             wheel_tile_offsets,
             pitch_levels: def.pitch_levels,
             pitch_max,
-            wheelbase_px,
+            wheelbase_m,
             roll_levels: def.roll_levels,
             roll_max,
-            track_px,
+            track_m,
             path_footprint: footprint,
             turn_rate: def.turn_rate_deg_per_sec.to_radians(),
-            safe_fall_px: def.safe_fall_px,
+            safe_fall_m: def.safe_fall_m,
             wheel_travel_up,
             wheel_travel_down,
             tilt_dead_zone,
@@ -776,7 +778,7 @@ impl Engine {
             let body_terrain = terrain.height(x, y);
             v.vel_z -= MOON_GRAVITY * delta;
             v.altitude += v.vel_z * delta;
-            let airborne = v.altitude > alt_target + 0.5;
+            let airborne = v.altitude > alt_target + 0.5 / PPM_TARGET;
             if !airborne {
                 v.altitude = alt_target;
                 if v.vel_z < 0.0 {
@@ -784,7 +786,9 @@ impl Engine {
                 }
             }
             v.airborne = airborne;
-            let body_offset_y = -(v.altitude - body_terrain);
+            // `frame_offset.z` is the altitude above the sprite's own terrain in
+            // world metres (the sprite model re-adds terrain height at its x/y).
+            let body_altitude = v.altitude - body_terrain;
 
             // -- body pitch (angular spring-damper) --------------------------
             // Target = terrain slope along the heading from the instantaneous
@@ -796,7 +800,7 @@ impl Engine {
             } else {
                 let front = (wheel_ground[0] + wheel_ground[1]) * 0.5;
                 let rear = (wheel_ground[2] + wheel_ground[3]) * 0.5;
-                soft_deadzone(((front - rear) / v.wheelbase_px.max(1e-4)).atan(), v.tilt_dead_zone)
+                soft_deadzone(((front - rear) / v.wheelbase_m.max(1e-4)).atan(), v.tilt_dead_zone)
             };
             let (pitch, pitch_vel) = step_spring(v.pitch, v.pitch_vel, pitch_target, delta);
             v.pitch = pitch;
@@ -810,7 +814,7 @@ impl Engine {
             } else {
                 let left = (wheel_ground[0] + wheel_ground[2]) * 0.5;
                 let right = (wheel_ground[1] + wheel_ground[3]) * 0.5;
-                soft_deadzone(((left - right) / v.track_px.max(1e-4)).atan(), v.tilt_dead_zone)
+                soft_deadzone(((left - right) / v.track_m.max(1e-4)).atan(), v.tilt_dead_zone)
             };
             let (roll, roll_vel) = step_spring(v.roll, v.roll_vel, roll_target, delta);
             v.roll = roll;
@@ -821,10 +825,10 @@ impl Engine {
             // Airborne the plane is flat so wheels hang uniformly.
             let (plane_pitch, plane_roll) = if airborne { (0.0, 0.0) } else { (pitch, roll) };
             let plane = [
-                v.altitude + 0.5 * plane_pitch * v.wheelbase_px + 0.5 * plane_roll * v.track_px,
-                v.altitude + 0.5 * plane_pitch * v.wheelbase_px - 0.5 * plane_roll * v.track_px,
-                v.altitude - 0.5 * plane_pitch * v.wheelbase_px + 0.5 * plane_roll * v.track_px,
-                v.altitude - 0.5 * plane_pitch * v.wheelbase_px - 0.5 * plane_roll * v.track_px,
+                v.altitude + 0.5 * plane_pitch * v.wheelbase_m + 0.5 * plane_roll * v.track_m,
+                v.altitude + 0.5 * plane_pitch * v.wheelbase_m - 0.5 * plane_roll * v.track_m,
+                v.altitude - 0.5 * plane_pitch * v.wheelbase_m + 0.5 * plane_roll * v.track_m,
+                v.altitude - 0.5 * plane_pitch * v.wheelbase_m - 0.5 * plane_roll * v.track_m,
             ];
 
             // -- per-wheel suspension ---------------------------------------
@@ -832,7 +836,7 @@ impl Engine {
             // around the body plane: it droops at most `wheel_travel_down` below
             // and compresses at most `wheel_travel_up` above.  Anything beyond
             // that is absorbed by the body plane (lift + tilt) instead.
-            let mut wheel_off_y = [0.0f32; 4];
+            let mut wheel_altitude = [0.0f32; 4];
             let mut wheel_z = [0.0f32; 4];
             for i in 0..4 {
                 let target = wheel_ground[i]
@@ -843,7 +847,7 @@ impl Engine {
                 // Never sink below the terrain, and never compress above the
                 // travel cap (so wheels never ride over the body).
                 let final_h = v.wheel_h[i].max(wheel_ground[i]).min(plane[i] + v.wheel_travel_up);
-                wheel_off_y[i] = -(final_h - wheel_ground[i]);
+                wheel_altitude[i] = final_h - wheel_ground[i];
                 wheel_z[i] = final_h;
             }
 
@@ -857,12 +861,12 @@ impl Engine {
 
             VehicleWrite {
                 body: [x, y, v.altitude],
-                body_offset_y,
+                body_altitude,
                 body_anchor: lerp_dir2(&v.body_anchors, v.heading),
                 direction: v.direction,
                 body_frame,
                 wheel_xy,
-                wheel_off_y,
+                wheel_altitude,
                 wheel_z,
                 wheel_anchors,
                 steer_index: v.steer_index,
@@ -888,7 +892,7 @@ impl Engine {
         if let Ok(mut s) = self.world.get::<&mut IsoSprite>(ve) {
             s.frame = write.body_frame;
             s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, write.body_frame);
-            s.frame_offset.y = write.body_offset_y;
+            s.frame_offset.z = write.body_altitude;
             s.anchor = Vec2::from(write.body_anchor);
         }
 
@@ -902,7 +906,7 @@ impl Engine {
             if let Ok(mut s) = self.world.get::<&mut IsoSprite>(*we) {
                 s.frame = write.direction as f32;
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, s.frame);
-                s.frame_offset.y = write.wheel_off_y[i];
+                s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
             }
         }
@@ -920,7 +924,7 @@ impl Engine {
                 let frame = (write.steer_index * DIRECTIONS + write.direction) as f32;
                 s.frame = frame;
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, frame);
-                s.frame_offset.y = write.wheel_off_y[i];
+                s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
             }
         }
@@ -967,12 +971,12 @@ impl Engine {
             // so a teleport onto a slope doesn't flicker through the level frame.
             let front = (v.wheel_h[0] + v.wheel_h[1]) * 0.5;
             let rear = (v.wheel_h[2] + v.wheel_h[3]) * 0.5;
-            v.pitch = ((front - rear) / v.wheelbase_px.max(1e-4)).atan();
+            v.pitch = ((front - rear) / v.wheelbase_m.max(1e-4)).atan();
             v.pitch_vel = 0.0;
             v.pitch_index = pitch_index(v.pitch, v.pitch_max, v.pitch_levels);
             let left = (v.wheel_h[0] + v.wheel_h[2]) * 0.5;
             let right = (v.wheel_h[1] + v.wheel_h[3]) * 0.5;
-            v.roll = ((left - right) / v.track_px.max(1e-4)).atan();
+            v.roll = ((left - right) / v.track_m.max(1e-4)).atan();
             v.roll_vel = 0.0;
             v.roll_index = pitch_index(v.roll, v.roll_max, v.roll_levels);
             let mut wheel_anchors = [[0.0f32; 2]; 4];
@@ -984,12 +988,12 @@ impl Engine {
 
             VehicleWrite {
                 body: [x, y, v.altitude],
-                body_offset_y: -(v.altitude - terrain.height(x, y)),
+                body_altitude: v.altitude - terrain.height(x, y),
                 body_anchor: v.body_anchors[direction],
                 direction: v.direction,
                 body_frame,
                 wheel_xy,
-                wheel_off_y: [0.0; 4],
+                wheel_altitude: [0.0; 4],
                 wheel_z,
                 wheel_anchors,
                 steer_index: v.steer_index,
@@ -1012,7 +1016,7 @@ impl Engine {
             );
             return VehicleGotoSubmit::NoVehicle;
         };
-        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px, turn_cost) = {
+        let (footprint, pitch_max, roll_max, wheelbase_m, track_m, safe_fall_m, turn_cost) = {
             let Ok(v) = self.world.get::<&IsoVehicle>(ve) else {
                 return VehicleGotoSubmit::NoVehicle;
             };
@@ -1029,9 +1033,9 @@ impl Engine {
                 v.path_footprint.clone(),
                 v.pitch_max,
                 v.roll_max,
-                v.wheelbase_px,
-                v.track_px,
-                v.safe_fall_px,
+                v.wheelbase_m,
+                v.track_m,
+                v.safe_fall_m,
                 v.turn_cost,
             )
         };
@@ -1057,9 +1061,9 @@ impl Engine {
                     footprint,
                     pitch_max,
                     roll_max,
-                    wheelbase_px,
-                    track_px,
-                    safe_fall_px,
+                    wheelbase_m,
+                    track_m,
+                    safe_fall_m,
                     JUMP_COST,
                     turn_cost,
                 );
@@ -1071,9 +1075,9 @@ impl Engine {
                 &footprint,
                 pitch_max,
                 roll_max,
-                wheelbase_px,
-                track_px,
-                safe_fall_px,
+                wheelbase_m,
+                track_m,
+                safe_fall_m,
                 JUMP_COST,
                 turn_cost,
             ) {
@@ -1159,15 +1163,15 @@ impl Engine {
     /// answer without re-running A*, and a target change resubmits.
     pub fn vehicle_probe(&mut self, name: &str, tx: i32, ty: i32) -> i32 {
         let Some(&ve) = self.names.get(name) else { return -2 };
-        let (footprint, pitch_max, roll_max, wheelbase_px, track_px, safe_fall_px, turn_cost) = {
+        let (footprint, pitch_max, roll_max, wheelbase_m, track_m, safe_fall_m, turn_cost) = {
             let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return -2 };
             (
                 v.path_footprint.clone(),
                 v.pitch_max,
                 v.roll_max,
-                v.wheelbase_px,
-                v.track_px,
-                v.safe_fall_px,
+                v.wheelbase_m,
+                v.track_m,
+                v.safe_fall_m,
                 v.turn_cost,
             )
         };
@@ -1216,9 +1220,9 @@ impl Engine {
                 &footprint,
                 pitch_max,
                 roll_max,
-                wheelbase_px,
-                track_px,
-                safe_fall_px,
+                wheelbase_m,
+                track_m,
+                safe_fall_m,
                 JUMP_COST,
                 turn_cost,
             );
@@ -1246,9 +1250,9 @@ impl Engine {
                 footprint,
                 pitch_max,
                 roll_max,
-                wheelbase_px,
-                track_px,
-                safe_fall_px,
+                wheelbase_m,
+                track_m,
+                safe_fall_m,
                 JUMP_COST,
                 turn_cost,
             );
@@ -1347,7 +1351,7 @@ impl Engine {
 mod tests {
     use super::*;
     use classic_core::components::{NavMesh, Role};
-    use classic_core::math::iso_to_cartesian_4;
+    use classic_core::math::{iso_camera_px, iso_world_pos};
     use classic_core::types::{FrameTable, VehicleAnchors, VehicleDef, VehiclePartDef};
 
     /// Build a `VehicleAnchors` from `(name, anchors)` pairs — the name→anchors
@@ -1576,13 +1580,10 @@ mod tests {
                 (wheels[i][0][1] - body[0][1]) * cell[1],
                 0.0,
             );
-            let iso = iso_to_cartesian_4().transform_point3(Vec3::new(
-                tile_scale * offsets[i][0][0],
-                tile_scale * offsets[i][0][1],
-                0.0,
-            ));
-            assert!((iso.x - delta.x).abs() < 1e-3, "wheel {i} x {iso} vs {delta}");
-            assert!((iso.y - delta.y).abs() < 1e-3, "wheel {i} y {iso} vs {delta}");
+            let world = iso_world_pos(offsets[i][0][0], offsets[i][0][1], 0.0);
+            let screen = iso_camera_px(world);
+            assert!((screen.x - delta.x).abs() < 1e-3, "wheel {i} x {screen} vs {delta}");
+            assert!((screen.y - delta.y).abs() < 1e-3, "wheel {i} y {screen} vs {delta}");
         }
     }
 
@@ -1604,7 +1605,7 @@ mod tests {
             roll_levels: 1,
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -1782,7 +1783,7 @@ mod tests {
             roll_levels: 3,
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -1822,10 +1823,10 @@ mod tests {
         let veh = engine.world.get::<&IsoVehicle>(body_entity).unwrap();
         assert_eq!(veh.pitch_levels, 3);
         assert!((veh.pitch_max - 20.0f32.to_radians()).abs() < 1e-6);
-        assert!(veh.wheelbase_px > 0.0);
+        assert!(veh.wheelbase_m > 0.0);
         assert_eq!(veh.roll_levels, 3);
         assert!((veh.roll_max - 20.0f32.to_radians()).abs() < 1e-6);
-        assert!(veh.track_px > 0.0);
+        assert!(veh.track_m > 0.0);
     }
 
     #[test]
@@ -1858,7 +1859,7 @@ mod tests {
             roll_levels: 1,
             roll_max_deg: 20.0,
             path_footprint: Some(vec![(0, 0)]),
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -2043,7 +2044,7 @@ mod tests {
             roll_levels: 1,
             roll_max_deg: 20.0,
             path_footprint: None,
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -2176,6 +2177,7 @@ mod tests {
 
     /// The real LRV sidecar anchors (8 directions per part) from `lrv.json`,
     /// returned as a `(def, anchors-artifact)` pair.
+    #[allow(clippy::type_complexity)]
     fn lrv_def_real() -> (VehicleDef, VehicleAnchors) {
         let part = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| {
             (
@@ -2257,7 +2259,7 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: None,
             turn_rate_deg_per_sec: 90.0,
-            safe_fall_px: 96.0,
+            safe_fall_m: 1.5,
             steer_levels: 1,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -2299,7 +2301,7 @@ mod tests {
         let mut engine = Engine::new_for_test();
         let size = 48;
         let mut tm = flat_tilemap(size, size);
-        tm.height_scale = 32.0; // matches commit_terrain(32.0) in lrv-guest
+        tm.height_scale = 64.0; // matches commit_terrain(64.0) in lrv-guest
         if let Some(h) = heights {
             tm.height_data = h;
         }
@@ -2321,7 +2323,7 @@ mod tests {
 
         let (mut def, anchors) = lrv_def(90.0);
         def.path_footprint = Some(rect_footprint(3, 2)); // 7x5, matches auto-derive
-        def.safe_fall_px = 96.0;
+        def.safe_fall_m = 1.5;
         insert_lrv(&mut engine, (def, anchors));
 
         engine
@@ -2345,17 +2347,17 @@ mod tests {
         // like the lrvtest map: the flat base and ramp faces must stay reachable.
         let size = 48;
         let n = (size + 1) as usize;
-        let mut heights = vec![1.0f32; n * n];
-        // East ramp: x in 33..=41, y in 20..=29, rise 3 units over 8 tiles.
+        let mut heights = vec![0.5f32; n * n];
+        // East ramp: x in 33..=41, y in 20..=29, rise 1.5 m over 8 tiles.
         for y in 20..=29 {
             for x in 33..=41 {
-                heights[y * n + x] = heights[y * n + x].max(1.0 + 3.0 * (x - 33) as f32 / 8.0);
+                heights[y * n + x] = heights[y * n + x].max(0.5 + 1.5 * (x - 33) as f32 / 8.0);
             }
         }
-        // Curb: x in 20..=36, y in 42..=47, +1 unit.
+        // Curb: x in 20..=36, y in 42..=47, +0.5 m.
         for x in 20..=36 {
             for y in 42..=47 {
-                heights[y * n + x] = heights[y * n + x].max(2.0);
+                heights[y * n + x] = heights[y * n + x].max(1.0);
             }
         }
 
@@ -2515,25 +2517,26 @@ mod tests {
         let body = *engine.names.get("lrv").unwrap();
         let v = engine.world.get::<&IsoVehicle>(body).unwrap();
 
-        // The body plane lifts with the wheels (well above the flat 1.0-unit
-        // base, which is 32 px) and noses up on the east ramp.
-        assert!(v.altitude > 32.0 * 1.5, "body did not lift on the ramp: {}", v.altitude);
+        // The body plane lifts with the wheels (well above the flat 0.5-metre
+        // base) and noses up on the east ramp.
+        assert!(v.altitude > 0.75, "body did not lift on the ramp: {}", v.altitude);
         assert!(v.pitch > 0.0, "body did not nose up on the east ramp: {}", v.pitch);
 
         // Every wheel stays within the travel envelope around the body plane, so
         // none rides over the body or hangs beyond droop.
+        let tol = 1.0 / PPM_TARGET;
         for i in 0..4 {
             let pw = if i < 2 { 0.5 } else { -0.5 };
             let rw = if i % 2 == 0 { 0.5 } else { -0.5 };
-            let plane = v.altitude + pw * v.pitch * v.wheelbase_px + rw * v.roll * v.track_px;
+            let plane = v.altitude + pw * v.pitch * v.wheelbase_m + rw * v.roll * v.track_m;
             assert!(
-                v.wheel_h[i] <= plane + v.wheel_travel_up + 1.0,
+                v.wheel_h[i] <= plane + v.wheel_travel_up + tol,
                 "wheel {i} rode over the body: {} vs {}",
                 v.wheel_h[i],
                 plane + v.wheel_travel_up
             );
             assert!(
-                v.wheel_h[i] >= plane - v.wheel_travel_down - 1.0,
+                v.wheel_h[i] >= plane - v.wheel_travel_down - tol,
                 "wheel {i} over-drooped: {} vs {}",
                 v.wheel_h[i],
                 plane - v.wheel_travel_down
@@ -2541,67 +2544,67 @@ mod tests {
         }
     }
 
-    /// The full `lrvtest` ramp-course height field, mirroring
-    /// `gen_lrvtest_map` in classic-roms: base 1.0, a central hill, four
-    /// cardinal + four diagonal ramps, and a raised curb.
+    /// The full `lrvtest` ramp-course height field, mirroring `gen_lrvtest_map`
+    /// in classic-roms (already re-expressed to metres): base 0.5 m, a central
+    /// hill, four cardinal + four diagonal ramps, and a raised curb.
     fn lrvtest_heights() -> Vec<f32> {
         let size = 48usize;
         let n = size + 1;
-        let mut h = vec![1.0f32; n * n];
+        let mut h = vec![0.5f32; n * n];
         let idx = |x: usize, y: usize| y * n + x;
 
-        // Central hill: +2 peak at (24,24), radius 5.
+        // Central hill: +1 m peak at (24,24), radius 5.
         for y in 0..n {
             for x in 0..n {
                 let dx = x as f32 - 24.0;
                 let dy = y as f32 - 24.0;
                 let d = (dx * dx + dy * dy).sqrt();
                 if d < 5.0 {
-                    let bump = 2.0 * (1.0 - d / 5.0);
-                    h[idx(x, y)] = h[idx(x, y)].max(1.0 + bump);
+                    let bump = 1.0 * (1.0 - d / 5.0);
+                    h[idx(x, y)] = h[idx(x, y)].max(0.5 + bump);
                 }
             }
         }
         // Cardinal ramps.
         for y in 20..=29 {
             for x in 33..=41 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (x - 33) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (x - 33) as f32 / 8.0);
             }
             for x in 7..=15 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (15 - x) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (15 - x) as f32 / 8.0);
             }
         }
         for x in 20..=29 {
             for y in 33..=41 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (y - 33) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (y - 33) as f32 / 8.0);
             }
             for y in 7..=15 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (15 - y) as f32 / 8.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (15 - y) as f32 / 8.0);
             }
         }
         // Diagonal ramps.
         for x in 33..=41 {
             for y in 33..=41 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * ((x + y) as f32 - 66.0) / 16.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * ((x + y) as f32 - 66.0) / 16.0);
             }
             for y in 7..=15 {
                 h[idx(x, y)] =
-                    h[idx(x, y)].max(1.0 + 3.0 * (x as f32 + (15.0 - y as f32) - 40.0) / 16.0);
+                    h[idx(x, y)].max(0.5 + 1.5 * (x as f32 + (15.0 - y as f32) - 40.0) / 16.0);
             }
         }
         for x in 7..=15 {
             for y in 7..=15 {
-                h[idx(x, y)] = h[idx(x, y)].max(1.0 + 3.0 * (30.0 - (x + y) as f32) / 16.0);
+                h[idx(x, y)] = h[idx(x, y)].max(0.5 + 1.5 * (30.0 - (x + y) as f32) / 16.0);
             }
             for y in 33..=41 {
                 h[idx(x, y)] =
-                    h[idx(x, y)].max(1.0 + 3.0 * (15.0 - x as f32 + y as f32 - 40.0) / 16.0);
+                    h[idx(x, y)].max(0.5 + 1.5 * (15.0 - x as f32 + y as f32 - 40.0) / 16.0);
             }
         }
         // Curb.
         for x in 20..=36 {
             for y in 42..=47 {
-                h[idx(x, y)] = h[idx(x, y)].max(2.0);
+                h[idx(x, y)] = h[idx(x, y)].max(1.0);
             }
         }
         h
@@ -2640,14 +2643,14 @@ mod tests {
             matches!(goto_sync(&mut engine, "lrv", 10, 10), VehicleGotoPoll::Accepted(_)),
             "nw diagonal ramp face should path"
         );
-        // The 1-unit curb is a ~14.5° pitch over the wheelbase — within the
+        // The 0.5 m curb is a ~14.5° pitch over the wheelbase — within the
         // 20° limit, so the vehicle can drive over it.
         assert!(
             matches!(goto_sync(&mut engine, "lrv", 28, 45), VehicleGotoPoll::Accepted(_)),
-            "1-unit curb should be traversable"
+            "0.5 m curb should be traversable"
         );
 
-        // The ramp's 3-unit cliff sides are a ~38° pitch over the wheelbase —
+        // The ramp's 1.5 m cliff sides are a ~38° pitch over the wheelbase —
         // beyond the 20° limit, so the vehicle can't stand on them.
         assert!(
             matches!(goto_sync(&mut engine, "lrv", 7, 29), VehicleGotoPoll::NoPath),

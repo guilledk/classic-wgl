@@ -24,6 +24,18 @@ Rust port.  Everything from coordinate math through tilemap mesh generation,
 depth occlusion, sprite rendering, agent animation, nav mesh overlay, and the
 render sort order is covered here.
 
+> **⚠️ Coordinate-system unification (post-2026-09).**  The renderer now lives
+> in one Blender-canonical **world-metre** space; the whole isometric projection
+> is the single orthographic camera [`iso_camera_matrix`] and depth is the camera
+> view depth [`iso_view_depth`] normalised over `DEPTH_NEAR`/`DEPTH_FAR`.  The
+> canonical math is **`crates/classic-core/src/math.rs`** (doc comments) plus the
+> shaders `iso_tilemap.vert` / `direct_tex.vert` / `sheet.frag`.  This document
+> has been migrated to that model; if you spot any of the old tile-space terms
+> (`cartesian_to_iso_4`, `iso_to_cartesian_4`, `iso_matrix`, `height_scale`,
+> `depth_scale`, `depth_range`, or `cart_pos.y -= …`), treat them as stale and
+> prefer `math.rs`.  See `plans/opencode/coordinate-system.md` for the full
+> cheat-sheet.
+
 All code lives in three crates:
 
 | Crate | Role |
@@ -52,147 +64,100 @@ cartesian, then the camera matrix projects to screen.
 
 ---
 
-## 2. Cartesian↔Iso Transforms
+## 2. World-metre transforms (`classic-core::math`)
 
-Defined in `classic-core::math`.
+The renderer no longer uses separate `cartesian_to_iso` / `iso_to_cartesian`
+matrices.  Everything lives in one Blender-canonical world space and the whole
+isometric projection is the single orthographic camera.  The primitives (all in
+`classic-core::math`):
 
-### `cartesian_to_iso_4()`
+| Helper | Does |
+|---|---|
+| `iso_world_pos(tx, ty, h)` | tile `(tx, ty)` + world height `h` (metres) → world `(tx·TILE_M, −ty·TILE_M, h)` |
+| `iso_basis()` | camera basis `(right, up, back)` — unit, 45° yaw / 30° elevation / `ty→−Y` flip |
+| `iso_camera_matrix()` | world → camera view; `view·w = (dot(right,w), dot(up,w), dot(back,w))` |
+| `iso_view_depth(world)` | `dot(back, world)` — metres, *decreases* with distance |
+| `iso_camera_px(world)` | `(view.x·ppm, −view.y·ppm)` — camera-view screen px (before pan/zoom) |
+| `iso_camera_px_inverse(px)` | camera-view screen px → ground-plane (`z=0`) world point |
+| `iso_world_light_matrix(scale)` | world metres → metric light space (px, +Z up) — independent of the screen camera |
+| `iso_world_normal_matrix(scale)` | metric world normal → light space |
 
-```rust
-Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4) * Mat4::from_scale(Vec3::new(1.0, 2.0, 1.0))
-```
-
-Rotates the coordinate frame by 45° (π/4) around Z, then scales Y by 2×.
-This is the canonical 2:1 isometric projection matrix.  Applying it to a
-cartesian position yields iso-space coordinates.
-
-Companion `cartesian_to_iso_3()` produces a `Mat3` variant (used for normal
-matrix computation).
-
-### `iso_to_cartesian_4()`
-
-The inverse of `cartesian_to_iso_4()`.  Converts from iso space back to
-cartesian world space.  This is used throughout the engine to compute world
-positions from tile coordinates:
-
-- `compute_iso_sprite_model` converts an IsoSprite's `(tx, ty)` position to
-  cartesian world space via `iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale)`.
-- Footprint collider construction transforms iso-space footprint vertices to
-  world space for the quadtree.
-- Debug footprint rendering does the reverse transform.
-
-### Tilemap-scale adjustment
-
-The iso transform is always composed with the tilemap entity's `Transform.scale`:
-
-```rust
-let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
-```
-
-This ensures that tile coordinates scale correctly with the tilemap's visual
-size.  The inverse is composed similarly for the mouse-to-iso pipeline:
-
-```rust
-let cart_to_iso = cartesian_to_iso_4() * Mat4::from_scale(inv_scale);
-// where inv_scale = Vec3::new(1.0 / scale.x, 1.0 / scale.y, 1.0)
-```
+`TILE_M = 45/64 = 0.703125` (metres/tile) and `PPM_TARGET = 64.0` (px/m) are the
+two fixed constants (both in `classic-core::tilemap`).  `iso_world_pos` is the
+single tile→world conversion; the `+tx→+X`, `+ty→−Y` flip is Blender's clockwise
+top-down convention.  `iso_camera_matrix` folds the 45° yaw + 30° elevation +
+`ty→−Y` flip into one matrix — there is no separate squash or shear, and the
+screen `y` is negated because `up` projects to the negative old-cartesian y.
 
 ---
 
 ## 3. Depth Formula
 
-Depth in the classic-wgl iso renderer is **not** the standard GL depth-buffer
-value.  Instead, `gl_Position.z` is overridden in both the tilemap vertex
-shader and the IsoSprite image-sheet vertex shader with a synthetic iso-depth
-value.  The depth is computed in **window space** `[0, 1]`, then mapped to
-clip z via `d * 2.0 - 1.0` so the fixed-function clip→window mapping round-trips.
+Depth is the single orthographic camera's **view depth** normalised to window
+`[0, 1]` — no synthetic tile-space `tx − ty`, no separate height divisor, no
+per-map horizontal scale.  The camera basis `back = right × up =
+(−√(3/8), −√(3/8), +0.5)` points **toward** the camera, so view depth
+`dot(back, world)` *decreases* with distance: the nearest map corner (SW) is the
+most positive, the farthest (NE) the most negative.
 
-The canonical formula (one definition, in `classic-core::tilemap`):
+The canonical formula (one definition, `classic-core::math`):
 
-```
-iso_depth(tx, ty, z) = (tx - ty) / horizontal_depth_scale + 0.5 + (z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M
-  horizontal_depth_scale  = max(HORIZONTAL_DEPTH_SCALE, 2 · max(size_x, size_y))
-                            (tiles per 1.0 iso-depth)
-  HORIZONTAL_DEPTH_SCALE  = 400.0 (legacy fixed divisor; == horizontal_depth_scale for a 200×200 map)
-  HEIGHT_DEPTH_SCALE_M    = 344.46 (z in metres; the metre-space height divisor)
-  PPM_TARGET              = 64.0   (px/m; converts the px mesh/sprite z back to metres)
+```text
+iso_view_depth(world) = dot(back, world)                         // metres
+depth (window [0,1])  = (DEPTH_NEAR − iso_view_depth) / (DEPTH_NEAR − DEPTH_FAR)
+DEPTH_NEAR = 220.0, DEPTH_FAR = −220.0                            // fixed global bounds
 ```
 
-**`horizontal_depth_scale` must never fall below 400.**  Depth-mapped sprites
-bake their per-pixel grayscale with the legacy fixed `HORIZONTAL_DEPTH_SCALE`
-(400) horizontal divisor — `classic-assets` `render/materials.py::proxy_axis`
-uses `1/(tile_m · 400)` — so a smaller divisor (e.g. `2·48 = 96` on the
-container/lrvtest maps) makes the sprite's horizontal depth component
-`400/smaller` × too small relative to the terrain: the near (front) corners read
-as *deeper* than the terrain (ghosted) and the far corners read as *nearer*
-(solid) — inverted corner occlusion.  Keep `2·max(size)` only when it exceeds
-400 (large maps whose `tx−ty` span would clip the NE/SW corners, e.g. the lunar
-400×400 → 800).  This is the bug the `shipping-container-cargo` session fixed.
+`DEPTH_NEAR` (closest) is positive and `DEPTH_FAR` (farthest) negative —
+numerically `near > far` — so the normalised depth is
+`(DEPTH_NEAR − dot) / (DEPTH_NEAR − DEPTH_FAR)`, **not** `(dot − near) /
+(far − near)`.  `0` = nearest, `1` = farthest (standard window depth).  The
+bounds are fixed so every scene shares one range; a 400×400 map spans
+`±√(3/8)·400·TILE_M ≈ ±172` view-depth metres, and the tallest sprite (the ~47 m
+rocket) adds `0.5·47 ≈ 24` toward the near side — `220` covers both with margin.
+Mirrored by classic-assets `render/presets.py::DEPTH_NEAR`/`DEPTH_FAR`.
 
-The height term is **`+ z / D`**: the camera basis `back.z = +0.5` means taller
-terrain is *farther* (larger depth).  An earlier sign error (`- z / D`) made
-taller terrain appear *closer*, breaking ghosting at slope corners in a
-camera-position-dependent way.
-
-The height axis is re-expressed in **metres** (the exporter's unit): `height_data`
-is metres and `height_scale` is px/m (`PPM_TARGET` = 64).  The mesh/sprite `z`
-is carried in tileset pixels (`z_px = height_data · height_scale`); the depth
-formula converts it back to metres via `/ PPM_TARGET` before dividing by the
-metre divisor.  The constants are shared with the shaders via the `depth_scale`
-(`vec2(horizontal_depth_scale, HEIGHT_DEPTH_SCALE_M)`) and `ppm`
-(`PPM_TARGET`) uniforms, so there are no GLSL literals to keep in sync.
+Height is carried in **world metres** on the mesh/sprite `z` (never a pixel
+offset): the tilemap builds vertices as `(tx·TILE_M, −ty·TILE_M, h_m)`, and
+`height_data` is metres.  The depth bounds are passed to the shaders as the
+`depth_span` uniform (`vec2(DEPTH_NEAR, DEPTH_FAR)`) — no GLSL depth literals.
 
 ### Tilemap vertex shader (`iso_tilemap.vert`)
 
 ```glsl
-// Light space (+Z up): what all lighting and the shadow map use.
-vec4 lightPos = model_matrix * iso_matrix * vec4(vertex_pos, 1.0);
-// Screen space: the isometric shear, for rasterisation only.
-vec4 worldPos = lightPos;
-worldPos.y -= vertex_pos.z;
-
-highp float isoDepth = (vertex_pos.x - vertex_pos.y) / depth_scale.x + 0.5 + (vertex_pos.z / ppm) / depth_scale.y;
+// World metres -> camera view space (metres): `iso_camera_matrix`.
+vec4 view = world_matrix * vec4(world, 1.0);
+// Screen pixels before pan/zoom (the camera `up` axis projects to -y).
+vec4 screenPos = vec4(view.x * ppm, -view.y * ppm, 0.0, 1.0);
+// Camera view depth in window space [0, 1] (0 = nearest, 1 = farthest).
+highp float isoDepth = (depth_span.x - view.z) / (depth_span.x - depth_span.y);
 clipPos.z = isoDepth * 2.0 - 1.0;
-
-vLightPos = lightPos.xyz;   // the only position varying emitted
+vLightPos = (light_matrix * vec4(world, 1.0)).xyz;   // metric light space, +Z up
 ```
 
 Key aspects:
 
-1. **Height offset on Y:** `worldPos.y -= vertex_pos.z` — height (Z) is subtracted
-   from the screen-space Y coordinate.  This produces the correct vertical
-   displacement for elevated tiles.
-   **⚠️ This shear is for rasterisation only.**  It leaves height in *both* y
-   and z, so the resulting space has up axis `(0,-1,1)/√2`.  Never use it for
-   lighting, normals, light positions or the shadow map — those all live in the
-   unsheared **light space** (`lightPos`, +Z up), which is why `vLightPos` is
-   the only position varying the shader emits.  See `classic-gfx` §17.
-2. **Depth axis is `tx - ty`:**  The map's depth direction runs along the
-   `(1, -1)` diagonal in iso space.  Tiles with larger `tx - ty` are farther
-   from the camera.
-3. **Window space, no clamp:**  the value is `depth_scale`-derived window depth;
+1. **No shear.**  There is no `y -= vertex.z`; the screen position comes straight
+   from the camera `right`/`up` view components (`view.x`, `view.y`), and depth
+   from the `back` component (`view.z`).  Height reads as height because
+   `up.z = cos30°` projects world `z` into the screen `y`.
+2. **Depth axis is `back`.**  `view.z = dot(back, world)` is camera view depth;
+   a larger `dot` is nearer.  Normalised to window `[0, 1]` over the fixed
+   `depth_span = [DEPTH_NEAR, DEPTH_FAR]`.
+3. **Window space, no clamp:**  the value is `depth_span`-derived window depth;
    geometry beyond `[0, 1]` is clipped by the fixed function (`z_clip ∉ [-1, 1]`).
-   `+0.5` centres the range.
-4. The height divisor is `HEIGHT_DEPTH_SCALE_M = 344.46` in metres (`344.46` is
-   `iso_depth_factor / back.z`).  The mesh `vertex_pos.z` is pixels, so the
-   shader converts `z_m = z_px / ppm` (`ppm = PPM_TARGET = 64` px/m) before the
-   division — numerically `z_px / 22045.4`.
-5. `isoDepth` is computed in `highp` (not the shader's `mediump float` default)
-   to match the highp sprite/depth-map path and the 24-bit depth buffer.
+4. **Light space is separate.**  `light_matrix` (`iso_world_light_matrix`) maps
+   world metres to metric light space (+Z up, px) for `vLightPos` — independent
+   of the screen camera (see §12).
+5. `isoDepth` is computed in `highp` to match the highp sprite/depth-map path and
+   the 24-bit depth buffer.
 
 ### CPU-side equivalent (`compute_iso_depth_corners`)
 
 The IsoSprite renderer needs depth values for each of the 4 footprint corners
-(see Section 8).  The CPU-side formula mirrors the shader (via
-`compute_iso_base_depth`), in **window space**, with **no** `-0.005` bias:
-
-```rust
-let d = (pos.x + pt.x - pos.y - pt.y) / h_depth + 0.5 + (pos.z / PPM_TARGET) / HEIGHT_DEPTH_SCALE_M;
-```
-
-The old `-0.005` sprite-only bias was removed during depth-scale unification
-(it placed sprites ~2 tiles behind their feet and broke ghosting at slope
-corners).
+(see Section 8).  The CPU side mirrors the shader via
+`Self::world_depth(world) = (DEPTH_NEAR − iso_view_depth(world)) /
+(DEPTH_NEAR − DEPTH_FAR)` — the same window-space depth, no bias term.
 
 ### `DrawKind::IsoSprite` sort order uses `tx - ty`
 
@@ -258,9 +223,9 @@ slope corners.  (The mouse-to-iso solve and pathfinder still use `bilinear_heigh
 
 ### Uses
 
-- **Mouse-to-iso solve:**  3-pass iterative height-parallax.
-- **IsoSprite model matrix:**  position in iso → world cartesian, then
-  `cart_pos.y -= height * height_scale` to lift/drop the sprite.
+- **Mouse-to-iso solve:**  ground-plane ray + height-field intersection (see §5).
+- **IsoSprite model matrix:**  `iso_world_pos(tx, ty, h + altitude)` — height is
+  world metres in `z`, never a `cart_pos.y` pixel offset (see §8).
 - **Agent terrain sampling:**  during `FollowPath` lerp, the agent samples
   terrain height at its current `(px, py)` and smooth-z-interpolates.
 - **Footprint collider construction:**  each footprint vertex is
@@ -269,44 +234,50 @@ slope corners.  (The mouse-to-iso solve and pathfinder still use `bilinear_heigh
 
 ---
 
-## 5. Mouse-to-Iso (3-Pass Height Parallax Solve)
+## 5. Mouse-to-Iso (ground-plane ray + height-field intersect)
 
-Registered in `commit_terrain` as an `on_update` closure on `Engine`.  Runs every
-frame to convert screen-space mouse position into iso tile coordinates,
-accounting for height parallax.
+Registered in `commit_terrain` as an `on_update` closure.  Runs every frame and
+stores the result in `Tilemap.mouse_iso_pos` as `(x, y, z)` — `x/y` in tiles,
+`z` the terrain height (metres) under the cursor.
 
 ### Algorithm
 
-1. **Screen → camera → iso:**
-   ```
-   iso_pos = mouse_pos + camera.fix()
-   iso_pos /= camera.scale
-   iso_pos = cart_to_iso.transform_point3(iso_pos)
-   ```
-   Where `cart_to_iso = cartesian_to_iso_4() * Mat4::from_scale(inv_scale)`.
+1. **Un-project to the ground plane.**  Undo pan/zoom
+   (`screen += camera.fix(); screen /= camera.scale`), then intersect the camera
+   view ray with the world-metre ground plane `z = 0`:
 
-2. **Compute `tile_step`:**
-   ```
-   tile_step = scale.x * FRAC_1_SQRT_2   // ≈ scale.x * 0.7071
+   ```text
+   view_x = screen.x / PPM_TARGET
+   view_y = -screen.y / PPM_TARGET
+   view_z = -up.z · view_y / back.z       // world.z = up.z·view_y + back.z·view_z == 0
+   ground  = right·view_x + up·view_y + back·view_z
    ```
 
-3. **3-pass iteration:**
-   ```
-   for _ in 0..3:
-       h = bilinear_height(iso_pos.x, iso_pos.y)
-       if h <= 0: break
-       z_offset = (h * height_scale) / tile_step
-       iso_pos.x = orig.x - z_offset
-       iso_pos.y = orig.y + z_offset
-   ```
-   Each pass refines the iso position by shifting it along the depth axis
-   `(+1, -1)` proportional to the terrain height at the current estimate.
-   The `z_offset` moves the point closer to the camera (screen-left/down in
-   iso terms) to compensate for parallax.
+2. **Ray/height-field intersect (parallax).**  The ground point's tile coords
+   shift along the depth axis by the terrain height; iterate the fixed point
+   (8 passes) until the sampled height stabilises:
 
-4. **Result written to `Tilemap.mouse_iso_pos`.**
+   ```text
+   tx0 = ground.x / TILE_M
+   ty0 = -ground.y / TILE_M
+   parallax = 2 · √(3/8) / TILE_M
+   for _ in 0..8:
+       h = sample_height_mesh(tx, ty); if h <= 0: break
+       z_off = h * parallax
+       tx = tx0 - z_off
+       ty = ty0 + z_off
+   ```
 
-This drives the tile selection cursor and editor paint rectangle.
+   Each pass shifts the tile point toward the camera along the depth axis in
+   proportion to the terrain height — the parallax compensation.
+
+3. **Ground the height.**  `z = sample_height_mesh(tx, ty)` (the same
+   triangle-linear interpolation the rendered mesh uses), then write
+   `Tilemap.mouse_iso_pos = (tx, ty, z)`.
+
+This drives the tile selection cursor and editor paint rectangle.  The inverse
+(iso → screen) is `iso_to_screen_px` (`iso_world_pos(x, y, h) + tilemap.position`
+→ `iso_camera_px` → the `world_to_screen_matrix` pan/zoom).
 
 ---
 
@@ -320,23 +291,24 @@ Each vertex is **9 floats = 36 bytes**, interleaved:
 
 | Offset | Size | Attribute | Description |
 |--------|------|-----------|-------------|
-| 0 | 3×f32 | `vertexPos` | Position in tile-grid space `(x, y, z)` |
+| 0 | 3×f32 | `vertexPos` | Position in **world metres** `(tx·TILE_M, −ty·TILE_M, h)` |
 | 12 | 2×f32 | `mapCoord` | Normalized map UV `[0..1, 0..1]` |
 | 20 | 1×f32 | `tileId` | Tile index (≤0 = steep face, >0 = wall) |
-| 24 | 3×f32 | `normal` | Smooth per-vertex normal |
+| 24 | 3×f32 | `normal` | Smooth per-vertex normal (metric world space) |
 
 Drawn as non-indexed `TRIANGLES`.
 
 ### Top face
 
 Each non-empty tile generates two triangles (NW→NE→SW, NE→SE→SW) forming a
-single quad.  Heights at the four corners (`z_nw`, `z_ne`, `z_sw`, `z_se`)
-are computed from the height data grid multiplied by `height_scale`.
+single quad.  Heights at the four corners (`z_nw`, `z_ne`, `z_sw`, `z_se`) are
+the height grid values verbatim — **already world metres**, no `* height_scale`.
+The vertex position is `iso_world_pos(tx, ty, h)` = `(tx·TILE_M, −ty·TILE_M, h)`.
 
 The `tileId` for the top face is `-steepness` where:
 
 ```rust
-let steepness = ((z_max - z_min) / height_scale.max(0.001)).min(1.0);
+let steepness = ((z_max - z_min) / TILE_M).min(1.0);
 ```
 
 This negative value routes the fragment shader to tile-data texture lookup
@@ -346,10 +318,10 @@ This negative value routes the fragment shader to tile-data texture lookup
 
 Generated only at map borders, one wall per exterior tile edge:
 
-- **East wall** (`tx+1 >= size_x`): normal `[1, 0, 0]`
-- **South wall** (`ty+1 >= size_y`): normal `[0, 1, 0]`
-- **West wall** (`tx == 0`): normal `[-1, 0, 0]`
-- **North wall** (`ty == 0`): normal `[0, -1, 0]`
+- **East wall** (`tx+1 >= size_x`, outward `+tx → +X`): normal `[1, 0, 0]`
+- **South wall** (`ty+1 >= size_y`, outward `+ty → −Y`): normal `[0, -1, 0]`
+- **West wall** (`tx == 0`, outward `−tx → −X`): normal `[-1, 0, 0]`
+- **North wall** (`ty == 0`, outward `−ty → +Y`): normal `[0, 1, 0]`
 
 Each wall is a twisted quad (two triangles: lo→mid→hi, lo→hi→mid) where
 `mid` is the centre-point of the edge extruded to the midpoint height.  The
@@ -366,8 +338,11 @@ non-level terrain.  On a flat map every face normal is already `+Z`, so the
 averaged result is bit-identical to the old per-face value and flat scenes
 (including the demo golden baseline) are unaffected.
 
-The normals are passed through a `normalMatrix` uniform (transpose of the
-inverse of the iso matrix) in the vertex shader for correct lighting.
+The normals are passed through a `normalMatrix` uniform (`iso_world_normal_matrix`,
+the `inverse_transpose(S(scale)·Rz(−45°)) · D` world-normal → light-space matrix)
+in the vertex shader for correct lighting.  World normals are
+`normalize(D⁻¹ · tile_normal)` with `D⁻¹ = diag(1/TILE_M, −1/TILE_M, PPM_TARGET)`
+— see §13.
 
 ### Allocation
 
@@ -439,33 +414,47 @@ interpolation path.
 
 ```rust
 fn compute_iso_sprite_model(...) -> Mat4 {
-    let iso_to_cart_world = iso_to_cartesian_4() * Mat4::from_scale(tilemap_tf.scale);
-    let mut cart_pos = iso_to_cart_world.transform_point3(sprite_tf.position);
-    cart_pos += tilemap_tf.position;
+    let h = sample_height_mesh(...);                    // terrain height, metres
+    let altitude = iso_sprite.frame_offset.z;           // frame altitude, metres
+    let drift = Vec3::new(frame_offset.x, frame_offset.y, 0.0);  // horizontal drift
 
-    let h = sample_height_mesh(...);
-    cart_pos.y -= h * tilemap.height_scale;
+    // Ground anchor in world metres (terrain + altitude) + tilemap offset.
+    let world_pos = iso_world_pos(x, y, h + altitude) + drift + tilemap_tf.position;
 
-    let anchor_delta = Vec3::new(
-        -tex_dim.0 * iso_sprite.anchor.x,
-        -tex_dim.1 * iso_sprite.anchor.y,
-        0.0,
+    // Quad size in metres (source-cell px → metres at PPM_TARGET).
+    let w  = tex_dim.0 * scale.x / PPM_TARGET;
+    let hh = tex_dim.1 * scale.y / PPM_TARGET;
+
+    // Anchor in normalized [0,1] quad space.
+    let ua = anchor_px.x / tex_dim.0;
+    let wa = anchor_px.y / tex_dim.1;
+
+    // Billboard: width along (1/√2, −1/√2, 0), height down world −Z.
+    let billboard = Mat4::from_cols(
+        Vec4::new(FRAC_1_SQRT_2, -FRAC_1_SQRT_2, 0.0, 0.0),
+        Vec4::new(0.0, 0.0, -1.0, 0.0),
+        Vec4::new(FRAC_1_SQRT_2,  FRAC_1_SQRT_2, 0.0, 0.0),
+        Vec4::W,
     );
 
-    Mat4::from_translation(cart_pos)
-        * Mat4::from_scale(sprite_tf.scale)
-        * Mat4::from_translation(anchor_delta)
-        * Mat4::from_scale(Vec3::new(tex_dim.0, tex_dim.1, 1.0))
+    Mat4::from_translation(world_pos)
+        * billboard
+        * Mat4::from_scale(Vec3::new(w, hh, 1.0))
+        * Mat4::from_translation(Vec3::new(-ua, -wa, 0.0))
 }
 ```
 
 Key pieces:
-- Iso position → cartesian world via `iso_to_cartesian_4() * tilemap_scale`.
-- Height offset: `cart_pos.y -= h * height_scale`.
-- `anchor_delta` shifts the sprite origin from top-left (default GL quad) to the
-  sprite's anchor point (e.g. `[0.5, 0.98]` anchors at bottom-centre).
-- `tex_dim` is the texture size divided by tile-set dimensions, giving the
-  aspect-ratio scale needed to make each tile square in the sprite sheet.
+- Position → world metres via `iso_world_pos(x, y, h + altitude)` (height in `z`,
+  never a `cart_pos.y` pixel offset); `frame_offset.z` is the altitude, `x/y` the
+  horizontal drift.
+- The billboard basis stands the quad up in world space: width along the screen
+  `right` axis `(1/√2, −1/√2, 0)`, height down world `−Z` (so the sheet's `v=0`
+  top is at higher `z` and the feet at the anchor).  The screen camera then
+  projects this standing quad.
+- `tex_dim` is the source-cell pixel size; `w/hh` scale it to metres via
+  `PPM_TARGET`.  The `-ua/-wa` translation shifts the quad so the anchor point
+  (e.g. `[0.5, 0.98]` = bottom-centre) sits at the world origin.
 
 ### Depth corners (`compute_iso_depth_corners`)
 
@@ -567,8 +556,8 @@ vertically (the exporter renders the body tilted about its ground origin on a
 - `Engine::update_vehicles` (`classic-engine/src/vehicle.rs`) drives the body as
   a single **chassis plane** `(altitude, pitch, roll)` fit to the four wheel
   contacts and spring-smoothed, then quantizes pitch/roll against
-  `pitch_max`/`roll_max` to pick the frame; `frame_offset.y` still carries the
-  suspension/jump delta.  Each wheel is a per-wheel suspension spring clamped to
+  `pitch_max`/`roll_max` to pick the frame; `frame_offset.z` carries the
+  suspension/jump altitude (x/y are horizontal drift — world metres).  Each wheel is a per-wheel suspension spring clamped to
   a travel envelope (`wheel_travel_up`/`wheel_travel_down`, derived from the def
   geometry at spawn) around the body plane, so wheels never ride over the body —
   the plane lifts/tilts to absorb terrain instead.  A soft dead-zone
@@ -640,8 +629,8 @@ on top of the main terrain.
 ### Mesh generation
 
 The nav mesh uses the same `build_mesh` function as the main tilemap, built
-from the tilemap's **actual** `height_data` + `height_scale` (the flat
-`height_scale = 64.0` fallback is only used when there is no tilemap).  The
+from the parent tilemap's **actual** `height_data` (world metres); when the grid
+is absent or the wrong size it falls back to a flat all-`1.0` height grid.  The
 data array contains walkability flags where `1` = walkable, `0` = blocked.
 
 ### Rendering
@@ -673,25 +662,21 @@ IsoSprite entities (excluding agents) get footprint colliders registered with
 
 ### Construction
 
-For each IsoSprite:
+`init_footprint_colliders` (now in `classic-demo/src/prefabs.rs`) iterates every
+`IsoSprite` (skipping `IsoAgent`s, which get their own collider handling):
 
 1. For each footprint vertex `pt`:
-   - Compute iso position: `px = sprite_iso_pos.x + pt.x`, `py = sprite_iso_pos.y + pt.y`.
-   - Bilinear height at `(px, py)`.
-   - Convert to world space:
-     ```
-     v = iso_to_cart_world.transform_point3(Vec3::new(px, py, 0.0))
-     v += tilemap_pos
-     v.y -= h * height_scale
-     ```
+   - Iso position `px = sprite_iso_pos.x + pt.x`, `py = sprite_iso_pos.y + pt.y`.
+   - Terrain height `h = bilinear_height(...)` (metres).
+   - World-metre vertex `iso_world_pos(px, py, h) + tilemap_pos`, then projected
+     to screen px via `iso_camera_px`.
 
-2. Build a `Shape::Polygon` via `polygon_from_verts(world_verts)`, which
-   auto-computes `center`, `min`, and `max` AABB.
+2. Build a `Shape::Polygon` via `polygon_from_verts(world_verts)` (auto
+   `center`/`min`/`max` AABB).
 
-3. Register with `PhysicsProvider` and set the sprite's Z-offset to the
-   terrain height: `tf.position.z = bilinear_height(px, py) * height_scale`.
-
-Agents are explicitly skipped — they receive their own collider handling.
+3. `register_named_collider` with the entity name, and set the sprite's z-offset
+   to the terrain height (world metres — no `* height_scale`):
+   `tf.position.z = terrain_z`.
 
 ---
 
@@ -773,14 +758,18 @@ let d = Vec3::new(
 
 ### Normal matrix
 
-The tilemap shader receives a `normalMatrix` uniform computed as:
+The tilemap shader receives a `normalMatrix` uniform computed from the world→light
+normal matrix:
 
 ```rust
-let iso3 = Mat3::from_mat4(iso_matrix);
-let normal_matrix = iso3.inverse().transpose();
+let normal_matrix = classic_core::math::iso_world_normal_matrix(tilemap_tf.scale);
 ```
 
-This corrects normals for the non-uniform 2:1 scale of the isometric transform.
+`iso_world_normal_matrix` is `inverse_transpose(S(scale)·Rz(−45°)) · D` (where
+`D = diag(TILE_M, −TILE_M, 1/PPM_TARGET)`), **not**
+`inverse_transpose(mat3(iso_world_light_matrix))` — `D` does not commute with the
+rotation, and the wrong order subtly re-axes slope lighting.  World normals are
+`normalize(D⁻¹ · tile_normal)`.
 
 ### Dynamic point lights (UBO)
 
@@ -790,18 +779,14 @@ skill (§16 "Dynamic lights") for the buffer layout and the `classic-ecs` skill
 for the `Light` component.  Only two points matter for iso placement:
 
 - **`Engine::iso_to_world(x, y, elevation)`** is the single conversion from an
-  iso tile to a **light-space** position: `p_xy =
-  iso_to_cartesian_4() * S(tilemap.scale) * (x,y,0) + tilemap.position`, then
-  `p.z = (h+elevation)·height_scale`.  `elevation` is metres above the terrain
-  (same units as `height_data`); `height_scale` is px/metre.
+  iso tile to a **light-space** position:
+  `iso_world_pos(x, y, height_at(x, y) + elevation) + tilemap.position`.
+  `elevation` is metres above the terrain (same units as `height_data`).
   **Height goes in `z` alone.**  Light space is +Z up — the same space
   `light_dir` and `vNormal` live in.  This function used to also apply the
   renderer's isometric shear (`p.y -= z_px`), which put lights in screen space
   while the normals they are dotted against stayed in light space; `dot(n, L)`
   then mixed spaces.  See `classic-gfx` §17.
-- The conversion is safe only when `tilemap.scale.x == tilemap.scale.y`
-  (the two scenes use `[45,45,1]`); `iso_to_cartesian_4() * S(scale)` and
-  `S(scale) * iso_to_cartesian_4()` differ for non-uniform x/y scale.
 
 Point lights are **unoccluded** (no point-light shadows).  A bare point light on
 terrain reads as a symmetric "sphere"; that's expected until point-light shadows
@@ -829,25 +814,23 @@ The ghost pass uses a hardcoded `ghostAlpha = 0.4`.  Adjust
 
 ### Per-pixel depth maps (per-sheet)
 
-A texture may declare a grayscale depth map (`depth` + `depth_range` in the
-manifest, keyed per **sheet**).  When
-present, the sprite writes `gl_FragDepth` from the map in `sheet.frag`, so
-overlapping sprites occlude each other per-pixel rather than by draw order, and
-the ghost pass becomes `GREATER` against the depth buffer.  Sprites sharing a
-non-zero `ghost_group` (a vehicle's body + wheels) never ghost through each
-other (stencil `NOTEQUAL`).  Depth maps are emitted by the Blender exporter
-(`classic-assets` `render/materials.py`), encoded `gray = 0.5 - dot/range`
-(gray `0.5` == the ground anchor == `depth_base`), and packed by the ROM
-`xtask`.  All depth maps share one global `DEPTH_RANGE` (classic-assets
-`presets.DEPTH_RANGE`) so several assets can pack into a single depth sheet.
+A texture may declare a grayscale depth map (`depth` in the manifest, keyed per
+**sheet**).  When present, the sprite writes `gl_FragDepth` from the map in
+`sheet.frag`, so overlapping sprites occlude each other per-pixel rather than by
+draw order, and the ghost pass becomes `GREATER` against the depth buffer.
+Sprites sharing a non-zero `ghost_group` (a vehicle's body + wheels) never ghost
+through each other (stencil `NOTEQUAL`).  Depth maps are emitted by the Blender
+exporter (`classic-assets` `render/materials.py`), baked as camera view depth
+`gray = (DEPTH_NEAR − dot(back, world)) / (DEPTH_NEAR − DEPTH_FAR)`.
 
-**The depth map's horizontal component is baked with the fixed
-`HORIZONTAL_DEPTH_SCALE` = 400** (`proxy_axis` returns `1/(tile_m · 400)` for
-x/y), so the engine's `horizontal_depth_scale(map)` must be ≥ 400 (see §3) or
-the sprite's near/far corner occlusion inverts.  `gray = 0.5 − dot/0.05`, where
-`dot = axis · (position − anchor)` equals the iso-depth offset of the pixel
-relative to the anchor; the shader decodes
-`gl_FragDepth = depth_base + (0.5 − gray) · depth_range`.
+The sheet bakes `gray` **relative to the Blender origin** (`gray ≈ 0.5` at the
+asset's ground anchor), so `sheet.frag` re-anchors per sprite:
+`gl_FragDepth = depth_base + (gray − 0.5)`, where `depth_base` is the sprite's
+own window-space anchor depth (`world_depth(model.w_axis.truncate())`, the
+*render* height) passed as a `sheet.frag` uniform.  **TODO** (noted in
+`sheet.frag` + `render/materials.py`): bake the sheet *relative to the ground
+anchor* so `gray = 0.5` is exactly the anchor and the `− 0.5` stops carrying an
+implicit Blender-origin assumption.
 
 ### Per-pixel normal maps (per-sheet)
 

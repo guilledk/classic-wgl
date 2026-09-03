@@ -51,15 +51,11 @@ pub struct TextureManifestEntry {
     pub name: String,
     pub src: String,
     /// Optional per-pixel depth map (a grayscale texture with the same tile
-    /// layout as this texture; 0.5 = anchor plane, 1.0 = closest, 0.0 =
-    /// farthest).  When present, the sprite writes `gl_FragDepth` and is
-    /// occluded per-pixel instead of by draw order.
+    /// layout as this texture; window `[0, 1]`, 0 = nearest, 1 = farthest).
+    /// When present, the sprite writes `gl_FragDepth` and is occluded
+    /// per-pixel instead of by draw order.
     #[serde(default)]
     pub depth: Option<String>,
-    /// Depth range (isoDepth units) that the depth map's grayscale [0, 1]
-    /// spans, emitted by the exporter.
-    #[serde(default)]
-    pub depth_range: f32,
     /// Optional per-pixel normal map (RGB = world-space normal remapped
     /// `[-1,1] → [0,1]`, same tile layout as this texture).  When present,
     /// the sprite shades with a runtime Lambertian term (`ambient_color +
@@ -103,12 +99,10 @@ pub struct SpriteSheetEntry {
     #[serde(default)]
     pub normal: Option<String>,
     /// Optional per-sheet depth-map PNG packed in the same rect layout as this
-    /// sheet (grayscale `gl_FragDepth` mask; 0.5 = anchor plane).
+    /// sheet (grayscale `gl_FragDepth` mask; window `[0, 1]`, 0 = nearest,
+    /// 1 = farthest).
     #[serde(default)]
     pub depth: Option<String>,
-    /// Depth range (isoDepth units) the sheet's depth-map grayscale spans.
-    #[serde(default)]
-    pub depth_range: f32,
 }
 
 /// A single frame inside a packed sprite atlas.
@@ -256,11 +250,11 @@ pub struct VehicleDef {
     /// movement approximates the old instant-turn behaviour for simple defs.
     #[serde(default)]
     pub turn_rate_deg_per_sec: f32,
-    /// Max drop (in pixels) the suspension absorbs without damage.  The A* may
+    /// Max drop (in metres) the suspension absorbs without damage.  The A* may
     /// route a downward "jump" over a small cliff whose drop is within this
     /// distance; larger drops are impassable (issue #35).  `0` disables jumps.
     #[serde(default)]
-    pub safe_fall_px: f32,
+    pub safe_fall_m: f32,
     /// Number of steering angles rendered for the front tires (1 = no steering).
     /// A steering-tire sheet stacks `steer_levels` direction blocks vertically,
     /// so its `tile_set_size` is `[columns, rows · steer_levels]`.
@@ -325,7 +319,7 @@ pub struct VehicleOverrides {
     #[serde(default)]
     pub turn_rate_deg_per_sec: Option<f32>,
     #[serde(default)]
-    pub safe_fall_px: Option<f32>,
+    pub safe_fall_m: Option<f32>,
     #[serde(default)]
     pub steer_rate_deg_per_sec: Option<f32>,
     #[serde(default)]
@@ -341,8 +335,8 @@ impl VehicleOverrides {
         if let Some(v) = self.turn_rate_deg_per_sec {
             def.turn_rate_deg_per_sec = v;
         }
-        if let Some(v) = self.safe_fall_px {
-            def.safe_fall_px = v;
+        if let Some(v) = self.safe_fall_m {
+            def.safe_fall_m = v;
         }
         if let Some(v) = self.steer_rate_deg_per_sec {
             def.steer_rate_deg_per_sec = v;
@@ -577,7 +571,7 @@ mod tests {
             "roll_max_deg": 20.0,
             "cell": [331, 331],
             "turn_rate_deg_per_sec": 90.0,
-            "safe_fall_px": 96.0,
+            "safe_fall_m": 1.5,
             "anchors": "lrv_anchors",
             "parts": [
                 { "name": "body", "texture": "lrvBody" }
@@ -586,7 +580,7 @@ mod tests {
         let def: VehicleDef = serde_json::from_value(json).expect("deserialize authored def");
         assert_eq!(def.name, "lrv");
         assert_eq!(def.turn_rate_deg_per_sec, 90.0);
-        assert_eq!(def.safe_fall_px, 96.0);
+        assert_eq!(def.safe_fall_m, 1.5);
         assert_eq!(def.anchors, "lrv_anchors");
         assert!(def.path_footprint.is_none(), "absent path_footprint -> None (auto-derive)");
 
@@ -615,7 +609,7 @@ mod tests {
 
         let ov: VehicleOverrides = serde_json::from_value(serde_json::json!({
             "turn_rate_deg_per_sec": 55.0,
-            "safe_fall_px": 96.0
+            "safe_fall_m": 1.5
         }))
         .unwrap();
         let mut def = VehicleDef {
@@ -631,7 +625,7 @@ mod tests {
             roll_max_deg: 20.0,
             path_footprint: None,
             turn_rate_deg_per_sec: 720.0,
-            safe_fall_px: 0.0,
+            safe_fall_m: 0.0,
             steer_levels: 5,
             steer_max_deg: 30.0,
             steer_rate_deg_per_sec: 360.0,
@@ -642,7 +636,7 @@ mod tests {
         };
         ov.apply_to(&mut def);
         assert_eq!(def.turn_rate_deg_per_sec, 55.0);
-        assert_eq!(def.safe_fall_px, 96.0);
+        assert_eq!(def.safe_fall_m, 1.5);
         assert_eq!(def.steer_rate_deg_per_sec, 360.0);
     }
 
