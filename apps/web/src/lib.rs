@@ -199,6 +199,11 @@ async fn run() -> anyhow::Result<()> {
             return Err(err);
         }
     };
+    // Esc aborts the load: stop hydrating and leave the loader hanging.
+    if platform.input().borrow().was_key_pressed("Escape") {
+        log::info!("boot aborted (Esc)");
+        return Ok(());
+    }
     if let Some(loader) = &loader {
         loader.set_dag(&loaded);
         loader.sync(&mut engine, vw, vh);
@@ -212,6 +217,10 @@ async fn run() -> anyhow::Result<()> {
     // plan drains).
     let mut plan = engine.begin_boot_gfx(gl, &loaded, sink.as_ref());
     while !plan.is_done() {
+        if platform.input().borrow().was_key_pressed("Escape") {
+            log::info!("boot aborted (Esc)");
+            return Ok(());
+        }
         let frame_start = std::time::Instant::now();
         loop {
             if plan.is_done() {
@@ -227,6 +236,10 @@ async fn run() -> anyhow::Result<()> {
             engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
         }
         next_frame().await;
+    }
+    if platform.input().borrow().was_key_pressed("Escape") {
+        log::info!("boot aborted (Esc)");
+        return Ok(());
     }
     engine.upload_pending_basis(&mut plan, sink.as_ref()).await;
     if let Some(loader) = &loader {

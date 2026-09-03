@@ -278,6 +278,14 @@ fn main() {
     let tf = test_failed.clone();
 
     platform.run_loop(move |gl, input, vw, vh, delta, should_close| {
+        // Esc aborts the in-flight load and stops the process (the detached
+        // boot thread dies with it).
+        if !booted && input.was_key_pressed("Escape") {
+            classic_core::cl_info!(classic_core::instrument::Chan::Platform, "boot aborted (Esc)");
+            *should_close = true;
+            return;
+        }
+
         // Drain the boot channel: forward background events to the process sink,
         // and pick up the decoded assets once the CPU boot stages finish.
         loop {
