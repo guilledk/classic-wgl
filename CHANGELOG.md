@@ -87,6 +87,9 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   slopes: project through `iso_camera_px` and sample mesh-matched heights, and
   account for the tilemap `Transform.position` offset in the mouse raycast and
   shadow pass.
+- Fix the editor/HUD UI holding the 1280x720 reference size (until the next
+  window resize) after the loading screen hands off to the game — size it to
+  the engine's actual viewport at install time.
 
 ## [0.1.1] - 2026-09-01
 
