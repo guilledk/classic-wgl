@@ -279,37 +279,6 @@ pub fn init_engine_multi(
     e
 }
 
-/// Desktop async bootstrap: `loaded` was resolved and its textures decoded and
-/// guests compiled off-thread; this hydrates the GL-side steps (upload, SDF,
-/// entity/guest instantiate) on the calling thread.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn init_engine_multi_decoded(
-    gl: Rc<glow::Context>,
-    loaded: &LoadedRoms,
-    decoded: HashMap<String, classic_engine::boot::DecodedTexture>,
-    compiled: &CompiledModules,
-    sink: &dyn BootSink,
-) -> Engine {
-    let mut e = Engine::new();
-    e.load_roms_decoded(gl, loaded, decoded, sink);
-    finish_init_engine(&mut e, loaded, compiled, sink);
-    e
-}
-
-/// Web-only async bootstrap: awaits the worker-ized `.basis` transcode during
-/// `load_roms_async`, then installs the shared host layer synchronously.
-#[cfg(target_arch = "wasm32")]
-pub async fn init_engine_multi_async(
-    gl: Rc<glow::Context>,
-    loaded: &LoadedRoms,
-    sink: &dyn BootSink,
-) -> Engine {
-    let mut e = Engine::new();
-    e.load_roms_async(gl, loaded, sink).await;
-    finish_init_engine(&mut e, loaded, &CompiledModules::new(), sink);
-    e
-}
-
 /// The shared post-load tail of [`init_engine_multi`] (and its async variant):
 /// cursor/camera/animator prefabs, default lighting, the background guest
 /// worker, the ROM guests, terrain commit, colliders, and the editor/HUD host

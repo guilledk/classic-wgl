@@ -971,22 +971,6 @@ impl Engine {
         }
     }
 
-    /// Upload a batch of already-transcoded `.basis` textures (produced by
-    /// [`boot::decode_basis_jobs`]) on this, the GL thread, then alias each
-    /// job's remaining keys to the first key's GL texture.  A job whose payload
-    /// is `None` failed to transcode and is skipped (treated as missing).
-    #[cfg(not(target_arch = "wasm32"))]
-    fn upload_basis_predecoded(
-        &mut self,
-        jobs: &[BasisTextureJob],
-        decoded: &[Option<classic_gfx::DecodedBasis>],
-        sink: &dyn classic_rom::BootSink,
-    ) {
-        for (job, payload) in jobs.iter().zip(decoded) {
-            self.upload_basis_job(job, payload.as_ref(), sink);
-        }
-    }
-
     /// Upload a single already-transcoded `.basis` job (its payload is
     /// `decoded[index]`), then alias its remaining keys.  Emits
     /// [`classic_rom::BootEvent::TextureUploaded`] (the `ResourceDecoded` event
@@ -1124,60 +1108,6 @@ impl Engine {
         self.hydrate_roms(loaded, sink);
     }
 
-    /// Hydrate the engine from a resolved DAG whose texture `Decode` steps were
-    /// already run off-thread.  `decoded` maps each texture key to its
-    /// [`boot::DecodedTexture`] pixels (produced by [`boot::decode_plan`]);
-    /// the `Decode` steps are skipped and every remaining step (upload,
-    /// metadata, SDF, entity hydrate, finish) runs on this, the GL thread.
-    pub fn load_roms_decoded(
-        &mut self,
-        gl: Rc<glow::Context>,
-        loaded: &classic_rom::LoadedRoms,
-        decoded: HashMap<String, boot::DecodedTexture>,
-        sink: &dyn classic_rom::BootSink,
-    ) {
-        // Query the compressed-format capabilities once, before `gl` moves into
-        // `ensure_gfx`, so the off-thread basis transcode targets the same
-        // formats this context will upload.
-        #[cfg(not(target_arch = "wasm32"))]
-        let caps = classic_gfx::Caps::query(&gl);
-
-        if let Some(root) = loaded.root_rom() {
-            self.ensure_gfx(gl, &root.manifest, sink);
-        }
-        let mut plan = self.begin_boot(loaded, sink);
-        plan.decoded = decoded;
-        self.boot_step_predecoded(&mut plan, usize::MAX);
-
-        // Transcode the pending `.basis` sheets in parallel on the loader pool
-        // (CPU), then upload the decoded payloads on this, the GL thread.
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let basis = boot::decode_basis_jobs(&plan.basis_jobs, caps, sink);
-            self.upload_basis_predecoded(&plan.basis_jobs, &basis, sink);
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.upload_basis_sync(&plan.basis_jobs, sink);
-        }
-    }
-
-    /// Web-only async counterpart to [`Engine::load_roms`]: the `.basis`
-    /// transcode stage is awaited through the web transcoder worker (the rest of
-    /// hydration stays synchronous).
-    #[cfg(target_arch = "wasm32")]
-    pub async fn load_roms_async(
-        &mut self,
-        gl: Rc<glow::Context>,
-        loaded: &classic_rom::LoadedRoms,
-        sink: &dyn classic_rom::BootSink,
-    ) {
-        if let Some(root) = loaded.root_rom() {
-            self.ensure_gfx(gl, &root.manifest, sink);
-        }
-        self.hydrate_roms_async(loaded, sink).await;
-    }
-
     /// The GL-free core of [`Engine::load_roms`]: per-ROM resource + entity +
     /// grid hydration in topological order, plus DAG bookkeeping.  Split out so
     /// the multi-ROM logic is unit-testable without a GL context.  Builds a
@@ -1187,19 +1117,6 @@ impl Engine {
         let mut plan = self.begin_boot(loaded, sink);
         self.boot_step(&mut plan, usize::MAX);
         self.upload_basis_sync(&plan.basis_jobs, sink);
-    }
-
-    /// Web-only async hydration: identical to [`Engine::hydrate_roms`] except the
-    /// `.basis` upload is awaited through the transcoder worker.
-    #[cfg(target_arch = "wasm32")]
-    async fn hydrate_roms_async(
-        &mut self,
-        loaded: &classic_rom::LoadedRoms,
-        sink: &dyn classic_rom::BootSink,
-    ) {
-        let mut plan = self.begin_boot(loaded, sink);
-        self.boot_step(&mut plan, usize::MAX);
-        self.upload_basis_async(std::mem::take(&mut plan.basis_jobs), sink).await;
     }
 
     /// Hydrate one ROM entry's state + grids (after its resources are loaded).
