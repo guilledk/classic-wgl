@@ -177,11 +177,15 @@ async fn run() -> anyhow::Result<()> {
     let (vw, vh) = platform.viewport();
 
     // Set up the GL layer + embedded font up front so the loader renders from
-    // frame 0, then draw one initial frame before the (awaited) fetch.
+    // frame 0, then render one initial frame before the (awaited) fetch.
     let mut engine = classic_engine::Engine::new();
     engine.init_gfx(gl.clone());
+    // Install the loading-screen UI from frame 0 (visual loader only), sync
+    // it, and render through the normal frame pipeline.
     if let Some(loader) = &loader {
-        loader.draw(&mut engine, vw, vh);
+        loader.install(&mut engine);
+        loader.sync(&mut engine, vw, vh);
+        engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
     }
 
     let boot_start = std::time::Instant::now();
@@ -197,7 +201,8 @@ async fn run() -> anyhow::Result<()> {
     };
     if let Some(loader) = &loader {
         loader.set_dag(&loaded);
-        loader.draw(&mut engine, vw, vh);
+        loader.sync(&mut engine, vw, vh);
+        engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
     }
 
     // Hydrate the engine incrementally: build the boot plan, then drain a
@@ -218,13 +223,18 @@ async fn run() -> anyhow::Result<()> {
             }
         }
         if let Some(loader) = &loader {
-            loader.draw(&mut engine, vw, vh);
+            loader.sync(&mut engine, vw, vh);
+            engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
         }
         next_frame().await;
     }
     engine.upload_pending_basis(&mut plan, sink.as_ref()).await;
     if let Some(loader) = &loader {
-        loader.draw(&mut engine, vw, vh);
+        loader.sync(&mut engine, vw, vh);
+        engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
+    }
+    if let Some(loader) = &loader {
+        loader.uninstall(&mut engine);
     }
     classic_demo::finish_init_engine(
         &mut engine,

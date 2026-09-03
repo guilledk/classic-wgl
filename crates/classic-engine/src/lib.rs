@@ -3725,32 +3725,33 @@ impl Engine {
 
         let ui_debug = env_config::EnvConfig::get().ui_debug && self.debug_frame < 120;
         if ui_debug {
-            let Some(ref ui) = self.ui else { return };
-            log::info!(
-                "=== frame {} vp={:.0}x{:.0} ===",
-                self.debug_frame,
-                ui.viewport_w,
-                ui.viewport_h
-            );
-            let mut ents: Vec<_> = self
-                .world
-                .query::<(&Transform, &classic_core::components::UiNode)>()
-                .iter()
-                .map(|(e, (tf, n))| (e, tf.clone(), n.clone()))
-                .collect();
-            ents.sort_by(|a, b| a.2.kind.kind_str().cmp(b.2.kind.kind_str()));
-            for (e, tf, node) in &ents {
+            if let Some(ui) = self.ui.as_ref() {
                 log::info!(
-                    "  [{:?}] {:?} pos=({:.0},{:.0}) size=({:.0},{:.0}) z={:.0} enabled={} parent={:?} children={}",
-                    node.kind.kind_str(),
-                    e.id(),
-                    tf.position.x, tf.position.y,
-                    node.size.x, node.size.y,
-                    tf.position.z,
-                    self.world.get::<&classic_core::components::Disabled>(*e).is_err(),
-                    node.parent,
-                    node.children.len(),
+                    "=== frame {} vp={:.0}x{:.0} ===",
+                    self.debug_frame,
+                    ui.viewport_w,
+                    ui.viewport_h
                 );
+                let mut ents: Vec<_> = self
+                    .world
+                    .query::<(&Transform, &classic_core::components::UiNode)>()
+                    .iter()
+                    .map(|(e, (tf, n))| (e, tf.clone(), n.clone()))
+                    .collect();
+                ents.sort_by(|a, b| a.2.kind.kind_str().cmp(b.2.kind.kind_str()));
+                for (e, tf, node) in &ents {
+                    log::info!(
+                        "  [{:?}] {:?} pos=({:.0},{:.0}) size=({:.0},{:.0}) z={:.0} enabled={} parent={:?} children={}",
+                        node.kind.kind_str(),
+                        e.id(),
+                        tf.position.x, tf.position.y,
+                        node.size.x, node.size.y,
+                        tf.position.z,
+                        self.world.get::<&classic_core::components::Disabled>(*e).is_err(),
+                        node.parent,
+                        node.children.len(),
+                    );
+                }
             }
         }
         self.debug_frame += 1;

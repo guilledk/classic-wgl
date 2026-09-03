@@ -324,6 +324,10 @@ fn main() {
         if engine.is_none() {
             let mut e = classic_engine::Engine::new();
             e.init_gfx(gl.clone());
+            // Install the loading-screen UI from frame 0 (visual loader only).
+            if let Some(l) = &loader {
+                l.install(&mut e);
+            }
             engine = Some(e);
         }
         if !caps_sent {
@@ -371,6 +375,9 @@ fn main() {
                     b.basis_cursor += 1;
                     b.basis_done = done;
                 } else {
+                    if let Some(l) = &loader {
+                        l.uninstall(e);
+                    }
                     classic_demo::finish_init_engine(e, &b.loaded, &b.compiled, sink.as_ref());
                     sink.on_event(BootEvent::BootComplete { elapsed: boot_start.elapsed() });
                     sampler.take();
@@ -401,7 +408,10 @@ fn main() {
                     tf.set(true);
                 }
             } else if let Some(l) = &loader {
-                l.draw(e, vw, vh);
+                // Sync the loader's UI entities, then render them through the
+                // normal frame pipeline.
+                l.sync(e, vw, vh);
+                e.frame(input, vw, vh, delta);
             }
         }
     });
