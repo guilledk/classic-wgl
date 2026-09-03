@@ -11,6 +11,9 @@ mod shaders;
 
 mod compressed;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use compressed::{transcode_basis, Caps, DecodedBasis};
+
 #[cfg(target_arch = "wasm32")]
 mod basis_web;
 
@@ -683,6 +686,22 @@ impl Gfx {
             name.to_string(),
             GlTexture::from_compressed(&self.gl, internal_format, data, w, h),
         );
+    }
+
+    /// Upload a previously-transcoded `.basis` payload (the off-thread half of
+    /// [`Gfx::add_texture_basis`], native only).  Compressed block data goes
+    /// through `compressed_tex_image_2d`; the RGBA8 fallback goes through the
+    /// raw path.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn upload_decoded_basis(&mut self, name: &str, decoded: &compressed::DecodedBasis) {
+        match decoded {
+            compressed::DecodedBasis::Compressed { internal_format, width, height, data } => {
+                self.add_texture_compressed(name, *internal_format, data, *width, *height);
+            }
+            compressed::DecodedBasis::Rgba8 { width, height, data } => {
+                self.add_texture_rgba8(name, data, *width, *height);
+            }
+        }
     }
 
     /// Upload a Basis Universal `.basis` payload: transcode to the target

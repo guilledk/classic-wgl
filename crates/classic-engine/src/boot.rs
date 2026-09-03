@@ -238,6 +238,46 @@ fn decode_jobs_parallel(
     decoded
 }
 
+/// Transcode every pending `.basis` job in parallel (CPU, native only),
+/// returning the decoded payload keyed by job index.  `None` marks a job that
+/// failed to transcode (its texture is treated as missing).  Mirrors
+/// [`decode_plan`] but for GPU-compressed sheets: the `basis_universal` decode
+/// fans out across the loader pool while the GL upload stays on the render
+/// thread via `Engine::upload_basis_predecoded`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn decode_basis_jobs(
+    jobs: &[BasisTextureJob],
+    caps: classic_gfx::Caps,
+) -> Vec<Option<classic_gfx::DecodedBasis>> {
+    let total = jobs.len();
+    if total == 0 {
+        return Vec::new();
+    }
+    use std::sync::mpsc;
+
+    let threads = crate::env_config::EnvConfig::get().loader_threads;
+    let pool = classic_worker::ThreadPool::new(threads);
+    let (tx, rx) = mpsc::channel();
+
+    for (index, job) in jobs.iter().enumerate() {
+        let tx = tx.clone();
+        let bytes = Arc::clone(&job.bytes);
+        let format = job.format.clone();
+        pool.spawn(move || {
+            let decoded = classic_gfx::transcode_basis(&bytes, &format, caps);
+            let _ = tx.send((index, decoded));
+        });
+    }
+    drop(tx);
+
+    let mut ordered: Vec<Option<classic_gfx::DecodedBasis>> = (0..total).map(|_| None).collect();
+    for _ in 0..total {
+        let (index, decoded) = rx.recv().expect("basis worker panicked");
+        ordered[index] = decoded;
+    }
+    ordered
+}
+
 /// Decode a PNG into owned pixels of the given channel layout.
 pub fn decode_texture(format: TextureFormat, bytes: &[u8]) -> DecodedTexture {
     let img = image::load_from_memory(bytes).expect("decode PNG");
