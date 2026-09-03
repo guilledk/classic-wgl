@@ -65,6 +65,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   overlay hook — instead of hand-rolled `draw_*` calls.  Text now goes through
   the per-entity glyph-buffer cache (no per-frame rebuild), and the duplicated
   `draw_text`/`measure_text` path is deleted.
+- Abortable boot: Esc during the desktop loading screen aborts the load and
+  stops the process; on web it stops hydration and leaves the loader hanging.
 
 ### Changed
 
