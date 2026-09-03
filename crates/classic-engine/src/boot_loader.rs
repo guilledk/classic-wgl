@@ -11,9 +11,9 @@
 //! Sans SDF atlas (loaded by [`crate::Engine::init_gfx`]) means text renders
 //! from frame 0.
 
+use classic_platform::BootTimer;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use classic_core::components::{
     Disabled, RectRender, SdfTextRender, SpriteRender, TextJustify, Transform, UiKind, UiNode,
@@ -195,7 +195,7 @@ struct LoaderState {
     /// [`VisualBootSink::set_dag`] runs, the tree layout can't place dependents
     /// under their parents, so the renderer falls back to a simple stack.
     dag_set: bool,
-    started: Instant,
+    started: BootTimer,
     done: bool,
 }
 
@@ -212,7 +212,7 @@ impl LoaderState {
             rss_bytes: 0,
             last_texture: None,
             dag_set: false,
-            started: Instant::now(),
+            started: BootTimer::start(),
             done: false,
         }
     }
@@ -495,7 +495,7 @@ impl VisualBootSink {
             "cpu {}%   rss {:.1} MiB   {:.1}s",
             state.cpu_percent,
             state.rss_bytes as f64 / (1024.0 * 1024.0),
-            state.started.elapsed().as_secs_f32(),
+            state.started.elapsed_secs(),
         );
         set_text(engine, ui.metrics, vw - pad, 8.0 * s, 0.6 * s, &metrics, DIM_TEXT);
 

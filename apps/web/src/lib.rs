@@ -188,7 +188,7 @@ async fn run() -> anyhow::Result<()> {
         engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
     }
 
-    let boot_start = std::time::Instant::now();
+    let boot_start = classic_platform::BootTimer::start();
     let loaded = match resolve_web_roms(&spec, sink.as_ref()).await {
         Ok(loaded) => loaded,
         Err(err) => {
@@ -221,13 +221,13 @@ async fn run() -> anyhow::Result<()> {
             log::info!("boot aborted (Esc)");
             return Ok(());
         }
-        let frame_start = std::time::Instant::now();
+        let frame_start = classic_platform::BootTimer::start();
         loop {
             if plan.is_done() {
                 break;
             }
             engine.boot_step(&mut plan, 1);
-            if frame_start.elapsed().as_millis() >= BOOT_BUDGET_MILLIS {
+            if frame_start.elapsed_ms() >= BOOT_BUDGET_MILLIS {
                 break;
             }
         }
@@ -255,7 +255,7 @@ async fn run() -> anyhow::Result<()> {
         &classic_demo::CompiledModules::new(),
         sink.as_ref(),
     );
-    sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed() });
+    sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed_duration() });
 
     platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {
         engine.frame(input, vw, vh, delta);
