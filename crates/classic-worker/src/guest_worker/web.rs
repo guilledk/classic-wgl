@@ -32,6 +32,13 @@ const WORKER_SRC: &str = include_str!("guest_worker.js");
 /// A completed task result (see the native backend).
 pub type TaskResult = Result<Vec<u8>, String>;
 
+/// Placeholder for the compiled-worker type on web, where the worker guest runs
+/// browser-native wasm in a `web_sys::Worker` (no off-thread cranelift compile),
+/// so the `CompiledModules` payload stays target-independent.
+pub struct CompiledWorker {
+    _priv: (),
+}
+
 /// The engine-facing handle to the background guest worker.
 pub struct GuestWorker {
     mode: Mode,

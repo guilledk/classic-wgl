@@ -34,6 +34,27 @@ enum Command {
 /// trapped/panicked while running its entry point.
 pub type TaskResult = Result<Vec<u8>, String>;
 
+/// A compiled worker module (`Send + Sync`), the off-main-thread half of worker
+/// init.  Compile it on a background thread, then instantiate it on the GL
+/// thread with [`GuestWorker::new_compiled`] — which must use the *same* engine
+/// that compiled it.
+pub struct CompiledWorker {
+    pub(crate) engine: WasmtimeEngine,
+    pub(crate) module: Module,
+}
+
+impl CompiledWorker {
+    /// Compile the worker guest from its `.wasm` bytes (native wasmtime).
+    /// Off-thread-safe: no GL, no engine references, and the result is `Send`.
+    pub fn compile(wasm: &[u8]) -> Result<Self, String> {
+        let engine = WasmtimeEngine::new(&wasmtime::Config::new())
+            .map_err(|e| format!("worker guest engine: {e}"))?;
+        let module =
+            Module::new(&engine, wasm).map_err(|e| format!("worker guest compile: {e}"))?;
+        Ok(Self { engine, module })
+    }
+}
+
 /// The engine-facing handle to the background guest worker.
 pub struct GuestWorker {
     mode: Mode,
@@ -76,12 +97,25 @@ impl GuestWorker {
     /// runtime runs entries inline on the calling thread; otherwise it runs on a
     /// dedicated thread.
     pub fn new(wasm: &[u8], nav: Arc<NavSnapshot>, synchronous: bool) -> Result<Self, String> {
+        let compiled = CompiledWorker::compile(wasm)?;
+        Self::new_compiled(&compiled, nav, synchronous)
+    }
+
+    /// Instantiate a worker from a module already compiled off-thread.  Uses the
+    /// same engine that compiled the module (see [`CompiledWorker`]).  When
+    /// `synchronous` is true the runtime runs entries inline on the calling
+    /// thread; otherwise it runs on a dedicated thread.
+    pub fn new_compiled(
+        compiled: &CompiledWorker,
+        nav: Arc<NavSnapshot>,
+        synchronous: bool,
+    ) -> Result<Self, String> {
         if synchronous {
-            let runtime = build_runtime(wasm, Arc::clone(&nav))?;
+            let runtime = instantiate(&compiled.engine, &compiled.module, Arc::clone(&nav))?;
             return Ok(Self { mode: Mode::Sync(runtime), results: HashMap::new() });
         }
 
-        let runtime = build_runtime(wasm, Arc::clone(&nav))?;
+        let runtime = instantiate(&compiled.engine, &compiled.module, Arc::clone(&nav))?;
         let (tx, worker_rx) = mpsc::channel::<Command>();
         let (worker_tx, rx) = mpsc::channel::<(TaskId, TaskResult)>();
 
@@ -179,18 +213,20 @@ fn install_imports(linker: &mut Linker<WorkerHost>) -> Result<(), wasmtime::Erro
     )
 }
 
-/// Build the wasmtime store + instance for the worker guest (reduced surface).
-fn build_runtime(wasm: &[u8], nav: Arc<NavSnapshot>) -> Result<Runtime, String> {
-    let engine = WasmtimeEngine::new(&wasmtime::Config::new())
-        .map_err(|e| format!("worker guest engine: {e}"))?;
-    let module = Module::new(&engine, wasm).map_err(|e| format!("worker guest compile: {e}"))?;
-
-    let mut linker = Linker::<WorkerHost>::new(&engine);
+/// Build the wasmtime store + instance for a compiled worker module (the
+/// instantiate half of worker init; the cranelift compile already happened in
+/// [`CompiledWorker::compile`]).
+fn instantiate(
+    engine: &WasmtimeEngine,
+    module: &Module,
+    nav: Arc<NavSnapshot>,
+) -> Result<Runtime, String> {
+    let mut linker = Linker::<WorkerHost>::new(engine);
     install_imports(&mut linker).map_err(|e| format!("worker guest import link: {e}"))?;
 
-    let mut store = Store::new(&engine, WorkerHost::new(nav));
+    let mut store = Store::new(engine, WorkerHost::new(nav));
     let instance = linker
-        .instantiate(&mut store, &module)
+        .instantiate(&mut store, module)
         .map_err(|e| format!("worker guest instantiate: {e}"))?;
 
     Ok(Runtime { store, instance })

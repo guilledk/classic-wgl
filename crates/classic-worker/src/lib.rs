@@ -15,7 +15,7 @@ pub mod pathfinder_worker;
 pub mod pool;
 
 pub use classic_core::pathfinder::PathPoll;
-pub use guest_worker::{GuestWorker, TaskId, WorkerHost};
+pub use guest_worker::{CompiledWorker, GuestWorker, TaskId, WorkerHost};
 pub use pathfinder_worker::PathfinderWorker;
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::ThreadPool;

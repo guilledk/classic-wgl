@@ -67,6 +67,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `draw_text`/`measure_text` path is deleted.
 - Abortable boot: Esc during the desktop loading screen aborts the load and
   stops the process; on web it stops hydration and leaves the loader hanging.
+- Off-thread worker compile: split the Tier-3 `GuestWorker` wasmtime build into
+  a background compile (cranelift `Module`) and a GL-thread instantiate, and
+  compile the root ROM's worker module alongside the foreground guests in the
+  desktop boot, so the loader no longer freezes on the last ~1s of lunar boot.
 
 ### Changed
 

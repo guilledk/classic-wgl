@@ -373,6 +373,7 @@ dependencies = [
  "classic-gfx",
  "classic-guest",
  "classic-rom",
+ "classic-worker",
  "glam",
  "glow",
  "hecs",

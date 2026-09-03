@@ -2884,6 +2884,24 @@ impl Engine {
         Ok(())
     }
 
+    /// Install the background guest worker (Tier 3) from a module already
+    /// compiled off-thread (the async native path).  Shares the current nav
+    /// snapshot; instantiate uses the same engine that compiled the module.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn install_guest_worker_compiled(
+        &mut self,
+        compiled: &classic_worker::CompiledWorker,
+        synchronous: bool,
+    ) -> Result<(), String> {
+        let worker = classic_worker::GuestWorker::new_compiled(
+            compiled,
+            Arc::clone(&self.nav_snapshot),
+            synchronous,
+        )?;
+        self.guest_worker = Some(worker);
+        Ok(())
+    }
+
     /// Submit a background guest task: run the named export of the worker guest
     /// with `arg` as its input bytes.  Returns a task id to poll with
     /// [`Engine::poll_task`].

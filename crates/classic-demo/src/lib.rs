@@ -42,10 +42,33 @@ use classic_rom::{BootEvent, BootSink, LoadedRom, LoadedRoms, Rom};
 
 use crate::state::{DemoState, DemoStateRef};
 
-/// Compiled native guest modules keyed by ROM resolver name — the off-main-
-/// thread half of guest init (see [`compile_guest_modules`]).  Empty on web,
-/// where browser `WebAssembly` compiles inline during [`init_guest`].
-pub type CompiledModules = HashMap<String, classic_guest::CompiledModule>;
+/// Compiled native guest modules keyed by ROM resolver name, plus the optional
+/// compiled Tier-3 worker module for the root ROM — the off-main-thread half of
+/// guest init (see [`compile_guest_modules`]).  Both are empty/`None` on web,
+/// where guests and the worker compile inline.
+///
+/// The fields are read on the native async path only (`init_guests` +
+/// `install_worker`); on web the payload is always empty and both fields are
+/// dead.
+#[allow(dead_code)]
+pub struct CompiledModules {
+    modules: HashMap<String, classic_guest::CompiledModule>,
+    worker: Option<classic_worker::CompiledWorker>,
+}
+
+impl CompiledModules {
+    /// An empty payload — the inline-compile path (sync / headless / golden /
+    /// web), where nothing was pre-compiled off-thread.
+    pub fn new() -> Self {
+        Self { modules: HashMap::new(), worker: None }
+    }
+}
+
+impl Default for CompiledModules {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Install a single ROM guest runtime: instantiate the ROM's compiled guest
 /// module against the given namespace, run its optional one-shot `init` hook
@@ -140,29 +163,46 @@ fn guest_limits(entry: &LoadedRom) -> GuestLimits {
 }
 
 /// Compile every guest module in the DAG off the main thread (native
-/// wasmtime), keyed by ROM resolver name.  Emits `GuestCompiling` per compiled
-/// module.  On web this returns an empty map (guests compile inline).
+/// wasmtime), keyed by ROM resolver name, plus the root ROM's Tier-3 worker
+/// module.  Emits `GuestCompiling` per compiled foreground guest.  On web this
+/// returns an empty payload (guests and the worker compile inline).
 pub fn compile_guest_modules(loaded: &LoadedRoms, sink: &dyn BootSink) -> CompiledModules {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let mut out = CompiledModules::new();
+        let mut modules = HashMap::new();
         for entry in &loaded.order {
             let Some(wasm) = entry.rom.resources.code().get("main") else { continue };
             let limits = guest_limits(entry);
             sink.on_event(BootEvent::GuestCompiling { rom: entry.name.clone() });
             match module_cache::load_or_compile(entry, wasm, &limits) {
                 Ok(module) => {
-                    out.insert(entry.name.clone(), module);
+                    modules.insert(entry.name.clone(), module);
                 }
                 Err(err) => cl_error!(Chan::Guest, "compile guest `{}`: {err}", entry.name),
             }
         }
-        out
+        let worker = compile_worker_module(loaded);
+        CompiledModules { modules, worker }
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (loaded, sink);
         CompiledModules::new()
+    }
+}
+
+/// Compile the root ROM's Tier-3 worker module off-thread (native wasmtime).
+/// Returns `None` when the root ships no worker wasm (or on compile error).
+#[cfg(not(target_arch = "wasm32"))]
+fn compile_worker_module(loaded: &LoadedRoms) -> Option<classic_worker::CompiledWorker> {
+    let root = loaded.root_rom()?;
+    let wasm = root.resources.code().get("worker")?;
+    match classic_worker::CompiledWorker::compile(wasm) {
+        Ok(compiled) => Some(compiled),
+        Err(err) => {
+            cl_error!(Chan::Guest, "compile worker guest `{}`: {err}", loaded.root);
+            None
+        }
     }
 }
 
@@ -186,11 +226,39 @@ pub fn init_guests(
         let ns = e.rom_namespace(&entry.name);
         let limits = guest_limits(entry);
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(module) = compiled.get(&entry.name) {
+        if let Some(module) = compiled.modules.get(&entry.name) {
             init_guest_compiled(e, state, module, &limits, &ns, &entry.name, sink);
             continue;
         }
         init_guest(e, state, wasm, &limits, &ns, &entry.name, sink);
+    }
+}
+
+/// Install the background guest worker (Tier 3) for the root ROM.  Uses the
+/// off-thread-compiled worker module when present (the async native path);
+/// otherwise compiles inline (the sync / headless / golden / web path).
+#[cfg(not(target_arch = "wasm32"))]
+fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules, sync: bool) {
+    let Some(root) = loaded.root_rom() else { return };
+    let Some(worker_wasm) = root.resources.code().get("worker") else { return };
+    let result = match &compiled.worker {
+        Some(compiled_worker) => e.install_guest_worker_compiled(compiled_worker, sync),
+        None => e.install_guest_worker(worker_wasm, sync),
+    };
+    if let Err(err) = result {
+        cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
+    }
+}
+
+/// Web variant: the worker compiles inline (browser-native wasm in a Worker, or
+/// wasmi in sync mode), so there is never a pre-compiled module to install.
+#[cfg(target_arch = "wasm32")]
+fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules, sync: bool) {
+    let _ = compiled;
+    let Some(root) = loaded.root_rom() else { return };
+    let Some(worker_wasm) = root.resources.code().get("worker") else { return };
+    if let Err(err) = e.install_guest_worker(worker_wasm, sync) {
+        cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
     }
 }
 
@@ -267,15 +335,9 @@ pub fn finish_init_engine(
     // Install the background guest worker (Tier 3) *before* the foreground
     // guests run their `init` hook, so a generating guest can submit work from
     // `init`.  Worker code stays root-only for now (per-ROM workers deferred).
-    if let Some(root) = loaded.root_rom() {
-        if let Some(worker_wasm) = root.resources.code().get("worker") {
-            let env = classic_engine::env_config::EnvConfig::get();
-            if let Err(err) =
-                e.install_guest_worker(worker_wasm, env.test_active() || env.golden_active())
-            {
-                cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
-            }
-        }
+    {
+        let env = classic_engine::env_config::EnvConfig::get();
+        install_worker(e, loaded, compiled, env.test_active() || env.golden_active());
     }
 
     // ROM guest code.  Each guest owns its terrain — a generating guest
