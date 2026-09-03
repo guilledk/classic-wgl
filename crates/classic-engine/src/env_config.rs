@@ -68,6 +68,9 @@ pub struct EnvConfig {
     pub loader_mode: LoaderMode,
     /// CLASSIC_BOOT_LOG: always log the boot event stream to the `boot` channel.
     pub boot_log: bool,
+    /// CLASSIC_LOADER_THREADS: worker threads for parallel texture decode
+    /// (default: the machine's available parallelism).
+    pub loader_threads: usize,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -123,6 +126,10 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
             _ => LoaderMode::Off,
         },
         boot_log: read_bool("CLASSIC_BOOT_LOG"),
+        loader_threads: read("CLASSIC_LOADER_THREADS")
+            .parse()
+            .ok()
+            .unwrap_or_else(default_loader_threads),
         test,
     }
 });
@@ -154,4 +161,17 @@ fn read_string(key: &str) -> String {
 
 fn read_bool(key: &str) -> bool {
     matches!(std::env::var(key).as_deref(), Ok("1" | "true" | "yes"))
+}
+
+/// The default decode-thread count: the machine's available parallelism, or 1
+/// when it can't be determined (and on wasm, where there is no thread pool).
+fn default_loader_threads() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        1
+    }
 }

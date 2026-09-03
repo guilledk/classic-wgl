@@ -657,7 +657,7 @@ impl Engine {
                     steps.push(boot::BootStep::LoadSdfFont {
                         key,
                         metrics_json,
-                        atlas_png: atlas_png.to_vec(),
+                        atlas_png: atlas_png.clone(),
                     });
                 }
             }
@@ -937,6 +937,7 @@ impl Engine {
                 name,
                 namespace: rom.manifest.namespace.clone(),
                 rom: rom.clone(),
+                sha256: None,
             }],
         };
         self.load_roms(gl, &loaded, &classic_rom::NullBootSink);
@@ -5808,11 +5809,13 @@ mod tests {
                     name: "common".into(),
                     namespace: "common".into(),
                     rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                    sha256: None,
                 },
                 classic_rom::LoadedRom {
                     name: "scene".into(),
                     namespace: "scene".into(),
                     rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
+                    sha256: None,
                 },
             ],
         };
@@ -5844,11 +5847,13 @@ mod tests {
                     name: "common".into(),
                     namespace: "common".into(),
                     rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                    sha256: None,
                 },
                 classic_rom::LoadedRom {
                     name: "scene".into(),
                     namespace: "scene".into(),
                     rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
+                    sha256: None,
                 },
             ],
         };
@@ -6093,11 +6098,13 @@ mod tests {
                     name: "common".into(),
                     namespace: String::new(),
                     rom: test_rom("common", "", r#"{"entities":{"tilemap":{"components":[]}}}"#),
+                    sha256: None,
                 },
                 classic_rom::LoadedRom {
                     name: "scene".into(),
                     namespace: "scene".into(),
                     rom: test_rom("scene", "scene", scene_state),
+                    sha256: None,
                 },
             ],
         };

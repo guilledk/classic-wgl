@@ -496,6 +496,7 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "serde_json",
+ "sha2",
  "ureq",
  "wasm-bindgen",
  "wasm-bindgen-futures",

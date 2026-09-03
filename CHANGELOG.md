@@ -39,6 +39,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   then drain a time-budgeted slice of boot steps per animation frame (instead
   of stalling the first frame), keeping the browser responsive and the DOM boot
   overlay on screen while the large atlases decode.
+- Faster boot: drain ROM archive entries into `Arc<[u8]>` resources (no double
+  copy), decode textures/depth/normals in parallel on the loader thread pool
+  (`CLASSIC_LOADER_THREADS`), and cache compiled `wasmtime::Module`s on disk
+  keyed by the published ROM sha256 for `trusted` ROMs so repeat launches skip
+  cranelift.
 
 ### Changed
 

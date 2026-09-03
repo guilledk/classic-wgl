@@ -26,6 +26,10 @@ pub struct LoadedRom {
     pub namespace: String,
     /// The parsed, resource-populated ROM.
     pub rom: Rom,
+    /// The published `roms.json` sha256 of the archive this ROM was loaded from
+    /// (`None` when unknown — the web path and the legacy single-ROM path).  The
+    /// desktop boot uses it as the on-disk compiled-module cache key.
+    pub sha256: Option<String>,
 }
 
 /// A resolved multi-ROM dependency DAG in load order (deps before dependents).
@@ -105,7 +109,7 @@ fn visit(
     }
     visiting.pop();
     done.insert(name.to_string());
-    order.push(LoadedRom { name: name.to_string(), namespace, rom });
+    order.push(LoadedRom { name: name.to_string(), namespace, rom, sha256: None });
     Ok(())
 }
 
@@ -138,7 +142,7 @@ where
     }
     visiting.pop();
     done.insert(name.clone());
-    order.push(LoadedRom { name, namespace, rom });
+    order.push(LoadedRom { name, namespace, rom, sha256: None });
     Ok(())
 }
 
