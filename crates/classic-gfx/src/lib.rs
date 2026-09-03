@@ -737,14 +737,16 @@ impl Gfx {
 
     /// Web-only async counterpart to [`Gfx::add_texture_basis`]: transcode in
     /// the dedicated worker (awaited here) and upload on the main thread, with
-    /// a synchronous main-thread fallback when the worker cannot start.
+    /// a synchronous main-thread fallback when the worker cannot start.  Returns
+    /// the decoded texture dimensions on success (`None` when the payload can't
+    /// be transcoded).
     #[cfg(target_arch = "wasm32")]
     pub async fn add_texture_basis_async(
         &mut self,
         name: &str,
         bytes: &[u8],
         format: &str,
-    ) -> bool {
+    ) -> Option<(u32, u32)> {
         let gl = self.gl.clone();
         if let Some(fmt) = compressed::CompressedFormat::parse(format) {
             if let Some(decoded) = compressed::transcode_async(&gl, bytes, fmt).await {
@@ -754,6 +756,7 @@ impl Gfx {
                     decoded.width,
                     decoded.height
                 );
+                let dims = (decoded.width, decoded.height);
                 self.add_texture_compressed(
                     name,
                     decoded.internal_format,
@@ -761,15 +764,15 @@ impl Gfx {
                     decoded.width,
                     decoded.height,
                 );
-                return true;
+                return Some(dims);
             }
         }
         if let Some((w, h, rgba)) = compressed::transcode_rgba8_async(bytes).await {
             log::debug!("texture {name}: basis -> RGBA8 fallback ({w}/{h})");
             self.add_texture_rgba8(name, &rgba, w, h);
-            return true;
+            return Some((w, h));
         }
-        false
+        None
     }
 
     pub fn shader(&self, name: &str) -> &Shader {

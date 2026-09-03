@@ -116,6 +116,13 @@ pub use rom::{load_rom_bytes, resolve_rom, resolve_roms};
 pub use rom::{load_rom_bytes_async, resolve_rom_async, resolve_roms_async};
 
 // ---------------------------------------------------------------------------
+// Boot resource sampling (native sysinfo CPU+RSS, web JS-heap memory)
+// ---------------------------------------------------------------------------
+
+pub mod metrics;
+pub use metrics::ResourceUsageSampler;
+
+// ---------------------------------------------------------------------------
 // Native backend  (not wasm32)
 // ---------------------------------------------------------------------------
 

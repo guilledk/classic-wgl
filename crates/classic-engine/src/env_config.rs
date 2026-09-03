@@ -65,6 +65,8 @@ pub struct EnvConfig {
     /// `0` disables it.
     pub golden_layout: bool,
     /// CLASSIC_LOADER: boot loading-screen mode (`console` / `visual` / `off`).
+    /// Defaults to `visual` when unset (forced `off` for headless/golden/test
+    /// via [`EnvConfig::effective_loader_mode`]).
     pub loader_mode: LoaderMode,
     /// CLASSIC_BOOT_LOG: always log the boot event stream to the `boot` channel.
     pub boot_log: bool,
@@ -122,8 +124,8 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         golden_layout,
         loader_mode: match read("CLASSIC_LOADER").trim() {
             "console" => LoaderMode::Console,
-            "visual" => LoaderMode::Visual,
-            _ => LoaderMode::Off,
+            "off" => LoaderMode::Off,
+            _ => LoaderMode::Visual,
         },
         boot_log: read_bool("CLASSIC_BOOT_LOG"),
         loader_threads: read("CLASSIC_LOADER_THREADS")
@@ -148,6 +150,17 @@ impl EnvConfig {
     /// also forces synchronous workers.
     pub fn golden_active(&self) -> bool {
         !self.golden_mode.is_empty()
+    }
+
+    /// The loader mode to use, forced to [`LoaderMode::Off`] for the
+    /// deterministic boot paths (headless / golden / test), where the loading
+    /// screen must never render.
+    pub fn effective_loader_mode(&self) -> LoaderMode {
+        if self.headless || self.golden_active() || self.test_active() {
+            LoaderMode::Off
+        } else {
+            self.loader_mode
+        }
     }
 }
 

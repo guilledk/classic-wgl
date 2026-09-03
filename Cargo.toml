@@ -101,6 +101,8 @@ web-sys = { version = "0.3", features = [
     "Response",
     "Cache",
     "CacheStorage",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
 ] }
 js-sys = "0.3"
 gloo-net = "0.6"

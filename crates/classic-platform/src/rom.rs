@@ -61,14 +61,44 @@ pub fn resolve_rom_source(
 /// URL with blocking `ureq`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_rom_bytes(source: &RomSource) -> anyhow::Result<AssetBytes> {
+    load_rom_bytes_with_sink(source, "root", &classic_rom::NullBootSink)
+}
+
+/// Materialise an already-resolved source on native, streaming boot progress
+/// (`RomFetchProgress` per chunk; the caller emits `RomFetchStarted` with the
+/// known byte length before calling).
+#[cfg(not(target_arch = "wasm32"))]
+fn load_rom_bytes_with_sink(
+    source: &RomSource,
+    name: &str,
+    sink: &dyn BootSink,
+) -> anyhow::Result<AssetBytes> {
     match source {
-        RomSource::Url(url) => fetch_url(url).map(AssetBytes::Owned),
+        RomSource::Url(url) => fetch_url(url, name, sink).map(AssetBytes::Owned),
         RomSource::Path(path) => {
             let bytes = std::fs::read(path)
                 .map_err(|e| anyhow::anyhow!("failed to read ROM {}: {e}", path.display()))?;
+            sink.on_event(BootEvent::RomFetchProgress {
+                name: name.to_string(),
+                received: bytes.len() as u64,
+                total: bytes.len() as u64,
+            });
             Ok(AssetBytes::Owned(bytes))
         }
         RomSource::Data(bytes) => Ok(AssetBytes::Owned(bytes.clone())),
+        RomSource::Embedded(_) => unreachable!("resolve_rom_source resolves names first"),
+    }
+}
+
+/// The known byte length of a resolved source, when determinable without
+/// downloading (`None` for URLs, whose `Content-Length` arrives with the
+/// response headers).
+#[cfg(not(target_arch = "wasm32"))]
+fn source_total(source: &RomSource) -> Option<u64> {
+    match source {
+        RomSource::Path(path) => std::fs::metadata(path).ok().map(|m| m.len()),
+        RomSource::Data(bytes) => Some(bytes.len() as u64),
+        RomSource::Url(_) => None,
         RomSource::Embedded(_) => unreachable!("resolve_rom_source resolves names first"),
     }
 }
@@ -105,7 +135,9 @@ pub fn resolve_roms(
 
     let named_load = |name: &str| {
         let source = resolve_rom_source(&format!("rom:{name}"), index)?;
-        let bytes = load_rom_bytes(&source)?;
+        let total = source_total(&source);
+        sink.on_event(BootEvent::RomFetchStarted { name: name.to_string(), total });
+        let bytes = load_rom_bytes_with_sink(&source, name, sink)?;
         shas.borrow_mut().insert(name.to_string(), sha256_hex(&bytes));
         sink.on_event(BootEvent::RomFetched { name: name.to_string(), bytes: bytes.len() });
         rom_from_bytes(&bytes, name, sink)
@@ -114,7 +146,9 @@ pub fn resolve_roms(
     let mut loaded = match classic_rom::parse_rom_spec(spec) {
         RomSource::Embedded(name) => classic_rom::LoadedRoms::resolve(&name, named_load),
         other => {
-            let root_bytes = load_rom_bytes(&other)?;
+            let total = source_total(&other);
+            sink.on_event(BootEvent::RomFetchStarted { name: "root".to_string(), total });
+            let root_bytes = load_rom_bytes_with_sink(&other, "root", sink)?;
             sink.on_event(BootEvent::RomFetched {
                 name: "root".to_string(),
                 bytes: root_bytes.len(),
@@ -159,15 +193,30 @@ fn rom_name(rom: &Rom) -> String {
     }
 }
 
-/// Fetch a URL as raw bytes (blocking `ureq`, native).
+/// Fetch a URL as raw bytes (blocking `ureq`, native), streaming
+/// `RomFetchProgress` per chunk so a desktop download renders with the same
+/// progress the web loader shows.
 #[cfg(not(target_arch = "wasm32"))]
-fn fetch_url(url: &str) -> anyhow::Result<Vec<u8>> {
+fn fetch_url(url: &str, name: &str, sink: &dyn BootSink) -> anyhow::Result<Vec<u8>> {
     use std::io::Read;
 
     let resp = ureq::get(url).call().map_err(|e| anyhow::anyhow!("fetch {url}: {e}"))?;
+    let total = resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
     let mut reader = resp.into_reader();
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).map_err(|e| anyhow::anyhow!("read {url}: {e}"))?;
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut chunk).map_err(|e| anyhow::anyhow!("read {url}: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        sink.on_event(BootEvent::RomFetchProgress {
+            name: name.to_string(),
+            received: buf.len() as u64,
+            total,
+        });
+    }
     Ok(buf)
 }
 
@@ -177,11 +226,25 @@ fn fetch_url(url: &str) -> anyhow::Result<Vec<u8>> {
 /// (there is no filesystem on wasm).
 #[cfg(target_arch = "wasm32")]
 pub async fn load_rom_bytes_async(source: RomSource) -> anyhow::Result<AssetBytes> {
+    load_rom_bytes_async_with_sink(source, "root", &classic_rom::NullBootSink).await
+}
+
+/// Sink-aware counterpart to [`load_rom_bytes_async`]: streams the response
+/// body and emits `RomFetchProgress` per chunk (the caller emits
+/// `RomFetchStarted` first).
+#[cfg(target_arch = "wasm32")]
+async fn load_rom_bytes_async_with_sink(
+    source: RomSource,
+    name: &str,
+    sink: &dyn BootSink,
+) -> anyhow::Result<AssetBytes> {
     match source {
-        RomSource::Url(url) => fetch_url_async(&url).await.map(AssetBytes::Owned),
+        RomSource::Url(url) => {
+            fetch_url_async_with_sink(&url, name, sink).await.map(AssetBytes::Owned)
+        }
         RomSource::Path(path) => {
             let url = path.to_string_lossy().into_owned();
-            fetch_url_async(&url).await.map(AssetBytes::Owned)
+            fetch_url_async_with_sink(&url, name, sink).await.map(AssetBytes::Owned)
         }
         RomSource::Data(bytes) => Ok(AssetBytes::Owned(bytes)),
         RomSource::Embedded(_) => unreachable!("resolve_rom_source resolves names first"),
@@ -210,10 +273,11 @@ async fn load_named_rom_async(
     sink: &dyn BootSink,
 ) -> anyhow::Result<Rom> {
     let source = resolve_rom_source(&format!("rom:{name}"), index)?;
+    sink.on_event(BootEvent::RomFetchStarted { name: name.to_string(), total: None });
     let bytes = match source {
-        RomSource::Url(url) => resolve_named_rom_cached(name, &url, index_url).await?,
+        RomSource::Url(url) => resolve_named_rom_cached(name, &url, index_url, sink).await?,
         RomSource::Path(path) => {
-            resolve_named_rom_cached(name, &path.to_string_lossy(), index_url).await?
+            resolve_named_rom_cached(name, &path.to_string_lossy(), index_url, sink).await?
         }
         RomSource::Data(bytes) => AssetBytes::Owned(bytes),
         RomSource::Embedded(_) => unreachable!("resolve_rom_source resolves names first"),
@@ -247,7 +311,8 @@ pub async fn resolve_roms_async(
             .await
         }
         other => {
-            let root_bytes = load_rom_bytes_async(other).await?;
+            sink.on_event(BootEvent::RomFetchStarted { name: "root".to_string(), total: None });
+            let root_bytes = load_rom_bytes_async_with_sink(other, "root", sink).await?;
             sink.on_event(BootEvent::RomFetched {
                 name: "root".to_string(),
                 bytes: root_bytes.len(),
@@ -282,6 +347,17 @@ async fn fetch_url_async(url: &str) -> anyhow::Result<Vec<u8>> {
     response_bytes(&resp).await
 }
 
+/// Sink-aware [`fetch_url_async`]: streams the body and emits `RomFetchProgress`.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_url_async_with_sink(
+    url: &str,
+    name: &str,
+    sink: &dyn BootSink,
+) -> anyhow::Result<Vec<u8>> {
+    let resp = fetch_response(url).await?;
+    response_bytes_streaming(&resp, name, sink).await
+}
+
 /// Fetch a URL and return the `web_sys::Response` (checking the HTTP status).
 #[cfg(target_arch = "wasm32")]
 async fn fetch_response(url: &str) -> anyhow::Result<web_sys::Response> {
@@ -314,6 +390,76 @@ async fn response_bytes(response: &web_sys::Response) -> anyhow::Result<Vec<u8>>
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
+/// Read a `web_sys::Response` body as raw bytes, streaming `RomFetchProgress`
+/// per chunk (the total comes from the `Content-Length` header when present).
+/// Falls back to a single [`response_bytes`] read when the body/stream is
+/// unavailable.
+#[cfg(target_arch = "wasm32")]
+async fn response_bytes_streaming(
+    response: &web_sys::Response,
+    name: &str,
+    sink: &dyn BootSink,
+) -> anyhow::Result<Vec<u8>> {
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+
+    let total = response
+        .headers()
+        .get("Content-Length")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    // Stream via the ReadableStream reader (web-sys models the reader as a
+    // generic object, so `read` is called reflectively).  Fall back to the
+    // whole-body `array_buffer` path when the stream is unavailable.
+    let Some(body) = response.body() else {
+        let bytes = response_bytes(response).await?;
+        sink.on_event(BootEvent::RomFetchProgress {
+            name: name.to_string(),
+            received: bytes.len() as u64,
+            total,
+        });
+        return Ok(bytes);
+    };
+    let reader = body.get_reader();
+    let read_fn: js_sys::Function =
+        js_sys::Reflect::get(reader.as_ref(), &JsValue::from_str("read"))
+            .map_err(|e| anyhow::anyhow!("read body: reader.read missing: {e:?}"))?
+            .dyn_into()
+            .map_err(|_| anyhow::anyhow!("read body: reader.read was not a function"))?;
+
+    let mut buf = Vec::new();
+    loop {
+        let promise =
+            read_fn.call0(reader.as_ref()).map_err(|e| anyhow::anyhow!("read body: {e:?}"))?;
+        let promise: js_sys::Promise = promise
+            .dyn_into()
+            .map_err(|_| anyhow::anyhow!("read body: reader.read() did not return a Promise"))?;
+        let chunk =
+            JsFuture::from(promise).await.map_err(|e| anyhow::anyhow!("read body: {e:?}"))?;
+        let done = js_sys::Reflect::get(&chunk, &JsValue::from_str("done"))
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if done {
+            break;
+        }
+        let value = js_sys::Reflect::get(&chunk, &JsValue::from_str("value")).ok();
+        let Some(value) = value.filter(|v| !v.is_undefined()) else { continue };
+        let part: js_sys::Uint8Array =
+            value.dyn_into().map_err(|_| anyhow::anyhow!("read body: chunk was not bytes"))?;
+        buf.extend_from_slice(&part.to_vec());
+        sink.on_event(BootEvent::RomFetchProgress {
+            name: name.to_string(),
+            received: buf.len() as u64,
+            total,
+        });
+    }
+    Ok(buf)
+}
+
 /// Resolve a *named* ROM to bytes, caching the downloaded archive in the
 /// browser's Cache API keyed by the content `sha256` published in `roms.json`.
 ///
@@ -326,13 +472,14 @@ pub async fn resolve_named_rom_cached(
     index_key: &str,
     url: &str,
     index_url: &str,
+    sink: &dyn BootSink,
 ) -> anyhow::Result<AssetBytes> {
     let sha = rom_sha256(index_key, index_url).await?;
     let key = format!("{url}?v={sha}");
 
     if let Some(cache) = rom_cache().await {
         if let Some(resp) = cache_match(&cache, &key).await? {
-            return response_bytes(&resp).await.map(AssetBytes::Owned);
+            return response_bytes_streaming(&resp, index_key, sink).await.map(AssetBytes::Owned);
         }
     }
 
@@ -344,7 +491,7 @@ pub async fn resolve_named_rom_cached(
             let _ = cache_put(&cache, &key, &cached).await;
         }
     }
-    response_bytes(&resp).await.map(AssetBytes::Owned)
+    response_bytes_streaming(&resp, index_key, sink).await.map(AssetBytes::Owned)
 }
 
 /// Fetch the `roms.json` checksum index and return the `sha256` for `name`.

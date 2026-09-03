@@ -14,6 +14,7 @@
 //! - [classic-debugging](.agents/skills/classic-debugging/SKILL.md) — CLASSIC_LOG, debugging playbook
 
 pub mod boot;
+pub mod boot_loader;
 pub mod env_config;
 pub mod golden;
 pub mod inventory;
@@ -183,6 +184,12 @@ pub enum ResourceKind {
 
 pub struct Engine {
     pub gfx: Option<Gfx>,
+    /// Whether the full builtin shader catalog has been compiled into `gfx`.
+    /// `init_gfx` (the pre-boot loading screen) compiles only the `solid` +
+    /// `sdf` shaders and leaves this `false`, so [`Engine::ensure_gfx`] still
+    /// runs to compile the full catalog (with manifest overrides) once a ROM
+    /// manifest is available.
+    gfx_full: bool,
     pub world: hecs::World,
     pub camera: Camera,
     pub time: Time,
@@ -382,6 +389,7 @@ impl Engine {
         classic_core::instrument::init_from_env();
         Self {
             gfx: None,
+            gfx_full: false,
             world: hecs::World::new(),
             camera: Camera::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0)),
             time: Time::default(),
@@ -473,10 +481,12 @@ impl Engine {
         manifest: &classic_rom::RomManifest,
         sink: &dyn classic_rom::BootSink,
     ) {
-        if self.gfx.is_some() {
+        if self.gfx.is_some() && self.gfx_full {
             return;
         }
-        self.gfx = Some(Gfx::new(gl));
+        if self.gfx.is_none() {
+            self.gfx = Some(Gfx::new(gl));
+        }
         let registry = classic_gfx::ShaderSourceRegistry::builtin();
         // The engine owns the shader declarations: compile the full builtin
         // catalog by default, letting the ROM override any shader by *name*
@@ -508,6 +518,69 @@ impl Engine {
             sink.on_event(classic_rom::BootEvent::ShaderCompiled {
                 name: builtin.name.to_string(),
             });
+        }
+
+        // The embedded DejaVu Sans SDF font, so `draw_sdf` works from frame 0
+        // (the boot loading screen renders before any ROM font is hydrated).
+        self.load_embedded_font();
+        self.gfx_full = true;
+    }
+
+    /// Set up the GL layer eagerly so the boot loading screen can draw from
+    /// frame 0, *before* any ROM manifest is available.  Only the two shaders
+    /// the loader needs are compiled (`solid` for rects/lines, `sdf` for text)
+    /// plus the embedded font; the real boot compiles the full catalog (with
+    /// any manifest overrides) via [`Engine::ensure_gfx`].  Idempotent.
+    ///
+    /// Used by the windowed desktop path, whose background thread resolves +
+    /// decodes + compiles while this thread renders the loader.
+    pub fn init_gfx(&mut self, gl: Rc<glow::Context>) {
+        if self.gfx.is_some() {
+            return;
+        }
+        self.gfx = Some(Gfx::new(gl));
+        let registry = classic_gfx::ShaderSourceRegistry::builtin();
+        for builtin in classic_gfx::builtin_shaders() {
+            if builtin.name != "solid" && builtin.name != "sdf" {
+                continue;
+            }
+            let vs = registry.resolve_vertex(builtin.vertex);
+            let fs = registry.resolve_fragment(builtin.fragment);
+            self.gfx
+                .as_mut()
+                .unwrap()
+                .add_shader(builtin.name, &vs, &fs, builtin.attr, builtin.unif)
+                .expect("compile shader");
+        }
+        self.load_embedded_font();
+    }
+
+    /// Load the embedded DejaVu Sans SDF atlas + metrics into
+    /// [`Engine::sdf_fonts`] and upload the atlas texture under
+    /// [`classic_core::components::DEFAULT_SDF_FONT`] so the boot loading
+    /// screen (and any text drawn before the ROM font hydrates) renders from
+    /// frame 0.  Byte-identical to the atlas the `common` ROM ships.
+    fn load_embedded_font(&mut self) {
+        // TODO(mono-font): swap to a DejaVu Sans Mono atlas for a cleaner
+        // monospaced log scroller.  Same generator + Bitstream Vera/PD license
+        // (already in use via `common::dejavusans`), so no new license surface;
+        // needs `DejaVuSansMono.ttf` vendored into `classic-assets/fonts/`.
+        const METRICS_JSON: &str = include_str!("../assets/dejavusans-sdf.json");
+        const ATLAS_PNG: &[u8] = include_bytes!("../assets/dejavusans-sdf.png");
+
+        let font_name = classic_core::components::DEFAULT_SDF_FONT;
+        let metrics: SdfFontMetrics =
+            serde_json::from_str(METRICS_JSON).expect("embedded SDF font metrics JSON");
+        self.sdf_fonts.insert(font_name.to_string(), metrics);
+
+        let atlas_name = format!("{font_name}-sdf");
+        let img = image::load_from_memory(ATLAS_PNG).expect("embedded SDF atlas PNG");
+        let luma = img.to_luma8();
+        if let Some(gfx) = self.gfx.as_mut() {
+            gfx.add_texture_r8(&atlas_name, &luma, luma.width(), luma.height());
+            if let Some(tex) = gfx.textures.get(&atlas_name) {
+                tex.set_linear(&gfx.gl);
+            }
         }
     }
 
@@ -576,11 +649,20 @@ impl Engine {
                 // `format`-declared target; uncompressed textures use the native
                 // channel count (RGB8 normal / R8 depth / RGBA8 albedo).
                 if let Some(format) = &entry.format {
+                    let kind = if entry.name.ends_with("-depth") {
+                        classic_rom::ResourceKind::Depth
+                    } else if entry.name.ends_with("-normal") {
+                        classic_rom::ResourceKind::Normal
+                    } else {
+                        classic_rom::ResourceKind::Texture
+                    };
                     let idx = basis_jobs.len();
                     basis_jobs.push(BasisTextureJob {
                         keys: vec![key],
                         bytes: bytes.clone(),
                         format: format.clone(),
+                        rom: rom.clone(),
+                        kind,
                     });
                     basis_by_src.insert(entry.src.clone(), idx);
                     continue;
@@ -901,25 +983,63 @@ impl Engine {
         sink: &dyn classic_rom::BootSink,
     ) {
         for (job, payload) in jobs.iter().zip(decoded) {
-            if let Some(p) = payload {
-                if let Some(gfx) = self.gfx.as_mut() {
-                    gfx.upload_decoded_basis(&job.keys[0], p);
-                }
+            self.upload_basis_job(job, payload.as_ref(), sink);
+        }
+    }
+
+    /// Upload a single already-transcoded `.basis` job (its payload is
+    /// `decoded[index]`), then alias its remaining keys.  Emits
+    /// [`classic_rom::BootEvent::TextureUploaded`] (the `ResourceDecoded` event
+    /// was already emitted off-thread by [`boot::decode_basis_jobs`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn upload_basis_job(
+        &mut self,
+        job: &BasisTextureJob,
+        payload: Option<&classic_gfx::DecodedBasis>,
+        sink: &dyn classic_rom::BootSink,
+    ) {
+        if let Some(p) = payload {
+            if let Some(gfx) = self.gfx.as_mut() {
+                gfx.upload_decoded_basis(&job.keys[0], p);
             }
-            sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
-            let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
-            if let Some(tex) = tex {
-                for alias in &job.keys[1..] {
-                    if let Some(gfx) = self.gfx.as_mut() {
-                        gfx.textures.insert(alias.clone(), tex.clone());
-                    }
+        }
+        sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
+        let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
+        if let Some(tex) = tex {
+            for alias in &job.keys[1..] {
+                if let Some(gfx) = self.gfx.as_mut() {
+                    gfx.textures.insert(alias.clone(), tex.clone());
                 }
             }
         }
     }
 
+    /// Native-only chunk of the basis phase: upload the already-transcoded job
+    /// at `index` (looked up in `plan.basis_jobs`, rebuilt by the caller each
+    /// frame).  Returns `true` when `index` is past the end (no jobs remain).
+    /// Lets the desktop app interleave one upload per loader frame after the
+    /// off-thread parallel transcode (`boot::decode_assets`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn upload_basis_predecoded_at(
+        &mut self,
+        plan: &mut boot::BootPlan<'_>,
+        index: usize,
+        decoded: &[Option<classic_gfx::DecodedBasis>],
+        sink: &dyn classic_rom::BootSink,
+    ) -> bool {
+        let Some(job) = plan.basis_jobs.get(index) else {
+            return true;
+        };
+        let job = job.clone();
+        let payload = decoded.get(index).and_then(|p| p.as_ref());
+        self.upload_basis_job(&job, payload, sink);
+        false
+    }
+
     /// Upload a batch of pending `.basis` textures through the web transcoder
-    /// worker (awaited), then alias each job's remaining keys.
+    /// worker (awaited), then alias each job's remaining keys.  Emits a
+    /// [`classic_rom::BootEvent::ResourceDecoded`] per sheet as each worker
+    /// transcode finishes (in plan order), then its `TextureUploaded`.
     #[cfg(target_arch = "wasm32")]
     async fn upload_basis_async(
         &mut self,
@@ -927,7 +1047,15 @@ impl Engine {
         sink: &dyn classic_rom::BootSink,
     ) {
         for job in jobs {
-            self.load_texture_basis_async(&job.keys[0], &job.bytes, &job.format).await;
+            let dims = self.load_texture_basis_async(&job.keys[0], &job.bytes, &job.format).await;
+            if let Some(dims) = dims {
+                sink.on_event(classic_rom::BootEvent::ResourceDecoded {
+                    rom: job.rom.clone(),
+                    kind: job.kind,
+                    name: job.keys[0].clone(),
+                    dims,
+                });
+            }
             sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
             let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
             if let Some(tex) = tex {
@@ -1025,7 +1153,7 @@ impl Engine {
         // (CPU), then upload the decoded payloads on this, the GL thread.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let basis = boot::decode_basis_jobs(&plan.basis_jobs, caps);
+            let basis = boot::decode_basis_jobs(&plan.basis_jobs, caps, sink);
             self.upload_basis_predecoded(&plan.basis_jobs, &basis, sink);
         }
         #[cfg(target_arch = "wasm32")]
@@ -1785,14 +1913,25 @@ impl Engine {
     }
 
     /// Web-only async counterpart to [`Engine::load_texture_basis`]: transcode
-    /// off the main thread (worker) and upload, awaited by the caller.
+    /// off the main thread (worker) and upload, awaited by the caller.  Returns
+    /// the decoded texture dimensions so the caller can emit a per-sheet
+    /// [`classic_rom::BootEvent::ResourceDecoded`] (the worker→main `decoded`
+    /// message) at the moment the transcode finishes.
     #[cfg(target_arch = "wasm32")]
-    pub async fn load_texture_basis_async(&mut self, name: &str, basis_bytes: &[u8], format: &str) {
+    pub async fn load_texture_basis_async(
+        &mut self,
+        name: &str,
+        basis_bytes: &[u8],
+        format: &str,
+    ) -> Option<(u32, u32)> {
         if let Some(gfx) = self.gfx.as_mut() {
-            if !gfx.add_texture_basis_async(name, basis_bytes, format).await {
+            let dims = gfx.add_texture_basis_async(name, basis_bytes, format).await;
+            if dims.is_none() {
                 log::warn!("texture {name}: basis transcode unavailable (format {format})");
             }
+            return dims;
         }
+        None
     }
 
     /// Load an SDF font from its metrics JSON and atlas PNG, keyed by the

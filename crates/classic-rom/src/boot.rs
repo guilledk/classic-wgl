@@ -21,12 +21,21 @@ use crate::resource::ResourceKind;
 pub enum BootEvent {
     /// ROM resolution (fetch/read) is starting.
     ResolveStarted { spec: String },
+    /// A named ROM's archive bytes have begun streaming in (download/read).
+    /// `total` is the known byte length when advertised (e.g. `Content-Length`),
+    /// otherwise `None` (indeterminate progress).
+    RomFetchStarted { name: String, total: Option<u64> },
+    /// Download/read progress for a named ROM's archive bytes.  `received` is
+    /// the byte count so far; `total` is `0` when the length is unknown.
+    RomFetchProgress { name: String, received: u64, total: u64 },
     /// A named ROM's archive bytes have been materialised.
     RomFetched { name: String, bytes: usize },
     /// A named ROM's archive was decompressed.
     RomDecompressed { name: String, entries: usize },
-    /// A named ROM was parsed (manifest + resources + state).
-    RomParsed { name: String, resources: usize },
+    /// A named ROM was parsed (manifest + resources + state).  `deps` is the
+    /// ROM's declared dependency names, surfaced here so a loading screen can
+    /// lay out the DAG before the full resource payload is resolved.
+    RomParsed { name: String, resources: usize, deps: Vec<String> },
     /// A resource was decoded to pixels on the CPU.
     ResourceDecoded { rom: String, kind: ResourceKind, name: String, dims: (u32, u32) },
     /// A decoded resource was uploaded to the GL layer.
@@ -43,6 +52,10 @@ pub enum BootEvent {
     BootComplete { elapsed: Duration },
     /// The boot failed at a named phase.
     BootFailed { phase: &'static str, error: String },
+    /// A periodic process resource sample taken during boot (native only; a
+    /// debugging aid).  `cpu_percent` is process-wide over the sampling window
+    /// and can exceed 100 on multi-core (parallel decode/transcode).
+    ResourceUsage { cpu_percent: u32, rss_bytes: u64 },
 }
 
 impl BootEvent {
@@ -50,11 +63,22 @@ impl BootEvent {
     pub fn describe(&self) -> String {
         match self {
             BootEvent::ResolveStarted { spec } => format!("resolve started (spec={spec})"),
+            BootEvent::RomFetchStarted { name, total } => match total {
+                Some(total) => format!("fetching `{name}` ({total} bytes)"),
+                None => format!("fetching `{name}`"),
+            },
+            BootEvent::RomFetchProgress { name, received, total } => {
+                if *total > 0 {
+                    format!("fetching `{name}` {received}/{total} bytes")
+                } else {
+                    format!("fetching `{name}` {received} bytes")
+                }
+            }
             BootEvent::RomFetched { name, bytes } => format!("fetched `{name}` ({bytes} bytes)"),
             BootEvent::RomDecompressed { name, entries } => {
                 format!("decompressed `{name}` ({entries} entries)")
             }
-            BootEvent::RomParsed { name, resources } => {
+            BootEvent::RomParsed { name, resources, .. } => {
                 format!("parsed `{name}` ({resources} resources)")
             }
             BootEvent::ResourceDecoded { rom, kind, name, dims } => {
@@ -69,6 +93,9 @@ impl BootEvent {
             }
             BootEvent::BootComplete { elapsed } => format!("boot complete in {elapsed:?}"),
             BootEvent::BootFailed { phase, error } => format!("boot failed at {phase}: {error}"),
+            BootEvent::ResourceUsage { cpu_percent, rss_bytes } => {
+                format!("cpu {cpu_percent}% rss {:.1} MiB", *rss_bytes as f64 / (1024.0 * 1024.0))
+            }
         }
     }
 }
@@ -77,6 +104,26 @@ impl BootEvent {
 /// (console log, loading screen, test capture).
 pub trait BootSink: Send + Sync {
     fn on_event(&self, event: BootEvent);
+}
+
+/// A [`BootSink`] that fans each event out to a set of inner sinks (e.g. the
+/// visual loader *and* the console log).
+pub struct TeeBootSink {
+    sinks: Vec<std::sync::Arc<dyn BootSink>>,
+}
+
+impl TeeBootSink {
+    pub fn new(sinks: Vec<std::sync::Arc<dyn BootSink>>) -> Self {
+        Self { sinks }
+    }
+}
+
+impl BootSink for TeeBootSink {
+    fn on_event(&self, event: BootEvent) {
+        for sink in &self.sinks {
+            sink.on_event(event.clone());
+        }
+    }
 }
 
 /// A [`BootSink`] that discards every event (the default for production boots

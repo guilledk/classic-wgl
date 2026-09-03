@@ -30,6 +30,7 @@ x11 = { version = "2", optional = true }
 libloading = "0.8"
 ureq = { workspace = true }
 sha2 = "0.10"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 serde_json.workspace = true

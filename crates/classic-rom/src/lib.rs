@@ -19,7 +19,7 @@ pub mod rom;
 pub mod source;
 
 pub use archive::RomArchive;
-pub use boot::{BootEvent, BootSink, NullBootSink, VecBootSink};
+pub use boot::{BootEvent, BootSink, NullBootSink, TeeBootSink, VecBootSink};
 pub use format::{detect_format, RomFormat};
 pub use loaded::{LoadedRom, LoadedRoms};
 #[cfg(not(target_arch = "wasm32"))]
