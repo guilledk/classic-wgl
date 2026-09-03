@@ -59,6 +59,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   web worker), unifies ROM downloads into the boot stream (`RomFetchStarted`/
   `RomFetchProgress`, desktop CDN fallback + web `ReadableStream` progress), and
   switches metrics to `sysinfo` (desktop CPU%+RSS; web JS-heap memory).
+- Boot loader UI migration: render the loading screen through the retained-mode
+  UI system — SDF-text/rect/sprite entities driven from the boot state each
+  frame (`install`/`sync`/`uninstall`), with the DAG connector edges drawn in an
+  overlay hook — instead of hand-rolled `draw_*` calls.  Text now goes through
+  the per-entity glyph-buffer cache (no per-frame rebuild), and the duplicated
+  `draw_text`/`measure_text` path is deleted.
 
 ### Changed
 

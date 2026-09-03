@@ -1,26 +1,30 @@
-//! Boot loading screen: a GL-only overlay driven by the [`BootSink`] stream.
+//! Boot loading screen: a retained-mode UI overlay driven by the [`BootSink`]
+//! stream.
 //!
 //! [`VisualBootSink`] records the boot event stream into a small mutable state
 //! (DAG node phases, per-sheet resource chips, a log scroller, live CPU/RSS)
-//! and renders it with the low-level [`classic_gfx::Gfx`] draw calls
-//! (`draw_rect` / `draw_line_strip` / `draw_sdf`).  It draws *before* the
-//! engine is booted (in the desktop/web boot loops), so it cannot use the
-//! retained-mode [`crate::ui::UIManager`] (which is only installed at the end
-//! of boot) — but it reuses the same SDF text primitives
-//! (`build_sdf_glyph_buffer` + `draw_sdf` + the embedded DejaVu Sans atlas).
+//! and renders it through the normal [`crate::Engine::frame`] pipeline: the
+//! loader spawns plain UI entities (`RectRender` / `SdfTextRender` /
+//! `SpriteRender`, all `ignore_cam`) and mutates their transforms/text/colors
+//! from the boot state on every frame via [`VisualBootSink::sync`], with the
+//! DAG connector edges drawn in a post-pass overlay hook.  The embedded DejaVu
+//! Sans SDF atlas (loaded by [`crate::Engine::init_gfx`]) means text renders
+//! from frame 0.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use classic_core::components::{TextJustify, DEFAULT_SDF_FONT};
-use classic_core::sdf_builder::build_sdf_glyph_buffer;
-use classic_core::types::SdfFontMetrics;
-use classic_gfx::{Gfx, GlBuffer, RenderSettings, SpriteRegion};
+use classic_core::components::{
+    Disabled, RectRender, SdfTextRender, SpriteRender, TextJustify, Transform, UiKind, UiNode,
+    DEFAULT_SDF_FONT,
+};
+use classic_gfx::{Gfx, GlBuffer};
 use classic_rom::{BootEvent, BootSink, LoadedRom, LoadedRoms};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 
 use crate::boot::BootStep;
+use crate::Engine;
 
 /// How many trailing event descriptions the footer log scroller keeps.
 const LOG_LINES: usize = 4;
@@ -50,6 +54,22 @@ const BAR_BG: [f32; 4] = [0.14, 0.14, 0.20, 1.0];
 const TEXT_COLOR: [f32; 4] = [0.81, 0.78, 0.94, 1.0];
 const DIM_TEXT: [f32; 4] = [0.55, 0.53, 0.66, 1.0];
 const EDGE_COLOR: [f32; 4] = [0.30, 0.30, 0.42, 1.0];
+
+// Z layering (the UI phase is pure draw-order).  The render list sorts by
+// `Transform.position.z` *descending* and draws in that order, so the highest
+// z draws first (bottom) and the lowest draws last (top).  Assign the
+// background the highest z and later layers progressively lower z, so the
+// background sits behind the header/body/footer.  Values only order relative
+// to each other; they stay well inside the ortho clip range.
+const Z_BG: f32 = -100.0;
+const Z_HEADER: f32 = -200.0;
+const Z_HEADER_TEXT: f32 = -210.0;
+const Z_BODY: f32 = -300.0;
+const Z_BODY_DETAIL: f32 = -310.0;
+const Z_BODY_TEXT: f32 = -320.0;
+const Z_FOOTER: f32 = -400.0;
+const Z_FOOTER_DETAIL: f32 = -410.0;
+const Z_FOOTER_TEXT: f32 = -420.0;
 
 /// The phase a ROM node is in, derived from the boot event stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +134,49 @@ struct RomNode {
     total: u64,
     /// Resolver names this ROM depends on (its `manifest.deps`), fanning into it.
     deps: Vec<String>,
+}
+
+/// The UI entities backing one DAG node.
+struct NodeUi {
+    rect: hecs::Entity,
+    phase_bar: hecs::Entity,
+    name: hecs::Entity,
+    phase: hecs::Entity,
+    legend_swatch: hecs::Entity,
+    legend_name: hecs::Entity,
+}
+
+/// The entity set the loader renders through (spawned by
+/// [`VisualBootSink::install`], driven each frame by [`VisualBootSink::sync`]).
+struct LoaderUi {
+    bg: hecs::Entity,
+    header_bg: hecs::Entity,
+    title: hecs::Entity,
+    metrics: hecs::Entity,
+    footer_bg: hecs::Entity,
+    progress_bg: hecs::Entity,
+    progress_fill: hecs::Entity,
+    pct: hecs::Entity,
+    latest: hecs::Entity,
+    log: Vec<hecs::Entity>,
+    preview_bg: hecs::Entity,
+    preview_placeholder: hecs::Entity,
+    preview_sprite: hecs::Entity,
+    preview_label: hecs::Entity,
+    dots_bg: hecs::Entity,
+    dots_title: hecs::Entity,
+    nodes: HashMap<String, NodeUi>,
+    chips: HashMap<String, hecs::Entity>,
+    /// Cached layout for the edge overlay (top-left of each node, indexed like
+    /// the model's `nodes`).
+    positions: Vec<(f32, f32)>,
+    /// `(dep_idx, dependent_idx)` connector edges.
+    deps: Vec<(usize, usize)>,
+    tree_ready: bool,
+    wide: bool,
+    s: f32,
+    node_w: f32,
+    node_h: f32,
 }
 
 /// The loader's accumulated state (shared with the renderer through the sink).
@@ -259,16 +322,18 @@ impl LoaderState {
     }
 }
 
-/// A [`BootSink`] that renders the boot loading screen.  Draw it each boot-loop
-/// frame with [`VisualBootSink::draw`]; populate the DAG topology with
-/// [`VisualBootSink::set_dag`] once the resolved [`LoadedRoms`] is available.
+/// A [`BootSink`] that renders the boot loading screen.  Install its UI with
+/// [`VisualBootSink::install`], drive it each boot-loop frame with
+/// [`VisualBootSink::sync`], and tear it down with [`VisualBootSink::uninstall`].
 pub struct VisualBootSink {
     state: Mutex<LoaderState>,
+    /// The entity set + layout cache (only touched on the GL/run-loop thread).
+    ui: Mutex<Option<LoaderUi>>,
 }
 
 impl VisualBootSink {
     pub fn new() -> Self {
-        Self { state: Mutex::new(LoaderState::new()) }
+        Self { state: Mutex::new(LoaderState::new()), ui: Mutex::new(None) }
     }
 
     /// Install the resolved DAG topology (topological `LoadedRoms.order`) and
@@ -312,19 +377,101 @@ impl VisualBootSink {
         state.dag_set = true;
     }
 
-    /// Render the loading screen into the engine's current GL context, sizing
-    /// the GL viewport to `(vw, vh)` first (the boot loop runs before
-    /// [`crate::Engine::frame`], so the gfx viewport is not yet resized).
-    pub fn draw(&self, engine: &mut crate::Engine, vw: f32, vh: f32) {
+    /// Spawn the loader's UI entities and register the edge-drawing overlay
+    /// hook.  Idempotent.  Called on frame 0 of the boot loop, after
+    /// [`crate::Engine::init_gfx`] has loaded the embedded font.
+    pub fn install(self: &Arc<Self>, engine: &mut Engine) {
+        let mut ui_guard = self.ui.lock().expect("boot loader poisoned");
+        if ui_guard.is_some() {
+            return;
+        }
+
+        let world = &mut engine.world;
+        let log = (0..LOG_LINES)
+            .map(|_| spawn_text(world, "", 0.55, DIM_TEXT, TextJustify::Left, Z_FOOTER_TEXT))
+            .collect();
+        let ui = LoaderUi {
+            bg: spawn_rect(world, BG, Z_BG),
+            header_bg: spawn_rect(world, HEADER_BG, Z_HEADER),
+            title: spawn_text(world, "CLASSIC", 0.8, TEXT_COLOR, TextJustify::Left, Z_HEADER_TEXT),
+            metrics: spawn_text(world, "", 0.6, DIM_TEXT, TextJustify::Right, Z_HEADER_TEXT),
+            footer_bg: spawn_rect(world, HEADER_BG, Z_FOOTER),
+            progress_bg: spawn_rect(world, BAR_BG, Z_FOOTER_DETAIL),
+            progress_fill: spawn_rect(world, [0.40, 0.85, 0.45, 1.0], Z_FOOTER_DETAIL),
+            pct: spawn_text(world, "0%", 0.7, TEXT_COLOR, TextJustify::Left, Z_FOOTER_TEXT),
+            latest: spawn_text(world, "", 0.7, TEXT_COLOR, TextJustify::Left, Z_FOOTER_TEXT),
+            log,
+            preview_bg: spawn_rect(world, NODE_BG, Z_BODY),
+            preview_placeholder: spawn_text(
+                world,
+                "no asset yet",
+                0.55,
+                DIM_TEXT,
+                TextJustify::Left,
+                Z_BODY_DETAIL,
+            ),
+            preview_sprite: spawn_sprite(world, Z_BODY_DETAIL),
+            preview_label: spawn_text(
+                world,
+                "preview",
+                0.5,
+                DIM_TEXT,
+                TextJustify::Left,
+                Z_BODY_TEXT,
+            ),
+            dots_bg: spawn_rect(world, NODE_BG, Z_BODY),
+            dots_title: spawn_text(
+                world,
+                "resources",
+                0.55,
+                DIM_TEXT,
+                TextJustify::Left,
+                Z_BODY_TEXT,
+            ),
+            nodes: HashMap::new(),
+            chips: HashMap::new(),
+            positions: Vec::new(),
+            deps: Vec::new(),
+            tree_ready: false,
+            wide: true,
+            s: 1.0,
+            node_w: NODE_W,
+            node_h: NODE_H,
+        };
+        *ui_guard = Some(ui);
+
+        // Draw the DAG connector edges after the render list (the loader's
+        // entities are pure UI entities; lines have no entity equivalent).
+        let sink = self.clone();
+        engine.add_overlay(move |engine| {
+            let ui_guard = sink.ui.lock().expect("boot loader poisoned");
+            let Some(ui) = ui_guard.as_ref() else { return };
+            let Some(gfx) = engine.gfx.as_ref() else { return };
+            for (from, to) in &ui.deps {
+                let (x0, y0) = ui.positions[*from];
+                let (x1, y1) = ui.positions[*to];
+                let fx = x0 + ui.node_w / 2.0;
+                let fy = y0 + ui.node_h;
+                let tx = x1 + ui.node_w / 2.0;
+                let ty = y1;
+                if ui.wide {
+                    if ui.tree_ready {
+                        elbow(gfx, fx, fy, tx, ty, EDGE_COLOR);
+                    }
+                } else {
+                    line(gfx, fx, fy, tx, ty, EDGE_COLOR);
+                }
+            }
+        });
+    }
+
+    /// Synchronise the loader's UI entities from the current boot state.
+    /// Called before [`crate::Engine::frame`] each boot-loop frame.
+    pub fn sync(&self, engine: &mut Engine, vw: f32, vh: f32) {
         let state = self.state.lock().expect("boot loader poisoned");
-        let Some(gfx) = engine.gfx.as_mut() else { return };
-        let Some(font) = engine.sdf_fonts.get(DEFAULT_SDF_FONT).cloned() else { return };
+        let mut ui_guard = self.ui.lock().expect("boot loader poisoned");
+        let Some(ui) = ui_guard.as_mut() else { return };
 
-        gfx.resize(vw, vh);
-        gfx.begin_frame();
-
-        // Responsive scale: 1.0 at a 1280px-wide viewport, clamped so text
-        // stays legible on small windows and doesn't blow up on large ones.
         let s = (vw / 1280.0).clamp(0.6, 2.0);
         let pad = PAD * s;
         let header_h = HEADER_H * s;
@@ -335,159 +482,327 @@ impl VisualBootSink {
         let chip_row_h = CHIP_ROW_H * s;
         let footer_h = FOOTER_H * s;
 
-        // Background.
-        rect(gfx, 0.0, 0.0, vw, vh, BG);
-
-        // Header: title (left) + live metrics (right).
-        rect(gfx, 0.0, 0.0, vw, header_h, HEADER_BG);
+        // ---- Chrome (background, header, footer, progress, log). ----
+        set_rect(engine, ui.bg, 0.0, 0.0, vw, vh);
+        set_rect(engine, ui.header_bg, 0.0, 0.0, vw, header_h);
         let title = if state.spec.is_empty() {
             "CLASSIC".to_string()
         } else {
             format!("CLASSIC / {}", state.spec.to_uppercase())
         };
-        draw_text(gfx, &font, pad, 8.0 * s, &title, 0.8 * s, TEXT_COLOR);
-
+        set_text(engine, ui.title, pad, 8.0 * s, 0.8 * s, &title, TEXT_COLOR);
         let metrics = format!(
             "cpu {}%   rss {:.1} MiB   {:.1}s",
             state.cpu_percent,
             state.rss_bytes as f64 / (1024.0 * 1024.0),
             state.started.elapsed().as_secs_f32(),
         );
-        let mw = measure_text(&font, &metrics, 0.6 * s);
-        draw_text(gfx, &font, (vw - pad - mw).max(pad), 8.0 * s, &metrics, 0.6 * s, DIM_TEXT);
+        set_text(engine, ui.metrics, vw - pad, 8.0 * s, 0.6 * s, &metrics, DIM_TEXT);
 
-        // Body: (wide) a DAG tree on the left with an asset preview + per-ROM
-        // resource dots on the right; (narrow) a simple stacked DAG.
-        let body_top = header_h + pad;
-        let body_bottom = vh - footer_h;
-        let body_h = (body_bottom - body_top).max(60.0);
-
-        if vw >= WIDE_BREAKPOINT {
-            // ---- Wide: two columns ----
-            let dag_right = vw * DAG_FRACTION;
-            let dag_w = dag_right - pad;
-            let right_x = dag_right + pad;
-            let right_w = vw - pad - right_x;
-            let mid_y = body_top + body_h * 0.5;
-
-            // DAG layout: a layered tree (deps fan into the root) once the
-            // topology is known — from the parsed manifests (`set_dag`) or the
-            // deps surfaced in `RomParsed` events — or a simple vertical stack
-            // before any deps have been discovered.
-            let tree_ready = state.dag_set || state.nodes.iter().any(|n| !n.deps.is_empty());
-            let positions = if tree_ready {
-                tree_layout(&state, pad, body_top, dag_w, body_h, node_w, node_h)
-            } else {
-                stacked_layout(&state, pad, body_top, dag_w, body_h, node_w, node_h, s)
-            };
-            if tree_ready {
-                for (i, node) in state.nodes.iter().enumerate() {
-                    for dep_name in &node.deps {
-                        let Some(&di) = state.node_index.get(dep_name) else { continue };
-                        let (dx, dy) = positions[di];
-                        let (sx, sy) = positions[i];
-                        elbow(
-                            gfx,
-                            dx + node_w / 2.0,
-                            dy + node_h,
-                            sx + node_w / 2.0,
-                            sy,
-                            EDGE_COLOR,
-                        );
-                    }
-                }
-            }
-            for (i, node) in state.nodes.iter().enumerate() {
-                let (x, y) = positions[i];
-                draw_node(gfx, &font, x, y, node_w, node_h, node, s);
-            }
-
-            // Right column: preview (top) + resource dots (bottom).
-            let preview_h = (mid_y - body_top - pad).max(40.0);
-            draw_preview(
-                gfx,
-                &font,
-                right_x,
-                body_top,
-                right_w,
-                preview_h,
-                state.last_texture.as_deref(),
-                s,
-            );
-            let dots_top = mid_y + pad;
-            let dots_h = (body_bottom - dots_top).max(40.0);
-            draw_dots(
-                gfx,
-                &font,
-                right_x,
-                dots_top,
-                right_w,
-                dots_h,
-                &state.nodes,
-                chip_w,
-                chip_gap,
-                s,
-            );
-        } else {
-            // ---- Narrow: stacked DAG + chip rows ----
-            let center_x = vw / 2.0 - node_w / 2.0;
-            let node_gap = (body_h - (state.nodes.len() as f32) * node_h)
-                / (state.nodes.len().saturating_sub(1) as f32).max(1.0);
-            let node_gap = node_gap.clamp(6.0 * s, (pad + 8.0) * s);
-
-            let mut node_positions: Vec<(f32, f32)> = Vec::with_capacity(state.nodes.len());
-            for (i, node) in state.nodes.iter().enumerate() {
-                let y = body_top + i as f32 * (node_h + node_gap);
-                node_positions.push((center_x, y));
-                draw_node(gfx, &font, center_x, y, node_w, node_h, node, s);
-            }
-            for (i, node) in state.nodes.iter().enumerate() {
-                for dep_name in &node.deps {
-                    let Some(&di) = state.node_index.get(dep_name) else { continue };
-                    let Some(&(dx, dy)) = node_positions.get(di) else { continue };
-                    let (sx, sy) = node_positions[i];
-                    line(gfx, dx + node_w / 2.0, dy + node_h, sx + node_w / 2.0, sy, EDGE_COLOR);
-                }
-            }
-
-            // Chip rows (one per ROM), colour-coded by ROM.
-            let chip_y0 = body_top + (node_h + node_gap) * state.nodes.len() as f32 + pad;
-            let mut cy = chip_y0;
-            for node in &state.nodes {
-                if node.chips.is_empty() {
-                    continue;
-                }
-                let rc = rom_color(&node.name);
-                draw_text(gfx, &font, pad, cy + 1.0, &node.name, 0.6 * s, TEXT_COLOR);
-                let mut cx = pad + measure_text(&font, &node.name, 0.6 * s) + pad;
-                for chip in &node.chips {
-                    rect(gfx, cx, cy + 3.0 * s, chip_w, chip_w, chip_color(rc, chip.state));
-                    cx += chip_w + chip_gap;
-                }
-                cy += chip_row_h + 6.0 * s;
-            }
-        }
-
-        // Footer: global progress bar + latest event + log scroller.
         let footer_top = vh - footer_h;
-        rect(gfx, 0.0, footer_top, vw, footer_h, HEADER_BG);
-
+        set_rect(engine, ui.footer_bg, 0.0, footer_top, vw, footer_h);
         let bar_x = pad;
         let bar_w = vw - pad * 2.0 - 56.0 * s;
         let bar_y = footer_top + pad;
         let bar_h = 8.0 * s;
-        rect(gfx, bar_x, bar_y, bar_w, bar_h, BAR_BG);
+        set_rect(engine, ui.progress_bg, bar_x, bar_y, bar_w, bar_h);
         let frac = state.progress().clamp(0.0, 1.0);
-        rect(gfx, bar_x, bar_y, bar_w * frac, bar_h, [0.40, 0.85, 0.45, 1.0]);
-        let pct = format!("{:.0}%", frac * 100.0);
-        draw_text(gfx, &font, bar_x + bar_w + 8.0 * s, bar_y - 3.0 * s, &pct, 0.7 * s, TEXT_COLOR);
+        set_rect(engine, ui.progress_fill, bar_x, bar_y, bar_w * frac, bar_h);
+        set_text(
+            engine,
+            ui.pct,
+            bar_x + bar_w + 8.0 * s,
+            bar_y - 3.0 * s,
+            0.7 * s,
+            &format!("{:.0}%", frac * 100.0),
+            TEXT_COLOR,
+        );
 
         let mut ly = footer_top + pad + bar_h + 8.0 * s;
-        draw_text(gfx, &font, pad, ly, &state.latest, 0.7 * s, TEXT_COLOR);
+        set_text(engine, ui.latest, pad, ly, 0.7 * s, &state.latest, TEXT_COLOR);
         ly += 20.0 * s;
+        let mut log_i = 0;
         for line in state.log.iter().rev().take(LOG_LINES - 1).rev() {
-            draw_text(gfx, &font, pad, ly, line, 0.55 * s, DIM_TEXT);
+            if log_i < ui.log.len() {
+                set_text(engine, ui.log[log_i], pad, ly, 0.55 * s, line, DIM_TEXT);
+            }
+            log_i += 1;
             ly += 15.0 * s;
+        }
+        while log_i < ui.log.len() {
+            set_text(engine, ui.log[log_i], 0.0, 0.0, 0.55 * s, "", DIM_TEXT);
+            log_i += 1;
+        }
+
+        // ---- Body layout. ----
+        let body_top = header_h + pad;
+        let body_bottom = footer_top;
+        let body_h = (body_bottom - body_top).max(60.0);
+        let wide = vw >= WIDE_BREAKPOINT;
+        let tree_ready = state.dag_set || state.nodes.iter().any(|n| !n.deps.is_empty());
+
+        ui.s = s;
+        ui.node_w = node_w;
+        ui.node_h = node_h;
+        ui.wide = wide;
+        ui.tree_ready = tree_ready;
+
+        let positions: Vec<(f32, f32)> = if wide {
+            let dag_w = vw * DAG_FRACTION - pad;
+            if tree_ready {
+                tree_layout(&state, pad, body_top, dag_w, body_h, node_w, node_h)
+            } else {
+                stacked_layout(&state, pad, body_top, dag_w, body_h, node_w, node_h, s)
+            }
+        } else {
+            narrow_stacked(&state, body_top, body_h, node_w, node_h, vw, s)
+        };
+
+        // Reconcile the DAG node entities and position them.
+        for (i, node) in state.nodes.iter().enumerate() {
+            if !ui.nodes.contains_key(&node.name) {
+                ui.nodes.insert(node.name.clone(), spawn_node(engine));
+            }
+            let nu = ui.nodes.get_mut(&node.name).expect("node spawned");
+            let (x, y) = positions[i];
+            set_rect(engine, nu.rect, x, y, node_w, node_h);
+            set_rect(engine, nu.phase_bar, x, y, node_w, 3.0 * s);
+            set_rect_color(engine, nu.phase_bar, node.phase.color());
+            set_text(engine, nu.name, x + PAD * s, y + 8.0 * s, 0.7 * s, &node.name, TEXT_COLOR);
+            let fetch = if node.phase == RomPhase::Fetching {
+                if node.total > 0 {
+                    format!("  {} / {} B", node.received, node.total)
+                } else {
+                    format!("  {} B", node.received)
+                }
+            } else {
+                String::new()
+            };
+            set_text(
+                engine,
+                nu.phase,
+                x + PAD * s,
+                y + 26.0 * s,
+                0.55 * s,
+                &format!("{}{}", node.phase.label(), fetch),
+                node.phase.color(),
+            );
+        }
+        ui.nodes.retain(|name, nu| {
+            if state.node_index.contains_key(name) {
+                true
+            } else {
+                despawn_node(engine, nu);
+                false
+            }
+        });
+
+        // Reconcile the chip entities (spawn/remove), coloured by state.
+        for node in state.nodes.iter() {
+            let rc = rom_color(&node.name);
+            for chip in &node.chips {
+                if !ui.chips.contains_key(&chip.name) {
+                    ui.chips.insert(
+                        chip.name.clone(),
+                        spawn_rect(&mut engine.world, chip_color(rc, chip.state), Z_BODY_DETAIL),
+                    );
+                }
+                if let Some(&ce) = ui.chips.get(&chip.name) {
+                    set_rect_color(engine, ce, chip_color(rc, chip.state));
+                }
+            }
+        }
+        ui.chips.retain(|name, e| {
+            if state.chip_index.contains_key(name) {
+                true
+            } else {
+                despawn(engine, *e);
+                false
+            }
+        });
+
+        // ---- Wide vs narrow body. ----
+        if wide {
+            let dag_right = vw * DAG_FRACTION;
+            let right_x = dag_right + pad;
+            let right_w = vw - pad - right_x;
+            let mid_y = body_top + body_h * 0.5;
+
+            // Preview (top-right).
+            let preview_h = (mid_y - body_top - pad).max(40.0);
+            set_rect(engine, ui.preview_bg, right_x, body_top, right_w, preview_h);
+            set_enabled(engine, ui.preview_bg, true);
+            set_enabled(engine, ui.preview_label, true);
+            let preview_label = state.last_texture.as_deref().unwrap_or("preview").to_string();
+            set_text(
+                engine,
+                ui.preview_label,
+                right_x + PAD * s,
+                body_top + preview_h - 20.0 * s,
+                0.5 * s,
+                &preview_label,
+                DIM_TEXT,
+            );
+            let tex = state.last_texture.as_deref().and_then(|n| {
+                engine.gfx.as_ref().and_then(|g| g.textures.get(n).map(|t| (n, t.size)))
+            });
+            match tex {
+                Some((name, (tw, th))) => {
+                    let scale = (right_w / tw.max(1) as f32).min(preview_h / th.max(1) as f32);
+                    let dw = tw as f32 * scale;
+                    let dh = th as f32 * scale;
+                    let px = right_x + (right_w - dw) / 2.0;
+                    let py = body_top + (preview_h - dh) / 2.0;
+                    set_sprite(engine, ui.preview_sprite, px, py, dw, dh, name);
+                    set_enabled(engine, ui.preview_sprite, true);
+                    set_enabled(engine, ui.preview_placeholder, false);
+                }
+                None => {
+                    set_text(
+                        engine,
+                        ui.preview_placeholder,
+                        right_x + PAD * s,
+                        body_top + PAD * s,
+                        0.55 * s,
+                        "no asset yet",
+                        DIM_TEXT,
+                    );
+                    set_enabled(engine, ui.preview_placeholder, true);
+                    set_enabled(engine, ui.preview_sprite, false);
+                }
+            }
+
+            // Dots (bottom-right): panel + legend + chip grid.
+            let dots_top = mid_y + pad;
+            let dots_h = (body_bottom - dots_top).max(40.0);
+            set_rect(engine, ui.dots_bg, right_x, dots_top, right_w, dots_h);
+            set_enabled(engine, ui.dots_bg, true);
+            set_text(
+                engine,
+                ui.dots_title,
+                right_x + PAD * s,
+                dots_top + PAD * s,
+                0.55 * s,
+                "resources",
+                DIM_TEXT,
+            );
+            set_enabled(engine, ui.dots_title, true);
+
+            let legend_y = dots_top + PAD * s + 20.0 * s;
+            let mut lx = right_x + PAD * s;
+            for node in state.nodes.iter() {
+                if let Some(nu) = ui.nodes.get(&node.name) {
+                    let rc = rom_color(&node.name);
+                    set_rect(engine, nu.legend_swatch, lx, legend_y + 2.0 * s, chip_w, chip_w);
+                    set_rect_color(engine, nu.legend_swatch, rc);
+                    set_text(engine, nu.legend_name, lx, legend_y, 0.5 * s, &node.name, DIM_TEXT);
+                    set_enabled(engine, nu.legend_swatch, true);
+                    set_enabled(engine, nu.legend_name, true);
+                    lx += chip_w + chip_gap;
+                    lx += measure_legend(engine, &node.name, 0.5 * s) + chip_gap * 4.0;
+                }
+            }
+
+            let mut cx = right_x + PAD * s;
+            let mut cy = legend_y + 24.0 * s;
+            let max_x = right_x + right_w - PAD * s;
+            for node in state.nodes.iter() {
+                for chip in &node.chips {
+                    if let Some(&ce) = ui.chips.get(&chip.name) {
+                        set_rect(engine, ce, cx, cy, chip_w, chip_w);
+                        cx += chip_w + chip_gap;
+                        if cx + chip_w > max_x {
+                            cx = right_x + PAD * s;
+                            cy += chip_w + chip_gap;
+                        }
+                    }
+                }
+                cx += chip_gap * 2.0;
+            }
+        } else {
+            // Narrow: hide the preview/dots panels, show chip rows under the
+            // stacked DAG.
+            set_enabled(engine, ui.preview_bg, false);
+            set_enabled(engine, ui.preview_placeholder, false);
+            set_enabled(engine, ui.preview_sprite, false);
+            set_enabled(engine, ui.preview_label, false);
+            set_enabled(engine, ui.dots_bg, false);
+            set_enabled(engine, ui.dots_title, false);
+
+            let n = state.nodes.len().max(1) as f32;
+            let node_gap =
+                ((body_h - n * node_h) / (n - 1.0).max(1.0)).clamp(6.0 * s, (pad + 8.0) * s);
+            let chip_y0 = body_top + node_gap * (state.nodes.len() as f32 + 1.0) + pad;
+            let mut cy = chip_y0;
+            for node in state.nodes.iter() {
+                if let Some(nu) = ui.nodes.get(&node.name) {
+                    if node.chips.is_empty() {
+                        set_enabled(engine, nu.legend_swatch, false);
+                        set_enabled(engine, nu.legend_name, false);
+                        continue;
+                    }
+                    set_enabled(engine, nu.legend_swatch, false);
+                    set_enabled(engine, nu.legend_name, true);
+                    set_text(
+                        engine,
+                        nu.legend_name,
+                        pad,
+                        cy + 1.0,
+                        0.6 * s,
+                        &node.name,
+                        TEXT_COLOR,
+                    );
+                    let mut cx = pad + measure_legend(engine, &node.name, 0.6 * s) + pad;
+                    for chip in &node.chips {
+                        if let Some(&ce) = ui.chips.get(&chip.name) {
+                            set_rect(engine, ce, cx, cy + 3.0 * s, chip_w, chip_w);
+                            cx += chip_w + chip_gap;
+                        }
+                    }
+                    cy += chip_row_h + 6.0 * s;
+                }
+            }
+        }
+
+        ui.positions = positions;
+        ui.deps.clear();
+        for (i, node) in state.nodes.iter().enumerate() {
+            for dep_name in &node.deps {
+                if let Some(&di) = state.node_index.get(dep_name) {
+                    ui.deps.push((di, i));
+                }
+            }
+        }
+    }
+
+    /// Despawn the loader's UI entities (once boot finishes, before the
+    /// editor's full HUD installs).  The overlay hook becomes a cheap no-op.
+    pub fn uninstall(&self, engine: &mut Engine) {
+        let mut ui_guard = self.ui.lock().expect("boot loader poisoned");
+        let Some(ui) = ui_guard.take() else { return };
+        despawn(engine, ui.bg);
+        despawn(engine, ui.header_bg);
+        despawn(engine, ui.title);
+        despawn(engine, ui.metrics);
+        despawn(engine, ui.footer_bg);
+        despawn(engine, ui.progress_bg);
+        despawn(engine, ui.progress_fill);
+        despawn(engine, ui.pct);
+        despawn(engine, ui.latest);
+        for e in ui.log {
+            despawn(engine, e);
+        }
+        despawn(engine, ui.preview_bg);
+        despawn(engine, ui.preview_placeholder);
+        despawn(engine, ui.preview_sprite);
+        despawn(engine, ui.preview_label);
+        despawn(engine, ui.dots_bg);
+        despawn(engine, ui.dots_title);
+        for (_, nu) in ui.nodes {
+            despawn_node(engine, &nu);
+        }
+        for (_, e) in ui.chips {
+            despawn(engine, e);
         }
     }
 }
@@ -546,11 +861,150 @@ fn collect_chips(loaded: &LoadedRoms) -> HashMap<String, Vec<Chip>> {
     out
 }
 
-/// Draw a filled screen-space rectangle.
-fn rect(gfx: &Gfx, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
-    let model =
-        Mat4::from_translation(Vec3::new(x, y, 0.0)) * Mat4::from_scale(Vec3::new(w, h, 1.0));
-    gfx.draw_rect(&model, &Mat4::IDENTITY, &color, true);
+// ---- entity spawn/update helpers ------------------------------------------
+
+fn spawn_rect(world: &mut hecs::World, color: [f32; 4], z: f32) -> hecs::Entity {
+    world.spawn((
+        Transform::new(Vec3::new(0.0, 0.0, z), Vec3::ONE),
+        RectRender { color, ignore_cam: true },
+    ))
+}
+
+fn spawn_text(
+    world: &mut hecs::World,
+    text: &str,
+    scale: f32,
+    color: [f32; 4],
+    justify: TextJustify,
+    z: f32,
+) -> hecs::Entity {
+    world.spawn((
+        Transform::new(Vec3::new(0.0, 0.0, z), Vec3::new(scale, scale, 1.0)),
+        SdfTextRender {
+            atlas_name: DEFAULT_SDF_FONT.into(),
+            color,
+            outline_color: [0.0, 0.0, 0.0, 0.0],
+            outline_width: 0.0,
+            ignore_cam: true,
+            text: text.to_string(),
+            justify,
+            weight: 0.0,
+            gamma: 1.0,
+        },
+    ))
+}
+
+fn spawn_sprite(world: &mut hecs::World, z: f32) -> hecs::Entity {
+    world.spawn((
+        Transform::new(Vec3::new(0.0, 0.0, z), Vec3::ONE),
+        SpriteRender {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            texture: String::new(),
+            ignore_cam: true,
+            frame: 0.0,
+            frame_name: None,
+            tile_set_size: Vec2::ONE,
+            anchor: Vec2::ZERO,
+        },
+        UiNode { kind: UiKind::Sprite, ..UiNode::default() },
+    ))
+}
+
+fn spawn_node(engine: &mut Engine) -> NodeUi {
+    let world = &mut engine.world;
+    NodeUi {
+        rect: spawn_rect(world, NODE_BG, Z_BODY),
+        phase_bar: spawn_rect(world, [0.0, 0.0, 0.0, 1.0], Z_BODY_DETAIL),
+        name: spawn_text(world, "", 0.7, TEXT_COLOR, TextJustify::Left, Z_BODY_TEXT),
+        phase: spawn_text(world, "", 0.55, [0.0, 0.0, 0.0, 1.0], TextJustify::Left, Z_BODY_TEXT),
+        legend_swatch: spawn_rect(world, [0.0, 0.0, 0.0, 1.0], Z_BODY_DETAIL),
+        legend_name: spawn_text(world, "", 0.5, DIM_TEXT, TextJustify::Left, Z_BODY_TEXT),
+    }
+}
+
+fn despawn_node(engine: &mut Engine, nu: &NodeUi) {
+    despawn(engine, nu.rect);
+    despawn(engine, nu.phase_bar);
+    despawn(engine, nu.name);
+    despawn(engine, nu.phase);
+    despawn(engine, nu.legend_swatch);
+    despawn(engine, nu.legend_name);
+}
+
+fn despawn(engine: &mut Engine, e: hecs::Entity) {
+    let _ = engine.world.despawn(e);
+}
+
+fn set_rect(engine: &mut Engine, e: hecs::Entity, x: f32, y: f32, w: f32, h: f32) {
+    if let Ok(mut tf) = engine.world.get::<&mut Transform>(e) {
+        tf.position = Vec3::new(x, y, tf.position.z);
+        tf.scale = Vec3::new(w, h, 1.0);
+    }
+}
+
+fn set_rect_color(engine: &mut Engine, e: hecs::Entity, color: [f32; 4]) {
+    if let Ok(mut r) = engine.world.get::<&mut RectRender>(e) {
+        r.color = color;
+    }
+}
+
+fn set_text(
+    engine: &mut Engine,
+    e: hecs::Entity,
+    x: f32,
+    y: f32,
+    scale: f32,
+    text: &str,
+    color: [f32; 4],
+) {
+    if let Ok(mut tf) = engine.world.get::<&mut Transform>(e) {
+        tf.position = Vec3::new(x, y, tf.position.z);
+        tf.scale = Vec3::new(scale, scale, 1.0);
+    }
+    if let Ok(mut s) = engine.world.get::<&mut SdfTextRender>(e) {
+        s.text = text.to_string();
+        s.color = color;
+    }
+}
+
+fn set_sprite(engine: &mut Engine, e: hecs::Entity, x: f32, y: f32, w: f32, h: f32, texture: &str) {
+    if let Ok(mut tf) = engine.world.get::<&mut Transform>(e) {
+        tf.position = Vec3::new(x, y, tf.position.z);
+    }
+    if let Ok(mut n) = engine.world.get::<&mut UiNode>(e) {
+        n.size = Vec2::new(w, h);
+    }
+    if let Ok(mut s) = engine.world.get::<&mut SpriteRender>(e) {
+        s.texture = texture.to_string();
+    }
+}
+
+fn set_enabled(engine: &mut Engine, e: hecs::Entity, enabled: bool) {
+    if enabled {
+        let _ = engine.world.remove::<(Disabled,)>(e);
+    } else {
+        let _ = engine.world.insert(e, (Disabled,));
+    }
+}
+
+/// Measured width of a legend/chip-row label, used to advance the cursor after
+/// a ROM name.  Falls back to a glyph-count estimate if the font isn't loaded.
+fn measure_legend(engine: &Engine, text: &str, scale: f32) -> f32 {
+    engine
+        .sdf_fonts
+        .get(DEFAULT_SDF_FONT)
+        .map(|font| {
+            classic_core::sdf_builder::build_sdf_glyph_buffer(
+                font,
+                text,
+                scale,
+                TextJustify::Left,
+                0.0,
+            )
+            .text_width
+        })
+        .unwrap_or(text.len() as f32 * 18.0 * scale)
 }
 
 /// Draw a screen-space line strip of two points.
@@ -560,41 +1014,13 @@ fn line(gfx: &Gfx, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4]) {
     gfx.draw_line_strip(&buf, 0, 2, &Mat4::IDENTITY, &Mat4::IDENTITY, &color);
 }
 
-/// Draw one DAG node box (name + phase label + a mini progress bar).
-#[allow(clippy::too_many_arguments)]
-fn draw_node(
-    gfx: &Gfx,
-    font: &SdfFontMetrics,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    node: &RomNode,
-    s: f32,
-) {
-    rect(gfx, x, y, w, h, NODE_BG);
-    let phase_color = node.phase.color();
-    rect(gfx, x, y, w, 3.0 * s, phase_color);
-
-    let fetch = if node.phase == RomPhase::Fetching {
-        if node.total > 0 {
-            format!("  {} / {} B", node.received, node.total)
-        } else {
-            format!("  {} B", node.received)
-        }
-    } else {
-        String::new()
-    };
-    draw_text(gfx, font, x + PAD * s, y + 8.0 * s, &node.name, 0.7 * s, TEXT_COLOR);
-    draw_text(
-        gfx,
-        font,
-        x + PAD * s,
-        y + 26.0 * s,
-        &format!("{}{}", node.phase.label(), fetch),
-        0.55 * s,
-        phase_color,
-    );
+/// Draw an elbow tree connector (down, across, down) from `(x0, y0)` to
+/// `(x1, y1)`.
+fn elbow(gfx: &Gfx, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4]) {
+    let mid_y = (y0 + y1) / 2.0;
+    let verts = [x0, y0, 0.0, x0, mid_y, 0.0, x1, mid_y, 0.0, x1, y1, 0.0];
+    let buf = GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &verts, glow::STREAM_DRAW);
+    gfx.draw_line_strip(&buf, 0, 4, &Mat4::IDENTITY, &Mat4::IDENTITY, &color);
 }
 
 /// A simple vertical stack of the DAG nodes (centered), used before the
@@ -619,6 +1045,28 @@ fn stacked_layout(
     let gap =
         ((h - n as f32 * node_h) / (n.saturating_sub(1) as f32).max(1.0)).clamp(6.0 * s, 20.0 * s);
     (0..n).map(|i| (center_x, y0 + i as f32 * (node_h + gap))).collect()
+}
+
+/// The narrow stacked layout: centered, with a gap clamped so the DAG stays
+/// readable on short windows.
+#[allow(clippy::too_many_arguments)]
+fn narrow_stacked(
+    state: &LoaderState,
+    body_top: f32,
+    body_h: f32,
+    node_w: f32,
+    node_h: f32,
+    vw: f32,
+    s: f32,
+) -> Vec<(f32, f32)> {
+    let n = state.nodes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let center_x = vw / 2.0 - node_w / 2.0;
+    let gap = ((body_h - n as f32 * node_h) / (n.saturating_sub(1) as f32).max(1.0))
+        .clamp(6.0 * s, 20.0 * s);
+    (0..n).map(|i| (center_x, body_top + i as f32 * (node_h + gap))).collect()
 }
 
 /// Compute a layered tree layout for the DAG: leaf nodes (no deps) sit at the
@@ -687,111 +1135,6 @@ fn tree_layout(
     positions
 }
 
-/// Draw an elbow tree connector (down, across, down) from `(x0, y0)` to
-/// `(x1, y1)`.
-fn elbow(gfx: &Gfx, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4]) {
-    let mid_y = (y0 + y1) / 2.0;
-    let verts = [x0, y0, 0.0, x0, mid_y, 0.0, x1, mid_y, 0.0, x1, y1, 0.0];
-    let buf = GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &verts, glow::STREAM_DRAW);
-    gfx.draw_line_strip(&buf, 0, 4, &Mat4::IDENTITY, &Mat4::IDENTITY, &color);
-}
-
-/// Draw the asset preview pane: the most recently uploaded texture, fit to the
-/// pane preserving aspect ratio (or a placeholder before the first upload).
-#[allow(clippy::too_many_arguments)]
-fn draw_preview(
-    gfx: &Gfx,
-    font: &SdfFontMetrics,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    texture_name: Option<&str>,
-    s: f32,
-) {
-    rect(gfx, x, y, w, h, NODE_BG);
-    let label = texture_name.unwrap_or("preview");
-    let dims = texture_name.and_then(|n| gfx.textures.get(n)).map(|t| t.size);
-    match dims {
-        Some((tw, th)) => {
-            let scale = (w / tw.max(1) as f32).min(h / th.max(1) as f32);
-            let dw = tw as f32 * scale;
-            let dh = th as f32 * scale;
-            let px = x + (w - dw) / 2.0;
-            let py = y + (h - dh) / 2.0;
-            let model = Mat4::from_translation(Vec3::new(px, py, 0.0))
-                * Mat4::from_scale(Vec3::new(dw, dh, 1.0));
-            let settings = RenderSettings {
-                ambient: [1.0, 1.0, 1.0],
-                light_dir: [0.0, 0.0, 1.0],
-                light_color: [1.0, 1.0, 1.0],
-                depth_span: [0.0, 1.0],
-                ppm: 64.0,
-                shadow: None,
-            };
-            gfx.draw_sprite(
-                &model,
-                &Mat4::IDENTITY,
-                texture_name.unwrap(),
-                SpriteRegion::Grid { frame: 0.0, tile_set_size: [1.0, 1.0] },
-                true,
-                1.0,
-                &settings,
-            );
-        }
-        None => {
-            draw_text(gfx, font, x + PAD * s, y + PAD * s, "no asset yet", 0.55 * s, DIM_TEXT);
-        }
-    }
-    draw_text(gfx, font, x + PAD * s, y + h - 20.0 * s, label, 0.5 * s, DIM_TEXT);
-}
-
-/// Draw the per-ROM resource dots (one square per sheet, colour-coded by ROM
-/// and shaded by decode/upload state) with a compact colour legend.
-#[allow(clippy::too_many_arguments)]
-fn draw_dots(
-    gfx: &Gfx,
-    font: &SdfFontMetrics,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    nodes: &[RomNode],
-    chip_w: f32,
-    chip_gap: f32,
-    s: f32,
-) {
-    rect(gfx, x, y, w, h, NODE_BG);
-    draw_text(gfx, font, x + PAD * s, y + PAD * s, "resources", 0.55 * s, DIM_TEXT);
-
-    let legend_y = y + PAD * s + 20.0 * s;
-    let mut lx = x + PAD * s;
-    for node in nodes {
-        let rc = rom_color(&node.name);
-        rect(gfx, lx, legend_y + 2.0 * s, chip_w, chip_w, rc);
-        lx += chip_w + chip_gap;
-        draw_text(gfx, font, lx, legend_y, &node.name, 0.5 * s, DIM_TEXT);
-        lx += measure_text(font, &node.name, 0.5 * s) + chip_gap * 4.0;
-    }
-
-    let mut cx = x + PAD * s;
-    let mut cy = legend_y + 24.0 * s;
-    let max_x = x + w - PAD * s;
-    for node in nodes {
-        let rc = rom_color(&node.name);
-        for chip in &node.chips {
-            rect(gfx, cx, cy, chip_w, chip_w, chip_color(rc, chip.state));
-            cx += chip_w + chip_gap;
-            if cx + chip_w > max_x {
-                cx = x + PAD * s;
-                cy += chip_w + chip_gap;
-            }
-        }
-        // A small gap between one ROM's run and the next.
-        cx += chip_gap * 2.0;
-    }
-}
-
 /// A stable, per-ROM colour picked from a small palette (used to colour-code
 /// the resource dots by their owning ROM).
 fn rom_color(name: &str) -> [f32; 4] {
@@ -820,45 +1163,4 @@ fn chip_color(rom: [f32; 4], state: ChipState) -> [f32; 4] {
         ChipState::Uploaded => 1.0,
     };
     [rom[0] * k, rom[1] * k, rom[2] * k, 1.0]
-}
-
-/// Measure the rendered width of `text` at `scale` (left-justified).
-fn measure_text(font: &SdfFontMetrics, text: &str, scale: f32) -> f32 {
-    build_sdf_glyph_buffer(font, text, scale, TextJustify::Left, 0.0).text_width
-}
-
-/// Draw `text` left-justified with its top-left corner at `(x, y)`.
-fn draw_text(
-    gfx: &Gfx,
-    font: &SdfFontMetrics,
-    x: f32,
-    y: f32,
-    text: &str,
-    scale: f32,
-    color: [f32; 4],
-) {
-    let buf = build_sdf_glyph_buffer(font, text, scale, TextJustify::Left, 0.0);
-    if buf.vertex_count == 0 {
-        return;
-    }
-    let glyph_buf =
-        GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &buf.vertices, glow::DYNAMIC_DRAW);
-    let atlas_name = format!("{DEFAULT_SDF_FONT}-sdf");
-    let model = Mat4::from_translation(Vec3::new(x, y, 0.0))
-        * Mat4::from_scale(Vec3::new(buf.text_width, buf.text_height, 1.0));
-    gfx.draw_sdf(
-        &model,
-        &Mat4::IDENTITY,
-        &atlas_name,
-        &color,
-        &[0.0, 0.0, 0.0, 0.0],
-        0.0,
-        font.spread,
-        &font.atlas_size,
-        0.0,
-        1.0,
-        buf.vertex_count as i32,
-        &glyph_buf,
-        true,
-    );
 }
