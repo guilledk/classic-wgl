@@ -68,6 +68,17 @@ impl RomArchive {
         self.files.get(path).map(|v| v.as_slice())
     }
 
+    /// Remove a single entry from the archive, returning its owned bytes.
+    ///
+    /// This is the drain half of the owned-resource path: [`Rom::load`]
+    /// (via [`crate::ResourceSet::from_archive`]) moves each blob out of the
+    /// archive's `BTreeMap` instead of `to_vec()`-ing a second copy, so the
+    /// decompressed archive and the resource set never both hold the same
+    /// bytes.
+    pub fn take(&mut self, path: &str) -> Option<Vec<u8>> {
+        self.files.remove(path)
+    }
+
     /// Read a single entry and interpret it as UTF-8.
     pub fn read_string(&self, path: &str) -> anyhow::Result<String> {
         let bytes =

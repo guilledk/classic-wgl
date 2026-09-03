@@ -26,6 +26,9 @@ pub mod render_order;
 pub mod state;
 pub mod testing;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod module_cache;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -147,7 +150,7 @@ pub fn compile_guest_modules(loaded: &LoadedRoms, sink: &dyn BootSink) -> Compil
             let Some(wasm) = entry.rom.resources.code().get("main") else { continue };
             let limits = guest_limits(entry);
             sink.on_event(BootEvent::GuestCompiling { rom: entry.name.clone() });
-            match classic_guest::compile_module(wasm, &limits) {
+            match module_cache::load_or_compile(entry, wasm, &limits) {
                 Ok(module) => {
                     out.insert(entry.name.clone(), module);
                 }
@@ -359,6 +362,7 @@ pub fn init_engine(gl: Rc<glow::Context>, rom: &Rom) -> Engine {
             name,
             namespace: rom.manifest.namespace.clone(),
             rom: rom.clone(),
+            sha256: None,
         }],
     };
     init_engine_multi(gl, &loaded, &classic_rom::NullBootSink)

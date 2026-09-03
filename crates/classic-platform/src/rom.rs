@@ -13,6 +13,16 @@
 
 use classic_rom::{AssetBytes, BootEvent, BootSink, Rom, RomSource};
 
+/// Hex-encoded SHA-256 of `bytes` — the published ROM sha256, used as the
+/// compiled-module cache key (native only; the web path keys its ROM-bytes
+/// cache by the `roms.json` sha directly).
+#[cfg(not(target_arch = "wasm32"))]
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Build a lookup closure from a static `name -> URL/path` table.
 ///
 /// Convenience for apps with a fixed registry (the web app's CDN URLs).
@@ -88,14 +98,20 @@ pub fn resolve_roms(
 ) -> anyhow::Result<classic_rom::LoadedRoms> {
     sink.on_event(BootEvent::ResolveStarted { spec: spec.to_string() });
 
+    // Track each ROM's archive sha256 as it is materialised, so the resolved
+    // DAG can carry it as the compiled-module cache key.
+    let shas: std::cell::RefCell<std::collections::HashMap<String, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+
     let named_load = |name: &str| {
         let source = resolve_rom_source(&format!("rom:{name}"), index)?;
         let bytes = load_rom_bytes(&source)?;
+        shas.borrow_mut().insert(name.to_string(), sha256_hex(&bytes));
         sink.on_event(BootEvent::RomFetched { name: name.to_string(), bytes: bytes.len() });
         rom_from_bytes(&bytes, name, sink)
     };
 
-    match classic_rom::parse_rom_spec(spec) {
+    let mut loaded = match classic_rom::parse_rom_spec(spec) {
         RomSource::Embedded(name) => classic_rom::LoadedRoms::resolve(&name, named_load),
         other => {
             let root_bytes = load_rom_bytes(&other)?;
@@ -105,6 +121,7 @@ pub fn resolve_roms(
             });
             let root_rom = rom_from_bytes(&root_bytes, "root", sink)?;
             let root_name = rom_name(&root_rom);
+            shas.borrow_mut().insert(root_name.clone(), sha256_hex(&root_bytes));
             let mut root_loaded = false;
             classic_rom::LoadedRoms::resolve(&root_name, |name| {
                 if name == root_name && !root_loaded {
@@ -115,16 +132,21 @@ pub fn resolve_roms(
                 }
             })
         }
+    }?;
+
+    for entry in &mut loaded.order {
+        entry.sha256 = shas.borrow().get(&entry.name).cloned();
     }
+    Ok(loaded)
 }
 
 /// Parse a fully-loaded [`Rom`] from archive bytes, emitting
 /// `RomDecompressed` (after archive open) and `RomParsed` (from [`Rom::load`])
 /// to `sink` under the given `name`.
 fn rom_from_bytes(bytes: &[u8], name: &str, sink: &dyn BootSink) -> anyhow::Result<Rom> {
-    let archive = classic_rom::RomArchive::from_bytes(bytes)?;
+    let mut archive = classic_rom::RomArchive::from_bytes(bytes)?;
     sink.on_event(BootEvent::RomDecompressed { name: name.to_string(), entries: archive.len() });
-    Rom::load(&archive, sink)
+    Rom::load(&mut archive, sink)
 }
 
 /// The resolver name for a directly-loaded (non-`rom:`) root ROM: its

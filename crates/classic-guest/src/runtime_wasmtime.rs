@@ -47,6 +47,31 @@ impl CompiledModule {
         let module = Module::new(&engine, wasm).map_err(|e| GuestError::Compile(e.to_string()))?;
         Ok(Self { engine, module })
     }
+
+    /// Serialize the compiled module for an on-disk cache (native wasmtime).
+    /// The caller is responsible for versioning/invalidating the cache image.
+    pub fn serialize(&self) -> Result<Vec<u8>, GuestError> {
+        self.module.serialize().map_err(|e| GuestError::Compile(e.to_string()))
+    }
+
+    /// Rebuild a compiled module from a previously-serialized image, recreating
+    /// the engine from `limits` so its config (fuel metering, cranelift
+    /// settings) matches the one the module was originally compiled with.
+    ///
+    /// # Safety
+    ///
+    /// `serialized` must be a module image produced by [`Self::serialize`] from
+    /// a compatible wasmtime build.  Deserializing arbitrary or corrupt bytes is
+    /// memory-unsafe.  The boot layer guards this with a cache magic + version
+    /// header and only ever feeds it bytes it wrote itself.
+    pub fn deserialize(serialized: &[u8], limits: &GuestLimits) -> Result<Self, GuestError> {
+        let engine = WasmtimeRuntime::build_engine(limits)?;
+        // SAFETY: see the safety note above — `serialized` is a self-written,
+        // version-checked module image for a compatible wasmtime build.
+        let module = unsafe { Module::deserialize(&engine, serialized) }
+            .map_err(|e| GuestError::Compile(e.to_string()))?;
+        Ok(Self { engine, module })
+    }
 }
 
 /// wasmtime-backed [`GuestRuntime`] (native target only).
