@@ -46,6 +46,11 @@ pub(crate) struct BasisTextureJob {
     pub(crate) keys: Vec<String>,
     pub(crate) bytes: Arc<[u8]>,
     pub(crate) format: String,
+    /// The ROM this sheet belongs to (for `ResourceDecoded` events).
+    pub(crate) rom: String,
+    /// The resource kind (Texture / Normal / Depth), derived from the sheet's
+    /// manifest name + compressed target.
+    pub(crate) kind: ResourceKind,
 }
 
 /// One unit of boot work.
@@ -105,6 +110,28 @@ impl<'a> BootPlan<'a> {
     /// The total number of steps in the plan.
     pub fn total_steps(&self) -> usize {
         self.steps.len()
+    }
+
+    /// The number of steps consumed so far (incremental booters persist this
+    /// across frames when they rebuild the plan each chunk).
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Set the step cursor (used by incremental booters to resume mid-plan).
+    pub fn set_cursor(&mut self, cursor: usize) {
+        self.cursor = cursor;
+    }
+
+    /// Inject pre-decoded texture pixels (the off-thread decode results) so the
+    /// matching [`BootStep::Upload`] steps skip their `Decode` work.
+    pub fn set_decoded(&mut self, decoded: HashMap<String, DecodedTexture>) {
+        self.decoded = decoded;
+    }
+
+    /// Take the decoded-texture map back out (to persist across a plan rebuild).
+    pub fn take_decoded(&mut self) -> HashMap<String, DecodedTexture> {
+        std::mem::take(&mut self.decoded)
     }
 }
 
@@ -244,10 +271,15 @@ fn decode_jobs_parallel(
 /// [`decode_plan`] but for GPU-compressed sheets: the `basis_universal` decode
 /// fans out across the loader pool while the GL upload stays on the render
 /// thread via `Engine::upload_basis_predecoded`.
+///
+/// Emits a [`BootEvent::ResourceDecoded`] per successfully-transcoded sheet, in
+/// plan order (so the observable stream is deterministic regardless of which
+/// pool thread finishes first).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode_basis_jobs(
     jobs: &[BasisTextureJob],
     caps: classic_gfx::Caps,
+    sink: &dyn BootSink,
 ) -> Vec<Option<classic_gfx::DecodedBasis>> {
     let total = jobs.len();
     if total == 0 {
@@ -275,7 +307,41 @@ pub(crate) fn decode_basis_jobs(
         let (index, decoded) = rx.recv().expect("basis worker panicked");
         ordered[index] = decoded;
     }
+
+    // Re-assemble in plan order so `ResourceDecoded` events stay deterministic.
+    for (job, decoded) in jobs.iter().zip(&ordered) {
+        if let Some(payload) = decoded {
+            let dims = match payload {
+                classic_gfx::DecodedBasis::Compressed { width, height, .. }
+                | classic_gfx::DecodedBasis::Rgba8 { width, height, .. } => (*width, *height),
+            };
+            sink.on_event(BootEvent::ResourceDecoded {
+                rom: job.rom.clone(),
+                kind: job.kind,
+                name: job.keys[0].clone(),
+                dims,
+            });
+        }
+    }
     ordered
+}
+
+/// Decode every pending texture *and* `.basis` sheet off-thread (native only),
+/// returning the decoded payloads.  `basis` is indexed to match the plan's
+/// `basis_jobs` order (upload one at a time with
+/// [`crate::Engine::upload_basis_predecoded_at`]).  The heavy work fans out
+/// across the loader pool; the caller uploads on the GL thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn decode_assets(
+    loaded: &LoadedRoms,
+    caps: classic_gfx::Caps,
+    sink: &dyn BootSink,
+) -> (HashMap<String, DecodedTexture>, Vec<Option<classic_gfx::DecodedBasis>>) {
+    let engine = crate::Engine::new();
+    let mut plan = engine.begin_boot(loaded, sink);
+    let decoded = decode_plan(&mut plan);
+    let basis = decode_basis_jobs(&plan.basis_jobs, caps, sink);
+    (decoded, basis)
 }
 
 /// Decode a PNG into owned pixels of the given channel layout.

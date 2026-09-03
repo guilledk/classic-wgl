@@ -48,6 +48,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   GL thread on the loader pool (`CLASSIC_LOADER_THREADS`), then upload the
   decoded payloads on the render thread — mirrors the PNG decode/upload split
   for the compressed path.
+- Boot resource sampling: a native `/proc`-based sampler emits periodic
+  `ResourceUsage` boot events (process CPU% + RSS) during boot, so
+  `CLASSIC_BOOT_LOG` carries a perf trace through the whole pipeline.
+- Boot loading screen: a GL-only `visual` loader (the default) driven by the
+  boot event stream — a dependency DAG, per-sheet resource chips, a progress/log
+  footer, and a live CPU/RSS header — with `console`/`off` modes and forced-off
+  for headless/golden/test. Embeds the DejaVu Sans SDF atlas so text renders from
+  frame 0, emits per-sheet `ResourceDecoded` for `.basis` sheets (native pool +
+  web worker), unifies ROM downloads into the boot stream (`RomFetchStarted`/
+  `RomFetchProgress`, desktop CDN fallback + web `ReadableStream` progress), and
+  switches metrics to `sysinfo` (desktop CPU%+RSS; web JS-heap memory).
 
 ### Changed
 

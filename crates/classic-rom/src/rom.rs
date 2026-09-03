@@ -52,6 +52,7 @@ impl Rom {
                 manifest.entrypoint.clone()
             },
             resources: resources.len(),
+            deps: manifest.deps.clone(),
         });
 
         Ok(Self { manifest, manifest_json, resources, state })

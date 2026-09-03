@@ -26,51 +26,6 @@ fn query_param(name: &str) -> Option<String> {
     search.split('&').find_map(|p| p.strip_prefix(&prefix).map(|v| v.to_string()))
 }
 
-/// A simple DOM overlay (outside the canvas so it renders while the wasm/ROM
-/// bytes are streaming in).  `clear_overlay` removes it; the error variant
-/// keeps it on screen with a reload button.
-#[cfg(target_arch = "wasm32")]
-struct BootOverlay {
-    el: web_sys::HtmlDivElement,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl BootOverlay {
-    fn new(message: &str) -> Self {
-        let document = web_sys::window().and_then(|w| w.document()).expect("no document");
-        let el: web_sys::HtmlDivElement =
-            document.create_element("div").unwrap().dyn_into().unwrap();
-        el.set_text_content(Some(message));
-        let style = el.style();
-        style.set_property("position", "fixed").unwrap();
-        style.set_property("inset", "0").unwrap();
-        style.set_property("display", "flex").ok();
-        style.set_property("align-items", "center").ok();
-        style.set_property("justify-content", "center").ok();
-        style.set_property("background", "#000").unwrap();
-        style.set_property("color", "#cfc8f0").unwrap();
-        style.set_property("font-family", "monospace").unwrap();
-        style.set_property("font-size", "18px").unwrap();
-        style.set_property("z-index", "1000").unwrap();
-        document.body().unwrap().append_child(el.as_ref()).unwrap();
-        Self { el }
-    }
-
-    fn clear(&mut self) {
-        if let Some(parent) = self.el.parent_node() {
-            parent.remove_child(self.el.as_ref()).ok();
-        }
-    }
-
-    fn set(&self, message: &str) {
-        self.el.set_text_content(Some(message));
-    }
-
-    fn error(&self, message: &str) {
-        self.el.set_text_content(Some(message));
-    }
-}
-
 #[wasm_bindgen(start)]
 pub fn main() {
     console_error_panic_hook::set_once();
@@ -128,24 +83,57 @@ async fn resolve_web_roms(
     .await
 }
 
-/// Choose the boot sink for this session: a logging sink when the loader is
-/// enabled or `CLASSIC_BOOT_LOG` is set, otherwise the no-op sink.
+/// The boot loading-screen mode for this session, from the `?loader=` URL
+/// parameter (default `visual`).
 #[cfg(target_arch = "wasm32")]
-fn boot_sink() -> Box<dyn classic_rom::BootSink> {
-    if query_param("classic_loader").is_some() || query_param("boot_log").is_some() {
-        Box::new(classic_platform::LogBootSink)
-    } else {
-        Box::new(classic_rom::NullBootSink)
+fn loader_mode() -> classic_engine::env_config::LoaderMode {
+    match query_param("loader").as_deref() {
+        Some("console") => classic_engine::env_config::LoaderMode::Console,
+        Some("off") => classic_engine::env_config::LoaderMode::Off,
+        _ => classic_engine::env_config::LoaderMode::Visual,
     }
 }
 
+/// Choose the boot sink for this session, plus the visual loader (when the
+/// loader mode is `visual`).
+#[cfg(target_arch = "wasm32")]
+fn boot_sink() -> (
+    std::sync::Arc<dyn classic_rom::BootSink>,
+    Option<std::sync::Arc<classic_engine::boot_loader::VisualBootSink>>,
+) {
+    match loader_mode() {
+        classic_engine::env_config::LoaderMode::Visual => {
+            let loader = std::sync::Arc::new(classic_engine::boot_loader::VisualBootSink::new());
+            // `?boot_log=` also mirrors the stream to the console.
+            if query_param("boot_log").is_some() {
+                let tee = std::sync::Arc::new(classic_rom::TeeBootSink::new(vec![
+                    loader.clone(),
+                    std::sync::Arc::new(classic_platform::LogBootSink),
+                ]));
+                (tee, Some(loader))
+            } else {
+                (loader.clone(), Some(loader))
+            }
+        }
+        classic_engine::env_config::LoaderMode::Console => {
+            (std::sync::Arc::new(classic_platform::LogBootSink), None)
+        }
+        classic_engine::env_config::LoaderMode::Off => {
+            if query_param("boot_log").is_some() {
+                (std::sync::Arc::new(classic_platform::LogBootSink), None)
+            } else {
+                (std::sync::Arc::new(classic_rom::NullBootSink), None)
+            }
+        }
+    }
+}
 /// Per-frame boot budget: run boot steps for at most this long before yielding
 /// to the browser, so no single animation frame blocks past ~16 ms.
 #[cfg(target_arch = "wasm32")]
 const BOOT_BUDGET_MILLIS: u128 = 12;
 
 /// Resolve after the next `requestAnimationFrame` tick — yield one frame so the
-/// browser paints (and the boot overlay animates) between hydration slices.
+/// browser paints (and the loading screen animates) between hydration slices.
 #[cfg(target_arch = "wasm32")]
 fn next_frame() -> impl std::future::Future<Output = ()> {
     async {
@@ -170,11 +158,33 @@ async fn run() -> anyhow::Result<()> {
         classic_core::instrument::init(&spec);
     }
     let spec = query_param("rom").unwrap_or_default();
-    let label = query_param("rom").unwrap_or_else(|| "demo".to_string());
-    let mut overlay = BootOverlay::new(&format!("loading scene `{label}`…"));
+    let (sink, loader) = boot_sink();
+
+    use classic_platform::web::WebPlatform;
+    use classic_platform::Platform;
+
+    // Canvas-first: create the WebGL2 context *before* fetching the ROM, so the
+    // GL loading screen can draw while the archive streams in (mirrors the
+    // desktop window-first boot).  There is no DOM overlay anymore.
+    let platform = match WebPlatform::new("glCanvas") {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("WebGL2 init failed: {e:?}");
+            return Err(anyhow::anyhow!("WebPlatform::new: {e:?}"));
+        }
+    };
+    let gl = platform.gl();
+    let (vw, vh) = platform.viewport();
+
+    // Set up the GL layer + embedded font up front so the loader renders from
+    // frame 0, then draw one initial frame before the (awaited) fetch.
+    let mut engine = classic_engine::Engine::new();
+    engine.init_gfx(gl.clone());
+    if let Some(loader) = &loader {
+        loader.draw(&mut engine, vw, vh);
+    }
 
     let boot_start = std::time::Instant::now();
-    let sink = boot_sink();
     let loaded = match resolve_web_roms(&spec, sink.as_ref()).await {
         Ok(loaded) => loaded,
         Err(err) => {
@@ -182,31 +192,19 @@ async fn run() -> anyhow::Result<()> {
                 phase: "resolve",
                 error: format!("{err:#}"),
             });
-            overlay.error(&format!("failed to load scene `{label}`:\n{err}"));
             return Err(err);
         }
     };
-    overlay.set("decoding resources…");
+    if let Some(loader) = &loader {
+        loader.set_dag(&loaded);
+        loader.draw(&mut engine, vw, vh);
+    }
 
-    use classic_platform::web::WebPlatform;
-    use classic_platform::Platform;
-
-    let platform = match WebPlatform::new("glCanvas") {
-        Ok(p) => p,
-        Err(e) => {
-            let overlay = BootOverlay::new("WebGL2 unavailable");
-            overlay.error(&format!("WebGL2 init failed: {e:?}"));
-            return Err(anyhow::anyhow!("WebPlatform::new: {e:?}"));
-        }
-    };
-
-    // Hydrate the engine incrementally: compile shaders + build the boot plan
-    // up front, then drain a time-budgeted slice of steps per animation frame
-    // so the browser stays responsive (and the overlay animates) while the
-    // large atlases decode.  The `.basis` transcode stays in its dedicated
-    // Worker (awaited after the plan drains).
-    let gl = platform.gl();
-    let mut engine = classic_engine::Engine::new();
+    // Hydrate the engine incrementally: build the boot plan, then drain a
+    // time-budgeted slice of steps per animation frame (drawing the loader each
+    // frame) so the browser stays responsive while the large atlases decode.
+    // The `.basis` transcode stays in its dedicated Worker (awaited after the
+    // plan drains).
     let mut plan = engine.begin_boot_gfx(gl, &loaded, sink.as_ref());
     while !plan.is_done() {
         let frame_start = std::time::Instant::now();
@@ -219,9 +217,15 @@ async fn run() -> anyhow::Result<()> {
                 break;
             }
         }
+        if let Some(loader) = &loader {
+            loader.draw(&mut engine, vw, vh);
+        }
         next_frame().await;
     }
     engine.upload_pending_basis(&mut plan, sink.as_ref()).await;
+    if let Some(loader) = &loader {
+        loader.draw(&mut engine, vw, vh);
+    }
     classic_demo::finish_init_engine(
         &mut engine,
         &loaded,
@@ -229,7 +233,6 @@ async fn run() -> anyhow::Result<()> {
         sink.as_ref(),
     );
     sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed() });
-    overlay.clear();
 
     platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {
         engine.frame(input, vw, vh, delta);
