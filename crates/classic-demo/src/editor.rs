@@ -19,8 +19,13 @@ use crate::state::{DemoStateRef, EditorState};
 
 /// Spawn HUD text entities using the UI layout system.
 pub fn init_ui(engine: &mut Engine) {
-    let vp_w = 1280.0_f32;
-    let vp_h = 720.0_f32;
+    // Size the UI to the engine's current viewport when one is known (the
+    // windowed loader path runs `frame()` during boot, so `last_vw`/`last_vh`
+    // already hold the real window size); fall back to the 1280x720 reference
+    // before the first frame (headless/golden boot).
+    let (vw, vh) = engine.viewport_size();
+    let vp_w = if vw > 0.5 { vw } else { 1280.0 };
+    let vp_h = if vh > 0.5 { vh } else { 720.0 };
     let mut ui = ui::UIManager::new(vp_w, vp_h, &mut engine.world);
 
     // Top bar

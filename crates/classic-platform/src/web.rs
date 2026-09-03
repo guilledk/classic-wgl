@@ -195,6 +195,13 @@ impl WebPlatform {
     pub fn gl(&self) -> Rc<glow::Context> {
         self.gl.clone()
     }
+
+    /// The shared input state (keydown/keyup listeners installed in `new`),
+    /// cloned so the async boot loop can poll for an Esc abort before
+    /// `run_loop` starts.
+    pub fn input(&self) -> Rc<RefCell<InputState>> {
+        self.input.clone()
+    }
 }
 
 impl Platform for WebPlatform {

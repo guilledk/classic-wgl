@@ -23,6 +23,54 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Golden layout map: emit a deterministic, GPU-free `baseline.layout.txt` (one
   line per draw item with its screen-space rect) alongside the golden trace, so
   text-only models can introspect a rendered frame.
+- Boot progress events: a `BootEvent`/`BootSink` stream (no-op, test, and log
+  sinks) threaded through ROM resolve, archive open, resource load, and guest
+  init, plus a `CLASSIC_LOADER`/`CLASSIC_BOOT_LOG` config and a `boot` log
+  channel.
+- Boot plan: split ROM hydration into a precomputed, incrementally-consumable
+  `BootPlan`/`BootStep` pipeline (`Engine::begin_boot`/`boot_step`), splitting
+  each texture into CPU decode (`DecodedTexture`) and GL upload, with a
+  `boot_step(usize::MAX)` synchronous fast path.
+- Async desktop boot: create the window first, then run ROM resolve, archive
+  decompress, texture decode, and wasmtime module compile on a background thread
+  (streaming `BootEvent` over `mpsc`) while the main thread drains events and
+  uploads decoded textures; the headless/golden boot stays synchronous.
+- Interleaved web hydration: compile shaders + build the boot plan up front,
+  then drain a time-budgeted slice of boot steps per animation frame (instead
+  of stalling the first frame), keeping the browser responsive and the DOM boot
+  overlay on screen while the large atlases decode.
+- Faster boot: drain ROM archive entries into `Arc<[u8]>` resources (no double
+  copy), decode textures/depth/normals in parallel on the loader thread pool
+  (`CLASSIC_LOADER_THREADS`), and cache compiled `wasmtime::Module`s on disk
+  keyed by the published ROM sha256 for `trusted` ROMs so repeat launches skip
+  cranelift.
+- Parallel basis transcode: transcode GPU-compressed (`.basis`) sheets off the
+  GL thread on the loader pool (`CLASSIC_LOADER_THREADS`), then upload the
+  decoded payloads on the render thread — mirrors the PNG decode/upload split
+  for the compressed path.
+- Boot resource sampling: a native `/proc`-based sampler emits periodic
+  `ResourceUsage` boot events (process CPU% + RSS) during boot, so
+  `CLASSIC_BOOT_LOG` carries a perf trace through the whole pipeline.
+- Boot loading screen: a GL-only `visual` loader (the default) driven by the
+  boot event stream — a dependency DAG, per-sheet resource chips, a progress/log
+  footer, and a live CPU/RSS header — with `console`/`off` modes and forced-off
+  for headless/golden/test. Embeds the DejaVu Sans SDF atlas so text renders from
+  frame 0, emits per-sheet `ResourceDecoded` for `.basis` sheets (native pool +
+  web worker), unifies ROM downloads into the boot stream (`RomFetchStarted`/
+  `RomFetchProgress`, desktop CDN fallback + web `ReadableStream` progress), and
+  switches metrics to `sysinfo` (desktop CPU%+RSS; web JS-heap memory).
+- Boot loader UI migration: render the loading screen through the retained-mode
+  UI system — SDF-text/rect/sprite entities driven from the boot state each
+  frame (`install`/`sync`/`uninstall`), with the DAG connector edges drawn in an
+  overlay hook — instead of hand-rolled `draw_*` calls.  Text now goes through
+  the per-entity glyph-buffer cache (no per-frame rebuild), and the duplicated
+  `draw_text`/`measure_text` path is deleted.
+- Abortable boot: Esc during the desktop loading screen aborts the load and
+  stops the process; on web it stops hydration and leaves the loader hanging.
+- Off-thread worker compile: split the Tier-3 `GuestWorker` wasmtime build into
+  a background compile (cranelift `Module`) and a GL-thread instantiate, and
+  compile the root ROM's worker module alongside the foreground guests in the
+  desktop boot, so the loader no longer freezes on the last ~1s of lunar boot.
 
 ### Changed
 
@@ -45,6 +93,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   slopes: project through `iso_camera_px` and sample mesh-matched heights, and
   account for the tilemap `Transform.position` offset in the mouse raycast and
   shadow pass.
+- Fix the web boot loading screen panicking on `std::time::Instant::now()`
+  ("time not implemented on this platform") by using a platform-neutral boot
+  timer (`BootTimer`: `Instant` on native, `Date::now()` on web).
+- Fix the editor/HUD UI holding the 1280x720 reference size (until the next
+  window resize) after the loading screen hands off to the game — size it to
+  the engine's actual viewport at install time.
 
 ## [0.1.1] - 2026-09-01
 

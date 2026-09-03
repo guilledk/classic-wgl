@@ -19,11 +19,52 @@ pub mod sdk;
 
 pub use runtime::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
 #[cfg(not(target_arch = "wasm32"))]
-pub use runtime_wasmtime::WasmtimeRuntime;
+pub use runtime_wasmtime::{CompiledModule, WasmtimeRuntime};
 #[cfg(target_arch = "wasm32")]
 pub use runtime_web::WebWasmRuntime;
 #[cfg(target_arch = "wasm32")]
 pub use runtime_worker::WorkerWasmRuntime;
+
+/// A placeholder for the compiled-native-module type on web, where guests are
+/// compiled inline by the browser (no off-thread cranelift).  Keeps the
+/// `CompiledModules` map type target-independent.
+#[cfg(target_arch = "wasm32")]
+pub struct CompiledModule {
+    _priv: (),
+}
+
+/// Compile a guest module off the main thread (native wasmtime).  On web this
+/// is a stub: browser `WebAssembly` compiles inline in [`create_runtime`], so
+/// an off-thread compile is never requested.
+pub fn compile_module(wasm: &[u8], limits: &GuestLimits) -> Result<CompiledModule, GuestError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        CompiledModule::compile(wasm, limits)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (wasm, limits);
+        Ok(CompiledModule { _priv: () })
+    }
+}
+
+/// Instantiate a runtime from a pre-compiled native module (native).  On web
+/// this is unreachable — the compiled-modules map is always empty and guests
+/// compile inline.
+pub fn create_runtime_from_module(
+    compiled: &CompiledModule,
+    limits: &GuestLimits,
+) -> Result<Box<dyn GuestRuntime>, GuestError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        WasmtimeRuntime::from_module(compiled, limits).map(|r| Box::new(r) as Box<dyn GuestRuntime>)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (compiled, limits);
+        Err(GuestError::Compile("compiled guest modules are native-only".into()))
+    }
+}
 
 /// Create the best guest runtime available for the current target: wasmtime on
 /// native (near-native speed, fuel + memory limits); on wasm, browser-native

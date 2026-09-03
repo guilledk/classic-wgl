@@ -70,6 +70,69 @@ impl InputState {
 }
 
 // ---------------------------------------------------------------------------
+// Boot timing
+// ---------------------------------------------------------------------------
+
+/// A platform-neutral monotonic boot timer.
+///
+/// `std::time::Instant` panics on `wasm32-unknown-unknown` ("time not
+/// implemented on this platform"), so boot timing uses this: [`std::time::Instant`]
+/// on native, `js_sys::Date::now()` (milliseconds since the Unix epoch) on web.
+#[derive(Clone, Copy, Debug)]
+pub struct BootTimer {
+    #[cfg(not(target_arch = "wasm32"))]
+    start: std::time::Instant,
+    #[cfg(target_arch = "wasm32")]
+    start: f64,
+}
+
+impl BootTimer {
+    pub fn start() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self { start: std::time::Instant::now() }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self { start: js_sys::Date::now() }
+        }
+    }
+
+    pub fn elapsed_secs(&self) -> f32 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start.elapsed().as_secs_f32()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            ((js_sys::Date::now() - self.start) / 1000.0) as f32
+        }
+    }
+
+    pub fn elapsed_ms(&self) -> u128 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start.elapsed().as_millis()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            (js_sys::Date::now() - self.start) as u128
+        }
+    }
+
+    pub fn elapsed_duration(&self) -> std::time::Duration {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start.elapsed()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            std::time::Duration::from_secs_f64((js_sys::Date::now() - self.start) / 1000.0)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Platform trait
 // ---------------------------------------------------------------------------
 
@@ -109,10 +172,18 @@ pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 
 pub mod rom;
 pub use rom::resolve_rom_source;
+pub use rom::LogBootSink;
 #[cfg(not(target_arch = "wasm32"))]
 pub use rom::{load_rom_bytes, resolve_rom, resolve_roms};
 #[cfg(target_arch = "wasm32")]
 pub use rom::{load_rom_bytes_async, resolve_rom_async, resolve_roms_async};
+
+// ---------------------------------------------------------------------------
+// Boot resource sampling (native sysinfo CPU+RSS, web JS-heap memory)
+// ---------------------------------------------------------------------------
+
+pub mod metrics;
+pub use metrics::ResourceUsageSampler;
 
 // ---------------------------------------------------------------------------
 // Native backend  (not wasm32)
