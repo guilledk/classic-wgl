@@ -889,6 +889,35 @@ impl Engine {
         }
     }
 
+    /// Upload a batch of already-transcoded `.basis` textures (produced by
+    /// [`boot::decode_basis_jobs`]) on this, the GL thread, then alias each
+    /// job's remaining keys to the first key's GL texture.  A job whose payload
+    /// is `None` failed to transcode and is skipped (treated as missing).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn upload_basis_predecoded(
+        &mut self,
+        jobs: &[BasisTextureJob],
+        decoded: &[Option<classic_gfx::DecodedBasis>],
+        sink: &dyn classic_rom::BootSink,
+    ) {
+        for (job, payload) in jobs.iter().zip(decoded) {
+            if let Some(p) = payload {
+                if let Some(gfx) = self.gfx.as_mut() {
+                    gfx.upload_decoded_basis(&job.keys[0], p);
+                }
+            }
+            sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
+            let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
+            if let Some(tex) = tex {
+                for alias in &job.keys[1..] {
+                    if let Some(gfx) = self.gfx.as_mut() {
+                        gfx.textures.insert(alias.clone(), tex.clone());
+                    }
+                }
+            }
+        }
+    }
+
     /// Upload a batch of pending `.basis` textures through the web transcoder
     /// worker (awaited), then alias each job's remaining keys.
     #[cfg(target_arch = "wasm32")]
@@ -979,13 +1008,30 @@ impl Engine {
         decoded: HashMap<String, boot::DecodedTexture>,
         sink: &dyn classic_rom::BootSink,
     ) {
+        // Query the compressed-format capabilities once, before `gl` moves into
+        // `ensure_gfx`, so the off-thread basis transcode targets the same
+        // formats this context will upload.
+        #[cfg(not(target_arch = "wasm32"))]
+        let caps = classic_gfx::Caps::query(&gl);
+
         if let Some(root) = loaded.root_rom() {
             self.ensure_gfx(gl, &root.manifest, sink);
         }
         let mut plan = self.begin_boot(loaded, sink);
         plan.decoded = decoded;
         self.boot_step_predecoded(&mut plan, usize::MAX);
-        self.upload_basis_sync(&plan.basis_jobs, sink);
+
+        // Transcode the pending `.basis` sheets in parallel on the loader pool
+        // (CPU), then upload the decoded payloads on this, the GL thread.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let basis = boot::decode_basis_jobs(&plan.basis_jobs, caps);
+            self.upload_basis_predecoded(&plan.basis_jobs, &basis, sink);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.upload_basis_sync(&plan.basis_jobs, sink);
+        }
     }
 
     /// Web-only async counterpart to [`Engine::load_roms`]: the `.basis`

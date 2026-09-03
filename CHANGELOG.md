@@ -44,6 +44,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   (`CLASSIC_LOADER_THREADS`), and cache compiled `wasmtime::Module`s on disk
   keyed by the published ROM sha256 for `trusted` ROMs so repeat launches skip
   cranelift.
+- Parallel basis transcode: transcode GPU-compressed (`.basis`) sheets off the
+  GL thread on the loader pool (`CLASSIC_LOADER_THREADS`), then upload the
+  decoded payloads on the render thread — mirrors the PNG decode/upload split
+  for the compressed path.
 
 ### Changed
 
