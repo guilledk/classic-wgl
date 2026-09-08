@@ -314,6 +314,8 @@ plans/
 | `CLASSIC_NO_UI` | Skip the demo editor/HUD/overlay layer (clean lit scene) | off |
 | `CLASSIC_DUMP_DIR` | Native dump output dir | `./dump/` |
 | `CLASSIC_LOG` | Channel-gated logging (see `classic-debugging` skill) | off |
+| `CLASSIC_LOADER` | Boot loading-screen mode (`console` / `visual` / `off`; web: `?loader=`) | visual |
+| `CLASSIC_BOOT_LOG` | Always log the boot event stream to the `boot` channel | off |
 | `CLASSIC_UI_DEBUG` | Per-frame UI entity dump (first 120 frames) | off |
 
 ## Git / PR notes

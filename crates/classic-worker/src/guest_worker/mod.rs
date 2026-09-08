@@ -26,9 +26,9 @@ mod native;
 mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::GuestWorker;
+pub use native::{CompiledWorker, GuestWorker};
 #[cfg(target_arch = "wasm32")]
-pub use web::GuestWorker;
+pub use web::{CompiledWorker, GuestWorker};
 
 /// Request/result correlation id (owned by the caller, e.g. the engine).
 pub type TaskId = u64;

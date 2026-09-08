@@ -1,5 +1,14 @@
 use std::sync::LazyLock;
 
+/// The boot loading-screen mode (`CLASSIC_LOADER`).  `Visual`/`Console` gate
+/// the in-engine loader; `Off` (the default) keeps the synchronous silent boot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoaderMode {
+    Off,
+    Console,
+    Visual,
+}
+
 /// Hoisted per-process env-var configuration, parsed once via `LazyLock`.
 /// Replaces the per-frame `std::env::var()` calls spread throughout the engine.
 pub struct EnvConfig {
@@ -55,6 +64,15 @@ pub struct EnvConfig {
     /// alongside the golden trace.  Defaults on whenever CLASSIC_GOLDEN is set;
     /// `0` disables it.
     pub golden_layout: bool,
+    /// CLASSIC_LOADER: boot loading-screen mode (`console` / `visual` / `off`).
+    /// Defaults to `visual` when unset (forced `off` for headless/golden/test
+    /// via [`EnvConfig::effective_loader_mode`]).
+    pub loader_mode: LoaderMode,
+    /// CLASSIC_BOOT_LOG: always log the boot event stream to the `boot` channel.
+    pub boot_log: bool,
+    /// CLASSIC_LOADER_THREADS: worker threads for parallel texture decode
+    /// (default: the machine's available parallelism).
+    pub loader_threads: usize,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -104,6 +122,16 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         shadow_debug: read_bool("CLASSIC_SHADOW_DEBUG"),
         shadow_dump: read_bool("CLASSIC_SHADOW_DUMP"),
         golden_layout,
+        loader_mode: match read("CLASSIC_LOADER").trim() {
+            "console" => LoaderMode::Console,
+            "off" => LoaderMode::Off,
+            _ => LoaderMode::Visual,
+        },
+        boot_log: read_bool("CLASSIC_BOOT_LOG"),
+        loader_threads: read("CLASSIC_LOADER_THREADS")
+            .parse()
+            .ok()
+            .unwrap_or_else(default_loader_threads),
         test,
     }
 });
@@ -123,6 +151,17 @@ impl EnvConfig {
     pub fn golden_active(&self) -> bool {
         !self.golden_mode.is_empty()
     }
+
+    /// The loader mode to use, forced to [`LoaderMode::Off`] for the
+    /// deterministic boot paths (headless / golden / test), where the loading
+    /// screen must never render.
+    pub fn effective_loader_mode(&self) -> LoaderMode {
+        if self.headless || self.golden_active() || self.test_active() {
+            LoaderMode::Off
+        } else {
+            self.loader_mode
+        }
+    }
 }
 
 fn read(key: &str) -> String {
@@ -135,4 +174,17 @@ fn read_string(key: &str) -> String {
 
 fn read_bool(key: &str) -> bool {
     matches!(std::env::var(key).as_deref(), Ok("1" | "true" | "yes"))
+}
+
+/// The default decode-thread count: the machine's available parallelism, or 1
+/// when it can't be determined (and on wasm, where there is no thread pool).
+fn default_loader_threads() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        1
+    }
 }

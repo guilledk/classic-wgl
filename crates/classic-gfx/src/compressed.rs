@@ -45,45 +45,51 @@ pub struct Decoded {
     pub data: Vec<u8>,
 }
 
-/// The compressed-format capabilities a context advertises.
+/// The compressed-format capabilities a context advertises.  `Copy` so it can
+/// be queried on the GL thread and sent off-thread to drive a CPU-only
+/// transcode target selection.
 #[cfg(not(target_arch = "wasm32"))]
-struct Caps {
-    bptc: bool,
-    rgtc: bool,
-    s3tc: bool,
-    etc2: bool,
+#[derive(Clone, Copy)]
+pub struct Caps {
+    pub bptc: bool,
+    pub rgtc: bool,
+    pub s3tc: bool,
+    pub etc2: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn caps(gl: &glow::Context) -> Caps {
-    let version = gl.version();
-    let desktop = !version.is_embedded;
-    let ext = gl.supported_extensions();
-    log::debug!(
-        "compressed: gl {version:?} desktop={desktop} bptc={} rgtc={} s3tc={} etc2={}",
-        ext.contains("GL_ARB_texture_compression_bptc")
-            || ext.contains("EXT_texture_compression_bptc"),
-        ext.contains("GL_ARB_texture_compression_rgtc")
-            || ext.contains("EXT_texture_compression_rgtc"),
-        ext.contains("GL_EXT_texture_compression_s3tc")
-            || ext.contains("EXT_texture_compression_s3tc"),
-        !desktop || version.major >= 3, // ETC2 is core GLES 3.0+ (and desktop 4.3+)
-    );
-    Caps {
-        bptc: (desktop && (version.major > 4 || (version.major == 4 && version.minor >= 2)))
-            || ext.contains("GL_ARB_texture_compression_bptc")
-            || ext.contains("EXT_texture_compression_bptc"),
-        rgtc: (desktop && version.major >= 3)
-            || ext.contains("GL_ARB_texture_compression_rgtc")
-            || ext.contains("EXT_texture_compression_rgtc"),
-        s3tc: ext.contains("GL_EXT_texture_compression_s3tc")
-            || ext.contains("EXT_texture_compression_s3tc"),
-        // ETC2 is core in GLES 3.0+, and in desktop GL 4.3+ (GL_ARB_ES3_compatibility).
-        etc2: !desktop
-            || version.major > 4
-            || (version.major == 4 && version.minor >= 3)
-            || ext.contains("GL_ARB_ES3_compatibility")
-            || ext.contains("GL_OES_compressed_ETC2_RGB8_texture"),
+impl Caps {
+    /// Probe `gl` for the compressed-format targets it supports.
+    pub fn query(gl: &glow::Context) -> Self {
+        let version = gl.version();
+        let desktop = !version.is_embedded;
+        let ext = gl.supported_extensions();
+        log::debug!(
+            "compressed: gl {version:?} desktop={desktop} bptc={} rgtc={} s3tc={} etc2={}",
+            ext.contains("GL_ARB_texture_compression_bptc")
+                || ext.contains("EXT_texture_compression_bptc"),
+            ext.contains("GL_ARB_texture_compression_rgtc")
+                || ext.contains("EXT_texture_compression_rgtc"),
+            ext.contains("GL_EXT_texture_compression_s3tc")
+                || ext.contains("EXT_texture_compression_s3tc"),
+            !desktop || version.major >= 3, // ETC2 is core GLES 3.0+ (and desktop 4.3+)
+        );
+        Caps {
+            bptc: (desktop && (version.major > 4 || (version.major == 4 && version.minor >= 2)))
+                || ext.contains("GL_ARB_texture_compression_bptc")
+                || ext.contains("EXT_texture_compression_bptc"),
+            rgtc: (desktop && version.major >= 3)
+                || ext.contains("GL_ARB_texture_compression_rgtc")
+                || ext.contains("EXT_texture_compression_rgtc"),
+            s3tc: ext.contains("GL_EXT_texture_compression_s3tc")
+                || ext.contains("EXT_texture_compression_s3tc"),
+            // ETC2 is core in GLES 3.0+, and in desktop GL 4.3+ (GL_ARB_ES3_compatibility).
+            etc2: !desktop
+                || version.major > 4
+                || (version.major == 4 && version.minor >= 3)
+                || ext.contains("GL_ARB_ES3_compatibility")
+                || ext.contains("GL_OES_compressed_ETC2_RGB8_texture"),
+        }
     }
 }
 
@@ -114,8 +120,15 @@ fn transcode_to(
 /// falls back to [`transcode_rgba8`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn transcode(gl: &glow::Context, bytes: &[u8], format: CompressedFormat) -> Option<Decoded> {
+    transcode_with_caps(bytes, format, Caps::query(gl))
+}
+
+/// CPU-only transcode against pre-queried [`Caps`] (no GL) — the off-thread
+/// half of [`transcode`], so the heavy `basis_universal` decode can run on a
+/// worker thread while the GL upload stays on the render thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn transcode_with_caps(bytes: &[u8], format: CompressedFormat, caps: Caps) -> Option<Decoded> {
     use basis_universal::TranscoderTextureFormat as T;
-    let caps = caps(gl);
     let candidates: &[(bool, T, u32)] = match format {
         CompressedFormat::Bc7Rgba => &[
             (caps.bptc, T::BC7_RGBA, glow::COMPRESSED_RGBA_BPTC_UNORM),
@@ -144,6 +157,36 @@ pub fn transcode(gl: &glow::Context, bytes: &[u8], format: CompressedFormat) -> 
 pub fn transcode_rgba8(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     use basis_universal::TranscoderTextureFormat as T;
     transcode_to(bytes, T::RGBA32)
+}
+
+/// A transcoded `.basis` payload, ready for a GL upload.  Either a
+/// GPU-compressed block payload (via `compressed_tex_image_2d`) or the raw
+/// RGBA8 fallback.  `Send`, so it crosses the thread boundary from the decode
+/// pool to the GL thread.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+pub enum DecodedBasis {
+    Compressed { internal_format: u32, width: u32, height: u32, data: Vec<u8> },
+    Rgba8 { width: u32, height: u32, data: Vec<u8> },
+}
+
+/// Transcode a `.basis` payload (named by its manifest `format` string) against
+/// pre-queried [`Caps`] into a [`DecodedBasis`].  Falls back to a raw RGBA8
+/// transcode when no compressed target is supported or the payload can't be
+/// transcoded to one.  CPU-only (no GL).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn transcode_basis(bytes: &[u8], format: &str, caps: Caps) -> Option<DecodedBasis> {
+    if let Some(fmt) = CompressedFormat::parse(format) {
+        if let Some(decoded) = transcode_with_caps(bytes, fmt, caps) {
+            return Some(DecodedBasis::Compressed {
+                internal_format: decoded.internal_format,
+                width: decoded.width,
+                height: decoded.height,
+                data: decoded.data,
+            });
+        }
+    }
+    transcode_rgba8(bytes).map(|(width, height, data)| DecodedBasis::Rgba8 { width, height, data })
 }
 
 // Web: the compressed path uses our own precompiled transcoder `.wasm`

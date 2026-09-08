@@ -31,6 +31,49 @@ impl WasmtimeHost {
     }
 }
 
+/// A compiled native guest module (`Send + Sync`), the off-main-thread half of
+/// guest init.  Compile it on a background thread, then instantiate it on the
+/// GL thread with [`WasmtimeRuntime::from_module`].
+pub struct CompiledModule {
+    pub(crate) engine: WasmtimeEngine,
+    pub(crate) module: Module,
+}
+
+impl CompiledModule {
+    /// Compile a guest module from its `.wasm` bytes (native wasmtime).
+    /// Off-thread-safe: no GL, no engine references, and the result is `Send`.
+    pub fn compile(wasm: &[u8], limits: &GuestLimits) -> Result<Self, GuestError> {
+        let engine = WasmtimeRuntime::build_engine(limits)?;
+        let module = Module::new(&engine, wasm).map_err(|e| GuestError::Compile(e.to_string()))?;
+        Ok(Self { engine, module })
+    }
+
+    /// Serialize the compiled module for an on-disk cache (native wasmtime).
+    /// The caller is responsible for versioning/invalidating the cache image.
+    pub fn serialize(&self) -> Result<Vec<u8>, GuestError> {
+        self.module.serialize().map_err(|e| GuestError::Compile(e.to_string()))
+    }
+
+    /// Rebuild a compiled module from a previously-serialized image, recreating
+    /// the engine from `limits` so its config (fuel metering, cranelift
+    /// settings) matches the one the module was originally compiled with.
+    ///
+    /// # Safety
+    ///
+    /// `serialized` must be a module image produced by [`Self::serialize`] from
+    /// a compatible wasmtime build.  Deserializing arbitrary or corrupt bytes is
+    /// memory-unsafe.  The boot layer guards this with a cache magic + version
+    /// header and only ever feeds it bytes it wrote itself.
+    pub fn deserialize(serialized: &[u8], limits: &GuestLimits) -> Result<Self, GuestError> {
+        let engine = WasmtimeRuntime::build_engine(limits)?;
+        // SAFETY: see the safety note above — `serialized` is a self-written,
+        // version-checked module image for a compatible wasmtime build.
+        let module = unsafe { Module::deserialize(&engine, serialized) }
+            .map_err(|e| GuestError::Compile(e.to_string()))?;
+        Ok(Self { engine, module })
+    }
+}
+
 /// wasmtime-backed [`GuestRuntime`] (native target only).
 pub struct WasmtimeRuntime {
     store: Store<WasmtimeHost>,
@@ -66,30 +109,8 @@ impl WasmtimeRuntime {
 
 impl GuestRuntime for WasmtimeRuntime {
     fn new(wasm: &[u8], limits: &GuestLimits) -> Result<Self, GuestError> {
-        let engine = Self::build_engine(limits)?;
-        let module = Module::new(&engine, wasm).map_err(|e| GuestError::Compile(e.to_string()))?;
-
-        let store_limits = StoreLimitsBuilder::new()
-            .memory_size(limits.max_memory_bytes)
-            .trap_on_grow_failure(true)
-            .build();
-        let mut store = Store::new(&engine, WasmtimeHost::new(store_limits));
-        store.limiter(|host: &mut WasmtimeHost| host.resource_limiter());
-
-        let mut linker = Linker::new(&engine);
-        Self::install_imports(&mut linker).map_err(|e| GuestError::Instantiate(e.to_string()))?;
-
-        let instance = linker
-            .instantiate(&mut store, &module)
-            .map_err(|e| GuestError::Instantiate(e.to_string()))?;
-
-        let init = instance.get_typed_func::<(), ()>(&mut store, abi::INIT_EXPORT).ok();
-        let update = instance
-            .get_typed_func::<(f64,), ()>(&mut store, abi::UPDATE_EXPORT)
-            .map_err(|_| GuestError::MissingExport(abi::UPDATE_EXPORT.to_string()))?;
-        let start = instance.get_typed_func::<(), ()>(&mut store, abi::START_EXPORT).ok();
-
-        Ok(Self { store, init, update, start, limits: limits.clone() })
+        let compiled = CompiledModule::compile(wasm, limits)?;
+        Self::from_module(&compiled, limits)
     }
 
     fn init(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
@@ -118,6 +139,39 @@ impl GuestRuntime for WasmtimeRuntime {
 
     fn set_namespace(&mut self, namespace: &str) {
         self.store.data_mut().guest_mut().set_namespace(namespace);
+    }
+}
+
+impl WasmtimeRuntime {
+    /// Instantiate a runtime from a [`CompiledModule`] already compiled
+    /// off-thread.  Runs on the GL/main thread: it builds the store, linker and
+    /// instance against the pre-compiled module (the expensive cranelift
+    /// compile already happened in [`CompiledModule::compile`]).
+    pub fn from_module(
+        compiled: &CompiledModule,
+        limits: &GuestLimits,
+    ) -> Result<Self, GuestError> {
+        let store_limits = StoreLimitsBuilder::new()
+            .memory_size(limits.max_memory_bytes)
+            .trap_on_grow_failure(true)
+            .build();
+        let mut store = Store::new(&compiled.engine, WasmtimeHost::new(store_limits));
+        store.limiter(|host: &mut WasmtimeHost| host.resource_limiter());
+
+        let mut linker = Linker::new(&compiled.engine);
+        Self::install_imports(&mut linker).map_err(|e| GuestError::Instantiate(e.to_string()))?;
+
+        let instance = linker
+            .instantiate(&mut store, &compiled.module)
+            .map_err(|e| GuestError::Instantiate(e.to_string()))?;
+
+        let init = instance.get_typed_func::<(), ()>(&mut store, abi::INIT_EXPORT).ok();
+        let update = instance
+            .get_typed_func::<(f64,), ()>(&mut store, abi::UPDATE_EXPORT)
+            .map_err(|_| GuestError::MissingExport(abi::UPDATE_EXPORT.to_string()))?;
+        let start = instance.get_typed_func::<(), ()>(&mut store, abi::START_EXPORT).ok();
+
+        Ok(Self { store, init, update, start, limits: limits.clone() })
     }
 }
 

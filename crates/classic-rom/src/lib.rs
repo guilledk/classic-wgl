@@ -9,6 +9,7 @@
 //! world.
 
 pub mod archive;
+pub mod boot;
 pub mod format;
 pub mod loaded;
 pub mod loader;
@@ -18,6 +19,7 @@ pub mod rom;
 pub mod source;
 
 pub use archive::RomArchive;
+pub use boot::{BootEvent, BootSink, NullBootSink, TeeBootSink, VecBootSink};
 pub use format::{detect_format, RomFormat};
 pub use loaded::{LoadedRom, LoadedRoms};
 #[cfg(not(target_arch = "wasm32"))]

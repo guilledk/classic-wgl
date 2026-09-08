@@ -9,6 +9,7 @@
 //! metadata only.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::archive::RomArchive;
 use crate::loader::AssetLoader;
@@ -40,30 +41,36 @@ pub enum ResourceKind {
 }
 
 /// Name-keyed byte blobs, grouped by kind.
+///
+/// Blobs are stored as `Arc<[u8]>` so several manifest entries can share one
+/// archive entry (e.g. a packed atlas referenced by multiple frame-table
+/// textures) with a refcount bump instead of a second byte copy, and so the
+/// engine's boot plan can clone a texture's bytes into its `Decode` step
+/// without copying the pixel payload.
 #[derive(Clone, Debug, Default)]
 pub struct ResourceSet {
-    textures: BTreeMap<String, Vec<u8>>,
-    depths: BTreeMap<String, Vec<u8>>,
-    normals: BTreeMap<String, Vec<u8>>,
-    fonts: BTreeMap<String, Vec<u8>>,
-    code: BTreeMap<String, Vec<u8>>,
-    animations: BTreeMap<String, Vec<u8>>,
-    grids: BTreeMap<String, Vec<u8>>,
-    vehicles: BTreeMap<String, Vec<u8>>,
-    frames: BTreeMap<String, Vec<u8>>,
-    data: BTreeMap<String, Vec<u8>>,
+    textures: BTreeMap<String, Arc<[u8]>>,
+    depths: BTreeMap<String, Arc<[u8]>>,
+    normals: BTreeMap<String, Arc<[u8]>>,
+    fonts: BTreeMap<String, Arc<[u8]>>,
+    code: BTreeMap<String, Arc<[u8]>>,
+    animations: BTreeMap<String, Arc<[u8]>>,
+    grids: BTreeMap<String, Arc<[u8]>>,
+    vehicles: BTreeMap<String, Arc<[u8]>>,
+    frames: BTreeMap<String, Arc<[u8]>>,
+    data: BTreeMap<String, Arc<[u8]>>,
 }
 
 impl ResourceSet {
     /// Look up a resource by kind + name.
     pub fn get(&self, kind: ResourceKind, name: &str) -> Option<&[u8]> {
         let map = self.map(kind);
-        map.get(name).map(|v| v.as_slice())
+        map.get(name).map(|v| &v[..])
     }
 
     /// Insert a resource blob.
     pub fn insert(&mut self, kind: ResourceKind, name: impl Into<String>, bytes: Vec<u8>) {
-        self.map_mut(kind).insert(name.into(), bytes);
+        self.map_mut(kind).insert(name.into(), Arc::from(bytes));
     }
 
     /// The total number of resources across all categories.
@@ -84,67 +91,76 @@ impl ResourceSet {
         self.len() == 0
     }
 
-    pub fn textures(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn textures(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.textures
     }
 
-    pub fn depths(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn depths(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.depths
     }
 
-    pub fn normals(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn normals(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.normals
     }
 
-    pub fn fonts(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn fonts(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.fonts
     }
 
-    pub fn code(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn code(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.code
     }
 
-    pub fn animations(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn animations(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.animations
     }
 
-    pub fn grids(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn grids(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.grids
     }
 
-    pub fn vehicles(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn vehicles(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.vehicles
     }
 
-    pub fn data(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn data(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.data
     }
 
-    pub fn frames(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub fn frames(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.frames
     }
 
     /// Build a resource set by reading manifest-declared resources out of a
-    /// ROM archive.  A missing entry is an error (a self-contained ROM must
-    /// bundle everything it declares).
-    pub fn from_archive(archive: &RomArchive, manifest: &RomManifest) -> anyhow::Result<Self> {
+    /// ROM archive, **draining** each entry (moving its bytes out of the
+    /// archive) rather than copying.  A missing entry is an error (a
+    /// self-contained ROM must bundle everything it declares).  Manifest
+    /// entries that share one archive `src` (a packed atlas referenced by
+    /// several frame-table textures) alias the same `Arc`, so the shared blob
+    /// is drained once and refcounted, never copied.
+    pub fn from_archive(archive: &mut RomArchive, manifest: &RomManifest) -> anyhow::Result<Self> {
+        let mut drained: BTreeMap<String, Arc<[u8]>> = BTreeMap::new();
         Self::build(manifest, |path| {
-            archive
-                .read(path)
-                .map(|b| b.to_vec())
-                .ok_or_else(|| anyhow::anyhow!("ROM entry not found: {path}"))
+            if let Some(existing) = drained.get(path) {
+                return Ok(Arc::clone(existing));
+            }
+            let bytes =
+                archive.take(path).ok_or_else(|| anyhow::anyhow!("ROM entry not found: {path}"))?;
+            let bytes = Arc::<[u8]>::from(bytes);
+            drained.insert(path.to_string(), Arc::clone(&bytes));
+            Ok(bytes)
         })
     }
 
     /// Build a resource set by loading manifest-declared resources through an
     /// [`AssetLoader`] (loose files / embedded map).
     pub fn from_loader(loader: &dyn AssetLoader, manifest: &RomManifest) -> anyhow::Result<Self> {
-        Self::build(manifest, |path| Ok(loader.load_bytes(path)?.to_vec()))
+        Self::build(manifest, |path| Ok(Arc::<[u8]>::from(loader.load_bytes(path)?.to_vec())))
     }
 
     fn build(
         manifest: &RomManifest,
-        mut load: impl FnMut(&str) -> anyhow::Result<Vec<u8>>,
+        mut load: impl FnMut(&str) -> anyhow::Result<Arc<[u8]>>,
     ) -> anyhow::Result<Self> {
         let mut set = Self::default();
         for entry in &manifest.manifest.textures {
@@ -184,7 +200,7 @@ impl ResourceSet {
         Ok(set)
     }
 
-    fn map(&self, kind: ResourceKind) -> &BTreeMap<String, Vec<u8>> {
+    fn map(&self, kind: ResourceKind) -> &BTreeMap<String, Arc<[u8]>> {
         match kind {
             ResourceKind::Texture => &self.textures,
             ResourceKind::Depth => &self.depths,
@@ -199,7 +215,7 @@ impl ResourceSet {
         }
     }
 
-    fn map_mut(&mut self, kind: ResourceKind) -> &mut BTreeMap<String, Vec<u8>> {
+    fn map_mut(&mut self, kind: ResourceKind) -> &mut BTreeMap<String, Arc<[u8]>> {
         match kind {
             ResourceKind::Texture => &mut self.textures,
             ResourceKind::Depth => &mut self.depths,
@@ -257,7 +273,8 @@ mod tests {
 
     #[test]
     fn from_archive_populates_textures_fonts_code() {
-        let set = ResourceSet::from_archive(&test_archive(), &test_manifest()).unwrap();
+        let mut archive = test_archive();
+        let set = ResourceSet::from_archive(&mut archive, &test_manifest()).unwrap();
         assert_eq!(set.len(), 3);
         assert_eq!(set.get(ResourceKind::Texture, "humanoid"), Some(b"png".as_slice()));
         assert_eq!(set.get(ResourceKind::Font, "dejavusans"), Some(b"{}".as_slice()));
@@ -266,10 +283,10 @@ mod tests {
 
     #[test]
     fn from_archive_errors_on_missing_entry() {
-        let archive = test_archive();
+        let mut archive = test_archive();
         let mut manifest = test_manifest();
         manifest.manifest.textures[0].src = "res/missing.png".into();
-        assert!(ResourceSet::from_archive(&archive, &manifest).is_err());
+        assert!(ResourceSet::from_archive(&mut archive, &manifest).is_err());
     }
 
     #[test]
@@ -312,9 +329,9 @@ mod tests {
             writer.start_file(name, opts).unwrap();
             writer.write_all(data).unwrap();
         }
-        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+        let mut archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
 
-        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        let set = ResourceSet::from_archive(&mut archive, &manifest).unwrap();
         assert_eq!(
             set.get(ResourceKind::Animation, "rocketLanding"),
             Some(b"{\"positions\":[]}".as_slice())
@@ -338,9 +355,9 @@ mod tests {
             .compression_method(zip::CompressionMethod::Deflated);
         writer.start_file("data/demo.tiles.bin", opts).unwrap();
         writer.write_all(&[1, 0, 0, 0, 2, 0, 0, 0]).unwrap();
-        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+        let mut archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
 
-        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        let set = ResourceSet::from_archive(&mut archive, &manifest).unwrap();
         assert_eq!(set.get(ResourceKind::Grid, "demo.tiles"), Some(&[1, 0, 0, 0, 2, 0, 0, 0][..]));
     }
 
@@ -364,9 +381,9 @@ mod tests {
         writer.write_all(b"png").unwrap();
         writer.start_file("res/humanoid.frames.json", opts).unwrap();
         writer.write_all(b"{\"version\":1,\"sheets\":[],\"frames\":{}}").unwrap();
-        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+        let mut archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
 
-        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        let set = ResourceSet::from_archive(&mut archive, &manifest).unwrap();
         assert_eq!(
             set.get(ResourceKind::Frames, "humanoid"),
             Some(b"{\"version\":1,\"sheets\":[],\"frames\":{}}".as_slice())
@@ -398,9 +415,9 @@ mod tests {
             writer.start_file(name, opts).unwrap();
             writer.write_all(data).unwrap();
         }
-        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+        let mut archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
 
-        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        let set = ResourceSet::from_archive(&mut archive, &manifest).unwrap();
         assert_eq!(set.get(ResourceKind::Depth, "lrvBody"), Some(b"depth".as_slice()));
         // Textures without a depth map get no entry.
         assert_eq!(set.get(ResourceKind::Depth, "tree"), None);
@@ -431,9 +448,9 @@ mod tests {
             writer.start_file(name, opts).unwrap();
             writer.write_all(data).unwrap();
         }
-        let archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
+        let mut archive = RomArchive::from_bytes(&writer.finish().unwrap().into_inner()).unwrap();
 
-        let set = ResourceSet::from_archive(&archive, &manifest).unwrap();
+        let set = ResourceSet::from_archive(&mut archive, &manifest).unwrap();
         assert_eq!(set.get(ResourceKind::Normal, "lrvBody"), Some(b"normal".as_slice()));
         // Textures without a normal map get no entry.
         assert_eq!(set.get(ResourceKind::Normal, "tree"), None);

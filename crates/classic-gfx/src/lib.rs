@@ -11,6 +11,9 @@ mod shaders;
 
 mod compressed;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use compressed::{transcode_basis, Caps, DecodedBasis};
+
 #[cfg(target_arch = "wasm32")]
 mod basis_web;
 
@@ -685,6 +688,22 @@ impl Gfx {
         );
     }
 
+    /// Upload a previously-transcoded `.basis` payload (the off-thread half of
+    /// [`Gfx::add_texture_basis`], native only).  Compressed block data goes
+    /// through `compressed_tex_image_2d`; the RGBA8 fallback goes through the
+    /// raw path.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn upload_decoded_basis(&mut self, name: &str, decoded: &compressed::DecodedBasis) {
+        match decoded {
+            compressed::DecodedBasis::Compressed { internal_format, width, height, data } => {
+                self.add_texture_compressed(name, *internal_format, data, *width, *height);
+            }
+            compressed::DecodedBasis::Rgba8 { width, height, data } => {
+                self.add_texture_rgba8(name, data, *width, *height);
+            }
+        }
+    }
+
     /// Upload a Basis Universal `.basis` payload: transcode to the target
     /// [`compressed::CompressedFormat`] and upload compressed, or fall back to a
     /// raw RGBA8 transcode.  Returns `false` (and uploads nothing) when the
@@ -718,14 +737,16 @@ impl Gfx {
 
     /// Web-only async counterpart to [`Gfx::add_texture_basis`]: transcode in
     /// the dedicated worker (awaited here) and upload on the main thread, with
-    /// a synchronous main-thread fallback when the worker cannot start.
+    /// a synchronous main-thread fallback when the worker cannot start.  Returns
+    /// the decoded texture dimensions on success (`None` when the payload can't
+    /// be transcoded).
     #[cfg(target_arch = "wasm32")]
     pub async fn add_texture_basis_async(
         &mut self,
         name: &str,
         bytes: &[u8],
         format: &str,
-    ) -> bool {
+    ) -> Option<(u32, u32)> {
         let gl = self.gl.clone();
         if let Some(fmt) = compressed::CompressedFormat::parse(format) {
             if let Some(decoded) = compressed::transcode_async(&gl, bytes, fmt).await {
@@ -735,6 +756,7 @@ impl Gfx {
                     decoded.width,
                     decoded.height
                 );
+                let dims = (decoded.width, decoded.height);
                 self.add_texture_compressed(
                     name,
                     decoded.internal_format,
@@ -742,15 +764,15 @@ impl Gfx {
                     decoded.width,
                     decoded.height,
                 );
-                return true;
+                return Some(dims);
             }
         }
         if let Some((w, h, rgba)) = compressed::transcode_rgba8_async(bytes).await {
             log::debug!("texture {name}: basis -> RGBA8 fallback ({w}/{h})");
             self.add_texture_rgba8(name, &rgba, w, h);
-            return true;
+            return Some((w, h));
         }
-        false
+        None
     }
 
     pub fn shader(&self, name: &str) -> &Shader {
