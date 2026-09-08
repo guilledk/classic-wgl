@@ -1,38 +1,38 @@
 {
   "demo": {
-    "size": 314162,
-    "sha256": "ed6e10d8d430bd55d5a664524502f0952d6510a636f476f230629fc06634bb00",
+    "size": 314147,
+    "sha256": "c7f156cfee64b7c0b8fbcc7dc820e8c83716cff58a3e5fc5bfcae7da41173034",
     "version": "0.1.0",
-    "assets_hash": "c49023334ca1d710972538e4d6bad9731af6299b2c3a5eb40c61792bbe96d229"
+    "assets_hash": "af490fb850722720c655fc06f9b61ed1485603f4112201afae2371c434f03850"
   },
   "lunar": {
-    "size": 12892734,
-    "sha256": "3a5e737c33bf1c94d60f7020ef6b0452198b6c44b418ac5bf1031f748f99ad50",
+    "size": 7114907,
+    "sha256": "4527169fff1e80b559e11aa18116bb19d743ab5764701ae905b0e9cc9b34421c",
     "version": "0.1.1",
-    "assets_hash": "9c6e573453f16bb46f09c93ce544cb76e0e7a39c27e3898bdc0c3bce5fe958f1"
+    "assets_hash": "ee5260c9a3e8808a7eac8377b7588842f6223a16134ac4bb2181399cfdc7b12b"
   },
   "lrvtest": {
-    "size": 1872,
-    "sha256": "ed1e7697216e89ab6965dae808cf83ac6ce93506da448ae4118eaf7535220e89",
+    "size": 1874,
+    "sha256": "61df8674329bc37ecac0f3c4ddf85323970a443743c5371b2a9fa0296949ee17",
     "version": "0.1.0",
-    "assets_hash": "b818c0dea432d21f348e1d825c398e70059466f1209f7ae942f815648579aeae"
+    "assets_hash": "dd4221394174cc2f8f0ccff2ef90a322c03c83b9738dbd716f8b3a76b02ab28b"
   },
   "basetest": {
-    "size": 1490,
-    "sha256": "a47caeb6512c08a9f23facd94220b25fa7d3bf72a2b31ef3728a3b2c20d29117",
+    "size": 1493,
+    "sha256": "838b5a5dc1fc6d57da9ad62bb8406edbaf2c6a90bf77c5e8a39236000b0b7d32",
     "version": "0.1.0",
-    "assets_hash": "b818c0dea432d21f348e1d825c398e70059466f1209f7ae942f815648579aeae"
+    "assets_hash": "dd4221394174cc2f8f0ccff2ef90a322c03c83b9738dbd716f8b3a76b02ab28b"
   },
   "common": {
-    "size": 275873,
-    "sha256": "7d70cc71edf924de89ee795a011c401656134d02816384ee937244a47e528d57",
+    "size": 275871,
+    "sha256": "cf9f79cfa4cb93177eb7e6b4479e19a4889a8b69d726fd2be06960032c940483",
     "version": "0.1.0",
-    "assets_hash": "4e9265a78ff0d99592996e7459761a9282cae66a695c093051e2e01eccd0bf69"
+    "assets_hash": "9b53b35fa6bec1d4889e4398df60e2f09748909b54311cea1d4a00252dc75373"
   },
   "lunar-common": {
-    "size": 1419908,
-    "sha256": "d629b9a6657a81c5b15bb7381c1c729747268d47183e35efec161c61c546ed7c",
+    "size": 1420122,
+    "sha256": "714abdff029e1e8232aa568c3d3e0de62f7e8bebeeecd1c001d9e4398e140283",
     "version": "0.1.0",
-    "assets_hash": "bbd352ab62546722c0465267604f8e2cc6d2e4f5bff80ea14599102638910027"
+    "assets_hash": "b3e84ef2b00ccbfc6469e28ec67988e523105ab52885ace6457648023c5d94fd"
   }
 }
