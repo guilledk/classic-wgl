@@ -136,6 +136,11 @@ impl Rom {
                 out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
             }
         }
+        for entry in &self.manifest.manifest.data {
+            if let Some(bytes) = self.resources.data().get(&entry.name) {
+                out.push((crate::rom_path(&entry.src).to_string(), bytes.clone()));
+            }
+        }
         out
     }
 }

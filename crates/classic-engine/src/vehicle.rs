@@ -437,10 +437,26 @@ impl Engine {
             return false;
         }
 
-        let body_anchors = anchors8(&body_part.anchors);
+        // Resolve each part's per-direction anchors from the vehicle's anchors
+        // data artifact (referenced by `def.anchors`); absent parts fall back to
+        // the neutral 0.5/0.5 anchor.
+        let anchors_map: std::collections::HashMap<String, [[f32; 2]; 8]> = self
+            .vehicle_anchors
+            .get(&def.anchors)
+            .map(|a| {
+                a.parts
+                    .iter()
+                    .chain(a.tires.iter())
+                    .map(|p| (p.name.clone(), anchors8(&p.anchors)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let body_anchors =
+            anchors_map.get(&body_part.name).copied().unwrap_or([[0.5f32, 0.5f32]; 8]);
         let mut wheel_anchors = [[[0.5f32, 0.5f32]; 8]; 4];
-        for (i, anchors) in wheel_anchors.iter_mut().enumerate() {
-            *anchors = anchors8(&def.parts[i + 1].anchors);
+        for (i, wheel_anchors) in wheel_anchors.iter_mut().enumerate() {
+            *wheel_anchors =
+                anchors_map.get(&def.parts[i + 1].name).copied().unwrap_or([[0.5f32, 0.5f32]; 8]);
         }
         let tile_set_size = Vec2::new(def.columns as f32, def.rows as f32);
         let body_tile_set_size = Vec2::new(
@@ -1332,7 +1348,9 @@ mod tests {
     use super::*;
     use classic_core::components::{NavMesh, Role};
     use classic_core::math::iso_to_cartesian_4;
-    use classic_core::types::{FrameTable, VehicleDef, VehiclePartDef};
+    use classic_core::types::{
+        FrameTable, VehicleAnchors, VehicleAnchorsPart, VehicleDef, VehiclePartDef,
+    };
 
     fn test_tilemap() -> Tilemap {
         flat_tilemap(3, 3)
@@ -1566,6 +1584,7 @@ mod tests {
         let def = VehicleDef {
             name: "lrv".into(),
             directions: 8,
+            anchors: "lrv_anchors".into(),
             columns: 4,
             rows: 2,
             cell: [247.0, 247.0],
@@ -1583,39 +1602,83 @@ mod tests {
             tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
-                serde_json::from_value(serde_json::json!({
-                    "name": "body", "texture": "lrvBody",
-                    "anchors": [[0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352],
-                                [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_fl", "texture": "lrvWheelFl",
-                    "anchors": [[0.566, 0.618], [0.712, 0.676], [0.733, 0.768], [0.618, 0.841],
-                                [0.434, 0.852], [0.288, 0.794], [0.267, 0.702], [0.382, 0.629]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_fr", "texture": "lrvWheelFr",
-                    "anchors": [[0.734, 0.702], [0.712, 0.794], [0.566, 0.852], [0.382, 0.841],
-                                [0.266, 0.768], [0.288, 0.676], [0.434, 0.618], [0.618, 0.629]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_rl", "texture": "lrvWheelRl",
-                    "anchors": [[0.211, 0.796], [0.210, 0.676], [0.378, 0.591], [0.618, 0.590],
-                                [0.789, 0.674], [0.790, 0.794], [0.622, 0.880], [0.382, 0.880]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_rr", "texture": "lrvWheelRr",
-                    "anchors": [[0.379, 0.880], [0.210, 0.794], [0.211, 0.674], [0.382, 0.590],
-                                [0.621, 0.591], [0.790, 0.676], [0.789, 0.796], [0.618, 0.880]]
-                }))
-                .unwrap(),
+                VehiclePartDef { name: "body".into(), texture: "lrvBody".into() },
+                VehiclePartDef { name: "wheel_fl".into(), texture: "lrvWheelFl".into() },
+                VehiclePartDef { name: "wheel_fr".into(), texture: "lrvWheelFr".into() },
+                VehiclePartDef { name: "wheel_rl".into(), texture: "lrvWheelRl".into() },
+                VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
             ],
         };
-        engine.vehicles.insert("lrv".into(), def);
+        let anchors = VehicleAnchors {
+            version: 1,
+            name: "lrv".into(),
+            directions: 8,
+            parts: vec![
+                VehicleAnchorsPart {
+                    name: "body".into(),
+                    texture: "lrvBody".into(),
+                    anchors: vec![[0.5, 0.7352]; 8],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_fl".into(),
+                    texture: "lrvWheelFl".into(),
+                    anchors: vec![
+                        [0.566, 0.618],
+                        [0.712, 0.676],
+                        [0.733, 0.768],
+                        [0.618, 0.841],
+                        [0.434, 0.852],
+                        [0.288, 0.794],
+                        [0.267, 0.702],
+                        [0.382, 0.629],
+                    ],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_fr".into(),
+                    texture: "lrvWheelFr".into(),
+                    anchors: vec![
+                        [0.734, 0.702],
+                        [0.712, 0.794],
+                        [0.566, 0.852],
+                        [0.382, 0.841],
+                        [0.266, 0.768],
+                        [0.288, 0.676],
+                        [0.434, 0.618],
+                        [0.618, 0.629],
+                    ],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_rl".into(),
+                    texture: "lrvWheelRl".into(),
+                    anchors: vec![
+                        [0.211, 0.796],
+                        [0.210, 0.676],
+                        [0.378, 0.591],
+                        [0.618, 0.590],
+                        [0.789, 0.674],
+                        [0.790, 0.794],
+                        [0.622, 0.880],
+                        [0.382, 0.880],
+                    ],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_rr".into(),
+                    texture: "lrvWheelRr".into(),
+                    anchors: vec![
+                        [0.379, 0.880],
+                        [0.210, 0.794],
+                        [0.211, 0.674],
+                        [0.382, 0.590],
+                        [0.621, 0.591],
+                        [0.790, 0.676],
+                        [0.789, 0.796],
+                        [0.618, 0.880],
+                    ],
+                },
+            ],
+            tires: vec![],
+        };
+        insert_lrv(&mut engine, (def, anchors));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
         assert!(engine.has_name("lrv"));
@@ -1659,7 +1722,7 @@ mod tests {
         let mut engine = Engine::new_for_test();
         let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
         engine.names.insert("tilemap".into(), tm);
-        engine.vehicles.insert("lrv".into(), lrv_def(720.0));
+        insert_lrv(&mut engine, lrv_def(720.0));
 
         // An empty frame table is enough: `frame_name` only keys off the
         // texture name, so the frame resolves to `{texture}_{frame}`.
@@ -1687,7 +1750,7 @@ mod tests {
         let mut bare = Engine::new_for_test();
         let tm = bare.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
         bare.names.insert("tilemap".into(), tm);
-        bare.vehicles.insert("lrv".into(), lrv_def(720.0));
+        insert_lrv(&mut bare, lrv_def(720.0));
         assert!(bare.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
         let bare_body = *bare.names.get("lrv").unwrap();
         assert_eq!(bare.world.get::<&IsoSprite>(bare_body).unwrap().frame_name, None);
@@ -1710,6 +1773,7 @@ mod tests {
         let def = VehicleDef {
             name: "lrv".into(),
             directions: 8,
+            anchors: "lrv_anchors".into(),
             columns: 4,
             rows: 2,
             cell: [247.0, 247.0],
@@ -1727,29 +1791,47 @@ mod tests {
             tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
-                serde_json::from_value(serde_json::json!({
-                    "name": "body", "texture": "lrvBody", "anchors": body
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_fl", "texture": "lrvWheelFl", "anchors": fl
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_fr", "texture": "lrvWheelFr", "anchors": fr
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_rl", "texture": "lrvWheelRl", "anchors": rl
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_rr", "texture": "lrvWheelRr", "anchors": rr
-                }))
-                .unwrap(),
+                VehiclePartDef { name: "body".into(), texture: "lrvBody".into() },
+                VehiclePartDef { name: "wheel_fl".into(), texture: "lrvWheelFl".into() },
+                VehiclePartDef { name: "wheel_fr".into(), texture: "lrvWheelFr".into() },
+                VehiclePartDef { name: "wheel_rl".into(), texture: "lrvWheelRl".into() },
+                VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
             ],
         };
-        engine.vehicles.insert("lrv".into(), def);
+        let anchors = VehicleAnchors {
+            version: 1,
+            name: "lrv".into(),
+            directions: 8,
+            parts: vec![
+                VehicleAnchorsPart {
+                    name: "body".into(),
+                    texture: "lrvBody".into(),
+                    anchors: body.to_vec(),
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_fl".into(),
+                    texture: "lrvWheelFl".into(),
+                    anchors: fl.to_vec(),
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_fr".into(),
+                    texture: "lrvWheelFr".into(),
+                    anchors: fr.to_vec(),
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_rl".into(),
+                    texture: "lrvWheelRl".into(),
+                    anchors: rl.to_vec(),
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_rr".into(),
+                    texture: "lrvWheelRr".into(),
+                    anchors: rr.to_vec(),
+                },
+            ],
+            tires: vec![],
+        };
+        insert_lrv(&mut engine, (def, anchors));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
         let body_entity = *engine.names.get("lrv").unwrap();
@@ -1790,6 +1872,7 @@ mod tests {
         let def = VehicleDef {
             name: "lrv".into(),
             directions: 8,
+            anchors: "lrv_anchors".into(),
             columns: 4,
             rows: 2,
             cell: [247.0, 247.0],
@@ -1807,39 +1890,83 @@ mod tests {
             tires: vec![],
             turn_rate_deg_per_sec: 720.0,
             parts: vec![
-                serde_json::from_value(serde_json::json!({
-                    "name": "body", "texture": "lrvBody",
-                    "anchors": [[0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352],
-                                [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352], [0.5, 0.7352]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_fl", "texture": "lrvWheelFl",
-                    "anchors": [[0.566, 0.618], [0.712, 0.676], [0.733, 0.768], [0.618, 0.841],
-                                [0.434, 0.852], [0.288, 0.794], [0.267, 0.702], [0.382, 0.629]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_fr", "texture": "lrvWheelFr",
-                    "anchors": [[0.734, 0.702], [0.712, 0.794], [0.566, 0.852], [0.382, 0.841],
-                                [0.266, 0.768], [0.288, 0.676], [0.434, 0.618], [0.618, 0.629]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_rl", "texture": "lrvWheelRl",
-                    "anchors": [[0.211, 0.796], [0.210, 0.676], [0.378, 0.591], [0.618, 0.590],
-                                [0.789, 0.674], [0.790, 0.794], [0.622, 0.880], [0.382, 0.880]]
-                }))
-                .unwrap(),
-                serde_json::from_value(serde_json::json!({
-                    "name": "wheel_rr", "texture": "lrvWheelRr",
-                    "anchors": [[0.379, 0.880], [0.210, 0.794], [0.211, 0.674], [0.382, 0.590],
-                                [0.621, 0.591], [0.790, 0.676], [0.789, 0.796], [0.618, 0.880]]
-                }))
-                .unwrap(),
+                VehiclePartDef { name: "body".into(), texture: "lrvBody".into() },
+                VehiclePartDef { name: "wheel_fl".into(), texture: "lrvWheelFl".into() },
+                VehiclePartDef { name: "wheel_fr".into(), texture: "lrvWheelFr".into() },
+                VehiclePartDef { name: "wheel_rl".into(), texture: "lrvWheelRl".into() },
+                VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
             ],
         };
-        engine.vehicles.insert("lrv".into(), def);
+        let anchors = VehicleAnchors {
+            version: 1,
+            name: "lrv".into(),
+            directions: 8,
+            parts: vec![
+                VehicleAnchorsPart {
+                    name: "body".into(),
+                    texture: "lrvBody".into(),
+                    anchors: vec![[0.5, 0.7352]; 8],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_fl".into(),
+                    texture: "lrvWheelFl".into(),
+                    anchors: vec![
+                        [0.566, 0.618],
+                        [0.712, 0.676],
+                        [0.733, 0.768],
+                        [0.618, 0.841],
+                        [0.434, 0.852],
+                        [0.288, 0.794],
+                        [0.267, 0.702],
+                        [0.382, 0.629],
+                    ],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_fr".into(),
+                    texture: "lrvWheelFr".into(),
+                    anchors: vec![
+                        [0.734, 0.702],
+                        [0.712, 0.794],
+                        [0.566, 0.852],
+                        [0.382, 0.841],
+                        [0.266, 0.768],
+                        [0.288, 0.676],
+                        [0.434, 0.618],
+                        [0.618, 0.629],
+                    ],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_rl".into(),
+                    texture: "lrvWheelRl".into(),
+                    anchors: vec![
+                        [0.211, 0.796],
+                        [0.210, 0.676],
+                        [0.378, 0.591],
+                        [0.618, 0.590],
+                        [0.789, 0.674],
+                        [0.790, 0.794],
+                        [0.622, 0.880],
+                        [0.382, 0.880],
+                    ],
+                },
+                VehicleAnchorsPart {
+                    name: "wheel_rr".into(),
+                    texture: "lrvWheelRr".into(),
+                    anchors: vec![
+                        [0.379, 0.880],
+                        [0.210, 0.794],
+                        [0.211, 0.674],
+                        [0.382, 0.590],
+                        [0.621, 0.591],
+                        [0.790, 0.676],
+                        [0.789, 0.796],
+                        [0.618, 0.880],
+                    ],
+                },
+            ],
+            tires: vec![],
+        };
+        insert_lrv(&mut engine, (def, anchors));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
         let body = *engine.names.get("lrv").unwrap();
@@ -1928,16 +2055,20 @@ mod tests {
     }
 
     /// Build a minimal LRV vehicle definition (body + 4 wheels, flat anchors)
-    /// with a configurable turn rate for movement tests.
-    fn lrv_def(turn_rate_deg: f32) -> VehicleDef {
-        let part = |name: &str, texture: &str, anchors: [f32; 2]| VehiclePartDef {
-            name: name.into(),
-            texture: texture.into(),
-            anchors: vec![anchors],
-        };
-        VehicleDef {
+    /// with a configurable turn rate for movement tests, plus its anchors data
+    /// artifact.
+    fn lrv_def(turn_rate_deg: f32) -> (VehicleDef, VehicleAnchors) {
+        let spec: Vec<(&str, &str, [f32; 2])> = vec![
+            ("body", "lrvBody", [0.5, 0.7352]),
+            ("wheel_fl", "lrvWheelFl", [0.566, 0.618]),
+            ("wheel_fr", "lrvWheelFr", [0.734, 0.702]),
+            ("wheel_rl", "lrvWheelRl", [0.211, 0.796]),
+            ("wheel_rr", "lrvWheelRr", [0.379, 0.880]),
+        ];
+        let def = VehicleDef {
             name: "lrv".into(),
             directions: 8,
+            anchors: "lrv_anchors".into(),
             columns: 4,
             rows: 2,
             cell: [247.0, 247.0],
@@ -1954,14 +2085,32 @@ mod tests {
             turn_cost: 0.0,
             tires: vec![],
             turn_rate_deg_per_sec: turn_rate_deg,
-            parts: vec![
-                part("body", "lrvBody", [0.5, 0.7352]),
-                part("wheel_fl", "lrvWheelFl", [0.566, 0.618]),
-                part("wheel_fr", "lrvWheelFr", [0.734, 0.702]),
-                part("wheel_rl", "lrvWheelRl", [0.211, 0.796]),
-                part("wheel_rr", "lrvWheelRr", [0.379, 0.880]),
-            ],
-        }
+            parts: spec
+                .iter()
+                .map(|(n, t, _)| VehiclePartDef { name: (*n).into(), texture: (*t).into() })
+                .collect(),
+        };
+        let anchors = VehicleAnchors {
+            version: 1,
+            name: "lrv".into(),
+            directions: 8,
+            parts: spec
+                .iter()
+                .map(|(n, _t, a)| VehicleAnchorsPart {
+                    name: (*n).into(),
+                    texture: String::new(),
+                    anchors: vec![*a],
+                })
+                .collect(),
+            tires: vec![],
+        };
+        (def, anchors)
+    }
+
+    /// Register a test vehicle's def + anchors data artifact in the engine.
+    fn insert_lrv(engine: &mut Engine, (def, anchors): (VehicleDef, VehicleAnchors)) {
+        engine.vehicles.insert("lrv".into(), def);
+        engine.vehicle_anchors.insert("lrv_anchors".into(), anchors);
     }
 
     #[test]
@@ -1969,7 +2118,7 @@ mod tests {
         let mut engine = Engine::new_for_test();
         let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
         engine.names.insert("tilemap".into(), tm);
-        engine.vehicles.insert("lrv".into(), lrv_def(90.0));
+        insert_lrv(&mut engine, lrv_def(90.0));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
         let body = *engine.names.get("lrv").unwrap();
@@ -2026,7 +2175,7 @@ mod tests {
         let size = 20i32;
         let tm_e = engine.world.spawn((flat_tilemap(size, size), Role::new(RoleKind::Tilemap)));
         engine.names.insert("tilemap".into(), tm_e);
-        engine.vehicles.insert("lrv".into(), lrv_def(90.0));
+        insert_lrv(&mut engine, lrv_def(90.0));
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
         let body = *engine.names.get("lrv").unwrap();
@@ -2071,16 +2220,80 @@ mod tests {
         fp
     }
 
-    /// The real LRV sidecar anchors (8 directions per part) from `lrv.json`.
-    fn lrv_def_real() -> VehicleDef {
-        let part = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| VehiclePartDef {
-            name: name.into(),
-            texture: texture.into(),
-            anchors,
+    /// The real LRV sidecar anchors (8 directions per part) from `lrv.json`,
+    /// returned as a `(def, anchors-artifact)` pair.
+    fn lrv_def_real() -> (VehicleDef, VehicleAnchors) {
+        let part = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| {
+            (
+                VehiclePartDef { name: name.into(), texture: texture.into() },
+                VehicleAnchorsPart { name: name.into(), texture: texture.into(), anchors },
+            )
         };
-        VehicleDef {
+        let pairs = vec![
+            part("body", "lrvBody", vec![[0.5, 0.6618]; 8]),
+            part(
+                "wheel_fl",
+                "lrvWheelFl",
+                vec![
+                    [0.549373, 0.574673],
+                    [0.658127, 0.617648],
+                    [0.674253, 0.686486],
+                    [0.588304, 0.740864],
+                    [0.450627, 0.748927],
+                    [0.341873, 0.705952],
+                    [0.325747, 0.637114],
+                    [0.411696, 0.582736],
+                ],
+            ),
+            part(
+                "wheel_fr",
+                "lrvWheelFr",
+                vec![
+                    [0.674361, 0.637148],
+                    [0.658154, 0.706015],
+                    [0.549303, 0.74898],
+                    [0.411571, 0.740877],
+                    [0.325639, 0.686452],
+                    [0.341846, 0.617585],
+                    [0.450697, 0.57462],
+                    [0.588429, 0.582723],
+                ],
+            ),
+            part(
+                "wheel_rl",
+                "lrvWheelRl",
+                vec![
+                    [0.284399, 0.70716],
+                    [0.283399, 0.617648],
+                    [0.40928, 0.554],
+                    [0.588304, 0.553499],
+                    [0.715601, 0.61644],
+                    [0.716601, 0.705952],
+                    [0.59072, 0.7696],
+                    [0.411696, 0.770101],
+                ],
+            ),
+            part(
+                "wheel_rr",
+                "lrvWheelRr",
+                vec![
+                    [0.409349, 0.769654],
+                    [0.283371, 0.706014],
+                    [0.284292, 0.616474],
+                    [0.411571, 0.553486],
+                    [0.590651, 0.553946],
+                    [0.716629, 0.617586],
+                    [0.715708, 0.707126],
+                    [0.588429, 0.770114],
+                ],
+            ),
+        ];
+        let (parts, anchors_parts): (Vec<VehiclePartDef>, Vec<VehicleAnchorsPart>) =
+            pairs.into_iter().unzip();
+        let def = VehicleDef {
             name: "lrv".into(),
             directions: 8,
+            anchors: "lrv_anchors".into(),
             columns: 4,
             rows: 2,
             cell: [331.0, 331.0],
@@ -2097,86 +2310,41 @@ mod tests {
             reverse_speed: 1.3,
             turn_cost: 0.0,
             tires: vec![],
-            parts: vec![
-                part("body", "lrvBody", vec![[0.5, 0.6618]; 8]),
-                part(
-                    "wheel_fl",
-                    "lrvWheelFl",
-                    vec![
-                        [0.549373, 0.574673],
-                        [0.658127, 0.617648],
-                        [0.674253, 0.686486],
-                        [0.588304, 0.740864],
-                        [0.450627, 0.748927],
-                        [0.341873, 0.705952],
-                        [0.325747, 0.637114],
-                        [0.411696, 0.582736],
-                    ],
-                ),
-                part(
-                    "wheel_fr",
-                    "lrvWheelFr",
-                    vec![
-                        [0.674361, 0.637148],
-                        [0.658154, 0.706015],
-                        [0.549303, 0.74898],
-                        [0.411571, 0.740877],
-                        [0.325639, 0.686452],
-                        [0.341846, 0.617585],
-                        [0.450697, 0.57462],
-                        [0.588429, 0.582723],
-                    ],
-                ),
-                part(
-                    "wheel_rl",
-                    "lrvWheelRl",
-                    vec![
-                        [0.284399, 0.70716],
-                        [0.283399, 0.617648],
-                        [0.40928, 0.554],
-                        [0.588304, 0.553499],
-                        [0.715601, 0.61644],
-                        [0.716601, 0.705952],
-                        [0.59072, 0.7696],
-                        [0.411696, 0.770101],
-                    ],
-                ),
-                part(
-                    "wheel_rr",
-                    "lrvWheelRr",
-                    vec![
-                        [0.409349, 0.769654],
-                        [0.283371, 0.706014],
-                        [0.284292, 0.616474],
-                        [0.411571, 0.553486],
-                        [0.590651, 0.553946],
-                        [0.716629, 0.617586],
-                        [0.715708, 0.707126],
-                        [0.588429, 0.770114],
-                    ],
-                ),
-            ],
-        }
+            parts,
+        };
+        let anchors = VehicleAnchors {
+            version: 1,
+            name: "lrv".into(),
+            directions: 8,
+            parts: anchors_parts,
+            tires: vec![],
+        };
+        (def, anchors)
     }
 
     /// `lrv_def_real()` plus two front steering tires (5 steer levels), matching
     /// the exporter's front-wheel-steering sidecar shape.  Tires reuse their
     /// wheel's anchors (the steering yaw is about the axle's vertical axis, so
     /// the ground-origin anchor is steer-invariant).
-    fn lrv_def_steering() -> VehicleDef {
-        let mut def = lrv_def_real();
+    fn lrv_def_steering() -> (VehicleDef, VehicleAnchors) {
+        let (mut def, mut anchors) = lrv_def_real();
         def.steer_levels = 5;
         def.steer_max_deg = 30.0;
-        let tire = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| VehiclePartDef {
-            name: name.into(),
-            texture: texture.into(),
-            anchors,
+        let tire = |name: &str, texture: &str, anchors: Vec<[f32; 2]>| {
+            (
+                VehiclePartDef { name: name.into(), texture: texture.into() },
+                VehicleAnchorsPart { name: name.into(), texture: texture.into(), anchors },
+            )
         };
-        def.tires = vec![
-            tire("tire_fl", "lrvTireFl", def.parts[1].anchors.clone()),
-            tire("tire_fr", "lrvTireFr", def.parts[2].anchors.clone()),
+        let tire_pairs = vec![
+            tire("tire_fl", "lrvTireFl", anchors.parts[1].anchors.clone()),
+            tire("tire_fr", "lrvTireFr", anchors.parts[2].anchors.clone()),
         ];
-        def
+        let (tires, tire_anchors): (Vec<VehiclePartDef>, Vec<VehicleAnchorsPart>) =
+            tire_pairs.into_iter().unzip();
+        def.tires = tires;
+        anchors.tires = tire_anchors;
+        (def, anchors)
     }
 
     /// Build an engine with a 48×48 tilemap + all-walkable nav (the lrvtest
@@ -2206,10 +2374,10 @@ mod tests {
         let nm = engine.world.spawn((nav, Role::new(RoleKind::NavMesh)));
         engine.names.insert("navmesh".into(), nm);
 
-        let mut def = lrv_def(90.0);
+        let (mut def, anchors) = lrv_def(90.0);
         def.path_footprint = Some(rect_footprint(3, 2)); // 7x5, matches auto-derive
         def.safe_fall_px = 96.0;
-        engine.vehicles.insert("lrv".into(), def);
+        insert_lrv(&mut engine, (def, anchors));
 
         engine
     }
@@ -2263,7 +2431,7 @@ mod tests {
     #[test]
     fn real_lrv_def_auto_derives_and_paths() {
         let mut engine = engine_with_lrvtest_like_map(None);
-        engine.vehicles.insert("lrv".into(), lrv_def_real());
+        insert_lrv(&mut engine, lrv_def_real());
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
         let body = *engine.names.get("lrv").unwrap();
@@ -2288,7 +2456,7 @@ mod tests {
     #[test]
     fn spawn_vehicle_derives_travel_limits() {
         let mut engine = engine_with_lrvtest_like_map(None);
-        engine.vehicles.insert("lrv".into(), lrv_def_real());
+        insert_lrv(&mut engine, lrv_def_real());
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
         let body = *engine.names.get("lrv").unwrap();
@@ -2306,7 +2474,7 @@ mod tests {
     #[test]
     fn vehicle_probe_reports_reachability_and_caches_result() {
         let mut engine = engine_with_lrvtest_like_map(None);
-        engine.vehicles.insert("lrv".into(), lrv_def_real());
+        insert_lrv(&mut engine, lrv_def_real());
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
         engine.set_synchronous_workers(true);
 
@@ -2336,7 +2504,7 @@ mod tests {
     #[test]
     fn spawn_vehicle_spawns_steering_tires() {
         let mut engine = engine_with_lrvtest_like_map(None);
-        engine.vehicles.insert("lrv".into(), lrv_def_steering());
+        insert_lrv(&mut engine, lrv_def_steering());
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
         let body = *engine.names.get("lrv").unwrap();
@@ -2358,7 +2526,7 @@ mod tests {
     #[test]
     fn front_tires_steer_into_a_turn() {
         let mut engine = engine_with_lrvtest_like_map(None);
-        engine.vehicles.insert("lrv".into(), lrv_def_steering());
+        insert_lrv(&mut engine, lrv_def_steering());
         assert!(engine.spawn_vehicle("lrv", "lrv", 1.0, 1.0));
         let body = *engine.names.get("lrv").unwrap();
         {
@@ -2388,7 +2556,7 @@ mod tests {
     #[test]
     fn body_lifts_and_tilts_without_wheels_riding_over() {
         let mut engine = engine_with_lrvtest_like_map(Some(lrvtest_heights()));
-        engine.vehicles.insert("lrv".into(), lrv_def_real());
+        insert_lrv(&mut engine, lrv_def_real());
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
         // Teleport onto the east ramp face (rising +x), then let the suspension
@@ -2497,7 +2665,7 @@ mod tests {
     #[test]
     fn vehicle_goto_paths_on_full_lrvtest_map() {
         let mut engine = engine_with_lrvtest_like_map(Some(lrvtest_heights()));
-        engine.vehicles.insert("lrv".into(), lrv_def_real());
+        insert_lrv(&mut engine, lrv_def_real());
 
         assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
 
