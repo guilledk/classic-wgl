@@ -13,6 +13,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Web Basis Universal transcoder: vendor the three.js `basis_transcoder`
   (MIT/Apache) and transcode `.basis` (ETC1S) sheets to S3TC/ETC2/BC7 on WebGL 2
   (RGBA8 fallback), so GPU-compressed sheets render on web.
+- Read vehicle ground-anchor definitions from the packed `data[]` artifact
+  (namespace-qualified `ref`), replacing the sidecar anchor lookup.
 
 ## [0.1.1] - 2026-09-01
 
