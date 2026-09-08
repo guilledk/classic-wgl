@@ -325,7 +325,7 @@ Format: a `#`-prefixed header line (frame, viewport, camera pos/scale), a
 `order` — `name`, `kind`, `order`, `x y w h` (screen rect), `texture`, `color`.
 The `screen` rect is the axis-aligned bounding box of the item's unit quad
 after `(camera or identity) · model`; for `Tilemap` it is the projected
-iso-extent diamond (`(0,0)..(size_x,size_y)` through `model · iso_matrix`).
+iso-extent diamond (`(0,0)..(size_x,size_y)` through `iso_camera_px`).
 This is not part of `compare_traces`, so it cannot fail a golden run.
 
 ### Pixel golden (CLASSIC_GOLDEN_PNG)

@@ -152,14 +152,14 @@ plans/
 - **⚠️ Two spaces: light space vs screen space.**  This is the single most
   dangerous thing in the renderer; conflating them produced a shadow map that
   compiled, ran, passed its tests and cast nothing.
-  - **Light space** — `model * iso_matrix * vertex`, **+Z is up**.  `light_dir`,
-    `vNormal`, `Light::position`, `iso_to_world`, the shadow map and the
-    `vLightPos` varying all live here.  All lighting maths happens here.
-  - **Screen space** — the above, then `y -= vertex.z`.  This isometric shear is
-    what makes height read as height on screen.  It carries height in **both**
-    y and z, so its up axis is `(0,-1,1)/√2`; projecting it along a +Z-up
-    `light_dir` presents the sun at ~2.7° instead of 30°.  It is used for
-    rasterisation only and is deliberately **not** exposed as a varying.
+  - **Light space** — `iso_world_light_matrix · world` = `S(scale)·Rz(−45°)·D⁻¹`,
+    **metric +Z up**.  `light_dir`, `vNormal`, `Light::position`, `iso_to_world`,
+    the shadow map and the `vLightPos` varying all live here.  All lighting maths
+    happens here.
+  - **Screen space** — the single orthographic camera `iso_camera_px(world)`
+    (2D raster image).  There is no `y -= vertex.z` shear anymore: the camera
+    `up` axis (`up.z = cos30°`) already carries height into the screen y.  It is
+    used for rasterisation only and is deliberately **not** exposed as a varying.
   - Sprite billboards are screen-aligned quads, so shadow code unprojects them
     about their ground anchor (screen up → world +Z) via the `sprite_anchor`
     uniform.  `shadow_sprite.vert`, `direct_tex.vert` and

@@ -171,13 +171,8 @@ impl PathfinderWorker {
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("heights"), &heights);
         let _ = js_sys::Reflect::set(
             &msg,
-            &JsValue::from_str("heightScale"),
-            &JsValue::from_f64(snapshot.height_scale as f64),
-        );
-        let _ = js_sys::Reflect::set(
-            &msg,
-            &JsValue::from_str("tileScale"),
-            &JsValue::from_f64(snapshot.tile_scale as f64),
+            &JsValue::from_str("tileM"),
+            &JsValue::from_f64(snapshot.tile_m as f64),
         );
         let _ = self.worker.post_message(&msg);
     }
@@ -197,9 +192,9 @@ impl PathfinderWorker {
         footprint: Vec<GridCell>,
         pitch_max: f32,
         roll_max: f32,
-        wheelbase_px: f32,
-        track_px: f32,
-        safe_fall_px: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+        safe_fall_m: f32,
         jump_cost: f32,
         turn_cost: f32,
     ) {
@@ -232,18 +227,18 @@ impl PathfinderWorker {
         );
         let _ = js_sys::Reflect::set(
             &msg,
-            &JsValue::from_str("wheelbasePx"),
-            &JsValue::from_f64(wheelbase_px as f64),
+            &JsValue::from_str("wheelbaseM"),
+            &JsValue::from_f64(wheelbase_m as f64),
         );
         let _ = js_sys::Reflect::set(
             &msg,
-            &JsValue::from_str("trackPx"),
-            &JsValue::from_f64(track_px as f64),
+            &JsValue::from_str("trackM"),
+            &JsValue::from_f64(track_m as f64),
         );
         let _ = js_sys::Reflect::set(
             &msg,
-            &JsValue::from_str("safeFallPx"),
-            &JsValue::from_f64(safe_fall_px as f64),
+            &JsValue::from_str("safeFallM"),
+            &JsValue::from_f64(safe_fall_m as f64),
         );
         let _ = js_sys::Reflect::set(
             &msg,

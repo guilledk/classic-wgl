@@ -198,14 +198,12 @@ categories:
   `<= 0` disables falloff), `dir: Vec3`, `cone_angle: f32` (spot half-angle;
   `<= 0` encodes Point).  Spot fields are future-proofed but not yet emitted.
 - **⚠️ `position` is in light space, not screen space.**  Light space is
-  `model * iso_matrix * vertex` with **+Z up** — the same space `light_dir`,
-  `vNormal` and the shadow map live in.  The renderer's isometric shear
-  (`y -= z`, which makes height visible on screen) must **not** be applied:
-  mixing the two makes `dot(n, normalize(lightPos - p))` compare vectors from
-  different spaces.  `Engine::iso_to_world(x, y, elevation)` is the single
-  correct conversion — it carries elevation in `z` alone.  See `classic-gfx`
-  §17 for the full two-spaces rule; getting this wrong is what made the
-  directional shadow map cast nothing for an entire session.
+  `iso_world_light_matrix · world` (metric, **+Z up**) — the same space
+  `light_dir`, `vNormal` and the shadow map live in.  It must **not** be mixed
+  with the screen camera (`iso_camera_px`); `Engine::iso_to_world(x, y, elevation)`
+  is the single correct conversion — it carries elevation in `z` alone.  See
+  `classic-gfx` §17 for the full two-spaces rule; getting this wrong is what made
+  the directional shadow map cast nothing for an entire session.
 - The **runtime pool** is `Engine.light_pool` (`classic-engine/src/light.rs`,
   `LightPool`) — a free-list of `Light`s with per-light TTL decay.  The ECS
   `Light` component and the pool share the same `Light` type; declarative scene
