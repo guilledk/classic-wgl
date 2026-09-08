@@ -11,9 +11,9 @@
 //!   albedo/normal  → BC7 (BPTC) → BC3 (S3TC DXT5) → ETC2_RGBA
 //!   depth          → BC4 (RGTC) → ETC2_EAC_R11
 //!
-//! with a raw RGBA8 transcode as the final fallback.  The web path uses a
-//! separate precompiled transcoder `.wasm` (three.js `basis_transcoder`) — see
-//! `basis_web`.
+//! with a raw RGBA8 transcode as the final fallback.  The web path uses our
+//! own precompiled transcoder `.wasm` (an Emscripten build of the Basis
+//! Universal transcoder) — see `basis_web`.
 
 #[cfg(not(target_arch = "wasm32"))]
 use glow::HasContext;
@@ -146,8 +146,8 @@ pub fn transcode_rgba8(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     transcode_to(bytes, T::RGBA32)
 }
 
-// Web: the compressed path uses a separate precompiled transcoder `.wasm`
-// (P1.0/R2) — the vendored three.js `basis_transcoder` build, instantiated
-// synchronously on the main thread (see `basis_web`).
+// Web: the compressed path uses our own precompiled transcoder `.wasm`
+// (P1.0/R3) — an Emscripten build of the Basis Universal transcoder, run in a
+// web Worker with a synchronous main-thread fallback (see `basis_web`).
 #[cfg(target_arch = "wasm32")]
-pub use crate::basis_web::{transcode, transcode_rgba8};
+pub use crate::basis_web::{transcode, transcode_async, transcode_rgba8, transcode_rgba8_async};
