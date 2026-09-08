@@ -110,9 +110,9 @@ pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 pub mod rom;
 pub use rom::resolve_rom_source;
 #[cfg(not(target_arch = "wasm32"))]
-pub use rom::{load_rom_bytes, resolve_rom};
+pub use rom::{load_rom_bytes, resolve_rom, resolve_roms};
 #[cfg(target_arch = "wasm32")]
-pub use rom::{load_rom_bytes_async, resolve_rom_async};
+pub use rom::{load_rom_bytes_async, resolve_rom_async, resolve_roms_async};
 
 // ---------------------------------------------------------------------------
 // Native backend  (not wasm32)

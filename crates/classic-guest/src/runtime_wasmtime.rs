@@ -115,6 +115,10 @@ impl GuestRuntime for WasmtimeRuntime {
         self.set_fuel_budget()?;
         self.start.as_ref().unwrap().call(&mut self.store, ()).map_err(Self::map_call_error)
     }
+
+    fn set_namespace(&mut self, namespace: &str) {
+        self.store.data_mut().guest_mut().set_namespace(namespace);
+    }
 }
 
 impl WasmtimeRuntime {

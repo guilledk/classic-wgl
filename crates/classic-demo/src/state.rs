@@ -74,8 +74,10 @@ pub struct DemoState {
     /// Draw each active light as an X marker + a vertical Z line from the
     /// terrain surface to the light (KeyL).
     pub debug_lights: bool,
-    /// The ROM guest runtime (installed by `init_guest`).
-    pub guest: Option<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
+    /// The ROM guest runtimes (installed by `init_guests`), one per ROM in
+    /// topological order (deps first).  Held so the runtimes outlive the
+    /// `on_update` closures that borrow them.
+    pub guests: Vec<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
 }
 
 impl Default for DemoState {
@@ -95,7 +97,7 @@ impl Default for DemoState {
             iso_coord_z_e: None,
             test_light_handle: None,
             debug_lights: false,
-            guest: None,
+            guests: Vec::new(),
         }
     }
 }

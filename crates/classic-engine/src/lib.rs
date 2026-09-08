@@ -160,6 +160,17 @@ pub(crate) struct ResolvedFrame {
     pub(crate) depth_tex: Option<(String, f32)>,
 }
 
+/// The namespace-resolvable resource categories, mirroring the guest SDK's
+/// `has_resource` kinds plus the frame-table and vehicle registries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceKind {
+    Texture,
+    Font,
+    Animation,
+    FrameTable,
+    Vehicle,
+}
+
 pub struct Engine {
     pub gfx: Option<Gfx>,
     pub world: hecs::World,
@@ -223,6 +234,10 @@ pub struct Engine {
     /// from the manifest's `normal` field).  Sprites with a normal map are
     /// shaded with a runtime Lambertian term.
     texture_normals: HashMap<String, String>,
+    /// Qualified texture names registered by `load_manifest_resources`, kept
+    /// GL-free so texture existence + namespace resolution work without a
+    /// `Gfx` (the unit-test path).  Union across every loaded ROM.
+    pub texture_names: HashSet<String>,
     /// Wheeled-vehicle definitions keyed by name, loaded from the ROM's
     /// `vehicles` resources at boot.
     pub vehicles: HashMap<String, classic_core::types::VehicleDef>,
@@ -237,6 +252,10 @@ pub struct Engine {
     pub rom_manifest_json: Option<String>,
     pub rom_manifest: Option<classic_rom::RomManifest>,
     pub rom_resources: Option<classic_rom::ResourceSet>,
+    /// The full multi-ROM dependency DAG captured by `load_roms` (topological
+    /// order, deps first).  `dump_roms` reconstructs the DAG from this; the
+    /// single-ROM legacy path records exactly one entry.
+    pub loaded_roms: Vec<classic_rom::LoadedRom>,
     pub ui: Option<ui::UIManager>,
     pub selection_mode: i32,
     pub selection_begin_screen: glam::Vec3,
@@ -376,12 +395,14 @@ impl Engine {
             frame_tables: HashMap::new(),
             texture_depths: HashMap::new(),
             texture_normals: HashMap::new(),
+            texture_names: HashSet::new(),
             vehicles: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),
             next_ghost_group: 1,
             rom_manifest_json: None,
             rom_manifest: None,
             rom_resources: None,
+            loaded_roms: Vec::new(),
             ui: None,
             selection: selection::SelectionSet::default(),
             rts_box: None,
@@ -429,16 +450,13 @@ impl Engine {
         }
     }
 
-    /// Initialise the GL layer from a ROM manifest + resource set: compile the
-    /// manifest's shaders (built-ins, overridable by a ROM via the named
-    /// shader registry), upload every declared texture, load the SDF fonts, and
-    /// register the animations.
-    pub fn init_gfx(
-        &mut self,
-        gl: Rc<glow::Context>,
-        manifest: &classic_rom::RomManifest,
-        resources: &classic_rom::ResourceSet,
-    ) {
+    /// Compile the engine shader catalog (built-ins + any manifest `shaders[]`
+    /// overrides) into a fresh [`Gfx`], exactly once.  Idempotent across a
+    /// multi-ROM load: the first call creates the GL layer, later calls no-op.
+    fn ensure_gfx(&mut self, gl: Rc<glow::Context>, manifest: &classic_rom::RomManifest) {
+        if self.gfx.is_some() {
+            return;
+        }
         self.gfx = Some(Gfx::new(gl));
         let registry = classic_gfx::ShaderSourceRegistry::builtin();
         // The engine owns the shader declarations: compile the full builtin
@@ -469,38 +487,56 @@ impl Engine {
                 .add_shader(builtin.name, &vs, &fs, &attr, &unif)
                 .expect("compile shader");
         }
+    }
 
+    /// Upload/register a ROM's manifest-declared resources (textures, depth +
+    /// normal companions, SDF fonts, animations, frame tables, vehicles) into
+    /// the shared [`Gfx`] + engine registries.  Safe to call with `gfx == None`
+    /// (texture upload is skipped; the non-GL registries still populate).
+    fn load_manifest_resources(
+        &mut self,
+        manifest: &classic_rom::RomManifest,
+        resources: &classic_rom::ResourceSet,
+    ) {
         // Textures from the manifest, skipping the SDF atlas textures (those
         // are uploaded by the SDF font path with LINEAR filtering).  Several
         // manifest entries may share one `src` — every frame-table texture
         // points at its shared colour sheet — so decode + upload each unique
         // `src` once and alias the rest to the same GL texture (the packed-atlas
-        // draw path binds the sheet name, not the frame-table name).
+        // draw path binds the sheet name, not the frame-table name).  Every key
+        // is namespace-qualified (`{ns}::{name}`) under the ROM's effective
+        // namespace so namespaced ROMs' resources coexist with the global set.
         let atlas_names: std::collections::HashSet<String> =
-            resources.fonts().keys().map(|f| format!("{f}-sdf")).collect();
+            resources.fonts().keys().map(|f| self.entity_key(&format!("{f}-sdf"))).collect();
         let mut uploaded_by_src: HashMap<String, GlTexture> = HashMap::new();
         for entry in &manifest.manifest.textures {
-            if atlas_names.contains(&entry.name) {
+            let key = self.entity_key(&entry.name);
+            self.texture_names.insert(key.clone());
+            if atlas_names.contains(&key) {
                 continue;
             }
             let Some(bytes) = resources.textures().get(&entry.name) else {
                 continue;
             };
             if let Some(tex) = uploaded_by_src.get(&entry.src) {
-                self.gfx.as_mut().unwrap().textures.insert(entry.name.clone(), tex.clone());
+                if let Some(gfx) = self.gfx.as_mut() {
+                    gfx.textures.insert(key, tex.clone());
+                }
                 continue;
             }
-            // Shared-atlas companion sheets are named `{sheet}-normal` /
-            // `{sheet}-depth` by the packer; upload them in their native channel
-            // count (RGB8 / R8) instead of RGBA8.
-            if entry.name.ends_with("-depth") {
-                self.load_texture_luma8(&entry.name, bytes);
+            // GPU-compressed textures (Phase 1) transcode + upload via the
+            // `format`-declared target; uncompressed textures use the native
+            // channel count (RGB8 normal / R8 depth / RGBA8 albedo).
+            if let Some(format) = &entry.format {
+                self.load_texture_basis(&key, bytes, format);
+            } else if entry.name.ends_with("-depth") {
+                self.load_texture_luma8(&key, bytes);
             } else if entry.name.ends_with("-normal") {
-                self.load_texture_rgb8(&entry.name, bytes);
+                self.load_texture_rgb8(&key, bytes);
             } else {
-                self.load_texture_png(&entry.name, bytes);
+                self.load_texture_png(&key, bytes);
             }
-            if let Some(tex) = self.gfx.as_ref().unwrap().textures.get(&entry.name) {
+            if let Some(tex) = self.gfx.as_ref().and_then(|g| g.textures.get(&key)) {
                 uploaded_by_src.insert(entry.src.clone(), tex.clone());
             }
         }
@@ -511,12 +547,11 @@ impl Engine {
         for entry in &manifest.manifest.textures {
             if entry.depth.is_some() {
                 if let Some(bytes) = resources.depths().get(&entry.name) {
-                    let depth_tex = format!("{}-depth", entry.name);
+                    let key = self.entity_key(&entry.name);
+                    let depth_tex = format!("{key}-depth");
                     self.load_texture_luma8(&depth_tex, bytes);
-                    self.texture_depths.insert(
-                        entry.name.clone(),
-                        TextureDepth { depth_tex, depth_range: entry.depth_range },
-                    );
+                    self.texture_depths
+                        .insert(key, TextureDepth { depth_tex, depth_range: entry.depth_range });
                 }
             }
         }
@@ -528,35 +563,50 @@ impl Engine {
         for entry in &manifest.manifest.textures {
             if entry.normal.is_some() {
                 if let Some(bytes) = resources.normals().get(&entry.name) {
-                    let normal_tex = format!("{}-normal", entry.name);
+                    let key = self.entity_key(&entry.name);
+                    let normal_tex = format!("{key}-normal");
                     self.load_texture_rgb8(&normal_tex, bytes);
-                    self.texture_normals.insert(entry.name.clone(), normal_tex);
+                    self.texture_normals.insert(key, normal_tex);
                 }
             }
         }
 
-        // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf").
+        // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf"), keyed by
+        // the namespace-qualified font name.
         for (font_name, metrics_bytes) in resources.fonts() {
+            let key = self.entity_key(font_name);
             let atlas_name = format!("{font_name}-sdf");
             let metrics_str = std::str::from_utf8(metrics_bytes).expect("SDF metrics UTF-8");
             if let Some(atlas_png) = resources.textures().get(&atlas_name) {
-                self.load_sdf_font(&atlas_name, metrics_str, atlas_png);
+                self.load_sdf_font(&key, metrics_str, atlas_png);
             }
         }
 
         for anim in &manifest.manifest.animations {
-            self.animations.insert(anim.name.clone(), anim.clone());
+            let mut anim = anim.clone();
+            anim.src = self.entity_key(&anim.src);
+            self.animations.insert(self.entity_key(&anim.name), anim);
         }
 
         // Packed-atlas frame tables (`frames.json`) keyed by texture name,
         // loaded from the ROM's `frames` resources.  Companion sheets are
         // uploaded as ordinary textures (declared in the manifest) and are
-        // referenced by name from each frame's `sheet` index.
+        // referenced by name from each frame's `sheet` index.  The table's
+        // sheet + frame keys are qualified so the `{texture}_{frame}` frame-name
+        // convention stays consistent under namespacing.
         for (name, bytes) in resources.frames() {
             match serde_json::from_slice::<FrameTable>(bytes) {
                 Ok(mut table) => {
+                    for sheet in &mut table.sheets {
+                        sheet.name = self.entity_key(&sheet.name);
+                    }
+                    table.frames = table
+                        .frames
+                        .into_iter()
+                        .map(|(fname, fr)| (self.entity_key(&fname), fr))
+                        .collect();
                     table.precompute_companions();
-                    self.frame_tables.insert(name.clone(), table);
+                    self.frame_tables.insert(self.entity_key(name), table);
                 }
                 Err(e) => {
                     classic_core::cl_error!(Chan::Guest, "frame table '{name}' parse failed: {e}");
@@ -568,15 +618,19 @@ impl Engine {
         // manifest is loaded from the ROM's `animations/` resources and folded
         // into the registered `AnimationData`.
         for (name, metadata_bytes) in resources.animations() {
-            self.load_animation_channels(name, metadata_bytes);
+            self.load_animation_channels(&self.entity_key(name), metadata_bytes);
         }
 
         // Wheeled-vehicle definitions (JSON sidecars) from the `vehicles`
-        // resources, keyed by the manifest-declared name.
+        // resources, keyed by the manifest-declared name.  Each part's texture
+        // is qualified so `spawn_vehicle` binds the namespaced sheet.
         for (name, bytes) in resources.vehicles() {
             match serde_json::from_slice::<classic_core::types::VehicleDef>(bytes) {
-                Ok(def) => {
-                    self.vehicles.insert(name.clone(), def);
+                Ok(mut def) => {
+                    for part in def.parts.iter_mut().chain(def.tires.iter_mut()) {
+                        part.texture = self.entity_key(&part.texture);
+                    }
+                    self.vehicles.insert(self.entity_key(name), def);
                 }
                 Err(e) => {
                     classic_core::cl_error!(Chan::Guest, "vehicle '{name}' parse failed: {e}");
@@ -585,21 +639,120 @@ impl Engine {
         }
     }
 
-    /// Hydrate the engine from a ROM: compile shaders, upload resources, and
-    /// spawn the entity graph.  Records the ROM's manifest + resources so
-    /// [`Engine::dump_rom`] can reconstruct it.
+    /// Initialise the GL layer from a ROM manifest + resource set: compile the
+    /// manifest's shaders (built-ins, overridable by a ROM via the named
+    /// shader registry), upload every declared texture, load the SDF fonts, and
+    /// register the animations.  The single-ROM convenience wrapper over
+    /// [`Engine::ensure_gfx`] + [`Engine::load_manifest_resources`].
+    pub fn init_gfx(
+        &mut self,
+        gl: Rc<glow::Context>,
+        manifest: &classic_rom::RomManifest,
+        resources: &classic_rom::ResourceSet,
+    ) {
+        self.namespace = manifest.namespace.clone();
+        self.ensure_gfx(gl, manifest);
+        self.load_manifest_resources(manifest, resources);
+    }
+
+    /// Hydrate the engine from a single ROM (the legacy path).  Wraps the ROM
+    /// in a one-entry [`classic_rom::LoadedRoms`] (its declared namespace, no
+    /// deps) and delegates to [`Engine::load_roms`].
     pub fn load_rom(&mut self, gl: Rc<glow::Context>, rom: &classic_rom::Rom) {
-        self.namespace = rom.manifest.namespace.clone();
-        self.init_gfx(gl, &rom.manifest, &rom.resources);
-        self.load_state(&rom.state).expect("load ROM state");
-        self.load_grids(&rom.resources);
-        self.items = classic_core::inventory::ItemRegistry::build(
-            &rom.manifest.items,
-            &rom.manifest.inventory_types,
-        );
-        self.rom_manifest_json = Some(rom.manifest_json.clone());
-        self.rom_manifest = Some(rom.manifest.clone());
-        self.rom_resources = Some(rom.resources.clone());
+        let name = if rom.manifest.entrypoint.is_empty() {
+            "root".to_string()
+        } else {
+            rom.manifest.entrypoint.clone()
+        };
+        let loaded = classic_rom::LoadedRoms {
+            root: name.clone(),
+            order: vec![classic_rom::LoadedRom {
+                name,
+                namespace: rom.manifest.namespace.clone(),
+                rom: rom.clone(),
+            }],
+        };
+        self.load_roms(gl, &loaded);
+    }
+
+    /// Hydrate the engine from a resolved multi-ROM dependency DAG.
+    ///
+    /// Shaders are compiled once (honoring the root ROM's `shaders[]`
+    /// overrides); each ROM's resources, entity graph, and grids are then
+    /// hydrated in topological order (deps before dependents).  Entity names
+    /// are namespace-qualified via [`Engine::entity_key`] while a ROM's
+    /// namespace is non-empty.  The full DAG is recorded in
+    /// [`Engine::loaded_roms`] for [`Engine::dump_roms`]; the root ROM's
+    /// manifest/resources are also mirrored into the single-ROM fields for
+    /// backward compatibility (`dump_rom`, `has_texture`, the F10 save path).
+    pub fn load_roms(&mut self, gl: Rc<glow::Context>, loaded: &classic_rom::LoadedRoms) {
+        if let Some(root) = loaded.root_rom() {
+            self.ensure_gfx(gl, &root.manifest);
+        }
+        self.hydrate_roms(loaded);
+    }
+
+    /// The GL-free core of [`Engine::load_roms`]: per-ROM resource + entity +
+    /// grid hydration in topological order, plus DAG bookkeeping.  Split out so
+    /// the multi-ROM logic is unit-testable without a GL context.
+    fn hydrate_roms(&mut self, loaded: &classic_rom::LoadedRoms) {
+        let multi = loaded.order.len() > 1;
+        for entry in &loaded.order {
+            let ns = Self::effective_namespace(entry, multi);
+            self.namespace = ns.clone();
+            self.load_manifest_resources(&entry.rom.manifest, &entry.rom.resources);
+            let keys = self.load_state_in(&ns, &entry.rom.state).expect("load ROM state");
+            self.rewrite_cross_refs(&ns, &keys);
+            self.rewrite_resource_refs(&ns, &keys);
+            self.load_grids(&entry.rom.resources);
+        }
+
+        self.loaded_roms = loaded.order.clone();
+
+        // Item catalog: the root ROM's items/inventory_types (per-ROM item
+        // merging across the dep closure is deferred to the multi-guest work).
+        if let Some(root) = loaded.root_rom() {
+            self.items = classic_core::inventory::ItemRegistry::build(
+                &root.manifest.items,
+                &root.manifest.inventory_types,
+            );
+            self.rom_manifest_json = Some(root.manifest_json.clone());
+            self.rom_manifest = Some(root.manifest.clone());
+            self.rom_resources = Some(root.resources.clone());
+        }
+
+        // Per-scene vehicle tuning: the shared vehicle def now lives in a dep
+        // ROM (`lunar-common`), so the root scene's `vehicle_overrides` (emitted
+        // into the manifest by `classic-roms`, keys already namespace-qualified)
+        // are merged onto the hydrated `self.vehicles` *after* the whole dep
+        // closure has loaded.
+        if let Some(root) = loaded.root_rom() {
+            self.apply_vehicle_overrides(&root.manifest.vehicle_overrides);
+        }
+    }
+
+    /// Merge the root manifest's `vehicle_overrides` (qualified vehicle name →
+    /// top-level `VehicleDef` field overrides) into the hydrated vehicle
+    /// registry.  A vehicle not present (or an override with no object shape)
+    /// is skipped; the merge mirrors `classic-roms`' old pack-time bake —
+    /// serialize the loaded def, overlay the override keys, deserialize back.
+    fn apply_vehicle_overrides(
+        &mut self,
+        overrides: &std::collections::HashMap<String, serde_json::Value>,
+    ) {
+        for (name, override_val) in overrides {
+            let Some(def) = self.vehicles.get(name).cloned() else { continue };
+            let Ok(mut val) = serde_json::to_value(&def) else { continue };
+            let Some(obj) = val.as_object_mut() else { continue };
+            if let Some(ov) = override_val.as_object() {
+                for (key, value) in ov {
+                    obj.insert(key.clone(), value.clone());
+                }
+            }
+            if let Ok(merged) = serde_json::from_value::<classic_core::types::VehicleDef>(val) {
+                self.vehicles.insert(name.clone(), merged);
+            }
+        }
     }
 
     /// Qualify an entity name with the active namespace (a no-op when the
@@ -607,10 +760,259 @@ impl Engine {
     /// be applied: `names`/`name_order` and every name lookup route through this
     /// once several ROMs can load concurrently.
     pub fn entity_key(&self, name: &str) -> String {
-        if self.namespace.is_empty() {
+        self.entity_key_ns(&self.namespace, name)
+    }
+
+    /// Qualify a name under an explicit namespace (a no-op for the global/empty
+    /// namespace or an already-qualified `ns::name`).  The per-guest counterpart
+    /// of [`Engine::entity_key`]: guest SDK name routing uses this so a ROM's
+    /// entities are keyed by its own namespace rather than the last ROM loaded.
+    pub fn entity_key_ns(&self, ns: &str, name: &str) -> String {
+        if ns.is_empty() || name.contains("::") {
             name.to_string()
         } else {
-            format!("{}::{name}", self.namespace)
+            format!("{ns}::{name}")
+        }
+    }
+
+    /// The effective namespace a ROM was hydrated under: its declared
+    /// `namespace`, or its entrypoint/name when it participates in a multi-ROM
+    /// DAG (empty = global).  The demo layer uses this to scope a ROM's guest.
+    pub fn rom_namespace(&self, name: &str) -> String {
+        let multi = self.loaded_roms.len() > 1;
+        if let Some(entry) = self.loaded_roms.iter().find(|e| e.name == name) {
+            return Self::effective_namespace(entry, multi);
+        }
+        String::new()
+    }
+
+    /// Derive a ROM's effective namespace for the multi-ROM model: its declared
+    /// `namespace` when set, else its entrypoint (falling back to the resolver
+    /// name) when it participates in a multi-ROM DAG.  The legacy single-ROM
+    /// boot (one ROM, empty namespace) stays on the global (`""`) namespace so
+    /// shipped scenes and their golden traces are unchanged.
+    fn effective_namespace(entry: &classic_rom::LoadedRom, multi: bool) -> String {
+        if !entry.namespace.is_empty() {
+            return entry.namespace.clone();
+        }
+        if multi {
+            if entry.rom.manifest.entrypoint.is_empty() {
+                entry.name.clone()
+            } else {
+                entry.rom.manifest.entrypoint.clone()
+            }
+        } else {
+            String::new()
+        }
+    }
+
+    /// Rewrite the cross-entity references stored on a ROM's components into
+    /// namespace-qualified keys, using the ROM's namespace as the referring
+    /// namespace.  Covered: `NavMesh.map_entity`, `IsoSprite.tilemap` /
+    /// `IsoAgent.tilemap`, `Animator.target` (the `entity.component` entity
+    /// segment), and `IsoVehicle.tilemap` / `wheel_entities` / `tire_entities`.
+    /// A bare reference resolves in the referring namespace first, then the
+    /// global namespace (see [`Engine::resolve_entity_name`]); a dangling
+    /// reference is left untouched (the draw path reports it as missing).
+    fn rewrite_cross_refs(&mut self, ns: &str, keys: &[String]) {
+        for key in keys {
+            let Some(&entity) = self.names.get(key) else { continue };
+
+            if let Some(map_entity) =
+                self.world.get::<&NavMesh>(entity).ok().map(|n| n.map_entity.clone())
+            {
+                if !map_entity.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &map_entity) {
+                        if let Ok(mut n) = self.world.get::<&mut NavMesh>(entity) {
+                            n.map_entity = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(tilemap) =
+                self.world.get::<&IsoSprite>(entity).ok().map(|s| s.tilemap.clone())
+            {
+                if !tilemap.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
+                        if let Ok(mut s) = self.world.get::<&mut IsoSprite>(entity) {
+                            s.tilemap = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(tilemap) =
+                self.world.get::<&IsoAgent>(entity).ok().map(|a| a.tilemap.clone())
+            {
+                if !tilemap.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
+                        if let Ok(mut a) = self.world.get::<&mut IsoAgent>(entity) {
+                            a.tilemap = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(target) = self.world.get::<&Animator>(entity).ok().map(|a| a.target.clone())
+            {
+                let parts: Vec<&str> = target.splitn(2, '.').collect();
+                if let Some(entity_name) = parts.first() {
+                    if !entity_name.is_empty() {
+                        if let Some(resolved) = self.resolve_entity_name(ns, entity_name) {
+                            let new_target = if parts.len() == 2 {
+                                format!("{resolved}.{}", parts[1])
+                            } else {
+                                resolved
+                            };
+                            if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
+                                a.target = new_target;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some((tilemap, wheels, tires)) = self
+                .world
+                .get::<&IsoVehicle>(entity)
+                .ok()
+                .map(|v| (v.tilemap.clone(), v.wheel_entities.clone(), v.tire_entities.clone()))
+            {
+                if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(entity) {
+                    if !tilemap.is_empty() {
+                        if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
+                            v.tilemap = resolved;
+                        }
+                    }
+                    for w in wheels.iter().zip(v.wheel_entities.iter_mut()) {
+                        if !w.0.is_empty() {
+                            if let Some(resolved) = self.resolve_entity_name(ns, w.0) {
+                                *w.1 = resolved;
+                            }
+                        }
+                    }
+                    for t in tires.iter().zip(v.tire_entities.iter_mut()) {
+                        if !t.0.is_empty() {
+                            if let Some(resolved) = self.resolve_entity_name(ns, t.0) {
+                                *t.1 = resolved;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rewrite the resource references stored on a ROM's components into
+    /// namespace-qualified keys, using the ROM's namespace as the referring
+    /// namespace.  Covered: `Tilemap.tile_set`, `NavMesh.tile_set`,
+    /// `IsoSprite.texture`, `IsoAgent.texture`, `SpriteRender.texture` (all
+    /// textures), `SdfTextRender.atlas_name` (font), and `Animator.animation`.
+    /// A bare reference resolves in the referring namespace first, then the
+    /// global namespace (see [`Engine::resolve_resource`]); a dangling
+    /// reference is left untouched (the draw path reports it as missing).
+    fn rewrite_resource_refs(&mut self, ns: &str, keys: &[String]) {
+        for key in keys {
+            let Some(&entity) = self.names.get(key) else { continue };
+
+            if let Some(tile_set) =
+                self.world.get::<&Tilemap>(entity).ok().map(|t| t.tile_set.clone())
+            {
+                if !tile_set.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &tile_set)
+                    {
+                        if let Ok(mut t) = self.world.get::<&mut Tilemap>(entity) {
+                            t.tile_set = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(tile_set) =
+                self.world.get::<&NavMesh>(entity).ok().map(|n| n.tile_set.clone())
+            {
+                if !tile_set.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &tile_set)
+                    {
+                        if let Ok(mut n) = self.world.get::<&mut NavMesh>(entity) {
+                            n.tile_set = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(texture) =
+                self.world.get::<&IsoSprite>(entity).ok().map(|s| s.texture.clone())
+            {
+                if !texture.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &texture)
+                    {
+                        if let Ok(mut s) = self.world.get::<&mut IsoSprite>(entity) {
+                            s.texture = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(texture) =
+                self.world.get::<&IsoAgent>(entity).ok().map(|a| a.texture.clone())
+            {
+                if !texture.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &texture)
+                    {
+                        if let Ok(mut a) = self.world.get::<&mut IsoAgent>(entity) {
+                            a.texture = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(texture) =
+                self.world.get::<&SpriteRender>(entity).ok().map(|s| s.texture.clone())
+            {
+                if !texture.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Texture, &texture)
+                    {
+                        if let Ok(mut s) = self.world.get::<&mut SpriteRender>(entity) {
+                            s.texture = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(atlas_name) =
+                self.world.get::<&SdfTextRender>(entity).ok().map(|s| s.atlas_name.clone())
+            {
+                if !atlas_name.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Font, &atlas_name)
+                    {
+                        if let Ok(mut s) = self.world.get::<&mut SdfTextRender>(entity) {
+                            s.atlas_name = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(anim_name) =
+                self.world.get::<&Animator>(entity).ok().and_then(|a| a.animation.clone())
+            {
+                if !anim_name.is_empty() {
+                    if let Some(resolved) =
+                        self.resolve_resource(ns, ResourceKind::Animation, &anim_name)
+                    {
+                        if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
+                            a.animation = Some(resolved);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -653,7 +1055,19 @@ impl Engine {
     /// and the current world state.  Returns `None` if no ROM was loaded.
     pub fn dump_rom(&self) -> Option<classic_rom::Rom> {
         let mut resources = self.rom_resources.clone()?;
+        self.refresh_grids(&mut resources);
+        Some(classic_rom::Rom {
+            manifest: self.rom_manifest.clone()?,
+            manifest_json: self.rom_manifest_json.clone()?,
+            resources,
+            state: self.dump_state(),
+        })
+    }
 
+    /// Refresh the tile/nav/height grid resources in `resources` from the
+    /// current world state (the re-hydration `dump_rom`/`dump_roms` do before
+    /// serializing).
+    fn refresh_grids(&self, resources: &mut classic_rom::ResourceSet) {
         if let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) {
             if let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) {
                 if let Some(name) = &tm.tiles_grid {
@@ -683,12 +1097,25 @@ impl Engine {
                 }
             }
         }
+    }
 
-        Some(classic_rom::Rom {
-            manifest: self.rom_manifest.clone()?,
-            manifest_json: self.rom_manifest_json.clone()?,
-            resources,
-            state: self.dump_state(),
+    /// Reconstruct the full multi-ROM dependency DAG, mirroring
+    /// [`Engine::dump_rom`]: the root ROM's resources are re-hydrated with the
+    /// current tile/nav/height grids and its `state` refreshed from the current
+    /// world; dependency ROMs keep their boot-time resources.  Returns `None`
+    /// when no ROMs are loaded.
+    pub fn dump_roms(&self) -> Option<classic_rom::LoadedRoms> {
+        if self.loaded_roms.is_empty() {
+            return None;
+        }
+        let mut order = self.loaded_roms.clone();
+        if let Some(root) = order.last_mut() {
+            self.refresh_grids(&mut root.rom.resources);
+            root.rom.state = self.dump_state();
+        }
+        Some(classic_rom::LoadedRoms {
+            root: self.loaded_roms.last().map(|e| e.name.clone()).unwrap_or_default(),
+            order,
         })
     }
 
@@ -787,6 +1214,66 @@ impl Engine {
                 })
                 .collect();
         }
+    }
+
+    /// Resolve a bare or `ns::name` entity reference against the loaded ROMs'
+    /// namespaces.  A qualified name resolves exactly; a bare name resolves in
+    /// the referring namespace first, then the global (empty) namespace, then
+    /// fails (`None`).  The single resolution point for the multi-ROM namespace
+    /// model; entity lookups route through it as multi-ROM scenes land.
+    pub fn resolve_entity_name(&self, referring_ns: &str, name: &str) -> Option<String> {
+        if name.contains("::") {
+            return self.names.contains_key(name).then(|| name.to_string());
+        }
+        if !referring_ns.is_empty() {
+            let qualified = format!("{referring_ns}::{name}");
+            if self.names.contains_key(&qualified) {
+                return Some(qualified);
+            }
+        }
+        self.names.contains_key(name).then(|| name.to_string())
+    }
+
+    /// The namespace prefix of a qualified `ns::name` key (the empty string for
+    /// a bare name).  The inverse of [`Engine::entity_key_ns`]'s qualification.
+    pub fn namespace_of(name: &str) -> String {
+        name.split_once("::").map(|(ns, _)| ns.to_string()).unwrap_or_default()
+    }
+
+    /// Whether a (qualified) name is registered under the given resource kind.
+    fn resource_exists(&self, kind: ResourceKind, name: &str) -> bool {
+        match kind {
+            ResourceKind::Texture => {
+                self.texture_names.contains(name)
+                    || self.gfx.as_ref().map(|g| g.textures.contains_key(name)).unwrap_or(false)
+            }
+            ResourceKind::Font => self.sdf_fonts.contains_key(name),
+            ResourceKind::Animation => self.animations.contains_key(name),
+            ResourceKind::FrameTable => self.frame_tables.contains_key(name),
+            ResourceKind::Vehicle => self.vehicles.contains_key(name),
+        }
+    }
+
+    /// Resolve a bare or `ns::name` resource reference against the loaded ROMs'
+    /// namespaces, mirroring [`Engine::resolve_entity_name`].  A qualified name
+    /// resolves exactly; a bare name resolves in the referring namespace first,
+    /// then the global (empty) namespace, then fails (`None`).
+    pub fn resolve_resource(
+        &self,
+        referring_ns: &str,
+        kind: ResourceKind,
+        name: &str,
+    ) -> Option<String> {
+        if name.contains("::") {
+            return self.resource_exists(kind, name).then(|| name.to_string());
+        }
+        if !referring_ns.is_empty() {
+            let qualified = format!("{referring_ns}::{name}");
+            if self.resource_exists(kind, &qualified) {
+                return Some(qualified);
+            }
+        }
+        self.resource_exists(kind, name).then(|| name.to_string())
     }
 
     /// Load per-frame visual offsets emitted by the animation renderer.
@@ -896,18 +1383,32 @@ impl Engine {
         }
     }
 
-    /// Load an SDF font from its metrics JSON and atlas PNG.
-    /// The atlas texture is set to LINEAR filtering.
-    pub fn load_sdf_font(&mut self, atlas_name: &str, metrics_json: &str, atlas_png: &[u8]) {
+    /// Upload a Basis Universal `.basis` payload as a GPU-compressed texture
+    /// (transcoding to the `format`-declared target, or raw RGBA8 as fallback).
+    /// A payload that cannot be transcoded is dropped (logged), leaving the
+    /// texture unuploaded — the web transcoder gap (P1.0/R2) surfaces here.
+    pub fn load_texture_basis(&mut self, name: &str, basis_bytes: &[u8], format: &str) {
+        if let Some(gfx) = self.gfx.as_mut() {
+            if !gfx.add_texture_basis(name, basis_bytes, format) {
+                log::warn!("texture {name}: basis transcode unavailable (format {format})");
+            }
+        }
+    }
+
+    /// Load an SDF font from its metrics JSON and atlas PNG, keyed by the
+    /// (namespace-qualified) font name; the atlas texture is uploaded under
+    /// `"{font_name}-sdf"` with LINEAR filtering.
+    pub fn load_sdf_font(&mut self, font_name: &str, metrics_json: &str, atlas_png: &[u8]) {
+        let atlas_name = format!("{font_name}-sdf");
         let metrics: SdfFontMetrics =
             serde_json::from_str(metrics_json).expect("parse SDF font metrics JSON");
-        self.sdf_fonts.insert(metrics.name.clone(), metrics);
+        self.sdf_fonts.insert(font_name.to_string(), metrics);
 
         let img = image::load_from_memory(atlas_png).expect("decode SDF atlas PNG");
         let luma = img.to_luma8();
         if let Some(gfx) = self.gfx.as_mut() {
-            gfx.add_texture_r8(atlas_name, &luma, luma.width(), luma.height());
-            if let Some(tex) = gfx.textures.get(atlas_name) {
+            gfx.add_texture_r8(&atlas_name, &luma, luma.width(), luma.height());
+            if let Some(tex) = gfx.textures.get(&atlas_name) {
                 tex.set_linear(&gfx.gl);
             }
         }
@@ -1053,6 +1554,15 @@ impl Engine {
     }
 
     pub fn load_state(&mut self, json: &str) -> Result<(), anyhow::Error> {
+        let ns = self.namespace.clone();
+        self.load_state_in(&ns, json).map(|_| ())
+    }
+
+    /// Load the entity graph into the world under an explicit namespace,
+    /// returning the (qualified) keys of the entities added.  The multi-ROM
+    /// hydration path uses this so cross-entity references can be rewritten
+    /// with the *referring* ROM's namespace rather than the last one loaded.
+    fn load_state_in(&mut self, ns: &str, json: &str) -> Result<Vec<String>, anyhow::Error> {
         // Parse via raw Value to preserve JSON key order (serde_json Map is ordered
         // under `preserve_order`). The typed HashMap on StateData drops ordering.
         let root: serde_json::Value = serde_json::from_str(json)?;
@@ -1061,6 +1571,7 @@ impl Engine {
             .and_then(|v| v.as_object())
             .ok_or_else(|| anyhow::anyhow!("state.json missing 'entities' key"))?;
 
+        let mut inserted = Vec::new();
         for (name, val) in entities_obj {
             let ed: classic_core::types::EntityData = serde_json::from_value(val.clone())?;
             let mut builder = hecs::EntityBuilder::new();
@@ -1073,11 +1584,13 @@ impl Engine {
                 builder.add(());
             }
             let entity = self.world.spawn(builder.build());
-            self.world.insert_one(entity, DebugName(name.clone())).ok();
-            self.names.insert(name.clone(), entity);
-            self.name_order.push(name.clone());
+            let key = self.entity_key_ns(ns, name);
+            self.world.insert_one(entity, DebugName(key.clone())).ok();
+            self.names.insert(key.clone(), entity);
+            self.name_order.push(key.clone());
+            inserted.push(key);
         }
-        Ok(())
+        Ok(inserted)
     }
 
     pub fn debug_name(&self, entity: hecs::Entity) -> String {
@@ -1561,22 +2074,18 @@ impl Engine {
         Some((a.animation.clone().unwrap_or_default(), a.frame))
     }
 
-    /// Whether a named texture is available (declared in the ROM's resources or
-    /// already uploaded to GL).
+    /// Whether a named texture is available (registered from the ROM's
+    /// resources or already uploaded to GL).  The name must already be
+    /// namespace-resolved (see [`Engine::resolve_resource`]).
     pub fn has_texture(&self, name: &str) -> bool {
         let in_gfx = self.gfx.as_ref().map(|g| g.textures.contains_key(name)).unwrap_or(false);
-        let in_rom =
-            self.rom_resources.as_ref().map(|r| r.textures().contains_key(name)).unwrap_or(false);
-        in_gfx || in_rom
+        in_gfx || self.texture_names.contains(name)
     }
 
-    /// Whether a named SDF font is available (declared in the ROM's resources
-    /// or already loaded into `sdf_fonts`).
+    /// Whether a named SDF font is available (loaded into `sdf_fonts`).  The
+    /// name must already be namespace-resolved (see [`Engine::resolve_resource`]).
     pub fn has_font(&self, name: &str) -> bool {
-        let in_metrics = self.sdf_fonts.contains_key(name);
-        let in_rom =
-            self.rom_resources.as_ref().map(|r| r.fonts().contains_key(name)).unwrap_or(false);
-        in_metrics || in_rom
+        self.sdf_fonts.contains_key(name)
     }
 
     /// Whether a named animation is registered.
@@ -4912,5 +5421,321 @@ mod tests {
             gathered[0].position.z,
             expected.z
         );
+    }
+
+    fn test_rom(name: &str, namespace: &str, state_json: &str) -> classic_rom::Rom {
+        let manifest_json = format!(
+            r#"{{"entrypoint": "{name}", "namespace": "{namespace}",
+                "shaders": [], "textures": [], "animations": []}}"#
+        );
+        let manifest: classic_rom::RomManifest = serde_json::from_str(&manifest_json).unwrap();
+        classic_rom::Rom {
+            manifest,
+            manifest_json,
+            resources: classic_rom::ResourceSet::default(),
+            state: state_json.to_string(),
+        }
+    }
+
+    #[test]
+    fn load_state_qualifies_entity_names_under_namespace() {
+        let mut e = Engine::new_for_test();
+        e.namespace = "lunar".into();
+        e.load_state(r#"{"entities":{"rocket":{"components":[]}}}"#).unwrap();
+        assert!(e.names.contains_key("lunar::rocket"));
+        assert_eq!(e.name_order, vec!["lunar::rocket"]);
+
+        // An empty namespace is a no-op (the legacy single-ROM path).
+        let mut e2 = Engine::new_for_test();
+        e2.load_state(r#"{"entities":{"rocket":{"components":[]}}}"#).unwrap();
+        assert!(e2.names.contains_key("rocket"));
+        assert!(!e2.names.contains_key("::rocket"));
+    }
+
+    #[test]
+    fn hydrate_roms_tracks_dag_in_topological_order() {
+        let mut e = Engine::new_for_test();
+        let loaded = classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: "common".into(),
+                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
+                },
+            ],
+        };
+
+        e.hydrate_roms(&loaded);
+
+        // Entities from both ROMs are hydrated, namespace-qualified.
+        assert!(e.names.contains_key("common::tile"));
+        assert!(e.names.contains_key("scene::rocket"));
+
+        // The DAG is recorded and round-trips through `dump_roms`.
+        assert_eq!(e.loaded_roms.len(), 2);
+        let dumped = e.dump_roms().unwrap();
+        assert_eq!(dumped.root, "scene");
+        assert_eq!(dumped.order.len(), 2);
+        assert_eq!(dumped.order[0].namespace, "common");
+        assert_eq!(dumped.order[1].namespace, "scene");
+
+        // The root ROM is mirrored into the single-ROM fields.
+        assert_eq!(e.rom_manifest.as_ref().unwrap().entrypoint, "scene");
+    }
+
+    #[test]
+    fn apply_vehicle_overrides_merges_root_tuning_into_shared_def() {
+        let mut e = Engine::new_for_test();
+        let def: classic_core::types::VehicleDef = serde_json::from_str(
+            r#"{"name":"lrv","directions":8,
+                "parts":[{"name":"body","texture":"lrvBody","anchors":[[0.5,0.5]]}]}"#,
+        )
+        .unwrap();
+        e.vehicles.insert("lunar-common::lrv".into(), def);
+
+        let overrides: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({
+                "lunar-common::lrv": {"turn_rate_deg_per_sec": 55.0, "safe_fall_px": 96.0}
+            }))
+            .unwrap();
+        e.apply_vehicle_overrides(&overrides);
+
+        let merged = &e.vehicles["lunar-common::lrv"];
+        assert_eq!(merged.turn_rate_deg_per_sec, 55.0);
+        assert_eq!(merged.safe_fall_px, 96.0);
+        // Non-overridden fields keep the shared def's values.
+        assert_eq!(merged.name, "lrv");
+        assert_eq!(merged.parts.len(), 1);
+
+        // An override for a vehicle the DAG didn't hydrate is ignored.
+        let unknown: std::collections::HashMap<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"missing::lrv": {"turn_rate_deg_per_sec": 1.0}}),
+        )
+        .unwrap();
+        e.apply_vehicle_overrides(&unknown);
+        assert!(!e.vehicles.contains_key("missing::lrv"));
+    }
+
+    #[test]
+    fn resolve_entity_name_applies_namespace_rule() {
+        let mut e = Engine::new_for_test();
+        e.load_state(r#"{"entities":{"globalEnt":{"components":[]}}}"#).unwrap();
+        e.namespace = "lunar".into();
+        e.load_state(r#"{"entities":{"rocket":{"components":[]}}}"#).unwrap();
+
+        // Qualified names resolve exactly.
+        assert_eq!(e.resolve_entity_name("scene", "lunar::rocket"), Some("lunar::rocket".into()));
+        // Bare names resolve in the referring namespace first.
+        assert_eq!(e.resolve_entity_name("lunar", "rocket"), Some("lunar::rocket".into()));
+        // ...then fall back to the global namespace.
+        assert_eq!(e.resolve_entity_name("lunar", "globalEnt"), Some("globalEnt".into()));
+        // Unknown names fail.
+        assert_eq!(e.resolve_entity_name("lunar", "missing"), None);
+    }
+
+    #[test]
+    fn resolve_resource_applies_namespace_rule() {
+        let mut e = Engine::new_for_test();
+        // A global texture (empty namespace).
+        e.texture_names.insert("cursor".to_string());
+        // A namespaced ROM's resources.
+        e.texture_names.insert("scene::rocket".to_string());
+        e.animations.insert(
+            "scene::walk".to_string(),
+            AnimationData {
+                name: "walk".to_string(),
+                src: "humanoid".to_string(),
+                rate: 24.0,
+                sequence: vec![0],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                channels: vec![],
+                metadata: None,
+            },
+        );
+        e.sdf_fonts.insert(
+            "scene::dejavusans".to_string(),
+            SdfFontMetrics {
+                name: "dejavusans".to_string(),
+                family: "DejaVu Sans".to_string(),
+                atlas_size: [512.0, 512.0],
+                glyph_size: 32.0,
+                spread: 4.0,
+                baseline: 0.0,
+                line_height: 1.0,
+                glyphs: std::collections::HashMap::new(),
+            },
+        );
+
+        // Qualified names resolve exactly.
+        assert_eq!(
+            e.resolve_resource("x", ResourceKind::Texture, "scene::rocket"),
+            Some("scene::rocket".into())
+        );
+        // Bare names resolve in the referring namespace first.
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Texture, "rocket"),
+            Some("scene::rocket".into())
+        );
+        // ...then fall back to the global namespace.
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Texture, "cursor"),
+            Some("cursor".into())
+        );
+        // Animations and fonts resolve through their own registries.
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Animation, "walk"),
+            Some("scene::walk".into())
+        );
+        assert_eq!(
+            e.resolve_resource("scene", ResourceKind::Font, "dejavusans"),
+            Some("scene::dejavusans".into())
+        );
+        // Unknown names fail.
+        assert_eq!(e.resolve_resource("scene", ResourceKind::Texture, "missing"), None);
+    }
+
+    #[test]
+    fn rewrite_resource_refs_qualifies_resource_references() {
+        let scene_state = r#"{
+            "entities": {
+                "rocket": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "rocket", "tilemap": "tilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.98] } ] },
+                "marker": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "common::tileSet", "tilemap": "common::tilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.5] } ] },
+                "cursorSpr": { "components": [ { "type": "Sprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "cursor", "ignore_cam": true, "frame": 0,
+                    "tile_set_size": [1,1], "anchor": [0.5,0.5] } ] },
+                "label": { "components": [ { "type": "SdfText", "atlas_name": "dejavusans",
+                    "color": [1,1,1,1], "outline_color": [0,0,0,1], "outline_width": 0.0,
+                    "ignore_cam": true, "text": "x", "justify": "Left", "weight": 0.5,
+                    "gamma": 0.0 } ] },
+                "anim": { "components": [ { "type": "Animator", "target": "rocket.IsoSprite",
+                    "speed": 1.0, "animation": "walk" } ] }
+            }
+        }"#;
+
+        let mut e = Engine::new_for_test();
+        // Populate the resource registries as `load_manifest_resources` would.
+        e.texture_names.insert("scene::rocket".to_string());
+        e.texture_names.insert("common::tileSet".to_string());
+        e.texture_names.insert("cursor".to_string());
+        e.animations.insert(
+            "scene::walk".to_string(),
+            AnimationData {
+                name: "walk".to_string(),
+                src: "humanoid".to_string(),
+                rate: 24.0,
+                sequence: vec![0],
+                offsets: vec![],
+                offset_keyframes: vec![],
+                channels: vec![],
+                metadata: None,
+            },
+        );
+        e.sdf_fonts.insert(
+            "scene::dejavusans".to_string(),
+            SdfFontMetrics {
+                name: "dejavusans".to_string(),
+                family: "DejaVu Sans".to_string(),
+                atlas_size: [512.0, 512.0],
+                glyph_size: 32.0,
+                spread: 4.0,
+                baseline: 0.0,
+                line_height: 1.0,
+                glyphs: std::collections::HashMap::new(),
+            },
+        );
+
+        let keys = e.load_state_in("scene", scene_state).unwrap();
+        e.rewrite_resource_refs("scene", &keys);
+
+        // A bare texture resolves in the referring (own) namespace.
+        let rocket = *e.names.get("scene::rocket").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(rocket).unwrap().texture, "scene::rocket");
+        // A qualified cross-ROM reference resolves exactly (left untouched).
+        let marker = *e.names.get("scene::marker").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(marker).unwrap().texture, "common::tileSet");
+        // A bare name absent from the own namespace falls back to global.
+        let cursor_spr = *e.names.get("scene::cursorSpr").unwrap();
+        assert_eq!(e.world.get::<&SpriteRender>(cursor_spr).unwrap().texture, "cursor");
+        // The SDF font atlas_name resolves as a font.
+        let label = *e.names.get("scene::label").unwrap();
+        assert_eq!(e.world.get::<&SdfTextRender>(label).unwrap().atlas_name, "scene::dejavusans");
+        // The animator's animation name resolves as an animation.
+        let anim = *e.names.get("scene::anim").unwrap();
+        assert_eq!(
+            e.world.get::<&Animator>(anim).unwrap().animation.as_deref(),
+            Some("scene::walk")
+        );
+    }
+
+    #[test]
+    fn rewrite_cross_refs_qualifies_entity_references() {
+        // A dependency ROM that did not declare a namespace defaults to its
+        // entrypoint when it participates in a multi-ROM DAG.
+        let scene_state = r#"{
+            "entities": {
+                "rocket": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "rocket", "tilemap": "common::tilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.98] } ] },
+                "selfsprite": { "components": [ { "type": "IsoSprite", "position": [0,0,0],
+                    "scale": [1,1,1], "texture": "x", "tilemap": "localTilemap",
+                    "frame": 0, "tile_set_size": [1,1], "anchor": [0.5,0.5] } ] },
+                "nav": { "components": [ { "type": "IsometricNavMesh", "position": [0,0,0],
+                    "scale": [1,1,1], "map_entity": "common::tilemap", "size_x": 10, "size_y": 10 } ] },
+                "anim": { "components": [ { "type": "Animator", "target": "rocket.IsoSprite",
+                    "speed": 1.0 } ] },
+                "localTilemap": { "components": [] }
+            }
+        }"#;
+
+        let mut e = Engine::new_for_test();
+        let loaded = classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: String::new(),
+                    rom: test_rom("common", "", r#"{"entities":{"tilemap":{"components":[]}}}"#),
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom("scene", "scene", scene_state),
+                },
+            ],
+        };
+
+        e.hydrate_roms(&loaded);
+
+        // The undeclared dependency ROM defaulted to its entrypoint namespace.
+        assert_eq!(e.rom_namespace("common"), "common");
+        assert_eq!(e.rom_namespace("scene"), "scene");
+        assert!(e.names.contains_key("common::tilemap"));
+
+        // A qualified cross-ROM reference resolves exactly (left untouched).
+        let rocket = *e.names.get("scene::rocket").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(rocket).unwrap().tilemap, "common::tilemap");
+
+        // A bare reference to a same-ROM entity is qualified with the referring ns.
+        let selfsprite = *e.names.get("scene::selfsprite").unwrap();
+        assert_eq!(e.world.get::<&IsoSprite>(selfsprite).unwrap().tilemap, "scene::localTilemap");
+
+        // NavMesh.map_entity is rewritten.
+        let nav = *e.names.get("scene::nav").unwrap();
+        assert_eq!(e.world.get::<&NavMesh>(nav).unwrap().map_entity, "common::tilemap");
+
+        // Animator.target qualifies its entity segment and keeps the component name.
+        let anim = *e.names.get("scene::anim").unwrap();
+        assert_eq!(e.world.get::<&Animator>(anim).unwrap().target, "scene::rocket.IsoSprite");
     }
 }

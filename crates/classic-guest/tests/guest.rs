@@ -4,13 +4,12 @@
 use classic_core::components::{
     Animator, ColliderData, Disabled, IsoSprite, Light, NavMesh, Role, Shape, Tilemap,
 };
-use classic_core::types::AnimationData;
+use classic_core::types::{AnimationData, SdfFontMetrics};
 use classic_core::RoleKind;
 use classic_engine::Engine;
 #[cfg(not(target_arch = "wasm32"))]
 use classic_guest::WasmtimeRuntime;
 use classic_guest::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
-use classic_rom::{ResourceKind, ResourceSet};
 use glam::Vec3;
 
 /// Build one runtime per available backend for a WAT module.
@@ -1195,10 +1194,20 @@ fn guest_noise_field_imports_wired() {
 }
 
 fn install_test_resources(engine: &mut Engine) {
-    let mut resources = ResourceSet::default();
-    resources.insert(ResourceKind::Texture, "tree", vec![0, 1, 2]);
-    resources.insert(ResourceKind::Font, "font", vec![b'{']);
-    engine.rom_resources = Some(resources);
+    engine.texture_names.insert("tree".into());
+    engine.sdf_fonts.insert(
+        "font".into(),
+        SdfFontMetrics {
+            name: "font".into(),
+            family: "test".into(),
+            atlas_size: [128.0, 128.0],
+            glyph_size: 16.0,
+            spread: 2.0,
+            baseline: 0.0,
+            line_height: 1.0,
+            glyphs: Default::default(),
+        },
+    );
     engine.animations.insert(
         "anim".into(),
         AnimationData {

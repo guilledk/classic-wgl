@@ -24,3 +24,4 @@ zstd = "0.13"
 
 [dev-dependencies]
 base64.workspace = true
+pollster.workspace = true

@@ -99,8 +99,10 @@ pub struct SpriteRender {
 }
 
 /// The default SDF font atlas name used when a text element doesn't specify
-/// one explicitly.
-pub const DEFAULT_SDF_FONT: &str = "dejavusans";
+/// one explicitly.  The font ships in the shared `common` ROM, so the default
+/// is namespace-qualified (the bare name would no longer resolve under the
+/// multi-ROM split).
+pub const DEFAULT_SDF_FONT: &str = "common::dejavusans";
 
 /// SDF text.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -186,8 +188,9 @@ impl Tilemap {
 }
 
 /// Navigation mesh (layered on top of a Tilemap).
-/// The default nav-overlay tileset name.
-pub const DEFAULT_NAV_TILESET: &str = "navTileset";
+/// The default nav-overlay tileset name.  Ships in the shared `common` ROM, so
+/// it is namespace-qualified (a bare name would not resolve under the split).
+pub const DEFAULT_NAV_TILESET: &str = "common::navTileset";
 
 fn default_nav_tileset() -> String {
     DEFAULT_NAV_TILESET.to_string()

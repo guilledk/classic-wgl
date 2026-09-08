@@ -1,22 +1,38 @@
 {
   "demo": {
-    "size": 2243007,
-    "sha256": "af27b64731093274bde7c8929da4a4bd12542a06f485aaae6057da61292e2a85",
-    "version": "0.1.0"
+    "size": 314162,
+    "sha256": "ed6e10d8d430bd55d5a664524502f0952d6510a636f476f230629fc06634bb00",
+    "version": "0.1.0",
+    "assets_hash": "c49023334ca1d710972538e4d6bad9731af6299b2c3a5eb40c61792bbe96d229"
   },
   "lunar": {
-    "size": 47194994,
-    "sha256": "8205d41deea63b173f59a73c49c254135045711c68e45c0b1f9da4e89adb93ae",
-    "version": "0.1.1"
+    "size": 12892734,
+    "sha256": "3a5e737c33bf1c94d60f7020ef6b0452198b6c44b418ac5bf1031f748f99ad50",
+    "version": "0.1.1",
+    "assets_hash": "9c6e573453f16bb46f09c93ce544cb76e0e7a39c27e3898bdc0c3bce5fe958f1"
   },
   "lrvtest": {
-    "size": 7789703,
-    "sha256": "118b9287febf73261a3f97ff2f3cead1a292b7321f46deb66dc30d81c68d9d41",
-    "version": "0.1.0"
+    "size": 1872,
+    "sha256": "ed1e7697216e89ab6965dae808cf83ac6ce93506da448ae4118eaf7535220e89",
+    "version": "0.1.0",
+    "assets_hash": "b818c0dea432d21f348e1d825c398e70059466f1209f7ae942f815648579aeae"
   },
   "basetest": {
-    "size": 7970914,
-    "sha256": "cfdf7959334816463689c874babe6090ea8b5ce00099cd48f36ce06de3638362",
-    "version": "0.1.0"
+    "size": 1490,
+    "sha256": "a47caeb6512c08a9f23facd94220b25fa7d3bf72a2b31ef3728a3b2c20d29117",
+    "version": "0.1.0",
+    "assets_hash": "b818c0dea432d21f348e1d825c398e70059466f1209f7ae942f815648579aeae"
+  },
+  "common": {
+    "size": 275873,
+    "sha256": "7d70cc71edf924de89ee795a011c401656134d02816384ee937244a47e528d57",
+    "version": "0.1.0",
+    "assets_hash": "4e9265a78ff0d99592996e7459761a9282cae66a695c093051e2e01eccd0bf69"
+  },
+  "lunar-common": {
+    "size": 1419908,
+    "sha256": "d629b9a6657a81c5b15bb7381c1c729747268d47183e35efec161c61c546ed7c",
+    "version": "0.1.0",
+    "assets_hash": "bbd352ab62546722c0465267604f8e2cc6d2e4f5bff80ea14599102638910027"
   }
 }

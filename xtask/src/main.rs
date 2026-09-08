@@ -39,12 +39,15 @@ const LOCK_PATH: &str = "tests/golden/roms.lock.json";
 
 /// The ROMs shipped by `classic-roms`.  (`moon` is a resolve-time alias for
 /// `lunar` only — the desktop/web `rom_lookup`/`static_lookup` handle it — so it
-/// is not fetched here.)
+/// is not fetched here.)  `common` + `lunar-common` are the shared asset-only
+/// dependency ROMs the shipped scenes resolve at boot.
 const ROMS: &[(&str, &str)] = &[
     ("demo", "demo.rom"),
     ("lunar", "lunar.rom"),
     ("lrvtest", "lrvtest.rom"),
     ("basetest", "basetest.rom"),
+    ("common", "common.rom"),
+    ("lunar-common", "lunar-common.rom"),
 ];
 
 fn main() -> anyhow::Result<()> {

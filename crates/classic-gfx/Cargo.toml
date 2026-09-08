@@ -14,3 +14,15 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bytemuck.workspace = true
+
+# Phase 1 GPU-compressed storage: transcode Basis Universal `.basis` payloads
+# to the GPU's native compressed format at load.  Native-only (a C++ codec);
+# the web path uses a separate precompiled transcoder `.wasm` (see P1.0/R2).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+basis-universal = "0.3.1"
+
+# Web Basis Universal transcoder (P1.0/R2): a precompiled three.js
+# `basis_transcoder` `.wasm`, instantiated synchronously via js-sys.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
+wasm-bindgen.workspace = true
