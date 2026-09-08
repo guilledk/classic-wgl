@@ -31,6 +31,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Read the vehicle anchors `data[]` artifact as `name → anchors` maps
   (`BTreeMap`), dropping the redundant `name`/`directions`/per-part `texture`
   fields (#89).
+- Stream `Rom` archive entries into the pack writers (`for_each_entry`),
+  avoiding a full `Vec<(String, Vec<u8>)>` materialization.
 
 ## [0.1.1] - 2026-09-01
 
