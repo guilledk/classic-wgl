@@ -52,6 +52,12 @@ pub struct TraceItem {
     /// Normal-map texture name if the sprite shades with runtime lighting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normal: Option<String>,
+    /// Screen-space bounding rect `[x, y, w, h]` (top-left origin, pixels) of
+    /// the draw's unit quad after the camera matrix.  Deterministic and GPU-free;
+    /// emitted only into the sibling layout map — never into the JSONL golden
+    /// trace (hence `#[serde(skip)]`).
+    #[serde(skip)]
+    pub screen: Option<[f32; 4]>,
 }
 
 /// A complete render trace for one capture point (tag + frame).
@@ -101,6 +107,7 @@ pub struct TraceItemParams<'a> {
     pub depth: Option<&'a str>,
     pub depth_range: Option<f32>,
     pub normal: Option<&'a str>,
+    pub screen: Option<[f32; 4]>,
 }
 
 impl TraceCollector {
@@ -135,6 +142,7 @@ impl TraceCollector {
             depth: p.depth.map(|s| s.to_string()),
             depth_range: p.depth_range,
             normal: p.normal.map(|s| s.to_string()),
+            screen: p.screen,
         });
     }
 
@@ -183,6 +191,53 @@ pub fn serialize_trace(trace: &RenderTrace) -> String {
     out
 }
 
+/// Serialise a render trace as a fixed-width layout map: one line per draw item
+/// (sorted by `order`) with its screen-space rect.  This is the text-only frame
+/// artifact for non-vision models — deterministic, GPU-free, and emitted next to
+/// the golden trace, but never part of the line-by-line golden comparison.
+pub fn serialize_layout(trace: &RenderTrace) -> String {
+    use std::fmt::Write;
+
+    let mut out = String::new();
+    let [vw, vh] = trace.viewport;
+    let [cx, cy, cz] = trace.camera.position;
+    let [sx, sy, sz] = trace.camera.scale;
+    let _ = writeln!(
+        out,
+        "# frame {} viewport {:.0}x{:.0} camera_pos ({:.1},{:.1},{:.1}) scale ({:.3},{:.3},{:.3})",
+        trace.frame, vw, vh, cx, cy, cz, sx, sy, sz
+    );
+    let _ = writeln!(
+        out,
+        "# {:<16} {:<10} {:>10} {:>9} {:>9} {:>9} {:>9}  {:<16} color",
+        "name", "kind", "order", "x", "y", "w", "h", "texture"
+    );
+
+    let mut items: Vec<&TraceItem> = trace.items.iter().collect();
+    items.sort_by(|a, b| a.order.total_cmp(&b.order));
+    for it in items {
+        let rect = match it.screen {
+            Some([x, y, w, h]) => format!("{x:>9.1} {y:>9.1} {w:>9.1} {h:>9.1}"),
+            None => format!("{:>9} {:>9} {:>9} {:>9}", "-", "-", "-", "-"),
+        };
+        let color = it
+            .color
+            .map(|c| format!("[{:.2},{:.2},{:.2},{:.2}]", c[0], c[1], c[2], c[3]))
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "{:<16} {:<10} {:>10.2} {}  {:<16} {}",
+            it.name,
+            it.kind,
+            it.order,
+            rect,
+            it.texture.clone().unwrap_or_default(),
+            color
+        );
+    }
+    out
+}
+
 /// Compare two traces line-wise.  Returns Ok(()) on match, Err(lines_diff) on mismatch.
 pub fn compare_traces(actual: &str, expected: &str) -> Result<(), Vec<String>> {
     let actual_lines: Vec<&str> = actual.lines().collect();
@@ -211,6 +266,34 @@ fn mat4_to_row(m: &glam::Mat4) -> [f32; 16] {
     m.to_cols_array()
 }
 
+/// Project a model matrix's unit quad `(0,0)..(1,1)` to a screen-space bounding
+/// rect `[x, y, w, h]` (top-left origin, pixels).  `cam` is the camera view
+/// matrix (`Camera::matrix`), which already maps world → screen pixels;
+/// `camera_ignored` substitutes the identity so screen-aligned draws project
+/// their model coords directly.  Pure and GL-free — this is what makes the
+/// layout map deterministic and CI-safe.
+pub fn project_rect(cam: &glam::Mat4, model: &glam::Mat4, camera_ignored: bool) -> [f32; 4] {
+    let cam = if camera_ignored { glam::Mat4::IDENTITY } else { *cam };
+    let corners = [
+        glam::Vec3::new(0.0, 0.0, 0.0),
+        glam::Vec3::new(1.0, 0.0, 0.0),
+        glam::Vec3::new(0.0, 1.0, 0.0),
+        glam::Vec3::new(1.0, 1.0, 0.0),
+    ];
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for c in corners {
+        let p = cam.transform_point3(model.transform_point3(c));
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+    }
+    [min_x, min_y, max_x - min_x, max_y - min_y]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +307,76 @@ mod tests {
     #[test]
     fn different_traces_compare_unequal() {
         assert!(compare_traces("{\"tag\":\"a\"}", "{\"tag\":\"b\"}").is_err());
+    }
+
+    #[test]
+    fn project_rect_translates_and_scales_unit_quad() {
+        let model = glam::Mat4::from_translation(glam::Vec3::new(10.0, 20.0, 0.0))
+            * glam::Mat4::from_scale(glam::Vec3::new(30.0, 40.0, 1.0));
+        assert_eq!(project_rect(&glam::Mat4::IDENTITY, &model, false), [10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn project_rect_camera_ignored_uses_identity() {
+        let model = glam::Mat4::from_translation(glam::Vec3::new(5.0, 6.0, 0.0))
+            * glam::Mat4::from_scale(glam::Vec3::new(7.0, 8.0, 1.0));
+        // A camera that would otherwise shove the quad far off-screen.
+        let cam = glam::Mat4::from_translation(glam::Vec3::new(-1000.0, -1000.0, 0.0));
+        assert_eq!(project_rect(&cam, &model, true), [5.0, 6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn screen_field_is_not_serialized() {
+        let item = TraceItem {
+            order: 0.0,
+            kind: "Sprite".into(),
+            name: "n".into(),
+            model: [0.0; 16],
+            camera_ignored: false,
+            texture: None,
+            frame: None,
+            color: None,
+            depth: None,
+            depth_range: None,
+            normal: None,
+            screen: Some([1.0, 2.0, 3.0, 4.0]),
+        };
+        let json = serde_json::to_string(&item).expect("serialize");
+        assert!(!json.contains("screen"), "screen must not leak into the JSONL: {json}");
+    }
+
+    #[test]
+    fn serialize_layout_renders_items_with_rects() {
+        let item = TraceItem {
+            order: 2.0,
+            kind: "Sprite".into(),
+            name: "rocket".into(),
+            model: [0.0; 16],
+            camera_ignored: false,
+            texture: Some("demo_atlas".into()),
+            frame: None,
+            color: None,
+            depth: None,
+            depth_range: None,
+            normal: None,
+            screen: Some([10.0, 20.0, 30.0, 40.0]),
+        };
+        let trace = RenderTrace {
+            tag: "baseline".into(),
+            frame: 55,
+            viewport: [1280.0, 720.0],
+            camera: CameraSnapshot {
+                position: [1.0, 2.0, 3.0],
+                scale: [1.0, 1.0, 1.0],
+                matrix: [0.0; 16],
+            },
+            counts: BTreeMap::new(),
+            items: vec![item],
+        };
+        let map = serialize_layout(&trace);
+        assert!(map.contains("frame 55"));
+        assert!(map.contains("rocket"));
+        assert!(map.contains("Sprite"));
+        assert!(map.contains("demo_atlas"));
     }
 }
