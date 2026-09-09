@@ -6,9 +6,9 @@
     "assets_hash": "af490fb850722720c655fc06f9b61ed1485603f4112201afae2371c434f03850"
   },
   "lunar": {
-    "size": 6486153,
-    "sha256": "1606708ee9f605c8287cdb74675980706ce630b33c96dbde9f6fcdd6fbeefe15",
-    "version": "0.1.1",
+    "size": 6486151,
+    "sha256": "a5efe704fbfbf463e9ded5379cb6ff906fff978ff37c89f44223e01df29107b4",
+    "version": "0.2.0",
     "assets_hash": "1341d67619b43bf6ab8bb7bb148e28ca0b3207faa50c0c95024b94047d852958"
   },
   "lrvtest": {

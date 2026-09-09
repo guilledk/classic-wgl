@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "classic-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "classic-demo"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "classic-core",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "classic-desktop"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "classic-core",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "classic-engine"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "classic-gfx"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "basis-universal",
@@ -446,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "classic-guest"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "classic-core",
@@ -465,21 +465,21 @@ dependencies = [
 
 [[package]]
 name = "classic-pathfinder"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "classic-pathfinder-wasm"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "classic-pathfinder",
 ]
 
 [[package]]
 name = "classic-platform"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "classic-core",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "classic-rom"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -526,14 +526,14 @@ dependencies = [
 
 [[package]]
 name = "classic-terrain"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "classic-web"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "classic-core",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "classic-worker"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "classic-core",
  "js-sys",

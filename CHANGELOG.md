@@ -8,6 +8,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-09
+
 ### Added
 
 - Web Basis Universal transcoder: build our own Emscripten `basis_transcoder`
