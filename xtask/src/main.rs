@@ -345,6 +345,22 @@ fn set_workspace_version(root: &Path, old: &str, new: &str) -> anyhow::Result<()
         .context("write Cargo.toml")
 }
 
+/// Refresh `Cargo.lock` so it records the bumped workspace version (members
+/// inherit `version.workspace = true`).  Without this the committed lockfile
+/// drifts from `Cargo.toml`, so a later `cargo build --locked` fails.
+fn refresh_lockfile(root: &Path) -> anyhow::Result<()> {
+    let status = Command::new("cargo")
+        .arg("update")
+        .arg("--workspace")
+        .current_dir(root)
+        .status()
+        .context("run `cargo update --workspace` to refresh Cargo.lock")?;
+    if !status.success() {
+        anyhow::bail!("`cargo update --workspace` failed");
+    }
+    Ok(())
+}
+
 /// The first released version heading in `CHANGELOG.md` (skipping
 /// `[Unreleased]`).
 fn changelog_top_version(root: &Path) -> anyhow::Result<Option<String>> {
@@ -400,8 +416,8 @@ fn cmd_check_version() -> anyhow::Result<()> {
 }
 
 /// `cargo xtask release <major|minor|patch>` (or `--version X.Y.Z`): bump the
-/// workspace version, freeze the changelog, and verify.  Prints the commit/tag
-/// commands — it does not mutate git.
+/// workspace version, refresh `Cargo.lock`, freeze the changelog, and verify.
+/// Prints the commit/tag commands — it does not mutate git.
 fn cmd_release(args: &[String]) -> anyhow::Result<()> {
     let root = repo_root()?;
     let current = read_workspace_version(&root)?;
@@ -419,12 +435,13 @@ fn cmd_release(args: &[String]) -> anyhow::Result<()> {
     };
 
     set_workspace_version(&root, &current, &new_version)?;
+    refresh_lockfile(&root)?;
     freeze_changelog(&root, &new_version, &today_date()?)?;
     cmd_check_version()?;
 
     println!("bumped {current} -> {new_version}");
     println!("next:");
-    println!("  git add Cargo.toml CHANGELOG.md");
+    println!("  git add Cargo.toml Cargo.lock CHANGELOG.md");
     println!("  git commit -m \"release v{new_version}\"");
     println!("  git tag -a v{new_version} -m \"release v{new_version}\"");
     println!("  git push origin master --tags");
