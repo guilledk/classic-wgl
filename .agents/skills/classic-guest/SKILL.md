@@ -47,8 +47,9 @@ crates/classic-guest/
   src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel) + the shared
                           import macro + memory helpers
   src/runtime_web/        WebWasmRuntime (wasm only, trusted): browser-native
-                          `WebAssembly`, host imports as `Closure`s (+ a dispatcher
-                          for the 13 imports with >8 args)
+                          `WebAssembly`; host imports generated from the ABI table
+                          as typed `Closure`s (imports with >8 wasm params use an
+                          arity-1 `Closure` behind a JS `arguments` shim)
   src/runtime_worker.rs   WorkerWasmRuntime (wasm only, untrusted): `Worker` +
                           SAB/Atomics synchronous host-import bridge + terminate watchdog
   src/worker.js           the Worker script (SAB host-import stubs + update loop)
@@ -63,9 +64,11 @@ All implement the same `GuestRuntime` trait and the same `env` import surface.
 The import surface is declared once, in the ABI table
 (`classic-core/src/abi_manifest.rs`, `for_each_host_import!`): each entry
 records the name, typed params (marshalling kind), return kind and backend set.
-The wasmi and wasmtime linker layers (and the Tier-3 worker surface) are
-generated from it; only the `GuestHost` SDK bodies (`sdk.rs`) and the web/worker
-closure/SAB layers are hand-written per backend.
+The wasmi, wasmtime and browser-`WebAssembly` import layers (and the Tier-3
+worker surface) are generated from it by `classic_core::host_imports!`, which
+holds the per-kind marshalling once and calls a small per-backend frontend
+macro; only the `GuestHost` SDK bodies (`sdk.rs`) and the untrusted worker's
+SAB layer are hand-written.
 
 ## 3. The ABI (host imports, module "env")
 
@@ -261,26 +264,18 @@ confined to `GuestHost::engine`/`engine_mut`.
 1. Add the method to `GuestHost` in `sdk.rs` (call the safe `Engine` helper).
 2. Add its entry to the ABI table (`classic-core/src/abi_manifest.rs`): typed
    params (`str`, `f64`, …), return kind (`i32`, `json`, `pair_opt`, …) and
-   backends.  This generates the wasmi and wasmtime layers (and, for
-   `tier3`/`tier3_trap`, the background-worker surface).  If no existing return
-   kind fits, add one to `__link_host_import!` and the descriptor enums.
-3. Register it by hand in the remaining backends: `runtime_web/`
-   (browser-Wasm: a `Closure` in `mod.rs`, or a `dispatch.rs` arm for the
-   >8-arg imports) and `runtime_worker.rs`'s dispatch match plus the matching
-   stub in `worker.js`.  Marshal strings there with the local
-   `read_str`/`write_str` helpers; pairs with `write_f64_pair` (they wrap the
-   backend-agnostic `abi::read_str_from` / `abi::write_*_to` slice helpers).
+   backends.  This generates the wasmi, wasmtime and browser-`WebAssembly`
+   layers (and, for `tier3`/`tier3_trap`, the background-worker surface).  If no
+   existing return kind fits, add one to `__host_import!` (plus any new frontend
+   hook) and the descriptor enums.
+3. Register it by hand in the untrusted worker backend: `runtime_worker.rs`'s
+   dispatch match plus the matching stub in `worker.js`.
 4. Add a WAT test in `tests/guest.rs` (it runs against every backend).
 5. Update this skill's import table.
 
-**Gotcha — worker/web OP codes are hand-numbered.** `runtime_worker.rs` and
-`worker.js` carry a parallel `OP_*` table (and `runtime_web/dispatch.rs` a separate
-`OP_*` dispatcher table).  New high-arity imports must take the **next free
-code** in each table — codes 77–80 are already taken by the sprite
-`set_sprite_frame`/`set_sprite_color`/`spawn_sprite_clone`/`set_enabled`
-imports.  The `light_*` imports use 81–83 (worker) and 13–14 (web dispatcher).
-`light_spawn`/`light_set` are >8 args → web dispatcher; `light_release` is a
-direct `Closure`.
+**Gotcha — worker OP codes are hand-numbered.** `runtime_worker.rs` and
+`worker.js` carry a parallel `OP_*` table.  New imports must take the **next
+free code** in both — the `light_*` imports use 97–99.
 
 Treat every new import as a sandbox-surface change: it is reachable by untrusted
 guest code and must not expose raw engine internals or leak borrows.

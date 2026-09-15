@@ -43,9 +43,11 @@
 //! `tier3` (the background worker guest's real surface) and `tier3_trap`
 //! (registered in the background worker surface as a trap stub).
 //!
-//! The native and Tier-3 linker layers are generated from this table by
-//! [`link_host_imports!`]; [`HOST_IMPORTS`] is a runtime descriptor of the same
-//! table for tooling (signature checks, backend-subset tests).
+//! Backend import layers are generated from this table by [`host_imports!`],
+//! which holds the per-kind marshalling once and calls a small per-backend
+//! frontend (the wasmi/wasmtime one is [`link_host_imports!`]).
+//! [`HOST_IMPORTS`] is a runtime descriptor of the same table for tooling
+//! (signature checks, backend-subset tests).
 
 /// Expand `$cb! { ctx... entries... }` over every host import.
 ///
@@ -231,9 +233,39 @@ macro_rules! for_each_host_import {
     };
 }
 
+/// Generate one backend's host-import registrations from
+/// [`for_each_host_import!`], through a backend *frontend* macro.
+///
+/// `backend` selects the entries (`native`, `web`, `worker` or `tier3`; the
+/// `tier3` backend also registers a trap stub for every `tier3_trap` entry).
+/// The per-kind marshalling logic lives here once; the frontend only supplies
+/// how to reach guest memory and the host, and how to register an import.  It
+/// is invoked as `frontend!(@hook extra ...)`, where `extra` is the opaque
+/// token tree passed through from the call site:
+///
+/// | Hook | Form | Yields |
+/// |---|---|---|
+/// | `@host` | `extra caller` | the value implementing the import methods |
+/// | `@read_str` / `@read_bytes` | `extra caller ptr len` | `String` / `Vec<u8>` |
+/// | `@write_str` / `@write_bytes` | `extra caller out_ptr, value` | `i32` bytes written |
+/// | `@write_pair` / `@write_triple` | `extra caller out_ptr, a, b[, c]` | (ignored) |
+/// | `@register` | `extra caller name (ret) [raw: ty, ..] body` | a registration statement |
+/// | `@register_trap` | `extra name (ret) [ty ..]` | a trap-stub registration (tier3) |
+///
+/// `caller` is an identifier the frontend may bind as a closure parameter (the
+/// wasmi/wasmtime `Caller`); frontends without one ignore it.  Hooks that a
+/// backend never needs may be left undefined.
+#[macro_export]
+macro_rules! host_imports {
+    ($backend:ident, [$($frontend:tt)*], $extra:tt) => {
+        $crate::for_each_host_import!([$crate::__host_import] {
+            @table $backend [[$($frontend)*] $extra]
+        });
+    };
+}
+
 /// Register a backend's host imports into a wasmi/wasmtime-shaped `Linker`
-/// (`func_wrap(module, name, |caller: Caller<'_, Host>, ..| ..)`), generated
-/// from [`for_each_host_import!`].
+/// (`func_wrap(module, name, |caller: Caller<'_, Host>, ..| ..)`).
 ///
 /// Expands to a sequence of `$linker.func_wrap(..)?;` statements, so it must be
 /// used inside a function returning a `Result` the linker error converts into.
@@ -259,12 +291,9 @@ macro_rules! link_host_imports {
         write_f64_pair: $w2:path,
         write_f64_triple: $w3:path,
     }) => {
-        $crate::for_each_host_import!([$crate::__link_host_import] {
-            @table native [
-                $linker, $host, $module, [$($acc)*], $rs, $rb, $ws, $wb, $w2, $w3, (),
-                $crate::abi_manifest::unavailable,
-            ]
-        });
+        $crate::host_imports!(native, [$crate::__linker_frontend], [
+            native $linker, $host, $module, [$($acc)*], $rs, $rb, $ws, $wb, $w2, $w3,
+        ]);
     };
     (tier3 {
         linker: $linker:ident,
@@ -277,439 +306,410 @@ macro_rules! link_host_imports {
         err: $err:ty,
         trap: $trap:path,
     }) => {
-        $crate::for_each_host_import!([$crate::__link_host_import] {
-            @table tier3 [
-                $linker, $host, $module, [$($acc)*], $rs, $rb,
-                $crate::abi_manifest::unavailable, $wb, $crate::abi_manifest::unavailable,
-                $crate::abi_manifest::unavailable, $err, $trap,
-            ]
-        });
+        $crate::host_imports!(tier3, [$crate::__linker_frontend], [
+            tier3 $linker, $host, $module, [$($acc)*], $rs, $rb, $wb, $err, $trap,
+        ]);
     };
 }
 
-/// Internal muncher behind [`link_host_imports!`].
-///
-/// Context tuple (`$ctx`): `[linker, host, module, [access], read_str,
-/// read_bytes, write_str, write_bytes, write_f64_pair, write_f64_triple, err,
-/// trap]`.  Helpers a backend never selects are never expanded.
+/// The wasmi/wasmtime `Linker` frontend behind [`link_host_imports!`].
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __link_host_import {
-    // ---- table walk + backend selection ----------------------------------
-    (@table $want:ident $ctx:tt
-        $( $name:ident ( $($pn:ident : $pk:ident),* $(,)? ) -> $ret:ident [ $($be:ident)* ] ; )*
-    ) => {
-        $( $crate::__link_host_import!(
-            @select $ctx $want [$($be)*] { $name ($($pn : $pk,)*) -> $ret }
-        ); )*
+macro_rules! __linker_frontend {
+    (@host [$tag:ident $linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $($rest:tt)*]
+        $c:ident) => {
+        $c.data_mut() $($acc)*
     };
-
-    (@select $ctx:tt $want:ident [] $entry:tt) => {};
-    (@select $ctx:tt native [native $($rest:ident)*] $entry:tt) => {
-        $crate::__link_host_import!(@real $ctx $entry);
+    (@read_str [$tag:ident $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $($rest:tt)*] $c:ident $p:ident $l:ident) => {
+        $rs(&mut $c, $p, $l)
     };
-    (@select $ctx:tt tier3 [tier3 $($rest:ident)*] $entry:tt) => {
-        $crate::__link_host_import!(@real $ctx $entry);
+    (@read_bytes [$tag:ident $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $($rest:tt)*] $c:ident $p:ident $l:ident) => {
+        $rb(&mut $c, $p, $l)
     };
-    (@select $ctx:tt tier3 [tier3_trap $($rest:ident)*] $entry:tt) => {
-        $crate::__link_host_import!(@trap $ctx $entry);
+    (@write_str [native $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $ws:path, $wb:path, $w2:path, $w3:path,] $c:ident $ptr:expr, $v:expr) => {
+        $ws(&mut $c, $ptr, $v)
     };
-    (@select $ctx:tt $want:ident [$other:ident $($rest:ident)*] $entry:tt) => {
-        $crate::__link_host_import!(@select $ctx $want [$($rest)*] $entry);
+    (@write_bytes [native $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $ws:path, $wb:path, $w2:path, $w3:path,] $c:ident $ptr:expr, $v:expr) => {
+        $wb(&mut $c, $ptr, $v)
     };
-
-    // ---- real imports: munch params into [raw params] [reads] [call args] --
-    (@real $ctx:tt { $name:ident ($($params:tt)*) -> $ret:ident }) => {
-        $crate::__link_host_import!(@param $ctx $name $ret caller [] [] [] $($params)*);
+    (@write_bytes [tier3 $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $wb:path, $err:ty, $trap:path,] $c:ident $ptr:expr, $v:expr) => {
+        $wb(&mut $c, $ptr, $v)
     };
-
-    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
-        $p:ident : i32, $($rest:tt)*) => {
-        $crate::__link_host_import!(@param $ctx $name $ret $c
-            [$($raw)* $p: i32,] [$($rd)*] [$($arg)* $p,] $($rest)*);
+    (@write_pair [native $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $ws:path, $wb:path, $w2:path, $w3:path,] $c:ident $ptr:expr, $a:expr, $b:expr) => {
+        $w2(&mut $c, $ptr, $a, $b)
     };
-    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
-        $p:ident : f64, $($rest:tt)*) => {
-        $crate::__link_host_import!(@param $ctx $name $ret $c
-            [$($raw)* $p: f64,] [$($rd)*] [$($arg)* $p,] $($rest)*);
+    (@write_triple [native $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $ws:path, $wb:path, $w2:path, $w3:path,] $c:ident $ptr:expr, $a:expr, $b:expr,
+        $z:expr) => {
+        $w3(&mut $c, $ptr, $a, $b, $z)
     };
-    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
-        $p:ident : u32, $($rest:tt)*) => {
-        $crate::__link_host_import!(@param $ctx $name $ret $c
-            [$($raw)* $p: i32,] [$($rd)*] [$($arg)* $p.max(0) as u32,] $($rest)*);
-    };
-    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
-        $p:ident : bytes_owned, $($rest:tt)*) => {
-        $crate::__link_host_import!(@param $ctx $name $ret $c
-            [$($raw)* ptr: i32, len: i32,] [$($rd)* {bytes ptr len value}] [$($arg)* value,]
-            $($rest)*);
-    };
-    // `str` / `bytes` / `f32s` / `u32s`: read into a local, pass by reference.
-    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
-        $p:ident : $kind:ident, $($rest:tt)*) => {
-        $crate::__link_host_import!(@param $ctx $name $ret $c
-            [$($raw)* ptr: i32, len: i32,] [$($rd)* {$kind ptr len value}] [$($arg)* &value,]
-            $($rest)*);
-    };
-    (@param $ctx:tt $name:ident $ret:ident $c:ident $raw:tt $rd:tt $arg:tt) => {
-        $crate::__link_host_import!(@emit $ctx $name $ret $c $raw $rd $arg);
-    };
-
-    // ---- guest-memory reads ------------------------------------------------
-    (@read [$rs:path, $rb:path,] $c:ident {str $p:ident $l:ident $v:ident}) => {
-        let $v = $rs(&mut $c, $p, $l);
-    };
-    (@read [$rs:path, $rb:path,] $c:ident {bytes $p:ident $l:ident $v:ident}) => {
-        let $v = $rb(&mut $c, $p, $l);
-    };
-    (@read [$rs:path, $rb:path,] $c:ident {f32s $p:ident $l:ident $v:ident}) => {
-        let $v = $crate::abi::bytes_to_f32(&$rb(&mut $c, $p, $l));
-    };
-    (@read [$rs:path, $rb:path,] $c:ident {u32s $p:ident $l:ident $v:ident}) => {
-        let $v = $crate::abi::bytes_to_u32(&$rb(&mut $c, $p, $l));
-    };
-
-    // ---- emit one real import, per return kind -----------------------------
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident unit $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap($module, stringify!($name), |mut $c: Caller<'_, $host>, $($raw)*| {
-            $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-            $c.data_mut() $($acc)* .$name($($arg)*);
-        })?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident i32 $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
+    (@register [$tag:ident $linker:ident, $host:ty, $module:expr, $($rest:tt)*] $c:ident
+        $name:ident ($ret:ty) [$($p:ident: $t:ident,)*] {$($body:tt)*}) => {
         $linker.func_wrap(
             $module,
             stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)*| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                $c.data_mut() $($acc)* .$name($($arg)*)
-            },
+            |mut $c: Caller<'_, $host>, $($p: $t,)*| -> $ret { $($body)* },
         )?;
     };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident f64 $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
+    (@register_trap [tier3 $linker:ident, $host:ty, $module:expr, $acc:tt, $rs:path, $rb:path,
+        $wb:path, $err:ty, $trap:path,] $name:ident ($ret:ty) [$($t:ident)*]) => {
         $linker.func_wrap(
             $module,
             stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)*| -> f64 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                $c.data_mut() $($acc)* .$name($($arg)*)
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident json $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let json = $c.data_mut() $($acc)* .$name($($arg)*);
-                if out_cap < json.len() as i32 {
-                    return -1;
-                }
-                $ws(&mut $c, out_ptr, &json)
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident pair $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let (x, y) = $c.data_mut() $($acc)* .$name($($arg)*);
-                $w2(&mut $c, out_ptr, x, y);
-                1
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident pair_opt $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let Some((x, y)) = $c.data_mut() $($acc)* .$name($($arg)*) else {
-                    return 0;
-                };
-                $w2(&mut $c, out_ptr, x, y);
-                1
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident triple $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let (x, y, z) = $c.data_mut() $($acc)* .$name($($arg)*);
-                $w3(&mut $c, out_ptr, x, y, z);
-                1
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident triple_opt $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let Some((x, y, z)) = $c.data_mut() $($acc)* .$name($($arg)*) else {
-                    return 0;
-                };
-                $w3(&mut $c, out_ptr, x, y, z);
-                1
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident light $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let (a, d, col) = $c.data_mut() $($acc)* .$name($($arg)*);
-                let mut buf = Vec::with_capacity(72);
-                for v in a.iter().chain(d.iter()).chain(col.iter()) {
-                    buf.extend_from_slice(&v.to_le_bytes());
-                }
-                $wb(&mut $c, out_ptr, &buf);
-                1
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident f32s $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let field = $c.data_mut() $($acc)* .$name($($arg)*);
-                let bytes = $crate::abi::f32_array_bytes(&field);
-                if bytes.len() > out_cap.max(0) as usize {
-                    return -1;
-                }
-                $wb(&mut $c, out_ptr, &bytes);
-                bytes.len() as i32
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident bytes_out $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let bytes = $c.data_mut() $($acc)* .$name($($arg)*);
-                if bytes.len() > out_cap.max(0) as usize {
-                    return -1;
-                }
-                $wb(&mut $c, out_ptr, &bytes)
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident path_poll $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                match $c.data_mut() $($acc)* .$name($($arg)*) {
-                    $crate::pathfinder::PathPoll::Pending => 0,
-                    $crate::pathfinder::PathPoll::NoPath => -1,
-                    $crate::pathfinder::PathPoll::Path(cells) => {
-                        let bytes = $crate::abi::path_cells_bytes(&cells);
-                        if bytes.len() > out_cap.max(0) as usize {
-                            return -2;
-                        }
-                        $wb(&mut $c, out_ptr, &bytes);
-                        cells.len() as i32
-                    }
-                }
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident path_opt $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let Some(cells) = $c.data_mut() $($acc)* .$name($($arg)*) else {
-                    return -1;
-                };
-                let bytes = $crate::abi::path_cells_bytes(&cells);
-                if bytes.len() > out_cap.max(0) as usize {
-                    return -2;
-                }
-                $wb(&mut $c, out_ptr, &bytes);
-                cells.len() as i32
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident task_poll $c:ident [$($raw:tt)*] [$($rd:tt)*] [$id:ident,]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                let poll = $c.data_mut() $($acc)* .$name($id);
-                match poll {
-                    None => 0,
-                    Some(Err(e)) => {
-                        $c.data_mut() $($acc)* .log(&format!("task {} failed: {e}", $id));
-                        -1
-                    }
-                    Some(Ok(bytes)) => {
-                        if bytes.len() > out_cap.max(0) as usize {
-                            return -2;
-                        }
-                        $wb(&mut $c, out_ptr, &bytes);
-                        bytes.len() as i32
-                    }
-                }
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident event $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let Some((kind, name)) = $c.data_mut() $($acc)* .$name($($arg)*) else {
-                    return 0;
-                };
-                let mut bytes = Vec::with_capacity(8 + name.len());
-                bytes.extend_from_slice(&kind.to_le_bytes());
-                bytes.extend_from_slice(&(name.len() as u32).to_le_bytes());
-                bytes.extend_from_slice(name.as_bytes());
-                if bytes.len() > out_cap.max(0) as usize {
-                    return -1;
-                }
-                $wb(&mut $c, out_ptr, &bytes);
-                1
-            },
-        )?;
-    };
-    (@emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path, $ws:path,
-            $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident anim $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |mut $c: Caller<'_, $host>, $($raw)* out_ptr: i32, out_cap: i32| -> i32 {
-                $( $crate::__link_host_import!(@read [$rs, $rb,] $c $rd); )*
-                let Some((anim, frame)) = $c.data_mut() $($acc)* .$name($($arg)*) else {
-                    return 0;
-                };
-                let mut bytes = Vec::with_capacity(12 + anim.len());
-                bytes.extend_from_slice(&frame.to_le_bytes());
-                bytes.extend_from_slice(&(anim.len() as u32).to_le_bytes());
-                bytes.extend_from_slice(anim.as_bytes());
-                if bytes.len() > out_cap.max(0) as usize {
-                    return -1;
-                }
-                $wb(&mut $c, out_ptr, &bytes);
-                1
-            },
-        )?;
-    };
-
-    // ---- trap stubs (real wasm signature, body traps) ----------------------
-    (@trap $ctx:tt { $name:ident ($($params:tt)*) -> $ret:ident }) => {
-        $crate::__link_host_import!(@trap_param $ctx $name $ret [] $($params)*);
-    };
-    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : f64, $($rest:tt)*) => {
-        $crate::__link_host_import!(@trap_param $ctx $name $ret [$($raw)* _: f64,] $($rest)*);
-    };
-    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : i32, $($rest:tt)*) => {
-        $crate::__link_host_import!(@trap_param $ctx $name $ret [$($raw)* _: i32,] $($rest)*);
-    };
-    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : u32, $($rest:tt)*) => {
-        $crate::__link_host_import!(@trap_param $ctx $name $ret [$($raw)* _: i32,] $($rest)*);
-    };
-    // Every remaining parameter kind is a `ptr, len` pair.
-    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : $kind:ident,
-        $($rest:tt)*) => {
-        $crate::__link_host_import!(@trap_param $ctx $name $ret [$($raw)* _: i32, _: i32,]
-            $($rest)*);
-    };
-    (@trap_param $ctx:tt $name:ident unit [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name () [$($raw)*]);
-    };
-    (@trap_param $ctx:tt $name:ident i32 [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name i32 [$($raw)*]);
-    };
-    (@trap_param $ctx:tt $name:ident f64 [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name f64 [$($raw)*]);
-    };
-    (@trap_param $ctx:tt $name:ident pair [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name i32 [$($raw)* _: i32,]);
-    };
-    (@trap_param $ctx:tt $name:ident pair_opt [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name i32 [$($raw)* _: i32,]);
-    };
-    (@trap_param $ctx:tt $name:ident triple [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name i32 [$($raw)* _: i32,]);
-    };
-    (@trap_param $ctx:tt $name:ident triple_opt [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name i32 [$($raw)* _: i32,]);
-    };
-    (@trap_param $ctx:tt $name:ident light [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name i32 [$($raw)* _: i32,]);
-    };
-    // Every remaining return kind is an `out_ptr, out_cap` buffer returning `i32`.
-    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*]) => {
-        $crate::__link_host_import!(@trap_emit $ctx $name i32 [$($raw)* _: i32, _: i32,]);
-    };
-    (@trap_emit [$linker:ident, $host:ty, $module:expr, [$($acc:tt)*], $rs:path, $rb:path,
-                 $ws:path, $wb:path, $w2:path, $w3:path, $err:ty, $trap:path,]
-        $name:ident $rty:ty [$($raw:tt)*]) => {
-        $linker.func_wrap(
-            $module,
-            stringify!($name),
-            |_caller: Caller<'_, $host>, $($raw)*| -> Result<$rty, $err> {
+            |_caller: Caller<'_, $host>, $(_: $t,)*| -> Result<$ret, $err> {
                 Err($trap(stringify!($name)))
             },
         )?;
     };
 }
 
-/// Placeholder path for [`link_host_imports!`] helpers a backend does not
-/// provide (never expanded, because that backend never selects a kind using it).
+/// Internal muncher behind [`host_imports!`].
+///
+/// Context (`$ctx`): `[[frontend path tokens] extra]`.
 #[doc(hidden)]
-pub fn unavailable() -> ! {
-    unreachable!("host-import helper not provided for this backend")
+#[macro_export]
+macro_rules! __host_import {
+    // ---- frontend trampoline (`$fe` is the bracketed frontend path) --------
+    (@fe [$($fe:tt)*] $($args:tt)*) => {
+        $($fe)*!($($args)*)
+    };
+
+    // ---- table walk + backend selection ----------------------------------
+    (@table $want:ident $ctx:tt
+        $( $name:ident ( $($pn:ident : $pk:ident),* $(,)? ) -> $ret:ident [ $($be:ident)* ] ; )*
+    ) => {
+        $( $crate::__host_import!(
+            @select $ctx $want [$($be)*] { $name ($($pn : $pk,)*) -> $ret }
+        ); )*
+    };
+
+    (@select $ctx:tt $want:ident [] $entry:tt) => {};
+    (@select $ctx:tt native [native $($rest:ident)*] $entry:tt) => {
+        $crate::__host_import!(@real $ctx $entry);
+    };
+    (@select $ctx:tt web [web $($rest:ident)*] $entry:tt) => {
+        $crate::__host_import!(@real $ctx $entry);
+    };
+    (@select $ctx:tt worker [worker $($rest:ident)*] $entry:tt) => {
+        $crate::__host_import!(@real $ctx $entry);
+    };
+    (@select $ctx:tt tier3 [tier3 $($rest:ident)*] $entry:tt) => {
+        $crate::__host_import!(@real $ctx $entry);
+    };
+    (@select $ctx:tt tier3 [tier3_trap $($rest:ident)*] $entry:tt) => {
+        $crate::__host_import!(@trap $ctx $entry);
+    };
+    (@select $ctx:tt $want:ident [$other:ident $($rest:ident)*] $entry:tt) => {
+        $crate::__host_import!(@select $ctx $want [$($rest)*] $entry);
+    };
+
+    // ---- real imports: munch params into [raw params] [reads] [call args] --
+    (@real $ctx:tt { $name:ident ($($params:tt)*) -> $ret:ident }) => {
+        $crate::__host_import!(@param $ctx $name $ret caller [] [] [] $($params)*);
+    };
+
+    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
+        $p:ident : i32, $($rest:tt)*) => {
+        $crate::__host_import!(@param $ctx $name $ret $c
+            [$($raw)* $p: i32,] [$($rd)*] [$($arg)* $p,] $($rest)*);
+    };
+    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
+        $p:ident : f64, $($rest:tt)*) => {
+        $crate::__host_import!(@param $ctx $name $ret $c
+            [$($raw)* $p: f64,] [$($rd)*] [$($arg)* $p,] $($rest)*);
+    };
+    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
+        $p:ident : u32, $($rest:tt)*) => {
+        $crate::__host_import!(@param $ctx $name $ret $c
+            [$($raw)* $p: i32,] [$($rd)*] [$($arg)* $p.max(0) as u32,] $($rest)*);
+    };
+    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
+        $p:ident : bytes_owned, $($rest:tt)*) => {
+        $crate::__host_import!(@param $ctx $name $ret $c
+            [$($raw)* ptr: i32, len: i32,] [$($rd)* {bytes ptr len value}] [$($arg)* value,]
+            $($rest)*);
+    };
+    // `str` / `bytes` / `f32s` / `u32s`: read into a local, pass by reference.
+    (@param $ctx:tt $name:ident $ret:ident $c:ident [$($raw:tt)*] [$($rd:tt)*] [$($arg:tt)*]
+        $p:ident : $kind:ident, $($rest:tt)*) => {
+        $crate::__host_import!(@param $ctx $name $ret $c
+            [$($raw)* ptr: i32, len: i32,] [$($rd)* {$kind ptr len value}] [$($arg)* &value,]
+            $($rest)*);
+    };
+    (@param $ctx:tt $name:ident $ret:ident $c:ident $raw:tt $rd:tt $arg:tt) => {
+        $crate::__host_import!(@emit $ctx $name $ret $c $raw $rd $arg);
+    };
+
+    // ---- guest-memory reads ------------------------------------------------
+    (@read [$fe:tt $x:tt] $c:ident {str $p:ident $l:ident $v:ident}) => {
+        let $v = $crate::__host_import!(@fe $fe @read_str $x $c $p $l);
+    };
+    (@read [$fe:tt $x:tt] $c:ident {bytes $p:ident $l:ident $v:ident}) => {
+        let $v = $crate::__host_import!(@fe $fe @read_bytes $x $c $p $l);
+    };
+    (@read [$fe:tt $x:tt] $c:ident {f32s $p:ident $l:ident $v:ident}) => {
+        let $v = $crate::abi::bytes_to_f32(&$crate::__host_import!(@fe $fe @read_bytes $x $c $p $l));
+    };
+    (@read [$fe:tt $x:tt] $c:ident {u32s $p:ident $l:ident $v:ident}) => {
+        let $v = $crate::abi::bytes_to_u32(&$crate::__host_import!(@fe $fe @read_bytes $x $c $p $l));
+    };
+
+    // ---- emit one real import, per return kind -----------------------------
+    (@emit [$fe:tt $x:tt] $name:ident unit $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (()) [$($raw)*] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident i32 $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)*] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*)
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident f64 $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (f64) [$($raw)*] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*)
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident json $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let json = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+            if out_cap < json.len() as i32 {
+                return -1;
+            }
+            $crate::__host_import!(@fe $fe @write_str $x $c out_ptr, &json)
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident pair $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let (x, y) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+            $crate::__host_import!(@fe $fe @write_pair $x $c out_ptr, x, y);
+            1
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident pair_opt $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let Some((x, y)) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*) else {
+                return 0;
+            };
+            $crate::__host_import!(@fe $fe @write_pair $x $c out_ptr, x, y);
+            1
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident triple $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let (x, y, z) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+            $crate::__host_import!(@fe $fe @write_triple $x $c out_ptr, x, y, z);
+            1
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident triple_opt $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let Some((x, y, z)) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*) else {
+                return 0;
+            };
+            $crate::__host_import!(@fe $fe @write_triple $x $c out_ptr, x, y, z);
+            1
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident light $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let (a, d, col) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+            let mut buf = Vec::with_capacity(72);
+            for v in a.iter().chain(d.iter()).chain(col.iter()) {
+                buf.extend_from_slice(&v.to_le_bytes());
+            }
+            $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &buf);
+            1
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident f32s $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let field = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+            let bytes = $crate::abi::f32_array_bytes(&field);
+            if bytes.len() > out_cap.max(0) as usize {
+                return -1;
+            }
+            $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &bytes);
+            bytes.len() as i32
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident bytes_out $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let bytes = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+            if bytes.len() > out_cap.max(0) as usize {
+                return -1;
+            }
+            $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &bytes)
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident path_poll $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let poll = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*);
+            match poll {
+                $crate::pathfinder::PathPoll::Pending => 0,
+                $crate::pathfinder::PathPoll::NoPath => -1,
+                $crate::pathfinder::PathPoll::Path(cells) => {
+                    let bytes = $crate::abi::path_cells_bytes(&cells);
+                    if bytes.len() > out_cap.max(0) as usize {
+                        return -2;
+                    }
+                    $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &bytes);
+                    cells.len() as i32
+                }
+            }
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident path_opt $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let Some(cells) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*) else {
+                return -1;
+            };
+            let bytes = $crate::abi::path_cells_bytes(&cells);
+            if bytes.len() > out_cap.max(0) as usize {
+                return -2;
+            }
+            $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &bytes);
+            cells.len() as i32
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident task_poll $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$id:ident,]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            let poll = $crate::__host_import!(@fe $fe @host $x $c).$name($id);
+            match poll {
+                None => 0,
+                Some(Err(e)) => {
+                    $crate::__host_import!(@fe $fe @host $x $c).log(&format!("task {} failed: {e}", $id));
+                    -1
+                }
+                Some(Ok(bytes)) => {
+                    if bytes.len() > out_cap.max(0) as usize {
+                        return -2;
+                    }
+                    $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &bytes);
+                    bytes.len() as i32
+                }
+            }
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident event $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let Some((kind, name)) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*) else {
+                return 0;
+            };
+            let mut bytes = Vec::with_capacity(8 + name.len());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            if bytes.len() > out_cap.max(0) as usize {
+                return -1;
+            }
+            $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &bytes);
+            1
+        });
+    };
+    (@emit [$fe:tt $x:tt] $name:ident anim $c:ident [$($raw:tt)*] [$($rd:tt)*]
+        [$($arg:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register $x $c $name (i32) [$($raw)* out_ptr: i32, out_cap: i32,] {
+            $( $crate::__host_import!(@read [$fe $x] $c $rd); )*
+            let Some((anim, frame)) = $crate::__host_import!(@fe $fe @host $x $c).$name($($arg)*) else {
+                return 0;
+            };
+            let mut bytes = Vec::with_capacity(12 + anim.len());
+            bytes.extend_from_slice(&frame.to_le_bytes());
+            bytes.extend_from_slice(&(anim.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(anim.as_bytes());
+            if bytes.len() > out_cap.max(0) as usize {
+                return -1;
+            }
+            $crate::__host_import!(@fe $fe @write_bytes $x $c out_ptr, &bytes);
+            1
+        });
+    };
+
+    // ---- trap stubs (real wasm signature, body traps) ----------------------
+    (@trap $ctx:tt { $name:ident ($($params:tt)*) -> $ret:ident }) => {
+        $crate::__host_import!(@trap_param $ctx $name $ret [] $($params)*);
+    };
+    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : f64, $($rest:tt)*) => {
+        $crate::__host_import!(@trap_param $ctx $name $ret [$($raw)* f64] $($rest)*);
+    };
+    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : i32, $($rest:tt)*) => {
+        $crate::__host_import!(@trap_param $ctx $name $ret [$($raw)* i32] $($rest)*);
+    };
+    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : u32, $($rest:tt)*) => {
+        $crate::__host_import!(@trap_param $ctx $name $ret [$($raw)* i32] $($rest)*);
+    };
+    // Every remaining parameter kind is a `ptr, len` pair.
+    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*] $p:ident : $kind:ident,
+        $($rest:tt)*) => {
+        $crate::__host_import!(@trap_param $ctx $name $ret [$($raw)* i32 i32] $($rest)*);
+    };
+    (@trap_param $ctx:tt $name:ident unit [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (()) [$($raw)*]);
+    };
+    (@trap_param $ctx:tt $name:ident i32 [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (i32) [$($raw)*]);
+    };
+    (@trap_param $ctx:tt $name:ident f64 [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (f64) [$($raw)*]);
+    };
+    (@trap_param $ctx:tt $name:ident pair [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (i32) [$($raw)* i32]);
+    };
+    (@trap_param $ctx:tt $name:ident pair_opt [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (i32) [$($raw)* i32]);
+    };
+    (@trap_param $ctx:tt $name:ident triple [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (i32) [$($raw)* i32]);
+    };
+    (@trap_param $ctx:tt $name:ident triple_opt [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (i32) [$($raw)* i32]);
+    };
+    (@trap_param $ctx:tt $name:ident light [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (i32) [$($raw)* i32]);
+    };
+    // Every remaining return kind is an `out_ptr, out_cap` buffer returning `i32`.
+    (@trap_param $ctx:tt $name:ident $ret:ident [$($raw:tt)*]) => {
+        $crate::__host_import!(@trap_emit $ctx $name (i32) [$($raw)* i32 i32]);
+    };
+    (@trap_emit [$fe:tt $x:tt] $name:ident ($ret:ty) [$($raw:tt)*]) => {
+        $crate::__host_import!(@fe $fe @register_trap $x $name ($ret) [$($raw)*]);
+    };
 }
 
 /// A wasm value type in a host import's signature.

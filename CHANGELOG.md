@@ -18,6 +18,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Generate the trusted browser `WebAssembly` guest backend's host imports from
+  the ABI table, replacing ~1,500 hand-written closures and its hand-numbered
+  `OP_*` dispatcher; imports with more than 8 wasm params are now one
+  self-contained shim each instead of a shared global dispatcher (#NN).
+
 - Split the oversized source files into focused modules with no behaviour
   change: `classic-engine`'s `lib.rs` (`lifecycle`, `hooks`, `boot_api`,
   `render`) and `vehicle.rs` (`vehicle/`), `classic-gfx`'s `lib.rs`, and
@@ -26,6 +31,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 ### Removed
 
 - Unused `classic-gfx` dependency from `classic-platform` (#NN).
+
+### Fixed
+
+- Web (trusted) guests: a failed background task no longer panics with a
+  `RefCell` double borrow in `poll_task`, and a second guest runtime no longer
+  re-points every earlier runtime's wide host imports at itself (#NN).
 
 ## [0.2.0] - 2026-09-09
 
