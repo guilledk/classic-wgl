@@ -8,6 +8,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Removed
+
+- Unused `classic-gfx` dependency from `classic-platform` (#NN).
+
 ## [0.2.0] - 2026-09-09
 
 ### Added
