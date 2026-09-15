@@ -74,8 +74,10 @@ crates/
                           primitives ROM guests build map algorithms on
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
-  classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
-                          golden.rs (traces), env_config.rs, vehicle.rs (IsoVehicle sim + spawn API)
+  classic-engine/         generic engine: lib.rs (`Engine` struct), lifecycle.rs (new + frame),
+                          hooks.rs (hook surface + host API), boot_api.rs (ROM boot), render.rs,
+                          ui.rs (UIManager), golden.rs (traces), env_config.rs,
+                          vehicle/ (IsoVehicle sim + spawn API)
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
   classic-guest/          WASM guest runtime: GuestRuntime trait, WasmiRuntime + WasmtimeRuntime
@@ -105,7 +107,8 @@ plans/
   `crates/classic-core/src/components/mod.rs`.  Entities are `hecs::Entity` handles.
   There is no system scheduler; update logic lives in `Engine::on_update(FnMut(&mut Engine))`
   closures registered by `init_*` prefabs.
-- **The `Engine` struct** (`crates/classic-engine/src/lib.rs`) is the generic engine core:
+- **The `Engine` struct** (`crates/classic-engine/src/lib.rs`; its methods live in
+  `lifecycle.rs`, `hooks.rs`, `boot_api.rs` and `render.rs`) is the generic engine core:
   `World`, `PhysicsProvider`, `Camera`, `Time`, `InputState`, `Gfx`, `UIManager`, a
   `vehicles: HashMap<String, VehicleDef>` registry, and tilemap/nav plumbing.  It holds
   **no demo state** — editor/widget handles and light
@@ -123,7 +126,7 @@ plans/
   components, and register `on_update` / hook closures.  The demo layer is installed via
   `Engine`'s hook surface (`on_update`, `on_pre_update`, `on_selection_end`, `add_overlay`,
   `set_test_runner`).
-- **GL rendering** (`classic-gfx/src/lib.rs`) provides 7 `draw_*` functions (`draw_tilemap`,
+- **GL rendering** (`classic-gfx/src/draw.rs`) provides 7 `draw_*` functions (`draw_tilemap`,
   `draw_iso_sprite`, `draw_sprite`, `draw_rect`, `draw_sdf`, `draw_line_loop`, `draw_line_strip`).
   Each binds a named shader, sets projection/camera/model uniforms, and draws.
   **Important**: `begin_frame` does NOT enable `DEPTH_TEST` globally — tilemap/iso_sprite
@@ -181,7 +184,7 @@ plans/
   `pathfinder.wasm`); guests drive it through the
   async `request_path`/`poll_path` SDK imports (with a synchronous fallback for
   the deterministic harness).  See `classic-iso` and `classic-physics` skills.
-- **Wheeled vehicles**: `classic-engine/src/vehicle.rs` implements the `IsoVehicle`
+- **Wheeled vehicles**: `classic-engine/src/vehicle/` implements the `IsoVehicle`
   system — `spawn_vehicle` assembles a body + 4 wheel `IsoSprite`s from a
   `VehicleDef` sidecar (per-direction ground-origin anchors emitted by the Blender
   exporter), and `update_vehicles` drives the body as a single chassis plane
@@ -244,7 +247,7 @@ plans/
   guarantees — bounded slopes, flat landing pads, buildable area, and mutual
   reachability of every spawn pair (checked with the engine's own A*) across
   several seeds — rather than pixel output.
-- **classic-engine** unit tests live in the `vehicle.rs` `#[cfg(test)]` module
+- **classic-engine** unit tests live in `vehicle/tests.rs`
   (spawn/teleport/goto/stop, pitch/roll quantization + spring, wheel offset
   derivation) using `Engine::new_for_test()` — no GL needed.  **classic-gfx**
   still has no unit tests (no mock GL — deferred).

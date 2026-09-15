@@ -542,7 +542,7 @@ single `std140` uniform block each frame.  The two lit shaders (`isoTilemap`,
 `imageSheet`) declare the block and share an `evaluateLight`/`evaluateLights`
 pair; both emit a `highp vec3 vLightPos` varying (light space, +Z up — see §17).
 
-### Host side (`classic-gfx/src/lib.rs`)
+### Host side (`classic-gfx/src/light.rs`)
 
 - `MAX_LIGHTS = 256` (block = `16 + 256*48 = 12304` bytes, under the WebGL2
   16 KB `MAX_UNIFORM_BLOCK_SIZE`), `LIGHT_UBO_BINDING = 1`.
@@ -642,7 +642,7 @@ Three places must agree exactly, or a sprite falls in its own shadow:
 `shadow_sprite.vert` (cast), `direct_tex.vert` (receive), and
 `shadow.rs::sprite_billboard_corners` (light-box fit).
 
-### Host side (`classic-gfx/src/lib.rs`)
+### Host side (`classic-gfx/src/shadow.rs`, `framebuffer.rs`)
 
 - `SHADOW_MAP_SIZE = 2048` (square), `SHADOW_MAP_UNIT = 3`.
 - `DepthFramebuffer { fbo, depth_tex, width, height }` — depth-only FBO:

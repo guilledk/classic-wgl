@@ -553,7 +553,7 @@ vertically (the exporter renders the body tilted about its ground origin on a
   and `roll_levels`/`roll_max_deg`, plus per-part ground-origin `anchors`; the
   exporter emits it and `Engine::spawn_vehicle` derives the wheel tile offsets
   from it.
-- `Engine::update_vehicles` (`classic-engine/src/vehicle.rs`) drives the body as
+- `Engine::update_vehicles` (`classic-engine/src/vehicle/sim.rs`) drives the body as
   a single **chassis plane** `(altitude, pitch, roll)` fit to the four wheel
   contacts and spring-smoothed, then quantizes pitch/roll against
   `pitch_max`/`roll_max` to pick the frame; `frame_offset.z` carries the

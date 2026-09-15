@@ -45,7 +45,7 @@ crates/classic-guest/
                           import macro + memory helpers
   src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel) + the shared
                           import macro + memory helpers
-  src/runtime_web.rs      WebWasmRuntime (wasm only, trusted): browser-native
+  src/runtime_web/        WebWasmRuntime (wasm only, trusted): browser-native
                           `WebAssembly`, host imports as `Closure`s (+ a dispatcher
                           for the 13 imports with >8 args)
   src/runtime_worker.rs   WorkerWasmRuntime (wasm only, untrusted): `Worker` +
@@ -257,8 +257,8 @@ confined to `GuestHost::engine`/`engine_mut`.
 1. Add the method to `GuestHost` in `sdk.rs` (call the safe `Engine` helper).
 2. Register it in every backend's import surface: the `imports.rs`
    `install_host_imports!` macro (shared by the wasmi and wasmtime backends);
-   `runtime_web.rs` (browser-Wasm: a `Closure`, or a dispatcher arm for the
-   >8-arg imports); `runtime_worker.rs`'s dispatch match plus the matching
+   `runtime_web/` (browser-Wasm: a `Closure` in `mod.rs`, or a `dispatch.rs`
+   arm for the >8-arg imports); `runtime_worker.rs`'s dispatch match plus the matching
    stub in `worker.js`.
 3. Marshal strings with the local `read_str`/`write_str` helpers; pairs with
    `write_f64_pair` (they wrap the backend-agnostic `abi::read_str_from` /
@@ -267,7 +267,7 @@ confined to `GuestHost::engine`/`engine_mut`.
 5. Update this skill's import table.
 
 **Gotcha — worker/web OP codes are hand-numbered.** `runtime_worker.rs` and
-`worker.js` carry a parallel `OP_*` table (and `runtime_web.rs` a separate
+`worker.js` carry a parallel `OP_*` table (and `runtime_web/dispatch.rs` a separate
 `OP_*` dispatcher table).  New high-arity imports must take the **next free
 code** in each table — codes 77–80 are already taken by the sprite
 `set_sprite_frame`/`set_sprite_color`/`spawn_sprite_clone`/`set_enabled`

@@ -8,6 +8,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Changed
+
+- Split the oversized source files into focused modules with no behaviour
+  change: `classic-engine`'s `lib.rs` (`lifecycle`, `hooks`, `boot_api`,
+  `render`) and `vehicle.rs` (`vehicle/`), `classic-gfx`'s `lib.rs`, and
+  `classic-guest`'s `runtime_web.rs` (`runtime_web/`) (#NN).
+
 ### Removed
 
 - Unused `classic-gfx` dependency from `classic-platform` (#NN).
