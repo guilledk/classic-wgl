@@ -16,6 +16,8 @@ mod runtime_web;
 #[cfg(target_arch = "wasm32")]
 mod runtime_worker;
 pub mod sdk;
+#[doc(hidden)]
+pub mod worker_bridge;
 
 pub use runtime::{GuestError, GuestLimits, GuestRuntime, WasmiRuntime};
 #[cfg(not(target_arch = "wasm32"))]

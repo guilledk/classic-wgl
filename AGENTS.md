@@ -25,6 +25,9 @@ trunk build apps/web/index.html --release  # web release
 
 # Test
 cargo test                            # all unit/integration tests
+cargo test --target wasm32-unknown-unknown -p classic-guest --test web
+                                        # web + Worker guest backends in headless Chromium
+                                        # (nix develop; needs `cargo xtask build-pathfinder` first)
 CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop
                                         # headless e2e + golden trace check (needs libEGL)
 
@@ -47,7 +50,7 @@ cargo xtask release patch            # bump version + freeze changelog (prints c
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
-`headless golden test` on every push to `master` and every PR.  Run
+`web tests` (headless Chrome) + `headless golden test` on every push to `master` and every PR.  Run
 `cargo fmt -- --check`, `cargo clippy`, and `cargo test`
 before considering a task done.  The CI golden job calls `cargo xtask fetch-roms`
 instead of the old `cargo xtask all` — the ROMs come from the published

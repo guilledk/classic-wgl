@@ -15,6 +15,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   runtime `HOST_IMPORTS` descriptor.  The wasmi/wasmtime linker layer and the
   Tier-3 worker surface are now generated from it, and new tests check that
   every table import links on each native backend (#NN).
+- Headless-browser test harness for the wasm-only guest backends
+  (`wasm-bindgen-test` in Chromium, `crates/classic-guest/tests/web.rs`; the
+  flake pins the matching `wasm-bindgen-cli` and provides Chromium +
+  chromedriver) and a `web tests` CI job (#NN).
 
 ### Changed
 
@@ -22,7 +26,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   the ABI table, replacing ~1,500 hand-written closures and its hand-numbered
   `OP_*` dispatcher; imports with more than 8 wasm params are now one
   self-contained shim each instead of a shared global dispatcher (#NN).
-
+- Generate the untrusted Worker guest backend from the ABI table: the
+  main-thread dispatch is a table-built registry and `worker.js` builds its
+  import stubs from a descriptor, so both hand-numbered `OP_*` tables are gone.
+  The guest module is posted to the Worker instead of being copied into its
+  1 MiB `SharedArrayBuffer` (#NN).
 - Split the oversized source files into focused modules with no behaviour
   change: `classic-engine`'s `lib.rs` (`lifecycle`, `hooks`, `boot_api`,
   `render`) and `vehicle.rs` (`vehicle/`), `classic-gfx`'s `lib.rs`, and
@@ -37,6 +45,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Web (trusted) guests: a failed background task no longer panics with a
   `RefCell` double borrow in `poll_task`, and a second guest runtime no longer
   re-points every earlier runtime's wide host imports at itself (#NN).
+- Web (untrusted Worker) guests: expose the 16 host imports the backend was
+  missing (the field/kernel registry, `spawn_task`/`poll_task`,
+  `vehicle_goto_poll`), stream host-import payloads of any size instead of
+  failing above 6 KiB in / 64 KiB out, match the native return values (e.g.
+  `set_camera`), and report guest traps and link errors as `GuestError::Trap`
+  instead of timing out (#NN).
 
 ## [0.2.0] - 2026-09-09
 

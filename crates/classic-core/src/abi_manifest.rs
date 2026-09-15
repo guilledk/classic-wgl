@@ -91,14 +91,14 @@ macro_rules! for_each_host_import {
             rebuild_terrain() -> i32 [native web worker tier3_trap];
             request_path(sx: i32, sy: i32, ex: i32, ey: i32) -> i32 [native web worker tier3_trap];
             poll_path(id: i32) -> path_poll [native web worker tier3_trap];
-            spawn_task(entry: str, arg: bytes) -> i32 [native web];
-            poll_task(id: i32) -> task_poll [native web];
+            spawn_task(entry: str, arg: bytes) -> i32 [native web worker];
+            poll_task(id: i32) -> task_poll [native web worker];
 
             // ---- Vehicles -------------------------------------------------
             vehicle_teleport(name: str, x: f64, y: f64) -> i32 [native web worker];
             vehicle_spawn(def: str, name: str, x: f64, y: f64) -> i32 [native web worker];
             vehicle_goto(name: str, tx: i32, ty: i32) -> i32 [native web worker];
-            vehicle_goto_poll(id: i32) -> i32 [native web];
+            vehicle_goto_poll(id: i32) -> i32 [native web worker];
             vehicle_stop(name: str) -> i32 [native web worker];
             vehicle_set_speed(name: str, speed: f64) -> i32 [native web worker];
             vehicle_probe(name: str, tx: i32, ty: i32) -> i32 [native web worker];
@@ -208,22 +208,21 @@ macro_rules! for_each_host_import {
             commit_terrain(height_scale: f64) -> i32 [native web worker tier3_trap];
 
             // ---- Field-buffer registry + grid kernels ---------------------
-            // The untrusted `worker` backend does not expose these yet.
-            alloc_field(name: str, w: i32, h: i32, dtype: i32) -> i32 [native web tier3];
-            free_field(name: str) -> i32 [native web tier3];
-            write_field(name: str, data: f32s) -> i32 [native web tier3];
-            write_field_u32(name: str, data: u32s) -> i32 [native web tier3];
-            read_field(name: str) -> f32s [native web tier3];
-            map_field(op: i32, dst: str, src: str) -> i32 [native web tier3];
-            map_scalar(op: i32, dst: str, scalar: f64) -> i32 [native web tier3];
-            blur_box_field(name: str, radius: i32) -> i32 [native web tier3];
+            alloc_field(name: str, w: i32, h: i32, dtype: i32) -> i32 [native web worker tier3];
+            free_field(name: str) -> i32 [native web worker tier3];
+            write_field(name: str, data: f32s) -> i32 [native web worker tier3];
+            write_field_u32(name: str, data: u32s) -> i32 [native web worker tier3];
+            read_field(name: str) -> f32s [native web worker tier3];
+            map_field(op: i32, dst: str, src: str) -> i32 [native web worker tier3];
+            map_scalar(op: i32, dst: str, scalar: f64) -> i32 [native web worker tier3];
+            blur_box_field(name: str, radius: i32) -> i32 [native web worker tier3];
             relax_slopes_field(
                 name: str, max_slope: f64, iterations: i32, tolerance: f64, pinned: str
-            ) -> f64 [native web tier3];
-            gradient_magnitude_field(heights: str, dst: str) -> i32 [native web tier3];
-            threshold_le_field(src: str, dst: str, t: f64) -> i32 [native web tier3];
-            prune_components_field(name: str) -> i32 [native web tier3];
-            reduce_field(name: str, op: i32) -> f64 [native web tier3];
+            ) -> f64 [native web worker tier3];
+            gradient_magnitude_field(heights: str, dst: str) -> i32 [native web worker tier3];
+            threshold_le_field(src: str, dst: str, t: f64) -> i32 [native web worker tier3];
+            prune_components_field(name: str) -> i32 [native web worker tier3];
+            reduce_field(name: str, op: i32) -> f64 [native web worker tier3];
 
             // ---- Background worker guest only (Tier 3) --------------------
             find_path(sx: i32, sy: i32, ex: i32, ey: i32) -> path_opt [tier3];
@@ -946,16 +945,16 @@ mod tests {
     fn backend_subset_sizes() {
         assert_eq!(imports_for(Backend::Native).count(), 110);
         assert_eq!(imports_for(Backend::Web).count(), 110);
-        assert_eq!(imports_for(Backend::Worker).count(), 94);
+        assert_eq!(imports_for(Backend::Worker).count(), 110);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
         assert_eq!(imports_for(Backend::Tier3Trap).count(), 23);
     }
 
     #[test]
-    fn web_matches_native_and_worker_is_a_native_subset() {
+    fn web_and_worker_match_native() {
         let native = names(Backend::Native);
         assert_eq!(names(Backend::Web), native);
-        assert!(names(Backend::Worker).is_subset(&native));
+        assert_eq!(names(Backend::Worker), native);
         assert!(names(Backend::Tier3Trap).is_subset(&native));
         assert!(names(Backend::Tier3).is_disjoint(&names(Backend::Tier3Trap)));
     }

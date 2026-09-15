@@ -67,6 +67,28 @@ jobs:
             - run: cargo xtask build-pathfinder
             - run: cargo check --target wasm32-unknown-unknown -p classic-core -p classic-pathfinder -p classic-pathfinder-wasm -p classic-terrain -p classic-worker -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-guest -p classic-demo
 
+    web-test:
+        name: web tests (headless chrome)
+        runs-on: ubuntu-latest
+        timeout-minutes: 25
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: wasm32-unknown-unknown
+            # Must match the `wasm-bindgen` version in Cargo.lock (see flake.nix).
+            - run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+            - run: cargo xtask build-pathfinder
+            # The runner image ships Chrome + a matching chromedriver
+            # ($CHROMEWEBDRIVER); wasm-bindgen-test-runner serves the page
+            # cross-origin isolated, so SharedArrayBuffer works.
+            - name: classic-guest browser tests
+              env:
+                  CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+              run: |
+                  export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
+                  cargo test --target wasm32-unknown-unknown -p classic-guest --test web
+
     golden:
         name: golden test (headless EGL)
         runs-on: ubuntu-latest

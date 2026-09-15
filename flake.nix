@@ -15,6 +15,22 @@
 
         rust-toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
+        # Must match the `wasm-bindgen` crate version in Cargo.lock exactly:
+        # `wasm-bindgen-test-runner` refuses test binaries built against another
+        # version.
+        wasm-bindgen-cli = pkgs.buildWasmBindgenCli rec {
+          src = pkgs.fetchCrate {
+            pname = "wasm-bindgen-cli";
+            version = "0.2.127";
+            hash = "sha256-di+qBAdd7pENLiIB9CoZoab+W5xeDoByMREcCGTSzWo=";
+          };
+          cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+            inherit src;
+            inherit (src) pname version;
+            hash = "sha256-FTv2GZIAQs0ePdIZXIXil7JbZ6kIT05VG6vqC1qNFxQ=";
+          };
+        };
+
         nativeBuildInputs = with pkgs; [
           pkg-config
           udev
@@ -38,6 +54,9 @@
           trunk
           lld
           emscripten
+          # Headless browser for the wasm32 test harness (`wasm-bindgen-test`).
+          chromium
+          chromedriver
         ];
       in
       {
@@ -51,6 +70,11 @@
             fi
 
             export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER="${pkgs.lld}/bin/lld"
+
+            # `cargo test --target wasm32-unknown-unknown` runs the tests in
+            # headless Chromium (cross-origin isolated, so SharedArrayBuffer works).
+            export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="wasm-bindgen-test-runner"
+            export CHROMEDRIVER="${pkgs.chromedriver}/bin/chromedriver"
 
             # X11/GL linking is handled by classic-platform's build.rs via
             # pkg-config (which Nix wraps to find libs from nativeBuildInputs).
