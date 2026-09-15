@@ -332,4 +332,7 @@ foreground `GuestRuntime` — see `classic-worker/src/guest_worker`:
   writes `task_return`.  Native runs it on a `std::thread` (wasmtime); web uses
   a synchronous wasmi fallback (a real async web `Worker` is deferred).
 - `GuestWorker::new(wasm, nav, synchronous)` — `synchronous` runs entries inline
-  (the deterministic harness forces it under `CLASSIC_TEST`/`CLASSIC_GOLDEN`).
+  on a synchronous `classic_worker::JobQueue`.  The engine passes its single
+  determinism switch, `Engine::set_synchronous_workers` (which the demo sets
+  under `CLASSIC_TEST`/`CLASSIC_GOLDEN`), from `install_guest_worker`; the same
+  switch makes the pathfinder run inline.

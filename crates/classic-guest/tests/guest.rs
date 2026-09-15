@@ -545,7 +545,7 @@ fn worker_ok_wasm() -> Vec<u8> {
 #[test]
 fn engine_spawn_poll_task_roundtrip() {
     let mut engine = Engine::new_for_test();
-    engine.install_guest_worker(&worker_ok_wasm(), false).unwrap();
+    engine.install_guest_worker(&worker_ok_wasm()).unwrap();
 
     let id = engine.spawn_task("entry", vec![1, 2, 3]);
     let mut result = None;
@@ -574,7 +574,7 @@ fn guest_spawn_poll_task_imports_wired() {
         &GuestLimits::default(),
         |rt| {
             let mut engine = Engine::new_for_test();
-            engine.install_guest_worker(&worker_ok_wasm(), false).unwrap();
+            engine.install_guest_worker(&worker_ok_wasm()).unwrap();
             rt.update(&mut engine, 0.016).unwrap();
         },
     );

@@ -87,7 +87,6 @@ impl Engine {
             nav_version: 0,
             synchronous_workers: false,
             next_path_id: 1,
-            sync_paths: HashMap::new(),
             pathfinder: None,
             vehicle_nav_snapshot: Arc::new(pathfinder::VehicleNavSnapshot::new(
                 0,
@@ -96,7 +95,6 @@ impl Engine {
                 Vec::new(),
                 TILE_M,
             )),
-            sync_vehicle_paths: HashMap::new(),
             vehicle_path_entities: HashMap::new(),
             preview_paths: HashMap::new(),
             preview_probe: None,

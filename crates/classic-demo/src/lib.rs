@@ -84,9 +84,6 @@ pub fn init_guest(
     rom: &str,
     sink: &dyn BootSink,
 ) {
-    // The deterministic harness forces synchronous workers so frame output is
-    // independent of background-thread scheduling.
-    e.set_synchronous_workers(limits.synchronous_workers);
     sink.on_event(BootEvent::GuestCompiling { rom: rom.to_string() });
     match create_runtime(wasm, limits) {
         Ok(rt) => install_guest_runtime(e, state, rt, namespace, rom, sink),
@@ -107,7 +104,6 @@ pub fn init_guest_compiled(
     rom: &str,
     sink: &dyn BootSink,
 ) {
-    e.set_synchronous_workers(limits.synchronous_workers);
     match classic_guest::create_runtime_from_module(module, limits) {
         Ok(rt) => install_guest_runtime(e, state, rt, namespace, rom, sink),
         Err(err) => cl_error!(Chan::Guest, "init_guest: {err}"),
@@ -149,17 +145,9 @@ fn install_guest_runtime(
 }
 
 /// The per-ROM guest limits used by both the off-thread compile and the on-
-/// thread instantiate, so the two halves agree on fuel/memory/sync config.
+/// thread instantiate, so the two halves agree on fuel/memory config.
 fn guest_limits(entry: &LoadedRom) -> GuestLimits {
-    let env = classic_engine::env_config::EnvConfig::get();
-    GuestLimits {
-        trusted: entry.rom.manifest.trusted,
-        // The deterministic harness (CLASSIC_TEST) and golden capture both
-        // force synchronous workers so frame output is independent of
-        // background-thread scheduling.
-        synchronous_workers: env.test_active() || env.golden_active(),
-        ..GuestLimits::default()
-    }
+    GuestLimits { trusted: entry.rom.manifest.trusted, ..GuestLimits::default() }
 }
 
 /// Compile every guest module in the DAG off the main thread (native
@@ -238,12 +226,12 @@ pub fn init_guests(
 /// off-thread-compiled worker module when present (the async native path);
 /// otherwise compiles inline (the sync / headless / golden / web path).
 #[cfg(not(target_arch = "wasm32"))]
-fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules, sync: bool) {
+fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules) {
     let Some(root) = loaded.root_rom() else { return };
     let Some(worker_wasm) = root.resources.code().get("worker") else { return };
     let result = match &compiled.worker {
-        Some(compiled_worker) => e.install_guest_worker_compiled(compiled_worker, sync),
-        None => e.install_guest_worker(worker_wasm, sync),
+        Some(compiled_worker) => e.install_guest_worker_compiled(compiled_worker),
+        None => e.install_guest_worker(worker_wasm),
     };
     if let Err(err) = result {
         cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
@@ -253,11 +241,11 @@ fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModule
 /// Web variant: the worker compiles inline (browser-native wasm in a Worker, or
 /// wasmi in sync mode), so there is never a pre-compiled module to install.
 #[cfg(target_arch = "wasm32")]
-fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules, sync: bool) {
+fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules) {
     let _ = compiled;
     let Some(root) = loaded.root_rom() else { return };
     let Some(worker_wasm) = root.resources.code().get("worker") else { return };
-    if let Err(err) = e.install_guest_worker(worker_wasm, sync) {
+    if let Err(err) = e.install_guest_worker(worker_wasm) {
         cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
     }
 }
@@ -305,8 +293,12 @@ pub fn finish_init_engine(
     // guests run their `init` hook, so a generating guest can submit work from
     // `init`.  Worker code stays root-only for now (per-ROM workers deferred).
     {
+        // The single determinism switch: the deterministic harness (CLASSIC_TEST)
+        // and golden capture run all background work (pathfinding, the guest
+        // worker) inline, so frame output is independent of thread scheduling.
         let env = classic_engine::env_config::EnvConfig::get();
-        install_worker(e, loaded, compiled, env.test_active() || env.golden_active());
+        e.set_synchronous_workers(env.test_active() || env.golden_active());
+        install_worker(e, loaded, compiled);
     }
 
     // ROM guest code.  Each guest owns its terrain — a generating guest

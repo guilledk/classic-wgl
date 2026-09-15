@@ -701,7 +701,7 @@ impl Engine {
     /// Build the unified obstacle grid (0 = blocked, 1 = open) from the
     /// footprints of every non-disabled entity whose collider has `blocks_nav`
     /// set.  Used for both humanoid and vehicle pathfinding.
-    fn compute_nav_obstacles(&self) -> Vec<i32> {
+    pub(crate) fn compute_nav_obstacles(&self) -> Vec<i32> {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else { return Vec::new() };
         let Ok(nav) = self.world.get::<&NavMesh>(nav_entity) else { return Vec::new() };
         let (size_x, size_y) = (nav.size_x, nav.size_y);
@@ -744,7 +744,7 @@ impl Engine {
     /// A*, from the live `NavMesh` (structural nav) and `Tilemap` (heights +
     /// the fixed `TILE_M` tile metre length).  Returns `None` when either
     /// component is missing.
-    fn build_vehicle_nav_snapshot(
+    pub(crate) fn build_vehicle_nav_snapshot(
         &self,
         obstacles: &[i32],
     ) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
@@ -767,10 +767,16 @@ impl Engine {
         )))
     }
 
-    /// Force pathfinding to run synchronously on the render thread (the
-    /// deterministic test/golden harness) instead of offloading to a worker.
+    /// Run background work (pathfinding and the Tier-3 guest worker) inline on
+    /// the render thread — the deterministic test/golden harness — instead of
+    /// offloading it.  The single determinism switch: it decides how the
+    /// workers' job queues are built.  Set it before installing the guest worker;
+    /// a pathfinder already spawned in the other mode is rebuilt on next use.
     pub fn set_synchronous_workers(&mut self, synchronous: bool) {
         self.synchronous_workers = synchronous;
+        if self.pathfinder.as_ref().is_some_and(|w| w.is_synchronous() != synchronous) {
+            self.pathfinder = None;
+        }
     }
 
     /// The nav-snapshot version, bumped on every rebuild.
@@ -787,20 +793,10 @@ impl Engine {
     pub fn request_path(&mut self, from: (i32, i32), to: (i32, i32)) -> u64 {
         let id = self.next_path_id;
         self.next_path_id = self.next_path_id.wrapping_add(1);
-
-        if !self.synchronous_workers {
-            self.ensure_pathfinder();
-            if let Some(worker) = self.pathfinder.as_mut() {
-                worker.request_path(id, from, to);
-                return id;
-            }
+        self.ensure_pathfinder();
+        if let Some(worker) = self.pathfinder.as_mut() {
+            worker.request_path(id, from, to);
         }
-
-        let poll = match self.nav_snapshot.find_path(from, to) {
-            Some(path) => pathfinder::PathPoll::Path(path),
-            None => pathfinder::PathPoll::NoPath,
-        };
-        self.sync_paths.insert(id, poll);
         id
     }
 
@@ -810,9 +806,6 @@ impl Engine {
     /// running, [`pathfinder::PathPoll::Path`] with the route, or
     /// [`pathfinder::PathPoll::NoPath`] if no route exists.
     pub fn poll_path(&mut self, id: u64) -> pathfinder::PathPoll {
-        if let Some(poll) = self.sync_paths.remove(&id) {
-            return poll;
-        }
         if let Some(worker) = self.pathfinder.as_mut() {
             return worker.poll_path(id);
         }
@@ -831,11 +824,17 @@ impl Engine {
         }
     }
 
-    /// Spawn the pathfinding worker on first use, sharing the current nav
-    /// snapshot and vehicle nav snapshot.
+    /// Spawn the pathfinding worker on first use (synchronous under
+    /// `synchronous_workers`), sharing the current nav snapshot and vehicle nav
+    /// snapshot.
     pub(crate) fn ensure_pathfinder(&mut self) {
         if self.pathfinder.is_none() {
-            let mut worker = classic_worker::PathfinderWorker::new(Arc::clone(&self.nav_snapshot));
+            let snapshot = Arc::clone(&self.nav_snapshot);
+            let mut worker = if self.synchronous_workers {
+                classic_worker::PathfinderWorker::new_synchronous(snapshot)
+            } else {
+                classic_worker::PathfinderWorker::new(snapshot)
+            };
             worker.set_vehicle_snapshot(Arc::clone(&self.vehicle_nav_snapshot));
             self.pathfinder = Some(worker);
         }
@@ -843,12 +842,15 @@ impl Engine {
 
     /// Install the background guest worker (Tier 3), sharing the current nav
     /// snapshot.  The worker runs a second `.wasm` instance against the reduced
-    /// pure-import surface (see `classic-worker::guest_worker`).  `synchronous`
-    /// forces entries to run inline on the render thread (the deterministic
-    /// test/golden harness).
-    pub fn install_guest_worker(&mut self, wasm: &[u8], synchronous: bool) -> Result<(), String> {
-        let worker =
-            classic_worker::GuestWorker::new(wasm, Arc::clone(&self.nav_snapshot), synchronous)?;
+    /// pure-import surface (see `classic-worker::guest_worker`).  Under
+    /// `synchronous_workers` entries run inline on the render thread (the
+    /// deterministic test/golden harness).
+    pub fn install_guest_worker(&mut self, wasm: &[u8]) -> Result<(), String> {
+        let worker = classic_worker::GuestWorker::new(
+            wasm,
+            Arc::clone(&self.nav_snapshot),
+            self.synchronous_workers,
+        )?;
         self.guest_worker = Some(worker);
         Ok(())
     }
@@ -860,12 +862,11 @@ impl Engine {
     pub fn install_guest_worker_compiled(
         &mut self,
         compiled: &classic_worker::CompiledWorker,
-        synchronous: bool,
     ) -> Result<(), String> {
         let worker = classic_worker::GuestWorker::new_compiled(
             compiled,
             Arc::clone(&self.nav_snapshot),
-            synchronous,
+            self.synchronous_workers,
         )?;
         self.guest_worker = Some(worker);
         Ok(())

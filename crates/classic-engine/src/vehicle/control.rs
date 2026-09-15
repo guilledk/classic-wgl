@@ -3,6 +3,7 @@
 
 use classic_core::components::{IsoVehicle, Transform};
 use classic_core::pathfinder::PathPoll;
+use classic_worker::{VehiclePathQuery, VehicleSnapshot};
 
 use crate::Engine;
 
@@ -134,43 +135,19 @@ impl Engine {
         let id = self.next_path_id;
         self.next_path_id = self.next_path_id.wrapping_add(1);
 
-        if !self.synchronous_workers {
-            self.ensure_pathfinder();
-            if let Some(worker) = self.pathfinder.as_mut() {
-                worker.request_vehicle_path(
-                    id,
-                    from,
-                    (tx, ty),
-                    footprint,
-                    pitch_max,
-                    roll_max,
-                    wheelbase_m,
-                    track_m,
-                    safe_fall_m,
-                    JUMP_COST,
-                    turn_cost,
-                );
-            }
-        } else {
-            let poll = match self.find_vehicle_path(
-                from,
-                (tx, ty),
-                &footprint,
-                pitch_max,
-                roll_max,
-                wheelbase_m,
-                track_m,
-                safe_fall_m,
-                JUMP_COST,
-                turn_cost,
-            ) {
-                Some(path) => {
-                    VehicleGotoPoll::Accepted(path.into_iter().map(|(x, y)| [x, y]).collect())
-                }
-                None => VehicleGotoPoll::NoPath,
-            };
-            self.sync_vehicle_paths.insert(id, poll);
-        }
+        let query = VehiclePathQuery {
+            from,
+            to: (tx, ty),
+            footprint,
+            pitch_max,
+            roll_max,
+            wheelbase_m,
+            track_m,
+            safe_fall_m,
+            jump_cost: JUMP_COST,
+            turn_cost,
+        };
+        self.submit_vehicle_path(id, query);
 
         self.vehicle_path_entities.insert(id, ve);
         VehicleGotoSubmit::Submitted(id)
@@ -181,9 +158,7 @@ impl Engine {
     /// `v.path_idx`) here — the single mutation point shared by the sync and
     /// async paths.
     pub fn vehicle_goto_poll(&mut self, id: u64) -> VehicleGotoPoll {
-        let poll = if let Some(poll) = self.sync_vehicle_paths.remove(&id) {
-            poll
-        } else if let Some(worker) = self.pathfinder.as_mut() {
+        let poll = if let Some(worker) = self.pathfinder.as_mut() {
             match worker.poll_vehicle_path(id) {
                 PathPoll::Pending => VehicleGotoPoll::Pending,
                 PathPoll::NoPath => VehicleGotoPoll::NoPath,
@@ -296,56 +271,45 @@ impl Engine {
         // New target (or first call): submit a fresh probe.
         let id = self.next_path_id;
         self.next_path_id = self.next_path_id.wrapping_add(1);
-        if self.synchronous_workers {
-            let path = self.find_vehicle_path(
-                from,
-                target,
-                &footprint,
-                pitch_max,
-                roll_max,
-                wheelbase_m,
-                track_m,
-                safe_fall_m,
-                JUMP_COST,
-                turn_cost,
-            );
-            let found = path.is_some();
-            self.preview_probe = Some(PreviewProbe {
-                name: name.to_string(),
-                target,
-                state: PreviewProbeState::Done { reachable: found },
-            });
-            if let Some(path) = path {
-                self.preview_paths
-                    .insert(name.to_string(), path.into_iter().map(|(x, y)| [x, y]).collect());
-                return 1;
-            }
-            self.preview_paths.remove(name);
-            return -1;
-        }
-
-        self.ensure_pathfinder();
-        if let Some(worker) = self.pathfinder.as_mut() {
-            worker.request_vehicle_path(
-                id,
-                from,
-                target,
-                footprint,
-                pitch_max,
-                roll_max,
-                wheelbase_m,
-                track_m,
-                safe_fall_m,
-                JUMP_COST,
-                turn_cost,
-            );
-        }
+        let query = VehiclePathQuery {
+            from,
+            to: target,
+            footprint,
+            pitch_max,
+            roll_max,
+            wheelbase_m,
+            track_m,
+            safe_fall_m,
+            jump_cost: JUMP_COST,
+            turn_cost,
+        };
+        self.submit_vehicle_path(id, query);
         self.preview_probe = Some(PreviewProbe {
             name: name.to_string(),
             target,
             state: PreviewProbeState::Pending { id },
         });
-        0
+        // A synchronous pathfinder has already answered (`1`/`-1`); a background
+        // one is still searching (`0`).
+        self.poll_preview_probe(id)
+    }
+
+    /// Submit a vehicle path request to the pathfinder.  A synchronous
+    /// pathfinder searches a snapshot freshly built from the live world (so the
+    /// deterministic path sees current heights and `blocks_nav` obstacles); a
+    /// background one searches the snapshot last pushed at nav refresh.
+    fn submit_vehicle_path(&mut self, id: u64, query: VehiclePathQuery) {
+        self.ensure_pathfinder();
+        let synchronous = self.pathfinder.as_ref().is_some_and(|w| w.is_synchronous());
+        let snapshot = if synchronous {
+            let obstacles = self.compute_nav_obstacles();
+            VehicleSnapshot::Fresh(self.build_vehicle_nav_snapshot(&obstacles))
+        } else {
+            VehicleSnapshot::Current
+        };
+        if let Some(worker) = self.pathfinder.as_mut() {
+            worker.request_vehicle(id, query, snapshot);
+        }
     }
 
     /// Poll an in-flight preview probe by id, finalising `preview_probe` (and

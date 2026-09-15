@@ -184,3 +184,15 @@ fn web_rejects_imports_outside_its_subset() {
     .unwrap();
     assert!(WebWasmRuntime::new(&wasm, &limits()).is_err());
 }
+
+#[wasm_bindgen_test]
+fn synchronous_pathfinder_resolves_at_request_time_on_web() {
+    use classic_core::pathfinder::PathPoll;
+
+    // Under the determinism switch the web pathfinder runs inline (no Worker):
+    // the request is answered before `poll_path` is called.
+    let mut engine = Engine::new_for_test();
+    engine.set_synchronous_workers(true);
+    let id = engine.request_path((0, 0), (1, 1));
+    assert_ne!(engine.poll_path(id), PathPoll::Pending);
+}

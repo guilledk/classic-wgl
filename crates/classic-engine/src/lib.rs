@@ -291,16 +291,13 @@ pub struct Engine {
     /// single `PathId` namespace), starting at 1 so a vehicle id is always `> 0`
     /// (the ABI's "airborne" code is `0`).
     next_path_id: u64,
-    /// Synchronously-computed path results (synchronous_workers mode / web).
-    sync_paths: HashMap<u64, pathfinder::PathPoll>,
-    /// Pathfinding worker (spawned lazily on first async request; native
-    /// thread or web `Worker` depending on target).
+    /// Pathfinding worker (spawned lazily on first request): a background
+    /// native thread or web `Worker`, or an inline queue under
+    /// `synchronous_workers`.
     pathfinder: Option<classic_worker::PathfinderWorker>,
     /// Immutable vehicle nav snapshot (structural nav + heights) shared with
     /// the pathfinding worker.
     vehicle_nav_snapshot: Arc<pathfinder::VehicleNavSnapshot>,
-    /// Synchronously-computed vehicle path results (synchronous_workers mode).
-    sync_vehicle_paths: HashMap<u64, vehicle::VehicleGotoPoll>,
     /// Vehicle entity for each in-flight vehicle path request id.
     vehicle_path_entities: HashMap<u64, hecs::Entity>,
     /// Candidate vehicle path waypoints, keyed by vehicle name, computed by the

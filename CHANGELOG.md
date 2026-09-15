@@ -22,6 +22,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Run background work on a generic `classic_worker::JobQueue<J>` (threaded or
+  synchronous): `PathfinderWorker` and `GuestWorker` share its thread, FIFO
+  update, flush barrier and result map, and `Engine::set_synchronous_workers`
+  is now the single determinism switch — the engine always submits to the
+  pathfinder instead of branching into separate inline paths (synchronous
+  vehicle searches still use a snapshot of the live world).
+  `GuestLimits::synchronous_workers` and the `synchronous` argument of
+  `Engine::install_guest_worker{,_compiled}` are removed (#NN).
 - Spawn every background thread and web `Worker` through shared helpers
   (`classic_worker::spawn_thread`, `classic_worker::spawn_web_worker`) instead
   of five copies of the thread setup and four copies of the Blob/URL/`onmessage`
