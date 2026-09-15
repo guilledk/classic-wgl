@@ -1,9 +1,10 @@
-// classic-gfx web Basis Universal transcoder worker (P1.0/R3).
+// classic-worker web Basis Universal transcoder worker (P1.0/R3).
 //
-// Runs the self-built `basis_transcoder.wasm` (STANDALONE_WASM — no Emscripten
-// JS runtime) in a dedicated Worker, so the CPU transcode happens off the main
-// thread.  The wasm is instantiated asynchronously (`WebAssembly.instantiate`)
-// on `init`; any `transcode` messages that arrive first are queued.
+// Runs `classic-gfx`'s self-built `basis_transcoder.wasm` (STANDALONE_WASM — no
+// Emscripten JS runtime; passed in by `init`) in a dedicated Worker, so the CPU
+// transcode happens off the main thread.  The wasm is instantiated asynchronously
+// (`WebAssembly.instantiate`) on `init`; any `transcode` messages that arrive
+// first are queued.
 //
 // Messages (from the main thread):
 //   { type: "init", wasm: Uint8Array }                         — instantiate wasm
@@ -13,7 +14,7 @@
 //     width: number, height: number, data: Uint8Array }        — `data` present iff ok
 //
 // `format` is the basis_universal `transcoder_texture_format` enum — see
-// bootstrap.js for the values.
+// `classic-gfx/src/transcoder/bootstrap.js` for the values.
 
 var memory = null;
 var malloc = null;

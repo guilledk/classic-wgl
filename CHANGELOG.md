@@ -28,12 +28,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Fan boot-time texture decode and native `.basis` transcode out on a pooled
+  `JobQueue` (`JobQueue::pooled` + ordered `run_all`) instead of a separate
+  thread pool, so one decode path serves native (loader threads, now named
+  `classic-decode-N`/`classic-basis-N`) and wasm (inline); the web basis
+  transcode `Worker` moves into `classic_worker::transcoder_worker` (#NN).
 - Web workers exchange bytes as transferred buffers instead of structured
   clones: nav snapshots, guest/transcoder modules, task arguments and transcode
   inputs going in, and path, task and transcode results coming out.  The
   pathfinder result no longer clones the whole Worker wasm heap per search
   (#NN).
-
 - Run background work on a generic `classic_worker::JobQueue<J>` (threaded or
   synchronous): `PathfinderWorker` and `GuestWorker` share its thread, FIFO
   update, flush barrier and result map, and `Engine::set_synchronous_workers`
@@ -63,6 +67,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 ### Removed
 
 - Unused `classic-gfx` dependency from `classic-platform` (#NN).
+- `classic_worker::ThreadPool`, superseded by `JobQueue::pooled` (#NN).
 
 ### Fixed
 

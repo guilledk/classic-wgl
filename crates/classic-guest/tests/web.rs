@@ -260,3 +260,25 @@ async fn guest_worker_round_trips_task_bytes() {
     }
     panic!("guest worker never answered");
 }
+
+#[wasm_bindgen_test]
+async fn transcoder_worker_answers_each_request_by_id() {
+    use classic_worker::transcoder_worker::{parse_result, TranscoderWorker};
+    use wasm_bindgen::JsValue;
+
+    // The web basis transcode `Worker`: the transcoder module and each input go
+    // in as transferred buffers, and every reply resolves its own request's
+    // promise.  No `.basis` fixture exists, so the inputs are invalid payloads
+    // the transcoder rejects (`ok: false`).
+    const WASM: &[u8] = include_bytes!("../../classic-gfx/src/transcoder/basis_transcoder.wasm");
+    let worker = TranscoderWorker::new(WASM).unwrap();
+    let first = worker.request(b"not a basis file", 13).unwrap();
+    let second = worker.request(&[0u8; 4096], 6).unwrap();
+    for (promise, id) in [(second, 1.0), (first, 0.0)] {
+        let reply = wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
+        let get = |key| js_sys::Reflect::get(&reply, &JsValue::from_str(key)).unwrap();
+        assert_eq!(get("id").as_f64(), Some(id));
+        assert_eq!(get("ok").as_bool(), Some(false));
+        assert_eq!(parse_result(&reply), None);
+    }
+}

@@ -69,11 +69,12 @@ crates/
   classic-pathfinder/     #![no_std] A* + footprint/slope/jump vehicle search (single source of
                           truth for native + web; compiled to `pathfinder.wasm` for the web Worker)
   classic-pathfinder-wasm/ thin `#[no_mangle]` wasm ABI over `classic-pathfinder` (cdylib)
-  classic-worker/         background workers: the generic JobQueue<J> (jobs.rs: threaded or
-                          synchronous, the one determinism switch), PathfinderWorker (JobQueue
-                          natively + web Worker), the Tier-3 GuestWorker (a second .wasm instance
-                          running pure guest entries against a reduced import surface), ThreadPool,
-                          and the shared spawn helpers (spawn.rs: named threads, inline-JS Workers)
+  classic-worker/         background workers: the generic JobQueue<J> (jobs.rs: threaded, pooled
+                          or synchronous, the one determinism switch; also the boot decode
+                          fan-out), PathfinderWorker (JobQueue natively + web Worker), the Tier-3
+                          GuestWorker (a second .wasm instance running pure guest entries against
+                          a reduced import surface), the web basis TranscoderWorker, and the
+                          shared spawn helpers (spawn.rs: named threads, inline-JS Workers)
   classic-terrain/        #![no_std] open terrain/noise toolkit (simplex, fractal combinators, bulk
                           noise fields, and the grid-kernel catalog in kernels.rs) — the reusable
                           primitives ROM guests build map algorithms on

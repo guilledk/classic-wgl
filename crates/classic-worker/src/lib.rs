@@ -13,16 +13,14 @@
 pub mod guest_worker;
 pub mod jobs;
 pub mod pathfinder_worker;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod pool;
 pub mod spawn;
+#[cfg(target_arch = "wasm32")]
+pub mod transcoder_worker;
 
 pub use classic_core::pathfinder::PathPoll;
 pub use guest_worker::{CompiledWorker, GuestWorker, TaskId, WorkerHost};
 pub use jobs::{Job, JobId, JobQueue};
 pub use pathfinder_worker::{PathfinderWorker, VehiclePathQuery, VehicleSnapshot};
-#[cfg(not(target_arch = "wasm32"))]
-pub use pool::ThreadPool;
 #[cfg(not(target_arch = "wasm32"))]
 pub use spawn::spawn_thread;
 #[cfg(target_arch = "wasm32")]

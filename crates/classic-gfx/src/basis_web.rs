@@ -9,24 +9,23 @@
 //!
 //! There are two backends:
 //! - **Worker** (default): the transcode runs in a dedicated web `Worker`
-//!   (`transcoder_worker.js`), with the wasm instantiated asynchronously; the
-//!   main thread only uploads the decoded payload.
+//!   ([`classic_worker::transcoder_worker::TranscoderWorker`]), with the wasm
+//!   instantiated asynchronously; the main thread only uploads the decoded
+//!   payload.
 //! - **Sync** (fallback): the wasm is instantiated synchronously on the main
 //!   thread (`WebAssembly.Module` + `WebAssembly.Instance` via `bootstrap.js`),
 //!   used when the worker cannot start.
 
+use classic_worker::transcoder_worker::{parse_result, TranscoderWorker};
 use glow::HasContext;
 use js_sys::{Function, Reflect, Uint8Array};
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::rc::Rc;
+use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use super::compressed::{CompressedFormat, Decoded};
 
 const BOOTSTRAP_JS: &str = include_str!("transcoder/bootstrap.js");
-const TRANSCODER_WORKER_JS: &str = include_str!("transcoder/transcoder_worker.js");
 const BASIS_TRANSCODER_WASM: &[u8] = include_bytes!("transcoder/basis_transcoder.wasm");
 
 /// `basis_universal` `transcoder_texture_format` values (the C enum from
@@ -138,71 +137,8 @@ fn transcoder() -> Option<&'static Transcoder> {
     }
 }
 
-/// The web-Worker backend (the fast path): a `Worker` running the wasm, with a
-/// per-request promise the worker resolves via `postMessage`.
-struct TranscoderWorker {
-    worker: web_sys::Worker,
-    next_id: Rc<Cell<u64>>,
-    pending: Rc<RefCell<HashMap<u64, Function>>>,
-}
-
-impl TranscoderWorker {
-    fn new(wasm: &[u8]) -> Result<Self, JsValue> {
-        let next_id = Rc::new(Cell::new(0u64));
-        let pending: Rc<RefCell<HashMap<u64, Function>>> = Rc::new(RefCell::new(HashMap::new()));
-
-        // Resolve the promise for a completed transcode (keyed by request id).
-        let on_message = {
-            let pending = pending.clone();
-            Box::new(move |data: JsValue| {
-                let id = js_sys::Reflect::get(&data, &JsValue::from_str("id"))
-                    .ok()
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as u64;
-                if let Some(resolve) = pending.borrow_mut().remove(&id) {
-                    let _ = resolve.call1(&JsValue::NULL, &data);
-                }
-            })
-        };
-        let worker = classic_worker::spawn_web_worker(TRANSCODER_WORKER_JS, Some(on_message))
-            .map_err(|e| js_sys::Error::new(&format!("basis worker spawn: {e:?}")))?;
-
-        // Hand the wasm bytes to the worker (it instantiates them async and
-        // queues any transcode messages until ready).
-        {
-            let wasm = js_sys::Uint8Array::from(wasm);
-            let init = js_sys::Object::new();
-            Reflect::set(&init, &JsValue::from_str("type"), &JsValue::from_str("init"))?;
-            Reflect::set(&init, &JsValue::from_str("wasm"), &wasm)?;
-            classic_worker::post_transfer(&worker, &init, &[&wasm.buffer()])?;
-        }
-
-        Ok(Self { worker, next_id, pending })
-    }
-
-    /// Enqueue a transcode and return the promise the worker will resolve.
-    fn request(&self, bytes: &[u8], format: u32) -> Result<js_sys::Promise, JsValue> {
-        let id = self.next_id.get();
-        self.next_id.set(id + 1);
-
-        let mut resolve = None;
-        let promise = js_sys::Promise::new(&mut |res, _rej| resolve = Some(res));
-
-        self.pending.borrow_mut().insert(id, resolve.unwrap());
-
-        let msg = js_sys::Object::new();
-        Reflect::set(&msg, &JsValue::from_str("type"), &JsValue::from_str("transcode"))?;
-        Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_f64(id as f64))?;
-        let bytes = Uint8Array::from(bytes);
-        Reflect::set(&msg, &JsValue::from_str("bytes"), &bytes)?;
-        Reflect::set(&msg, &JsValue::from_str("format"), &JsValue::from(format))?;
-        classic_worker::post_transfer(&self.worker, &msg, &[&bytes.buffer()])?;
-        Ok(promise)
-    }
-}
-
 thread_local! {
-    static WORKER: RefCell<Option<TranscoderWorker>> = RefCell::new(None);
+    static WORKER: RefCell<Option<TranscoderWorker>> = const { RefCell::new(None) };
 }
 
 /// Lazily spawn (once) the transcode worker and run `f` against it.
@@ -220,19 +156,6 @@ fn with_worker<R>(f: impl FnOnce(&TranscoderWorker) -> R) -> Option<R> {
         }
         slot.as_ref().map(f)
     })
-}
-
-/// Parse a worker `result` message (`{ ok, width, height, data }`).
-fn parse_result(result: &JsValue) -> Option<(u32, u32, Vec<u8>)> {
-    let ok = Reflect::get(result, &JsValue::from_str("ok")).ok()?.as_bool()?;
-    if !ok {
-        return None;
-    }
-    let width = Reflect::get(result, &JsValue::from_str("width")).ok()?.as_f64()? as u32;
-    let height = Reflect::get(result, &JsValue::from_str("height")).ok()?.as_f64()? as u32;
-    let data: Uint8Array =
-        Reflect::get(result, &JsValue::from_str("data")).ok()?.dyn_into().ok()?;
-    Some((width, height, data.to_vec()))
 }
 
 /// Transcode to `format` via the worker, falling back to the synchronous
