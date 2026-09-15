@@ -14,8 +14,7 @@ use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-/// Resolve after `ms` milliseconds, yielding to the event loop (lets a freshly
-/// spawned `Worker` boot before the main thread busy-polls it).
+/// Resolve after `ms` milliseconds, yielding to the event loop.
 async fn sleep(ms: i32) {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         web_sys::window()
@@ -30,10 +29,19 @@ fn limits() -> GuestLimits {
     GuestLimits { max_frame_millis: 10_000, ..GuestLimits::default() }
 }
 
+/// Build a Worker runtime and wait for its readiness handshake.  A `Worker`
+/// cannot boot until the main thread yields, so it is never ready straight
+/// after construction.
 async fn worker(wat: &str) -> WorkerWasmRuntime {
     let rt = WorkerWasmRuntime::new(&wat::parse_str(wat).unwrap(), &limits()).unwrap();
-    sleep(100).await;
-    rt
+    assert!(!rt.is_ready(), "the Worker cannot have booted before the main thread yields");
+    for _ in 0..1000 {
+        if rt.is_ready() {
+            return rt;
+        }
+        sleep(5).await;
+    }
+    panic!("worker runtime never became ready");
 }
 
 /// A module importing every `backend` table entry with its table signature.
@@ -195,4 +203,60 @@ fn synchronous_pathfinder_resolves_at_request_time_on_web() {
     engine.set_synchronous_workers(true);
     let id = engine.request_path((0, 0), (1, 1));
     assert_ne!(engine.poll_path(id), PathPoll::Pending);
+}
+
+#[wasm_bindgen_test]
+async fn pathfinder_worker_round_trips_snapshots_and_paths() {
+    use classic_core::pathfinder::{NavSnapshot, PathPoll};
+    use std::sync::Arc;
+
+    // The background web pathfinder: the snapshot and module go to the Worker
+    // as transferred buffers, and the path comes back transferred.
+    let mut worker =
+        classic_worker::PathfinderWorker::new(Arc::new(NavSnapshot::new(8, 8, vec![1; 64])));
+    assert!(!worker.is_synchronous());
+    worker.request_path(1, (0, 0), (7, 7));
+    for _ in 0..1000 {
+        match worker.poll_path(1) {
+            PathPoll::Pending => sleep(5).await,
+            PathPoll::Path(path) => {
+                assert_eq!(path.first(), Some(&(0, 0)));
+                assert_eq!(path.last(), Some(&(7, 7)));
+                return;
+            }
+            PathPoll::NoPath => panic!("open grid must have a path"),
+        }
+    }
+    panic!("pathfinder worker never answered");
+}
+
+#[wasm_bindgen_test]
+async fn guest_worker_round_trips_task_bytes() {
+    use classic_core::pathfinder::NavSnapshot;
+    use std::sync::Arc;
+
+    // Tier-3 background guest on its web `Worker`: the argument goes in and the
+    // result comes back as transferred buffers.
+    let wasm = wat::parse_str(
+        r#"(module
+            (import "env" "task_arg" (func $task_arg (param i32 i32) (result i32)))
+            (import "env" "task_return" (func $task_return (param i32 i32)))
+            (memory (export "memory") 1)
+            (func (export "echo")
+                (call $task_return (i32.const 0) (call $task_arg (i32.const 0) (i32.const 1024)))))"#,
+    )
+    .unwrap();
+    let nav = Arc::new(NavSnapshot::new(0, 0, Vec::new()));
+    let mut worker = classic_worker::GuestWorker::new(&wasm, nav, false).unwrap();
+    worker.spawn_task(9, "echo", b"transferred".to_vec());
+    for _ in 0..1000 {
+        match worker.poll_task(9) {
+            None => sleep(5).await,
+            Some(result) => {
+                assert_eq!(result, Ok(b"transferred".to_vec()));
+                return;
+            }
+        }
+    }
+    panic!("guest worker never answered");
 }

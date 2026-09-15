@@ -49,6 +49,33 @@ pub fn spawn_web_worker(
     Ok(worker)
 }
 
+/// Post `msg` to `worker`, transferring (not copying) the given
+/// `ArrayBuffer`s.  Each transferred buffer is detached on this side, so only
+/// pass buffers built for this message.
+#[cfg(target_arch = "wasm32")]
+pub fn post_transfer(
+    worker: &web_sys::Worker,
+    msg: &wasm_bindgen::JsValue,
+    transfer: &[&wasm_bindgen::JsValue],
+) -> Result<(), wasm_bindgen::JsValue> {
+    let list = js_sys::Array::new();
+    for buffer in transfer {
+        list.push(buffer);
+    }
+    worker.post_message_with_transfer(msg, &list)
+}
+
+/// Whether `SharedArrayBuffer` is usable here (the page is cross-origin
+/// isolated: served with COOP `same-origin` + COEP `require-corp`).
+#[cfg(target_arch = "wasm32")]
+pub fn sab_available() -> bool {
+    js_sys::eval(
+        "(function(){ try { new SharedArrayBuffer(1); return true; } catch (e) { return false; } })()",
+    )
+    .map(|v| v.as_bool().unwrap_or(false))
+    .unwrap_or(false)
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;

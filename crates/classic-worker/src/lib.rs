@@ -26,4 +26,4 @@ pub use pool::ThreadPool;
 #[cfg(not(target_arch = "wasm32"))]
 pub use spawn::spawn_thread;
 #[cfg(target_arch = "wasm32")]
-pub use spawn::spawn_web_worker;
+pub use spawn::{post_transfer, sab_available, spawn_web_worker};

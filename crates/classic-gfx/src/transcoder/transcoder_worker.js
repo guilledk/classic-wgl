@@ -62,7 +62,8 @@ function handle(msg) {
     }
     free(inPtr);
     free(outPtr);
-    self.postMessage(result);
+    // `data` is already a copy out of wasm memory: transfer it, don't clone it.
+    self.postMessage(result, result.data ? [result.data.buffer] : []);
 }
 
 self.onmessage = function (e) {

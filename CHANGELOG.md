@@ -19,8 +19,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   (`wasm-bindgen-test` in Chromium, `crates/classic-guest/tests/web.rs`; the
   flake pins the matching `wasm-bindgen-cli` and provides Chromium +
   chromedriver) and a `web tests` CI job (#NN).
+- `GuestRuntime::is_ready()` readiness handshake: the untrusted web `Worker`
+  runtime reports ready once its `Worker` has booted, and the demo defers a
+  not-yet-ready guest's `init` to its first ready frame.  `trunk serve` now
+  sends COOP/COEP (cross-origin isolation), so `SharedArrayBuffer` and that
+  runtime are available in development; the GitHub Pages deploy stays
+  non-isolated (#NN).
 
 ### Changed
+
+- Web workers exchange bytes as transferred buffers instead of structured
+  clones: nav snapshots, guest/transcoder modules, task arguments and transcode
+  inputs going in, and path, task and transcode results coming out.  The
+  pathfinder result no longer clones the whole Worker wasm heap per search
+  (#NN).
 
 - Run background work on a generic `classic_worker::JobQueue<J>` (threaded or
   synchronous): `PathfinderWorker` and `GuestWorker` share its thread, FIFO

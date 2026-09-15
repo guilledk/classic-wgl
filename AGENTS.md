@@ -20,7 +20,7 @@ nix develop                             # enter dev shell (sets LD_LIBRARY_PATH 
 
 # Run
 cargo run -p classic-desktop            # native, interactive
-trunk serve apps/web/index.html         # web dev server
+trunk serve apps/web/index.html         # web dev server (cross-origin isolated: COOP/COEP from Trunk.toml)
 trunk build apps/web/index.html --release  # web release
 
 # Test

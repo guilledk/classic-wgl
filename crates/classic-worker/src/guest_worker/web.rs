@@ -146,7 +146,7 @@ impl GuestWorker {
             let _ =
                 js_sys::Reflect::set(&init, &JsValue::from_str("type"), &JsValue::from_str("init"));
             let _ = js_sys::Reflect::set(&init, &JsValue::from_str("wasm"), &wasm);
-            let _ = worker.post_message(&init);
+            let _ = crate::post_transfer(&worker, &init, &[&wasm.buffer()]);
         }
 
         Ok(Self { mode: Mode::Worker(worker), results })
@@ -187,7 +187,7 @@ impl GuestWorker {
                     &JsValue::from_str(entry),
                 );
                 let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("arg"), &arg);
-                let _ = worker.post_message(&msg);
+                let _ = crate::post_transfer(worker, &msg, &[&arg.buffer()]);
             }
         }
     }

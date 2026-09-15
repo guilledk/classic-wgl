@@ -50,6 +50,7 @@ const I_REQ_NUM_COUNT: u32 = 7;
 const I_MSG: u32 = 8;
 const I_CHUNK_LEN: u32 = 9;
 const I_TOTAL_LEN: u32 = 10;
+const I_READY: u32 = 11;
 
 // Float64 slots.
 const F_DT: u32 = 32;
@@ -68,12 +69,6 @@ const WORKER_SRC: &str = include_str!("worker.js");
 
 fn js_err(e: &JsValue) -> String {
     e.as_string().unwrap_or_else(|| format!("{e:?}"))
-}
-
-fn sab_available() -> bool {
-    js_sys::eval("(function(){ try { new SharedArrayBuffer(1); return true; } catch (e) { return false; } })()")
-        .map(|v| v.as_bool().unwrap_or(false))
-        .unwrap_or(false)
 }
 
 /// A request being received chunk by chunk.
@@ -199,7 +194,7 @@ impl WorkerWasmRuntime {
 
 impl GuestRuntime for WorkerWasmRuntime {
     fn new(wasm: &[u8], limits: &GuestLimits) -> Result<Self, GuestError> {
-        if !sab_available() {
+        if !classic_worker::sab_available() {
             return Err(GuestError::Instantiate(
                 "SharedArrayBuffer unavailable (needs cross-origin isolation)".into(),
             ));
@@ -220,10 +215,12 @@ impl GuestRuntime for WorkerWasmRuntime {
                 .map(|_| ())
                 .map_err(|e| GuestError::Instantiate(js_err(&e)))
         };
+        let module = js_sys::Uint8Array::from(wasm);
         set("sab", &sab)?;
-        set("wasm", &js_sys::Uint8Array::from(wasm))?;
+        set("wasm", &module)?;
         set("imports", &JsValue::from_str(&descriptor_json()))?;
-        worker.post_message(&init).map_err(|e| GuestError::Instantiate(js_err(&e)))?;
+        classic_worker::post_transfer(&worker, &init, &[&module.buffer()])
+            .map_err(|e| GuestError::Instantiate(js_err(&e)))?;
 
         Ok(Self {
             host: Rc::new(RefCell::new(GuestHost::new())),
@@ -249,6 +246,12 @@ impl GuestRuntime for WorkerWasmRuntime {
 
     fn start(&mut self, engine: &mut Engine) -> Result<(), GuestError> {
         self.run(engine, CMD_START, 0.0)
+    }
+
+    /// Ready once the `Worker` has booted and tried to instantiate the module
+    /// (a link error still counts: it is then reported by the next call).
+    fn is_ready(&self) -> bool {
+        self.flag_load(I_READY) != 0
     }
 
     fn set_namespace(&mut self, namespace: &str) {

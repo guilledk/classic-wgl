@@ -123,8 +123,14 @@ fn install_guest_runtime(
 ) {
     sink.on_event(BootEvent::GuestInstantiated { rom: rom.to_string() });
     rt.set_namespace(namespace);
-    if let Err(err) = rt.init(e) {
-        cl_error!(Chan::Guest, "guest init failed: {err}");
+    // Runtimes that instantiate synchronously run `init` right here, before the
+    // first frame.  A web `Worker` runtime only becomes ready once the main
+    // thread has yielded, so its `init` is deferred to the first ready frame.
+    let mut initialized = rt.is_ready();
+    if initialized {
+        if let Err(err) = rt.init(e) {
+            cl_error!(Chan::Guest, "guest init failed: {err}");
+        }
     }
     let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(rt));
     state.borrow_mut().guests.push(rt.clone());
@@ -132,6 +138,15 @@ fn install_guest_runtime(
     e.on_update(move |engine| {
         let dt = engine.time.delta as f64;
         let mut guest = rt.borrow_mut();
+        if !initialized {
+            if !guest.is_ready() {
+                return;
+            }
+            initialized = true;
+            if let Err(err) = guest.init(engine) {
+                cl_error!(Chan::Guest, "guest init failed: {err}");
+            }
+        }
         if let Err(err) = guest.update(engine, dt) {
             cl_error!(Chan::Guest, "guest update failed: {err}");
         }

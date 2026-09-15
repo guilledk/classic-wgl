@@ -78,7 +78,7 @@ impl PathfinderWorker {
             let _ =
                 js_sys::Reflect::set(&init, &JsValue::from_str("type"), &JsValue::from_str("init"));
             let _ = js_sys::Reflect::set(&init, &JsValue::from_str("wasm"), &wasm);
-            let _ = worker.post_message(&init);
+            let _ = crate::post_transfer(&worker, &init, &[&wasm.buffer()]);
         }
 
         let worker_handle = Self { backend: Backend::Worker { worker, results }, snapshot };
@@ -98,9 +98,10 @@ impl PathfinderWorker {
         matches!(self.backend, Backend::Inline(_))
     }
 
-    fn post(&self, msg: &js_sys::Object) {
+    /// Post to the Worker (a no-op for the inline backend), transferring `transfer`.
+    fn post(&self, msg: &js_sys::Object, transfer: &[&JsValue]) {
         if let Backend::Worker { worker, .. } = &self.backend {
-            let _ = worker.post_message(msg);
+            let _ = crate::post_transfer(worker, msg, transfer);
         }
     }
 
@@ -124,7 +125,7 @@ impl PathfinderWorker {
             &JsValue::from_f64(snapshot.size_y as f64),
         );
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("data"), &data);
-        self.post(&msg);
+        self.post(&msg, &[&data.buffer()]);
     }
 
     /// Replace the nav snapshot both the worker and the sync fallback search
@@ -159,7 +160,7 @@ impl PathfinderWorker {
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_f64(id as f64));
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("from"), &from);
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("to"), &to);
-        self.post(&msg);
+        self.post(&msg, &[]);
     }
 
     /// Poll a previously submitted request.  Non-blocking; returns
@@ -208,7 +209,7 @@ impl PathfinderWorker {
             &JsValue::from_str("tileM"),
             &JsValue::from_f64(snapshot.tile_m as f64),
         );
-        self.post(&msg);
+        self.post(&msg, &[&structural.buffer(), &heights.buffer()]);
     }
 
     /// Replace the vehicle nav snapshot the worker derives the slope grid from.
@@ -278,7 +279,7 @@ impl PathfinderWorker {
                 &JsValue::from_f64(value as f64),
             );
         }
-        self.post(&msg);
+        self.post(&msg, &[]);
     }
 
     /// Submit a vehicle path request over the current vehicle snapshot under a

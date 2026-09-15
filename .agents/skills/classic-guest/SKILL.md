@@ -231,9 +231,14 @@ Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
   `worker.terminate()`s on overrun, surfacing `GuestError::FuelExhausted`.  A
   guest trap or link error inside the Worker is reported back as
   `GuestError::Trap` (a trap fails that call only; a link error fails every
-  call).  **Gotcha:** a new `Worker` only boots once the main thread yields to
-  the event loop — calling `init`/`update` straight after
-  `WorkerWasmRuntime::new` busy-polls a worker that never starts and times out.
+  call).  **Readiness handshake:** a new `Worker` only boots once the main
+  thread yields to the event loop, so `GuestRuntime::is_ready()` is `false`
+  until it has instantiated the module; never run `init`/`update` before that
+  (they would busy-poll a worker that cannot start and time out).  The demo's
+  `install_guest_runtime` defers `init` to the first ready frame; synchronous
+  runtimes are ready immediately.  SAB (and so this backend) needs cross-origin
+  isolation: `trunk serve` sends COOP/COEP (`Trunk.toml`), the GitHub Pages
+  deploy cannot, so production untrusted guests use the wasmi fallback.
 - **Trusted**: `RomManifest.trusted` (`#[serde(default)]` = false).  The shipped
   demo/lunar ROMs set it true (skip fuel, intended for the fast browser path).
 

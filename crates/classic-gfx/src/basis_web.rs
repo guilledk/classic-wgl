@@ -174,7 +174,7 @@ impl TranscoderWorker {
             let init = js_sys::Object::new();
             Reflect::set(&init, &JsValue::from_str("type"), &JsValue::from_str("init"))?;
             Reflect::set(&init, &JsValue::from_str("wasm"), &wasm)?;
-            worker.post_message(&init)?;
+            classic_worker::post_transfer(&worker, &init, &[&wasm.buffer()])?;
         }
 
         Ok(Self { worker, next_id, pending })
@@ -193,9 +193,10 @@ impl TranscoderWorker {
         let msg = js_sys::Object::new();
         Reflect::set(&msg, &JsValue::from_str("type"), &JsValue::from_str("transcode"))?;
         Reflect::set(&msg, &JsValue::from_str("id"), &JsValue::from_f64(id as f64))?;
-        Reflect::set(&msg, &JsValue::from_str("bytes"), &Uint8Array::from(bytes))?;
+        let bytes = Uint8Array::from(bytes);
+        Reflect::set(&msg, &JsValue::from_str("bytes"), &bytes)?;
         Reflect::set(&msg, &JsValue::from_str("format"), &JsValue::from(format))?;
-        self.worker.post_message(&msg)?;
+        classic_worker::post_transfer(&self.worker, &msg, &[&bytes.buffer()])?;
         Ok(promise)
     }
 }

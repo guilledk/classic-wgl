@@ -78,6 +78,15 @@ pub trait GuestRuntime {
         Ok(())
     }
 
+    /// Whether the runtime can run guest code yet.  Runtimes that instantiate
+    /// synchronously are always ready.  The web `Worker` runtime only becomes
+    /// ready once its `Worker` has booted and instantiated the module, which
+    /// needs the main thread to yield to the event loop first — callers must
+    /// not run `init`/`update`/`start` before this returns `true`.
+    fn is_ready(&self) -> bool {
+        true
+    }
+
     /// Set the owning ROM's namespace (empty = global).  Guest-supplied entity
     /// names are scoped to it for the multi-ROM model; the default is a no-op
     /// for runtimes that don't isolate namespaces.

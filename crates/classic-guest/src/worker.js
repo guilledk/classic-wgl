@@ -27,6 +27,7 @@ var I_REQ_NUM_COUNT = 7;
 var I_MSG = 8;
 var I_CHUNK_LEN = 9;
 var I_TOTAL_LEN = 10;
+var I_READY = 11;
 
 var F_DT = 32;
 var F_RET = 33;
@@ -167,6 +168,9 @@ self.onmessage = function (e) {
     } catch (err) {
         linkError = err;
     }
+    // Booted: the main thread may now run guest entry points (a link error is
+    // reported by the first call).
+    Atomics.store(flags, I_READY, 1);
 
     while (true) {
         Atomics.wait(flags, I_GO, 0);

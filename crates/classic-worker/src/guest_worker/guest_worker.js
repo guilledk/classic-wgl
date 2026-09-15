@@ -44,11 +44,9 @@ function handle(msg) {
     currentResult = null;
     try {
         exports[msg.entry]();
-        self.postMessage({
-            type: "result",
-            id: msg.id,
-            result: currentResult || new Uint8Array(0),
-        });
+        // `currentResult` is already a copy out of wasm memory: transfer it.
+        var result = currentResult || new Uint8Array(0);
+        self.postMessage({ type: "result", id: msg.id, result: result }, [result.buffer]);
     } catch (err) {
         var message = err && err.message ? err.message : String(err);
         self.postMessage({ type: "error", id: msg.id, message: message });
