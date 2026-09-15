@@ -22,6 +22,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Spawn every background thread and web `Worker` through shared helpers
+  (`classic_worker::spawn_thread`, `classic_worker::spawn_web_worker`) instead
+  of five copies of the thread setup and four copies of the Blob/URL/`onmessage`
+  worker setup; native background threads are now named (#NN).
 - Generate the trusted browser `WebAssembly` guest backend's host imports from
   the ABI table, replacing ~1,500 hand-written closures and its hand-numbered
   `OP_*` dispatcher; imports with more than 8 wasm params are now one

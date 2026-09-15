@@ -71,7 +71,8 @@ crates/
   classic-pathfinder-wasm/ thin `#[no_mangle]` wasm ABI over `classic-pathfinder` (cdylib)
   classic-worker/         background workers: generic native ThreadPool, PathfinderWorker (native
                           thread + web Worker), and the Tier-3 GuestWorker (a second .wasm instance
-                          running pure guest entries against a reduced import surface)
+                          running pure guest entries against a reduced import surface), plus the
+                          shared spawn helpers (spawn.rs: named native threads, inline-JS web Workers)
   classic-terrain/        #![no_std] open terrain/noise toolkit (simplex, fractal combinators, bulk
                           noise fields, and the grid-kernel catalog in kernels.rs) — the reusable
                           primitives ROM guests build map algorithms on

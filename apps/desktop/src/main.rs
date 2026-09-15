@@ -248,7 +248,7 @@ fn main() {
     let (tx, rx) = mpsc::channel::<BootMsg>();
     let bg_spec = config.rom.clone();
     let bg_lookup = rom_lookup(rom_dir);
-    std::thread::spawn(move || {
+    classic_worker::spawn_thread("classic-boot", move || {
         let Ok(caps) = caps_rx.recv() else { return };
         let bg_sink = ChannelBootSink { tx: tx.clone() };
         match boot_assets(&bg_spec, &bg_lookup, caps, &bg_sink) {
@@ -263,7 +263,8 @@ fn main() {
                 let _ = tx.send(BootMsg::Failed(format!("{err:#}")));
             }
         }
-    });
+    })
+    .expect("failed to spawn boot thread");
 
     let max_frames: Option<u64> = std::env::var("CLASSIC_FRAMES").ok().and_then(|v| v.parse().ok());
     let mut frame_count: u64 = 0;

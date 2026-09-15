@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use classic_core::pathfinder::{GridCell, NavSnapshot, PathPoll, VehicleNavSnapshot};
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 
 use super::PathId;
 
@@ -38,22 +37,10 @@ impl PathfinderWorker {
     pub fn new(snapshot: Arc<NavSnapshot>) -> Self {
         let results: Rc<RefCell<HashMap<PathId, PathPoll>>> = Rc::new(RefCell::new(HashMap::new()));
 
-        // Build the worker from an inline source Blob (mirrors the guest
-        // worker runtime's approach).
-        let blob_parts = js_sys::Array::of1(&JsValue::from_str(WORKER_SRC));
-        let blob = web_sys::Blob::new_with_str_sequence(blob_parts.as_ref())
-            .expect("failed to build pathfinder worker blob");
-        let url = web_sys::Url::create_object_url_with_blob(&blob)
-            .expect("failed to create pathfinder worker url");
-        let worker = web_sys::Worker::new(&url).expect("failed to spawn pathfinder worker");
-
-        // Install the result handler.  Uses `JsValue` for the event so no
-        // `MessageEvent` web-sys feature is required.
-        {
+        // Install the result handler.
+        let on_message = {
             let results = results.clone();
-            let onmessage = Closure::wrap(Box::new(move |event: JsValue| {
-                let data = js_sys::Reflect::get(&event, &JsValue::from_str("data"))
-                    .unwrap_or(JsValue::NULL);
+            Box::new(move |data: JsValue| {
                 let id = js_sys::Reflect::get(&data, &JsValue::from_str("id"))
                     .ok()
                     .and_then(|v| v.as_f64())
@@ -68,10 +55,10 @@ impl PathfinderWorker {
                     _ => PathPoll::NoPath,
                 };
                 results.borrow_mut().insert(id, poll);
-            }) as Box<dyn FnMut(JsValue)>);
-            worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-            onmessage.forget();
-        }
+            })
+        };
+        let worker = crate::spawn_web_worker(WORKER_SRC, Some(on_message))
+            .expect("failed to spawn pathfinder worker");
 
         // Hand the compiled pathfinder.wasm bytes to the worker (it instantiates
         // them and queues any snapshot/find messages until ready).

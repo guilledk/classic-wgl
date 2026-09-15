@@ -13,9 +13,14 @@ pub mod guest_worker;
 pub mod pathfinder_worker;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pool;
+pub mod spawn;
 
 pub use classic_core::pathfinder::PathPoll;
 pub use guest_worker::{CompiledWorker, GuestWorker, TaskId, WorkerHost};
 pub use pathfinder_worker::PathfinderWorker;
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::ThreadPool;
+#[cfg(not(target_arch = "wasm32"))]
+pub use spawn::spawn_thread;
+#[cfg(target_arch = "wasm32")]
+pub use spawn::spawn_web_worker;

@@ -211,12 +211,8 @@ impl GuestRuntime for WorkerWasmRuntime {
             js_sys::Float64Array::new_with_byte_offset_and_length(&sab, NUM_OFFSET, NUM_SLOTS);
         let buf = js_sys::Uint8Array::new_with_byte_offset_and_length(&sab, BUF_OFFSET, BUF_BYTES);
 
-        let blob_parts = js_sys::Array::of1(&JsValue::from_str(WORKER_SRC));
-        let blob = web_sys::Blob::new_with_str_sequence(blob_parts.as_ref())
+        let worker = classic_worker::spawn_web_worker(WORKER_SRC, None)
             .map_err(|e| GuestError::Instantiate(js_err(&e)))?;
-        let url = web_sys::Url::create_object_url_with_blob(&blob)
-            .map_err(|e| GuestError::Instantiate(js_err(&e)))?;
-        let worker = web_sys::Worker::new(&url).map_err(|e| GuestError::Instantiate(js_err(&e)))?;
 
         let init = js_sys::Object::new();
         let set = |key: &str, value: &JsValue| {

@@ -151,22 +151,10 @@ impl TranscoderWorker {
         let next_id = Rc::new(Cell::new(0u64));
         let pending: Rc<RefCell<HashMap<u64, Function>>> = Rc::new(RefCell::new(HashMap::new()));
 
-        // Build the worker from an inline source Blob (mirrors the pathfinder /
-        // guest worker pattern in `classic-worker`).
-        let blob_parts = js_sys::Array::of1(&JsValue::from_str(TRANSCODER_WORKER_JS));
-        let blob = web_sys::Blob::new_with_str_sequence(blob_parts.as_ref())
-            .map_err(|e| js_sys::Error::new(&format!("basis worker blob: {e:?}")))?;
-        let url = web_sys::Url::create_object_url_with_blob(&blob)
-            .map_err(|e| js_sys::Error::new(&format!("basis worker url: {e:?}")))?;
-        let worker = web_sys::Worker::new(&url)
-            .map_err(|e| js_sys::Error::new(&format!("basis worker spawn: {e:?}")))?;
-
         // Resolve the promise for a completed transcode (keyed by request id).
-        {
+        let on_message = {
             let pending = pending.clone();
-            let onmessage = Closure::wrap(Box::new(move |event: JsValue| {
-                let data = js_sys::Reflect::get(&event, &JsValue::from_str("data"))
-                    .unwrap_or(JsValue::NULL);
+            Box::new(move |data: JsValue| {
                 let id = js_sys::Reflect::get(&data, &JsValue::from_str("id"))
                     .ok()
                     .and_then(|v| v.as_f64())
@@ -174,10 +162,10 @@ impl TranscoderWorker {
                 if let Some(resolve) = pending.borrow_mut().remove(&id) {
                     let _ = resolve.call1(&JsValue::NULL, &data);
                 }
-            }) as Box<dyn FnMut(JsValue)>);
-            worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-            onmessage.forget();
-        }
+            })
+        };
+        let worker = classic_worker::spawn_web_worker(TRANSCODER_WORKER_JS, Some(on_message))
+            .map_err(|e| js_sys::Error::new(&format!("basis worker spawn: {e:?}")))?;
 
         // Hand the wasm bytes to the worker (it instantiates them async and
         // queues any transcode messages until ready).

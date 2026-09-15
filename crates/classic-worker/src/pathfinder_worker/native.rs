@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 
 use classic_core::pathfinder::{
     GridCell, NavSnapshot, PathPoll, PathfinderState, VehicleNavSnapshot,
@@ -57,7 +56,7 @@ impl PathfinderWorker {
         let (worker_tx, rx) = mpsc::channel::<(PathId, Option<Vec<GridCell>>)>();
         let worker_snapshot = Arc::clone(&snapshot);
 
-        thread::spawn(move || {
+        crate::spawn_thread("classic-pathfinder", move || {
             let mut state = PathfinderState::new((*worker_snapshot).clone());
             while let Ok(command) = worker_rx.recv() {
                 match command {
@@ -100,7 +99,8 @@ impl PathfinderWorker {
                     Command::Shutdown => break,
                 }
             }
-        });
+        })
+        .expect("failed to spawn pathfinder thread");
 
         Self { tx, rx, results: HashMap::new(), snapshot }
     }
@@ -209,6 +209,7 @@ impl Drop for PathfinderWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use std::time::Duration;
 
     fn open_snapshot(w: i32, h: i32) -> Arc<NavSnapshot> {

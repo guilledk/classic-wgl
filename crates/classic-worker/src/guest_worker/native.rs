@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 
 use classic_core::pathfinder::NavSnapshot;
 use wasmtime::{Caller, Engine as WasmtimeEngine, Instance, Linker, Module, Store};
@@ -119,25 +118,23 @@ impl GuestWorker {
         let (tx, worker_rx) = mpsc::channel::<Command>();
         let (worker_tx, rx) = mpsc::channel::<(TaskId, TaskResult)>();
 
-        thread::Builder::new()
-            .name("classic-worker-guest".to_string())
-            .spawn(move || {
-                let mut runtime = runtime;
-                while let Ok(command) = worker_rx.recv() {
-                    match command {
-                        Command::Run { id, entry, arg } => {
-                            let result = runtime.run(&entry, arg);
-                            let _ = worker_tx.send((id, result));
-                        }
-                        Command::SetNav(nav) => runtime.store.data_mut().set_nav(nav),
-                        Command::Flush(ack) => {
-                            let _ = ack.send(());
-                        }
-                        Command::Shutdown => break,
+        crate::spawn_thread("classic-worker-guest", move || {
+            let mut runtime = runtime;
+            while let Ok(command) = worker_rx.recv() {
+                match command {
+                    Command::Run { id, entry, arg } => {
+                        let result = runtime.run(&entry, arg);
+                        let _ = worker_tx.send((id, result));
                     }
+                    Command::SetNav(nav) => runtime.store.data_mut().set_nav(nav),
+                    Command::Flush(ack) => {
+                        let _ = ack.send(());
+                    }
+                    Command::Shutdown => break,
                 }
-            })
-            .map_err(|e| format!("failed to spawn worker guest thread: {e}"))?;
+            }
+        })
+        .map_err(|e| format!("failed to spawn worker guest thread: {e}"))?;
 
         Ok(Self { mode: Mode::Threaded { tx, rx }, results: HashMap::new() })
     }
@@ -259,6 +256,7 @@ fn write_bytes(caller: &mut Caller<'_, WorkerHost>, ptr: i32, bytes: &[u8]) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use std::time::Duration;
 
     fn open_nav() -> Arc<NavSnapshot> {

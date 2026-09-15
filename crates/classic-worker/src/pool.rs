@@ -36,15 +36,16 @@ impl ThreadPool {
         let receiver = Arc::new(Mutex::new(receiver));
 
         let mut workers = Vec::with_capacity(threads);
-        for _ in 0..threads {
+        for i in 0..threads {
             let rx = Arc::clone(&receiver);
-            workers.push(thread::spawn(move || loop {
+            let worker = crate::spawn_thread(format!("classic-pool-{i}"), move || loop {
                 let message = rx.lock().expect("worker pool mutex poisoned").recv();
                 match message {
                     Ok(Message::Job(job)) => job(),
                     Ok(Message::Shutdown) | Err(_) => break,
                 }
-            }));
+            });
+            workers.push(worker.expect("failed to spawn thread-pool worker"));
         }
 
         Self { sender, workers }

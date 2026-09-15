@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use classic_core::pathfinder::NavSnapshot;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use wasmi::{Caller, Config, Engine as WasmiEngine, Instance, Linker, Module, Store};
 
 use super::install_worker_imports;
@@ -85,23 +84,10 @@ impl GuestWorker {
             return Ok(Self { mode: Mode::Sync(Box::new(runtime)), results });
         }
 
-        // Build the worker from an inline source Blob (mirrors the pathfinder
-        // worker's approach).
-        let blob_parts = js_sys::Array::of1(&JsValue::from_str(WORKER_SRC));
-        let blob = web_sys::Blob::new_with_str_sequence(blob_parts.as_ref())
-            .map_err(|e| format!("failed to build guest worker blob: {e:?}"))?;
-        let url = web_sys::Url::create_object_url_with_blob(&blob)
-            .map_err(|e| format!("failed to create guest worker url: {e:?}"))?;
-        let worker = web_sys::Worker::new(&url)
-            .map_err(|e| format!("failed to spawn guest worker: {e:?}"))?;
-
-        // Install the result handler.  Uses `JsValue` for the event so no
-        // `MessageEvent` web-sys feature is required.
-        {
+        // Install the result handler.
+        let on_message = {
             let results = results.clone();
-            let onmessage = Closure::wrap(Box::new(move |event: JsValue| {
-                let data = js_sys::Reflect::get(&event, &JsValue::from_str("data"))
-                    .unwrap_or(JsValue::NULL);
+            Box::new(move |data: JsValue| {
                 let id = js_sys::Reflect::get(&data, &JsValue::from_str("id"))
                     .ok()
                     .and_then(|v| v.as_f64())
@@ -127,10 +113,10 @@ impl GuestWorker {
                     _ => return,
                 };
                 results.borrow_mut().insert(id, result);
-            }) as Box<dyn FnMut(JsValue)>);
-            worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-            onmessage.forget();
-        }
+            })
+        };
+        let worker = crate::spawn_web_worker(WORKER_SRC, Some(on_message))
+            .map_err(|e| format!("failed to spawn guest worker: {e:?}"))?;
 
         // Hand the guest wasm bytes to the worker (it instantiates them and
         // queues any run messages until ready).
