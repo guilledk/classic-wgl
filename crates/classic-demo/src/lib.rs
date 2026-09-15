@@ -36,7 +36,7 @@ use std::rc::Rc;
 use classic_core::cl_error;
 use classic_core::cl_info;
 use classic_core::instrument::Chan;
-use classic_engine::boot::{BootFinish, BootPipeline};
+use classic_engine::boot::BootFinish;
 use classic_engine::Engine;
 use classic_guest::{create_runtime, GuestLimits, GuestRuntime};
 use classic_rom::{BootEvent, BootSink, LoadedRom, LoadedRoms, Rom};
@@ -267,8 +267,8 @@ fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModule
 }
 
 /// The demo's [`BootFinish`] hook: the post-load setup every boot driver runs
-/// once a [`BootPipeline`] has uploaded the ROM DAG.  Off the GL thread
-/// ([`BootPipeline::prepare`], native) it compiles the guest modules ahead of
+/// once a [`classic_engine::boot::BootPipeline`] has uploaded the ROM DAG.  Off the GL thread
+/// ([`classic_engine::boot::BootPipeline::prepare`], native) it compiles the guest modules ahead of
 /// time; otherwise the guests compile inline while finishing.
 #[derive(Default)]
 pub struct DemoFinish {
@@ -287,7 +287,7 @@ impl BootFinish for DemoFinish {
 
 /// Full demo engine bootstrap for a loaded multi-ROM dependency DAG.
 ///
-/// A synchronous [`BootPipeline`] hydrates shaders, resources and the entity
+/// [`classic_engine::boot::run_sync`] hydrates shaders, resources and the entity
 /// graph (deps before dependents), then [`DemoFinish`] installs the guests —
 /// each ROM's guest owns its own scene look — and the shared host layer
 /// (editor HUD, widgets, lighting default, hooks, test runner) on top.
@@ -296,10 +296,7 @@ pub fn init_engine_multi(
     loaded: &LoadedRoms,
     sink: &dyn BootSink,
 ) -> Engine {
-    let mut e = Engine::new();
-    let finish: Box<dyn BootFinish> = Box::new(DemoFinish::default());
-    BootPipeline::new(loaded.clone(), Some(finish)).poll(&mut e, &gl, sink, None);
-    e
+    classic_engine::boot::run_sync(gl, loaded.clone(), Box::new(DemoFinish::default()), sink)
 }
 
 /// The post-load tail of every boot ([`DemoFinish::finish`]): cursor/camera/

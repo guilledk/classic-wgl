@@ -127,27 +127,21 @@ fn boot_sink() -> (
         }
     }
 }
-/// Per-frame boot budget: run boot steps for at most this long before yielding
-/// to the browser, so no single animation frame blocks past ~16 ms.
-#[cfg(target_arch = "wasm32")]
-const BOOT_BUDGET: std::time::Duration = std::time::Duration::from_millis(12);
 
 /// Resolve after the next `requestAnimationFrame` tick — yield one frame so the
 /// browser paints (and the loading screen animates) between hydration slices.
 #[cfg(target_arch = "wasm32")]
-fn next_frame() -> impl std::future::Future<Output = ()> {
-    async {
-        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-            let resolve = resolve.clone();
-            let cb = wasm_bindgen::closure::Closure::once(move || {
-                let _ = resolve.call0(&JsValue::UNDEFINED);
-            });
-            let window = web_sys::window().expect("no window");
-            let _ = window.request_animation_frame(cb.as_ref().unchecked_ref());
-            cb.forget();
+async fn next_frame() {
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        let resolve = resolve.clone();
+        let cb = wasm_bindgen::closure::Closure::once(move || {
+            let _ = resolve.call0(&JsValue::UNDEFINED);
         });
-        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-    }
+        let window = web_sys::window().expect("no window");
+        let _ = window.request_animation_frame(cb.as_ref().unchecked_ref());
+        cb.forget();
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -176,17 +170,14 @@ async fn run() -> anyhow::Result<()> {
     let gl = platform.gl();
     let (vw, vh) = platform.viewport();
 
-    // Set up the GL layer + embedded font up front so the loader renders from
-    // frame 0, then render one initial frame before the (awaited) fetch.
-    let mut engine = classic_engine::Engine::new();
-    engine.init_gfx(gl.clone());
-    // Install the loading-screen UI from frame 0 (visual loader only), sync
-    // it, and render through the normal frame pipeline.
-    if let Some(loader) = &loader {
-        loader.install(&mut engine);
-        loader.sync(&mut engine, vw, vh);
-        engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
-    }
+    // Set up the GL layer, embedded font and loading screen up front so the
+    // loader renders from frame 0, then draw one frame before the (awaited)
+    // fetch.
+    use classic_engine::boot::{BootFrame, BootPipeline, InterleavedBoot};
+    let mut boot = InterleavedBoot::new(loader);
+    let mut engine = boot.engine(gl.clone());
+    let mut no_input = classic_platform::InputState::new();
+    boot.draw_loader(&mut engine, &mut no_input, vw, vh, 0.0);
 
     let boot_start = classic_platform::BootTimer::start();
     let loaded = match resolve_web_roms(&spec, sink.as_ref()).await {
@@ -204,40 +195,25 @@ async fn run() -> anyhow::Result<()> {
         log::info!("boot aborted (Esc)");
         return Ok(());
     }
-    if let Some(loader) = &loader {
-        loader.set_dag(&loaded);
-        loader.sync(&mut engine, vw, vh);
-        engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
-    }
+    boot.start(BootPipeline::new(loaded, Some(Box::new(classic_demo::DemoFinish::default()))));
+    boot.draw_loader(&mut engine, &mut no_input, vw, vh, 0.0);
 
-    // Hydrate the engine incrementally: run a time-budgeted slice of the boot
-    // pipeline per animation frame (drawing the loader each frame) so the
-    // browser stays responsive while the large atlases decode.  The `.basis`
-    // transcode runs in its dedicated Worker (awaited), and the loader is torn
-    // down right before the demo's finish hook runs.
-    use classic_engine::boot::{BootFinish, BootPipeline, BootPoll};
-    let finish: Box<dyn BootFinish> = Box::new(classic_demo::DemoFinish::default());
-    let mut boot = BootPipeline::new(loaded, Some(finish));
+    // Hydrate the engine incrementally, a time-budgeted slice per animation
+    // frame (drawing the loader each frame) so the browser stays responsive
+    // while the large atlases decode.  The `.basis` transcode runs in its
+    // dedicated Worker (awaited).
     loop {
         if platform.input().borrow().was_key_pressed("Escape") {
             log::info!("boot aborted (Esc)");
             return Ok(());
         }
-        match boot.poll(&mut engine, &gl, sink.as_ref(), Some(BOOT_BUDGET)) {
-            BootPoll::Pending => {}
-            BootPoll::AwaitBasis => boot.upload_basis_async(&mut engine, sink.as_ref()).await,
-            BootPoll::ReadyToFinish => {
-                if let Some(loader) = &loader {
-                    loader.uninstall(&mut engine);
-                }
-                continue;
-            }
-            BootPoll::Done => break,
+        match boot.poll(&mut engine, &gl, sink.as_ref()) {
+            BootFrame::Loading => {}
+            BootFrame::AwaitBasis => boot.upload_basis(&mut engine, sink.as_ref()).await,
+            BootFrame::Booted => break,
+            BootFrame::Failed(err) => return Err(anyhow::anyhow!(err)),
         }
-        if let Some(loader) = &loader {
-            loader.sync(&mut engine, vw, vh);
-            engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
-        }
+        boot.draw_loader(&mut engine, &mut no_input, vw, vh, 0.0);
         next_frame().await;
     }
     sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed_duration() });

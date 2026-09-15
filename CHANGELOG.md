@@ -28,6 +28,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Collapse the app boot drivers onto `classic_engine::boot`'s `run_sync`
+  (headless) and `InterleavedBoot` (per frame while the loader renders; the
+  windowed desktop's `InterleavedBoot::threaded` owns the boot thread, caps
+  hand-off and event forwarding), removing the desktop's `BootMsg` and
+  `ChannelBootSink` and the web app's hand-rolled boot loop (#NN).
 - Drive every boot through one `classic_engine::boot::BootPipeline` stage
   machine (`Uploading` → `UploadingBasis` → `Finishing` → `Done`): headless
   and golden runs poll it to completion, the windowed desktop prepares it on

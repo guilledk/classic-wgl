@@ -25,7 +25,7 @@
 //!   budget is spent (at least one unit of work per call) and the driver polls
 //!   again next frame.  [`BootPoll::ReadyToFinish`] is reported once before
 //!   the finish hook runs, so a loading screen can be torn down first; on web
-//!   the `.basis` stage is awaited through [`BootPipeline::upload_basis_async`]
+//!   the `.basis` stage is awaited through `BootPipeline::upload_basis_async`
 //!   when a poll reports `AwaitBasis`.
 
 use std::rc::Rc;

@@ -14,8 +14,10 @@ use classic_rom::ResourceKind;
 #[cfg(not(target_arch = "wasm32"))]
 use classic_rom::{BootEvent, BootSink};
 
+pub mod driver;
 pub mod pipeline;
 
+pub use driver::{run_sync, BootFrame, InterleavedBoot, FRAME_BUDGET};
 pub use pipeline::{BootFinish, BootPipeline, BootPoll, BootStage};
 
 /// Owned, decoded texture pixels (Send), ready for GL upload.
