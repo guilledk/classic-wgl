@@ -38,9 +38,10 @@ crates/classic-guest/
                           linear-memory slice
   src/sdk.rs              GuestHost: raw-pointer bridge to Engine + the SDK methods
                           (shared by every runtime backend)
-  src/imports.rs          the host-import surface (single source of truth): an
-                          `install_host_imports!` macro expanded by the wasmi and
-                          wasmtime backends (marshals args and forwards to `GuestHost`)
+  src/imports.rs          `install_host_imports!`: binds the wasmi and wasmtime
+                          linkers to the ABI table (`classic_core::abi_manifest`,
+                          the single source of truth) via `link_host_imports!`
+                          (marshals args and forwards to `GuestHost`)
   src/runtime.rs          WasmiRuntime (native + wasm): config (fuel) + the shared
                           import macro + memory helpers
   src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel) + the shared
@@ -59,9 +60,12 @@ wasm, **browser-native `WebAssembly` for `trusted` guests** (no fuel API) and a
 **`Worker`-isolated browser-native runtime for untrusted guests** (terminate
 watchdog), falling back to **wasmi** when `SharedArrayBuffer` is unavailable.
 All implement the same `GuestRuntime` trait and the same `env` import surface.
-The wasmi and wasmtime linker layers are generated from the single
-`imports.rs::install_host_imports!` macro; only the `GuestHost` SDK bodies
-(`sdk.rs`) and the web/worker closure/SAB layers are backend-specific.
+The import surface is declared once, in the ABI table
+(`classic-core/src/abi_manifest.rs`, `for_each_host_import!`): each entry
+records the name, typed params (marshalling kind), return kind and backend set.
+The wasmi and wasmtime linker layers (and the Tier-3 worker surface) are
+generated from it; only the `GuestHost` SDK bodies (`sdk.rs`) and the web/worker
+closure/SAB layers are hand-written per backend.
 
 ## 3. The ABI (host imports, module "env")
 
@@ -73,8 +77,8 @@ Guest exports (the host→guest side of the ABI):
 | `init` | `() -> ()` | once, synchronously at install, before the first frame (optional) |
 | `start` | `() -> ()` | once, after the first `update` completes (optional) |
 
-Host imports (defined once in `imports.rs::install_host_imports`, expanded by
-both the wasmi and wasmtime backends) are the SDK surface:
+Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
+`HOST_IMPORTS` is its runtime descriptor) are the SDK surface:
 
 | Import | Signature | Purpose |
 |---|---|---|
@@ -255,14 +259,17 @@ confined to `GuestHost::engine`/`engine_mut`.
 ## 7. Adding a host import (the SDK is a reviewed surface)
 
 1. Add the method to `GuestHost` in `sdk.rs` (call the safe `Engine` helper).
-2. Register it in every backend's import surface: the `imports.rs`
-   `install_host_imports!` macro (shared by the wasmi and wasmtime backends);
-   `runtime_web/` (browser-Wasm: a `Closure` in `mod.rs`, or a `dispatch.rs`
-   arm for the >8-arg imports); `runtime_worker.rs`'s dispatch match plus the matching
-   stub in `worker.js`.
-3. Marshal strings with the local `read_str`/`write_str` helpers; pairs with
-   `write_f64_pair` (they wrap the backend-agnostic `abi::read_str_from` /
-   `abi::write_*_to` slice helpers).
+2. Add its entry to the ABI table (`classic-core/src/abi_manifest.rs`): typed
+   params (`str`, `f64`, …), return kind (`i32`, `json`, `pair_opt`, …) and
+   backends.  This generates the wasmi and wasmtime layers (and, for
+   `tier3`/`tier3_trap`, the background-worker surface).  If no existing return
+   kind fits, add one to `__link_host_import!` and the descriptor enums.
+3. Register it by hand in the remaining backends: `runtime_web/`
+   (browser-Wasm: a `Closure` in `mod.rs`, or a `dispatch.rs` arm for the
+   >8-arg imports) and `runtime_worker.rs`'s dispatch match plus the matching
+   stub in `worker.js`.  Marshal strings there with the local
+   `read_str`/`write_str` helpers; pairs with `write_f64_pair` (they wrap the
+   backend-agnostic `abi::read_str_from` / `abi::write_*_to` slice helpers).
 4. Add a WAT test in `tests/guest.rs` (it runs against every backend).
 5. Update this skill's import table.
 
@@ -283,7 +290,9 @@ guest code and must not expose raw engine internals or leak borrows.
 `cargo test -p classic-guest` runs `tests/guest.rs`: every
 guest-driven test runs against **both** `WasmiRuntime` and (on native)
 `WasmtimeRuntime` — no-op run, spawn + move, fuel-exhaustion trap, memory-cap
-trap, and the full SDK surface.  Fixtures are inline WAT (`wat::parse_str`) — no
+trap, and the full SDK surface — plus `native_backends_link_every_table_import`,
+which links a module importing every `native` table entry (with its table
+signature) on each backend.  Fixtures are inline WAT (`wat::parse_str`) — no
 committed binaries needed for tests.  The shipped ROM guests live as Rust
 sources in the `classic-roms` repo (`guest/`) and are compiled to
 `roms/out/code/*.wasm` by that repo's `xtask`, then fetched by
@@ -300,7 +309,8 @@ foreground `GuestRuntime` — see `classic-worker/src/guest_worker`:
 
 - `WorkerHost` (Send, engine-free) owns an `Arc<NavSnapshot>`, a scratch
   `FieldRegistry`, and the current task's argument/result buffers.
-- The reduced import surface (`install_worker_imports!`) exposes only the pure
+- The reduced import surface (`install_worker_imports!`, generated from the ABI
+  table's `tier3` / `tier3_trap` entries) exposes only the pure
   subset — `log`, the noise fields, the field/kernel registry, a synchronous
   `find_path`, and `task_arg`/`task_return`.  Engine-mutating imports
   (`spawn`, `set_*`, `commit_terrain`, camera/light/input/UI) are registered as

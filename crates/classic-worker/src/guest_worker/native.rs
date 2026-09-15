@@ -358,6 +358,24 @@ mod tests {
     }
 
     #[test]
+    fn links_every_tier3_table_import() {
+        use classic_core::abi_manifest::{imports_for, Backend};
+
+        let imports: Vec<String> = imports_for(Backend::Tier3)
+            .chain(imports_for(Backend::Tier3Trap))
+            .map(|import| import.wat_import("env"))
+            .collect();
+        let wat = format!(
+            "(module {} (memory (export \"memory\") 1) (func (export \"entry\")))",
+            imports.join(" ")
+        );
+        let wasm = wat::parse_str(&wat).unwrap();
+
+        GuestWorker::new(&wasm, open_nav(), true)
+            .expect("the worker surface links every tier3 + tier3_trap table import");
+    }
+
+    #[test]
     fn join_barrier_waits_for_inflight() {
         let wasm = wat::parse_str(
             r#"(module

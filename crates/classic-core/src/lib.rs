@@ -1,4 +1,5 @@
 pub mod abi;
+pub mod abi_manifest;
 pub mod camera;
 pub mod collision;
 pub mod components;

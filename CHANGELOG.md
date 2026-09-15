@@ -8,6 +8,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- Declarative host-import ABI table (`classic_core::abi_manifest`): one entry
+  per import records its typed params, return kind and backend set, with a
+  runtime `HOST_IMPORTS` descriptor.  The wasmi/wasmtime linker layer and the
+  Tier-3 worker surface are now generated from it, and new tests check that
+  every table import links on each native backend (#NN).
+
 ### Changed
 
 - Split the oversized source files into focused modules with no behaviour

@@ -33,6 +33,23 @@ fn with_each_runtime(wat: &str, limits: &GuestLimits, f: impl Fn(&mut dyn GuestR
     }
 }
 
+/// Every `native` entry in the ABI table links, with its table signature, on
+/// every native backend.
+#[test]
+fn native_backends_link_every_table_import() {
+    use classic_core::abi_manifest::{imports_for, Backend};
+
+    let imports: Vec<String> =
+        imports_for(Backend::Native).map(|import| import.wat_import("env")).collect();
+    let wat = format!(
+        "(module {} (memory (export \"memory\") 1) (func (export \"update\") (param f64)))",
+        imports.join(" ")
+    );
+    let runtimes =
+        runtimes_from_wat(&wat, &GuestLimits::default()).expect("every native table import links");
+    assert!(!runtimes.is_empty());
+}
+
 #[test]
 fn noop_guest_runs() {
     with_each_runtime(
