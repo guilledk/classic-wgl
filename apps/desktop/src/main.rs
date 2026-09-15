@@ -1,41 +1,15 @@
+use classic_engine::boot::{BootFinish, BootPipeline, BootPoll};
 use classic_rom::{BootEvent, BootSink, LoadedRoms, NullBootSink};
-use std::collections::HashMap;
 use std::sync::mpsc;
-
-/// The off-thread boot result: a resolved DAG, its decoded textures + basis
-/// sheets, and its compiled guest modules.  All owned + `Send`, so the
-/// background boot thread hands the whole payload to the GL thread in one
-/// message.
-struct DecodedAssets {
-    loaded: LoadedRoms,
-    decoded: HashMap<String, classic_engine::boot::DecodedTexture>,
-    basis: Vec<Option<classic_gfx::DecodedBasis>>,
-    compiled: classic_demo::CompiledModules,
-}
-
-/// Owned incremental-boot state, moved out of [`DecodedAssets`] on the GL
-/// thread so the plan can be drained a chunk at a time (interleaved with
-/// loading-screen frames) instead of one blocking `load_roms_decoded` call.
-#[cfg(not(target_arch = "wasm32"))]
-struct NativeBoot {
-    loaded: LoadedRoms,
-    decoded: HashMap<String, classic_engine::boot::DecodedTexture>,
-    basis: Vec<Option<classic_gfx::DecodedBasis>>,
-    compiled: classic_demo::CompiledModules,
-    cursor: usize,
-    basis_cursor: usize,
-    plan_done: bool,
-    basis_done: bool,
-}
 
 /// Per-frame boot budget (native): run boot steps for at most this long before
 /// yielding to the run loop so the loading screen keeps animating.
-const BOOT_BUDGET_MILLIS: u128 = 12;
+const BOOT_BUDGET: std::time::Duration = std::time::Duration::from_millis(12);
 
 /// Messages streamed from the background boot thread to the GL run loop.
 enum BootMsg {
     Event(BootEvent),
-    Assets(Box<DecodedAssets>),
+    Assets(Box<BootPipeline>),
     Failed(String),
 }
 
@@ -52,23 +26,19 @@ impl BootSink for ChannelBootSink {
 }
 
 /// Run the CPU-bound boot stages on the background thread: ROM resolve +
-/// archive decompress + parse, texture decode, basis transcode (parallel), and
-/// wasmtime `Module` compile.
+/// archive decompress + parse, then the pipeline's off-GL-thread half
+/// (parallel texture decode + basis transcode, wasmtime `Module` compile).
 fn boot_assets(
     spec: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
     caps: classic_gfx::Caps,
     sink: &dyn BootSink,
-) -> anyhow::Result<DecodedAssets> {
+) -> anyhow::Result<BootPipeline> {
     let loaded = classic_platform::resolve_roms(spec, lookup, sink)?;
-
-    // Decode every texture + transcode every `.basis` sheet off-thread (no GL
-    // here).  `decode_assets` fans out across the loader thread pool.
-    let (decoded, basis) = classic_engine::boot::decode_assets(&loaded, caps, sink);
-
-    let compiled = classic_demo::compile_guest_modules(&loaded, sink);
-
-    Ok(DecodedAssets { loaded, decoded, basis, compiled })
+    let finish: Box<dyn BootFinish> = Box::new(classic_demo::DemoFinish::default());
+    let mut boot = BootPipeline::new(loaded, Some(finish));
+    boot.prepare(caps, sink);
+    Ok(boot)
 }
 
 /// Hydrate an engine from a resolved multi-ROM dependency DAG.
@@ -271,8 +241,7 @@ fn main() {
 
     let platform = classic_platform::native::NativePlatform::new();
     let mut engine: Option<classic_engine::Engine> = None;
-    let mut assets: Option<Box<DecodedAssets>> = None;
-    let mut boot: Option<NativeBoot> = None;
+    let mut boot: Option<Box<BootPipeline>> = None;
     let mut booted = false;
     let mut caps_sent = false;
     let test_failed = Rc::new(Cell::new(false));
@@ -288,11 +257,16 @@ fn main() {
         }
 
         // Drain the boot channel: forward background events to the process sink,
-        // and pick up the decoded assets once the CPU boot stages finish.
+        // and pick up the prepared boot pipeline once the CPU boot stages finish.
         loop {
             match rx.try_recv() {
                 Ok(BootMsg::Event(ev)) => sink.on_event(ev),
-                Ok(BootMsg::Assets(a)) => assets = Some(a),
+                Ok(BootMsg::Assets(pipeline)) => {
+                    if let Some(l) = &loader {
+                        l.set_dag(pipeline.loaded());
+                    }
+                    boot = Some(pipeline);
+                }
                 Ok(BootMsg::Failed(err)) => {
                     eprintln!("resolve ROMs: {err}");
                     *should_close = true;
@@ -300,7 +274,7 @@ fn main() {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    if !booted && assets.is_none() && boot.is_none() {
+                    if !booted && boot.is_none() {
                         eprintln!("boot thread exited without producing assets");
                         *should_close = true;
                         return;
@@ -308,23 +282,6 @@ fn main() {
                     break;
                 }
             }
-        }
-
-        // Move the CPU-side payload into owned incremental-boot state (once).
-        if let Some(a) = assets.take() {
-            if let Some(l) = &loader {
-                l.set_dag(&a.loaded);
-            }
-            boot = Some(NativeBoot {
-                loaded: a.loaded,
-                decoded: a.decoded,
-                basis: a.basis,
-                compiled: a.compiled,
-                cursor: 0,
-                basis_cursor: 0,
-                plan_done: false,
-                basis_done: false,
-            });
         }
 
         // First frame: set up the GL layer + embedded font so the loading
@@ -344,54 +301,32 @@ fn main() {
             let _ = caps_tx.send(classic_gfx::Caps::query(&gl));
         }
 
-        // Run one chunk of hydration per frame (interleaved with the loader).
+        // Run one time-budgeted slice of the boot per frame (interleaved with the
+        // loader), tearing the loader down right before the finish hook runs.
         if !booted {
             if let (Some(e), Some(b)) = (engine.as_mut(), boot.as_mut()) {
-                if !b.plan_done {
-                    // Drain plan steps under a time budget, rebuilding the plan
-                    // each frame so it never needs to live across the frame.
-                    let frame_start = std::time::Instant::now();
-                    let (cursor, decoded, done) = {
-                        let mut plan = e.begin_boot_gfx(gl.clone(), &b.loaded, sink.as_ref());
-                        plan.set_cursor(b.cursor);
-                        plan.set_decoded(std::mem::take(&mut b.decoded));
-                        loop {
-                            if plan.is_done() {
-                                break;
-                            }
-                            e.boot_step_predecoded(&mut plan, 1);
-                            if frame_start.elapsed().as_millis() >= BOOT_BUDGET_MILLIS {
-                                break;
+                loop {
+                    match b.poll(e, &gl, sink.as_ref(), Some(BOOT_BUDGET)) {
+                        BootPoll::Pending => break,
+                        BootPoll::ReadyToFinish => {
+                            if let Some(l) = &loader {
+                                l.uninstall(e);
                             }
                         }
-                        let done = plan.is_done();
-                        (plan.cursor(), plan.take_decoded(), done)
-                    };
-                    b.cursor = cursor;
-                    b.decoded = decoded;
-                    b.plan_done = done;
-                } else if !b.basis_done {
-                    // One pre-decoded `.basis` upload per frame (chunked).
-                    let done = {
-                        let mut plan = e.begin_boot_gfx(gl.clone(), &b.loaded, sink.as_ref());
-                        e.upload_basis_predecoded_at(
-                            &mut plan,
-                            b.basis_cursor,
-                            &b.basis,
-                            sink.as_ref(),
-                        )
-                    };
-                    b.basis_cursor += 1;
-                    b.basis_done = done;
-                } else {
-                    if let Some(l) = &loader {
-                        l.uninstall(e);
+                        BootPoll::Done => {
+                            sink.on_event(BootEvent::BootComplete {
+                                elapsed: boot_start.elapsed(),
+                            });
+                            sampler.take();
+                            booted = true;
+                            break;
+                        }
                     }
-                    classic_demo::finish_init_engine(e, &b.loaded, &b.compiled, sink.as_ref());
-                    sink.on_event(BootEvent::BootComplete { elapsed: boot_start.elapsed() });
-                    sampler.take();
-                    booted = true;
                 }
+            }
+            if booted {
+                // Release the pipeline (its ROM bytes and any unconsumed payloads).
+                boot = None;
             }
         }
 

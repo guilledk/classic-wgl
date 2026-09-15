@@ -25,7 +25,7 @@ impl Engine {
     /// overrides) into a fresh [`Gfx`], exactly once.  Idempotent across a
     /// multi-ROM load: the first call creates the GL layer, later calls no-op.
     /// Emits a [`classic_rom::BootEvent::ShaderCompiled`] per compiled program.
-    fn ensure_gfx(
+    pub(crate) fn ensure_gfx(
         &mut self,
         gl: Rc<glow::Context>,
         manifest: &classic_rom::RomManifest,
@@ -139,14 +139,8 @@ impl Engine {
     /// Precomputes the sequence of [`boot::BootStep`]s — one texture decode +
     /// upload per unique sheet, one SDF font, one metadata registration, one
     /// entity-hydration batch, and the shared finish tail — plus the pending
-    /// basis jobs, **without** mutating the engine.  Consume it with
-    /// [`Engine::boot_step`].  Running every step (`boot_step(usize::MAX)`) is
-    /// byte-for-byte equivalent to the old synchronous boot.
-    pub fn begin_boot<'a>(
-        &self,
-        loaded: &'a classic_rom::LoadedRoms,
-        sink: &'a dyn classic_rom::BootSink,
-    ) -> boot::BootPlan<'a> {
+    /// basis jobs.  Needs no engine; consumed by a [`boot::BootPipeline`].
+    pub(crate) fn begin_boot(loaded: &classic_rom::LoadedRoms) -> boot::BootPlan {
         let multi = loaded.order.len() > 1;
         let mut steps: Vec<boot::BootStep> = Vec::new();
         let mut basis_jobs: Vec<BasisTextureJob> = Vec::new();
@@ -167,11 +161,8 @@ impl Engine {
             steps.push(boot::BootStep::RegisterMetadata { ns: ns.clone(), entry: entry_idx });
 
             // SDF atlas textures are skipped here — the font path uploads them.
-            let atlas_names: std::collections::HashSet<String> = resources
-                .fonts()
-                .keys()
-                .map(|f| self.entity_key_ns(&ns, &format!("{f}-sdf")))
-                .collect();
+            let atlas_names: std::collections::HashSet<String> =
+                resources.fonts().keys().map(|f| Self::qualify(&ns, &format!("{f}-sdf"))).collect();
 
             // Several manifest entries share one `src` (every frame-table texture
             // points at its shared colour sheet), so decode + upload each unique
@@ -180,7 +171,7 @@ impl Engine {
             let mut basis_by_src: HashMap<String, usize> = HashMap::new();
 
             for entry in &manifest.manifest.textures {
-                let key = self.entity_key_ns(&ns, &entry.name);
+                let key = Self::qualify(&ns, &entry.name);
                 if atlas_names.contains(&key) {
                     continue;
                 }
@@ -245,7 +236,7 @@ impl Engine {
             for entry in &manifest.manifest.textures {
                 if entry.depth.is_some() {
                     if let Some(bytes) = resources.depths().get(&entry.name) {
-                        let key = self.entity_key_ns(&ns, &entry.name);
+                        let key = Self::qualify(&ns, &entry.name);
                         let depth_tex = format!("{key}-depth");
                         steps.push(boot::BootStep::Decode {
                             key: depth_tex.clone(),
@@ -264,7 +255,7 @@ impl Engine {
             for entry in &manifest.manifest.textures {
                 if entry.normal.is_some() {
                     if let Some(bytes) = resources.normals().get(&entry.name) {
-                        let key = self.entity_key_ns(&ns, &entry.name);
+                        let key = Self::qualify(&ns, &entry.name);
                         let normal_tex = format!("{key}-normal");
                         steps.push(boot::BootStep::Decode {
                             key: normal_tex.clone(),
@@ -281,7 +272,7 @@ impl Engine {
             // SDF fonts: metrics JSON + atlas PNG (font name + "-sdf"), keyed by
             // the namespace-qualified font name.
             for (font_name, metrics_bytes) in resources.fonts() {
-                let key = self.entity_key_ns(&ns, font_name);
+                let key = Self::qualify(&ns, font_name);
                 let atlas_src = format!("{font_name}-sdf");
                 let metrics_json =
                     std::str::from_utf8(metrics_bytes).expect("SDF metrics UTF-8").to_string();
@@ -300,23 +291,7 @@ impl Engine {
 
         steps.push(boot::BootStep::Finish);
 
-        boot::BootPlan { loaded, sink, steps, basis_jobs, cursor: 0, decoded: HashMap::new() }
-    }
-
-    /// Compile the shader catalog into a fresh [`Gfx`] and build the hydration
-    /// [`boot::BootPlan`] in one step — the front half of [`Engine::load_roms`],
-    /// exposed so an incremental caller can interleave [`Engine::boot_step`]s
-    /// across frames.  The returned plan borrows `loaded` + `sink` (not `&self`).
-    pub fn begin_boot_gfx<'a>(
-        &mut self,
-        gl: Rc<glow::Context>,
-        loaded: &'a classic_rom::LoadedRoms,
-        sink: &'a dyn classic_rom::BootSink,
-    ) -> boot::BootPlan<'a> {
-        if let Some(root) = loaded.root_rom() {
-            self.ensure_gfx(gl, &root.manifest, sink);
-        }
-        self.begin_boot(loaded, sink)
+        boot::BootPlan { steps, basis_jobs, cursor: 0, decoded: HashMap::new() }
     }
 
     /// Register a ROM's non-GL metadata: texture names, depth/normal companion
@@ -427,26 +402,16 @@ impl Engine {
         }
     }
 
-    /// Execute up to `n` [`boot::BootStep`]s from `plan`, returning the number
-    /// consumed.  `n == usize::MAX` drains the whole plan synchronously —
-    /// the golden/headless/test fast path.
-    pub fn boot_step(&mut self, plan: &mut boot::BootPlan<'_>, n: usize) -> usize {
-        self.boot_step_impl(plan, n, true)
-    }
-
-    /// Like [`Engine::boot_step`], but `Decode` steps are treated as already
-    /// done: their pixels were decoded off-thread and injected into
-    /// `plan.decoded` (see [`boot::decode_plan`]).  Upload + metadata + SDF +
-    /// entity/guest instantiate still run here, on the GL thread.
-    pub fn boot_step_predecoded(&mut self, plan: &mut boot::BootPlan<'_>, n: usize) -> usize {
-        self.boot_step_impl(plan, n, false)
-    }
-
-    fn boot_step_impl(
+    /// Execute up to `n` [`boot::BootStep`]s from `plan` (built for `loaded`),
+    /// returning the number consumed.  `n == usize::MAX` drains the whole plan.
+    /// A `Decode` step already run off-thread (see [`boot::BootPipeline::prepare`])
+    /// is a `Noop` by now, with its pixels waiting in `plan.decoded`.
+    pub(crate) fn boot_step(
         &mut self,
-        plan: &mut boot::BootPlan<'_>,
+        plan: &mut boot::BootPlan,
+        loaded: &classic_rom::LoadedRoms,
+        sink: &dyn classic_rom::BootSink,
         n: usize,
-        do_decode: bool,
     ) -> usize {
         let mut ran = 0;
         while ran < n && plan.cursor < plan.steps.len() {
@@ -455,25 +420,21 @@ impl Engine {
             ran += 1;
             match step {
                 boot::BootStep::Decode { key, rom, kind, format, bytes } => {
-                    // The pre-decoded path skips the CPU decode (the pixels are
-                    // already in `plan.decoded`); the bytes are simply dropped.
-                    if do_decode {
-                        let decoded = boot::decode_texture(format, &bytes);
-                        let dims = decoded.dims();
-                        plan.decoded.insert(key.clone(), decoded);
-                        plan.sink.on_event(classic_rom::BootEvent::ResourceDecoded {
-                            rom,
-                            kind,
-                            name: key,
-                            dims,
-                        });
-                    }
+                    let decoded = boot::decode_texture(format, &bytes);
+                    let dims = decoded.dims();
+                    plan.decoded.insert(key.clone(), decoded);
+                    sink.on_event(classic_rom::BootEvent::ResourceDecoded {
+                        rom,
+                        kind,
+                        name: key,
+                        dims,
+                    });
                 }
                 boot::BootStep::Upload { key } => {
                     if let Some(decoded) = plan.decoded.remove(&key) {
                         self.upload_decoded(&key, &decoded);
                     }
-                    plan.sink.on_event(classic_rom::BootEvent::TextureUploaded { name: key });
+                    sink.on_event(classic_rom::BootEvent::TextureUploaded { name: key });
                 }
                 boot::BootStep::AliasTexture { key, from_key } => {
                     let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&from_key)).cloned();
@@ -483,7 +444,7 @@ impl Engine {
                 }
                 boot::BootStep::RegisterMetadata { ns, entry } => {
                     self.namespace = ns;
-                    let entry = &plan.loaded.order[entry];
+                    let entry = &loaded.order[entry];
                     self.register_manifest_metadata(&entry.rom.manifest, &entry.rom.resources);
                 }
                 boot::BootStep::LoadSdfFont { key, metrics_json, atlas_png } => {
@@ -491,11 +452,11 @@ impl Engine {
                 }
                 boot::BootStep::HydrateEntry { ns, entry } => {
                     self.namespace = ns.clone();
-                    let entry = &plan.loaded.order[entry];
-                    self.hydrate_rom_entry(&ns, entry, plan.sink);
+                    let entry = &loaded.order[entry];
+                    self.hydrate_rom_entry(&ns, entry, sink);
                 }
                 boot::BootStep::Finish => {
-                    self.finish_hydrate_roms(plan.loaded);
+                    self.finish_hydrate_roms(loaded);
                 }
                 boot::BootStep::Noop => {}
             }
@@ -503,30 +464,20 @@ impl Engine {
         ran
     }
 
-    /// Upload a batch of pending `.basis` textures synchronously (native), then
-    /// alias each job's remaining keys to the first key's GL texture.  Each
-    /// uploaded texture emits a [`classic_rom::BootEvent::TextureUploaded`].
-    fn upload_basis_sync(&mut self, jobs: &[BasisTextureJob], sink: &dyn classic_rom::BootSink) {
-        for job in jobs {
-            self.load_texture_basis(&job.keys[0], &job.bytes, &job.format);
-            sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
-            let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
-            if let Some(tex) = tex {
-                for alias in &job.keys[1..] {
-                    if let Some(gfx) = self.gfx.as_mut() {
-                        gfx.textures.insert(alias.clone(), tex.clone());
-                    }
-                }
-            }
-        }
+    /// Transcode + upload one pending `.basis` texture inline, then alias its
+    /// remaining keys.  Emits [`classic_rom::BootEvent::TextureUploaded`].
+    pub(crate) fn upload_basis(&mut self, job: &BasisTextureJob, sink: &dyn classic_rom::BootSink) {
+        self.load_texture_basis(&job.keys[0], &job.bytes, &job.format);
+        sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
+        self.alias_basis_keys(job);
     }
 
-    /// Upload a single already-transcoded `.basis` job (its payload is
-    /// `decoded[index]`), then alias its remaining keys.  Emits
+    /// Upload one already-transcoded `.basis` job (`payload`; `None` = it failed
+    /// to transcode), then alias its remaining keys.  Emits
     /// [`classic_rom::BootEvent::TextureUploaded`] (the `ResourceDecoded` event
     /// was already emitted off-thread by [`boot::decode_basis_jobs`]).
     #[cfg(not(target_arch = "wasm32"))]
-    fn upload_basis_job(
+    pub(crate) fn upload_basis_decoded(
         &mut self,
         job: &BasisTextureJob,
         payload: Option<&classic_gfx::DecodedBasis>,
@@ -538,46 +489,17 @@ impl Engine {
             }
         }
         sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
-        let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
-        if let Some(tex) = tex {
-            for alias in &job.keys[1..] {
-                if let Some(gfx) = self.gfx.as_mut() {
-                    gfx.textures.insert(alias.clone(), tex.clone());
-                }
-            }
-        }
+        self.alias_basis_keys(job);
     }
 
-    /// Native-only chunk of the basis phase: upload the already-transcoded job
-    /// at `index` (looked up in `plan.basis_jobs`, rebuilt by the caller each
-    /// frame).  Returns `true` when `index` is past the end (no jobs remain).
-    /// Lets the desktop app interleave one upload per loader frame after the
-    /// off-thread parallel transcode (`boot::decode_assets`).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn upload_basis_predecoded_at(
-        &mut self,
-        plan: &mut boot::BootPlan<'_>,
-        index: usize,
-        decoded: &[Option<classic_gfx::DecodedBasis>],
-        sink: &dyn classic_rom::BootSink,
-    ) -> bool {
-        let Some(job) = plan.basis_jobs.get(index) else {
-            return true;
-        };
-        let job = job.clone();
-        let payload = decoded.get(index).and_then(|p| p.as_ref());
-        self.upload_basis_job(&job, payload, sink);
-        false
-    }
-
-    /// Upload a batch of pending `.basis` textures through the web transcoder
-    /// worker (awaited), then alias each job's remaining keys.  Emits a
+    /// Upload `.basis` textures through the web transcoder worker (awaited),
+    /// aliasing each job's remaining keys.  Emits a
     /// [`classic_rom::BootEvent::ResourceDecoded`] per sheet as each worker
     /// transcode finishes (in plan order), then its `TextureUploaded`.
     #[cfg(target_arch = "wasm32")]
-    async fn upload_basis_async(
+    pub(crate) async fn upload_basis_async(
         &mut self,
-        jobs: Vec<BasisTextureJob>,
+        jobs: &[BasisTextureJob],
         sink: &dyn classic_rom::BootSink,
     ) {
         for job in jobs {
@@ -591,26 +513,18 @@ impl Engine {
                 });
             }
             sink.on_event(classic_rom::BootEvent::TextureUploaded { name: job.keys[0].clone() });
-            let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
-            if let Some(tex) = tex {
-                for alias in &job.keys[1..] {
-                    if let Some(gfx) = self.gfx.as_mut() {
-                        gfx.textures.insert(alias.clone(), tex.clone());
-                    }
-                }
-            }
+            self.alias_basis_keys(job);
         }
     }
 
-    /// Upload the plan's pending `.basis` textures through the web transcoder
-    /// worker (awaited).  Called after [`Engine::boot_step`] drains the plan.
-    #[cfg(target_arch = "wasm32")]
-    pub async fn upload_pending_basis(
-        &mut self,
-        plan: &mut boot::BootPlan<'_>,
-        sink: &dyn classic_rom::BootSink,
-    ) {
-        self.upload_basis_async(std::mem::take(&mut plan.basis_jobs), sink).await;
+    /// Point every key after a `.basis` job's first at the first key's texture.
+    fn alias_basis_keys(&mut self, job: &BasisTextureJob) {
+        let tex = self.gfx.as_ref().and_then(|g| g.textures.get(&job.keys[0])).cloned();
+        if let (Some(tex), Some(gfx)) = (tex, self.gfx.as_mut()) {
+            for alias in &job.keys[1..] {
+                gfx.textures.insert(alias.clone(), tex.clone());
+            }
+        }
     }
 
     /// Hydrate the engine from a single ROM (the legacy path).  Wraps the ROM
@@ -645,32 +559,27 @@ impl Engine {
     /// manifest/resources are also mirrored into the single-ROM fields for
     /// backward compatibility (`dump_rom`, `has_texture`, the F10 save path).
     ///
-    /// Boot progress is streamed to `sink`.
+    /// A synchronous [`boot::BootPipeline`] without a finish hook; boot progress
+    /// is streamed to `sink`.
     pub fn load_roms(
         &mut self,
         gl: Rc<glow::Context>,
         loaded: &classic_rom::LoadedRoms,
         sink: &dyn classic_rom::BootSink,
     ) {
-        if let Some(root) = loaded.root_rom() {
-            self.ensure_gfx(gl, &root.manifest, sink);
-        }
-        self.hydrate_roms(loaded, sink);
+        boot::BootPipeline::new(loaded.clone(), None).poll(self, &gl, sink, None);
     }
 
-    /// The GL-free core of [`Engine::load_roms`]: per-ROM resource + entity +
-    /// grid hydration in topological order, plus DAG bookkeeping.  Split out so
-    /// the multi-ROM logic is unit-testable without a GL context.  Builds a
-    /// [`boot::BootPlan`] and drains it synchronously, then uploads the pending
-    /// basis jobs.
+    /// The GL-free core of [`Engine::load_roms`] (no shader compile, and uploads
+    /// find no GL layer), so the multi-ROM logic is unit-testable without a GL
+    /// context.
+    #[cfg(test)]
     pub(crate) fn hydrate_roms(
         &mut self,
         loaded: &classic_rom::LoadedRoms,
         sink: &dyn classic_rom::BootSink,
     ) {
-        let mut plan = self.begin_boot(loaded, sink);
-        self.boot_step(&mut plan, usize::MAX);
-        self.upload_basis_sync(&plan.basis_jobs, sink);
+        boot::BootPipeline::new(loaded.clone(), None).poll_with(self, None, sink, None);
     }
 
     /// Hydrate one ROM entry's state + grids (after its resources are loaded).
@@ -694,7 +603,7 @@ impl Engine {
         });
     }
 
-    /// Shared tail of [`Engine::hydrate_roms`] / [`Engine::hydrate_roms_async`]:
+    /// The plan's `Finish` step:
     /// DAG bookkeeping, the item catalog, and per-scene vehicle overrides.
     fn finish_hydrate_roms(&mut self, loaded: &classic_rom::LoadedRoms) {
         self.loaded_roms = loaded.order.clone();
@@ -748,6 +657,11 @@ impl Engine {
     /// of [`Engine::entity_key`]: guest SDK name routing uses this so a ROM's
     /// entities are keyed by its own namespace rather than the last ROM loaded.
     pub fn entity_key_ns(&self, ns: &str, name: &str) -> String {
+        Self::qualify(ns, name)
+    }
+
+    /// [`Engine::entity_key_ns`] without an engine (boot planning).
+    fn qualify(ns: &str, name: &str) -> String {
         if ns.is_empty() || name.contains("::") {
             name.to_string()
         } else {

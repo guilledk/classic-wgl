@@ -881,6 +881,28 @@ mod tests {
         );
     }
 
+    /// A two-ROM DAG: `common` (entity `tile`) and the root `scene` (entity
+    /// `rocket`), each under its own namespace.
+    pub(crate) fn two_rom_dag() -> classic_rom::LoadedRoms {
+        classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: "common".into(),
+                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                    sha256: None,
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
+                    sha256: None,
+                },
+            ],
+        }
+    }
+
     fn test_rom(name: &str, namespace: &str, state_json: &str) -> classic_rom::Rom {
         let manifest_json = format!(
             r#"{{"entrypoint": "{name}", "namespace": "{namespace}",
@@ -913,23 +935,7 @@ mod tests {
     #[test]
     fn hydrate_roms_tracks_dag_in_topological_order() {
         let mut e = Engine::new_for_test();
-        let loaded = classic_rom::LoadedRoms {
-            root: "scene".into(),
-            order: vec![
-                classic_rom::LoadedRom {
-                    name: "common".into(),
-                    namespace: "common".into(),
-                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
-                    sha256: None,
-                },
-                classic_rom::LoadedRom {
-                    name: "scene".into(),
-                    namespace: "scene".into(),
-                    rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
-                    sha256: None,
-                },
-            ],
-        };
+        let loaded = two_rom_dag();
 
         e.hydrate_roms(&loaded, &classic_rom::NullBootSink);
 
@@ -947,48 +953,6 @@ mod tests {
 
         // The root ROM is mirrored into the single-ROM fields.
         assert_eq!(e.rom_manifest.as_ref().unwrap().entrypoint, "scene");
-    }
-
-    #[test]
-    fn boot_plan_stepwise_drain_matches_full_drain() {
-        let loaded = classic_rom::LoadedRoms {
-            root: "scene".into(),
-            order: vec![
-                classic_rom::LoadedRom {
-                    name: "common".into(),
-                    namespace: "common".into(),
-                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
-                    sha256: None,
-                },
-                classic_rom::LoadedRom {
-                    name: "scene".into(),
-                    namespace: "scene".into(),
-                    rom: test_rom("scene", "scene", r#"{"entities":{"rocket":{"components":[]}}}"#),
-                    sha256: None,
-                },
-            ],
-        };
-
-        let mut full = Engine::new_for_test();
-        let mut full_plan = full.begin_boot(&loaded, &classic_rom::NullBootSink);
-        full.boot_step(&mut full_plan, usize::MAX);
-
-        let mut stepwise = Engine::new_for_test();
-        let mut plan = stepwise.begin_boot(&loaded, &classic_rom::NullBootSink);
-        let total = plan.total_steps();
-        let mut consumed = 0;
-        while !plan.is_done() {
-            consumed += stepwise.boot_step(&mut plan, 1);
-        }
-
-        // One step at a time consumes exactly the full plan, in order.
-        assert!(plan.is_done());
-        assert_eq!(consumed, total);
-        assert_eq!(full.name_order, stepwise.name_order);
-        assert_eq!(full.loaded_roms.len(), 2);
-        assert_eq!(stepwise.loaded_roms.len(), 2);
-        assert!(stepwise.names.contains_key("common::tile"));
-        assert!(stepwise.names.contains_key("scene::rocket"));
     }
 
     #[test]

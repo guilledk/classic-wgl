@@ -130,7 +130,7 @@ fn boot_sink() -> (
 /// Per-frame boot budget: run boot steps for at most this long before yielding
 /// to the browser, so no single animation frame blocks past ~16 ms.
 #[cfg(target_arch = "wasm32")]
-const BOOT_BUDGET_MILLIS: u128 = 12;
+const BOOT_BUDGET: std::time::Duration = std::time::Duration::from_millis(12);
 
 /// Resolve after the next `requestAnimationFrame` tick — yield one frame so the
 /// browser paints (and the loading screen animates) between hydration slices.
@@ -210,26 +210,29 @@ async fn run() -> anyhow::Result<()> {
         engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
     }
 
-    // Hydrate the engine incrementally: build the boot plan, then drain a
-    // time-budgeted slice of steps per animation frame (drawing the loader each
-    // frame) so the browser stays responsive while the large atlases decode.
-    // The `.basis` transcode stays in its dedicated Worker (awaited after the
-    // plan drains).
-    let mut plan = engine.begin_boot_gfx(gl, &loaded, sink.as_ref());
-    while !plan.is_done() {
+    // Hydrate the engine incrementally: run a time-budgeted slice of the boot
+    // pipeline per animation frame (drawing the loader each frame) so the
+    // browser stays responsive while the large atlases decode.  The `.basis`
+    // transcode runs in its dedicated Worker (awaited), and the loader is torn
+    // down right before the demo's finish hook runs.
+    use classic_engine::boot::{BootFinish, BootPipeline, BootPoll};
+    let finish: Box<dyn BootFinish> = Box::new(classic_demo::DemoFinish::default());
+    let mut boot = BootPipeline::new(loaded, Some(finish));
+    loop {
         if platform.input().borrow().was_key_pressed("Escape") {
             log::info!("boot aborted (Esc)");
             return Ok(());
         }
-        let frame_start = classic_platform::BootTimer::start();
-        loop {
-            if plan.is_done() {
-                break;
+        match boot.poll(&mut engine, &gl, sink.as_ref(), Some(BOOT_BUDGET)) {
+            BootPoll::Pending => {}
+            BootPoll::AwaitBasis => boot.upload_basis_async(&mut engine, sink.as_ref()).await,
+            BootPoll::ReadyToFinish => {
+                if let Some(loader) = &loader {
+                    loader.uninstall(&mut engine);
+                }
+                continue;
             }
-            engine.boot_step(&mut plan, 1);
-            if frame_start.elapsed_ms() >= BOOT_BUDGET_MILLIS {
-                break;
-            }
+            BootPoll::Done => break,
         }
         if let Some(loader) = &loader {
             loader.sync(&mut engine, vw, vh);
@@ -237,24 +240,6 @@ async fn run() -> anyhow::Result<()> {
         }
         next_frame().await;
     }
-    if platform.input().borrow().was_key_pressed("Escape") {
-        log::info!("boot aborted (Esc)");
-        return Ok(());
-    }
-    engine.upload_pending_basis(&mut plan, sink.as_ref()).await;
-    if let Some(loader) = &loader {
-        loader.sync(&mut engine, vw, vh);
-        engine.frame(&mut classic_platform::InputState::new(), vw, vh, 0.0);
-    }
-    if let Some(loader) = &loader {
-        loader.uninstall(&mut engine);
-    }
-    classic_demo::finish_init_engine(
-        &mut engine,
-        &loaded,
-        &classic_demo::CompiledModules::new(),
-        sink.as_ref(),
-    );
     sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed_duration() });
 
     platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {

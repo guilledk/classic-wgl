@@ -841,9 +841,7 @@ fn rom_key(entry: &LoadedRom) -> String {
 /// in plan order) by walking a throwaway [`crate::boot::BootPlan`], so the chip
 /// names exactly match the keys the decode/upload events emit.
 fn collect_chips(loaded: &LoadedRoms) -> HashMap<String, Vec<Chip>> {
-    let engine = crate::Engine::new();
-    let sink = classic_rom::NullBootSink;
-    let plan = engine.begin_boot(loaded, &sink);
+    let plan = crate::Engine::begin_boot(loaded);
 
     let mut out: HashMap<String, Vec<Chip>> = HashMap::new();
     for step in &plan.steps {

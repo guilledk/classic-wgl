@@ -81,7 +81,9 @@ crates/
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (`Engine` struct), lifecycle.rs (new + frame),
-                          hooks.rs (hook surface + host API), boot_api.rs (ROM boot), render.rs,
+                          hooks.rs (hook surface + host API), boot/ (BootPlan + the BootPipeline
+                          stage machine every boot driver polls; BootFinish = app hook),
+                          boot_api.rs (ROM hydration the pipeline steps through), render.rs,
                           ui.rs (UIManager), golden.rs (traces), env_config.rs,
                           vehicle/ (IsoVehicle sim + spawn API)
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,

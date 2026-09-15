@@ -36,6 +36,7 @@ use std::rc::Rc;
 use classic_core::cl_error;
 use classic_core::cl_info;
 use classic_core::instrument::Chan;
+use classic_engine::boot::{BootFinish, BootPipeline};
 use classic_engine::Engine;
 use classic_guest::{create_runtime, GuestLimits, GuestRuntime};
 use classic_rom::{BootEvent, BootSink, LoadedRom, LoadedRoms, Rom};
@@ -44,7 +45,7 @@ use crate::state::{DemoState, DemoStateRef};
 
 /// Compiled native guest modules keyed by ROM resolver name, plus the optional
 /// compiled Tier-3 worker module for the root ROM — the off-main-thread half of
-/// guest init (see [`compile_guest_modules`]).  Both are empty/`None` on web,
+/// guest init (see [`DemoFinish`]).  Both are empty/`None` on web,
 /// where guests and the worker compile inline.
 ///
 /// The fields are read on the native async path only (`init_guests` +
@@ -93,7 +94,7 @@ pub fn init_guest(
 
 /// Install a guest from a module already compiled off-thread.  The
 /// `GuestCompiling` event was emitted on the background thread during
-/// [`compile_guest_modules`]; only instantiation happens here (GL thread).
+/// `DemoFinish::prepare`; only instantiation happens here (GL thread).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn init_guest_compiled(
     e: &mut Engine,
@@ -169,7 +170,7 @@ fn guest_limits(entry: &LoadedRom) -> GuestLimits {
 /// wasmtime), keyed by ROM resolver name, plus the root ROM's Tier-3 worker
 /// module.  Emits `GuestCompiling` per compiled foreground guest.  On web this
 /// returns an empty payload (guests and the worker compile inline).
-pub fn compile_guest_modules(loaded: &LoadedRoms, sink: &dyn BootSink) -> CompiledModules {
+fn compile_guest_modules(loaded: &LoadedRoms, sink: &dyn BootSink) -> CompiledModules {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut modules = HashMap::new();
@@ -265,30 +266,46 @@ fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModule
     }
 }
 
+/// The demo's [`BootFinish`] hook: the post-load setup every boot driver runs
+/// once a [`BootPipeline`] has uploaded the ROM DAG.  Off the GL thread
+/// ([`BootPipeline::prepare`], native) it compiles the guest modules ahead of
+/// time; otherwise the guests compile inline while finishing.
+#[derive(Default)]
+pub struct DemoFinish {
+    compiled: CompiledModules,
+}
+
+impl BootFinish for DemoFinish {
+    fn prepare(&mut self, loaded: &LoadedRoms, sink: &dyn BootSink) {
+        self.compiled = compile_guest_modules(loaded, sink);
+    }
+
+    fn finish(self: Box<Self>, engine: &mut Engine, loaded: &LoadedRoms, sink: &dyn BootSink) {
+        finish_init_engine(engine, loaded, &self.compiled, sink);
+    }
+}
+
 /// Full demo engine bootstrap for a loaded multi-ROM dependency DAG.
 ///
-/// `load_roms` hydrates shaders, resources and the entity graph (deps before
-/// dependents); each ROM's guest owns its own scene look, and the shared host
-/// layer (editor HUD, widgets, lighting default, hooks, test runner) is
-/// installed on top.
+/// A synchronous [`BootPipeline`] hydrates shaders, resources and the entity
+/// graph (deps before dependents), then [`DemoFinish`] installs the guests —
+/// each ROM's guest owns its own scene look — and the shared host layer
+/// (editor HUD, widgets, lighting default, hooks, test runner) on top.
 pub fn init_engine_multi(
     gl: Rc<glow::Context>,
     loaded: &LoadedRoms,
     sink: &dyn BootSink,
 ) -> Engine {
     let mut e = Engine::new();
-    e.load_roms(gl, loaded, sink);
-    finish_init_engine(&mut e, loaded, &CompiledModules::new(), sink);
+    let finish: Box<dyn BootFinish> = Box::new(DemoFinish::default());
+    BootPipeline::new(loaded.clone(), Some(finish)).poll(&mut e, &gl, sink, None);
     e
 }
 
-/// The shared post-load tail of [`init_engine_multi`] (and its async variant):
-/// cursor/camera/animator prefabs, default lighting, the background guest
-/// worker, the ROM guests, terrain commit, colliders, and the editor/HUD host
-/// layer.  Public so an incremental caller (e.g. the web app interleaving
-/// [`classic_engine::Engine::boot_step`]s across frames) can finish boot after
-/// its plan drains.
-pub fn finish_init_engine(
+/// The post-load tail of every boot ([`DemoFinish::finish`]): cursor/camera/
+/// animator prefabs, default lighting, the background guest worker, the ROM
+/// guests, terrain commit, colliders, and the editor/HUD host layer.
+fn finish_init_engine(
     e: &mut Engine,
     loaded: &LoadedRoms,
     compiled: &CompiledModules,

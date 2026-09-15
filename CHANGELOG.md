@@ -28,11 +28,23 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Drive every boot through one `classic_engine::boot::BootPipeline` stage
+  machine (`Uploading` → `UploadingBasis` → `Finishing` → `Done`): headless
+  and golden runs poll it to completion, the windowed desktop prepares it on
+  the boot thread (`BootPipeline::prepare`: parallel decode, basis transcode,
+  guest compile) and polls it per frame, and the web app polls it per animation
+  frame, awaiting the `.basis` Worker stage.  The demo's post-load setup is the
+  `classic_demo::DemoFinish` hook.  Removed: `Engine::begin_boot_gfx`,
+  `boot_step_predecoded`, `upload_basis_predecoded_at`, `upload_pending_basis`,
+  `boot::decode_assets` and `BootPlan`'s cursor/decoded setters; `BootPlan` no
+  longer borrows the ROMs or sink.  Now crate-private: `Engine::begin_boot`,
+  `Engine::boot_step`, `boot::decode_plan`,
+  `classic_demo::{finish_init_engine, compile_guest_modules}` (#NN).
 - Fan boot-time texture decode and native `.basis` transcode out on a pooled
-  `JobQueue` (`JobQueue::pooled` + ordered `run_all`) instead of a separate
-  thread pool, so one decode path serves native (loader threads, now named
-  `classic-decode-N`/`classic-basis-N`) and wasm (inline); the web basis
-  transcode `Worker` moves into `classic_worker::transcoder_worker` (#NN).
+  `JobQueue` (`JobQueue::pooled` + ordered `run_all`, loader threads now named
+  `classic-decode-N`/`classic-basis-N`) instead of a separate thread pool; the
+  web basis transcode `Worker` moves into `classic_worker::transcoder_worker`
+  (#NN).
 - Web workers exchange bytes as transferred buffers instead of structured
   clones: nav snapshots, guest/transcoder modules, task arguments and transcode
   inputs going in, and path, task and transcode results coming out.  The
