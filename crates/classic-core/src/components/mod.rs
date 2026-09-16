@@ -785,10 +785,8 @@ pub struct Light {
     /// Scalar multiplier applied to `color`.
     #[serde(default = "default_light_intensity")]
     pub intensity: f32,
-    /// Attenuation radius.  Authored in the legacy light-space unit (px;
-    /// `PPM_TARGET` px per metre) for compatibility with existing lights and
-    /// the guest ABI; `gather_lights` converts it to world metres before the
-    /// UBO upload.  `<= 0` disables distance falloff.
+    /// Attenuation radius in **world metres** (the same unit as `position`),
+    /// uploaded verbatim by `gather_lights`.  `<= 0` disables distance falloff.
     #[serde(default = "default_light_radius")]
     pub radius: f32,
     /// Spot direction (world space); ignored by point lights.
@@ -810,7 +808,8 @@ fn default_light_intensity() -> f32 {
 }
 
 fn default_light_radius() -> f32 {
-    200.0
+    // World metres (the legacy 200 px at `PPM_TARGET` = 64 px/m).
+    3.125
 }
 
 impl Default for Light {
@@ -820,7 +819,7 @@ impl Default for Light {
             position: Vec3::ZERO,
             color: [1.0, 1.0, 1.0],
             intensity: 1.0,
-            radius: 200.0,
+            radius: default_light_radius(),
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: None,

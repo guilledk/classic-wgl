@@ -194,8 +194,8 @@ categories:
   it can be authored in `state.json` and round-trips through the registry).
   Fields: `kind: LightKind` (`Point`/`Spot`, `#[serde(rename_all = "snake_case")]`),
   `position: Vec3` (**light space**, +Z up — see below),
-  `color: [f32;3]`, `intensity: f32`, `radius: f32` (attenuation, world px;
-  `<= 0` disables falloff), `dir: Vec3`, `cone_angle: f32` (spot half-angle;
+  `color: [f32;3]`, `intensity: f32`, `radius: f32` (attenuation, **world metres**,
+  uploaded verbatim; `<= 0` disables falloff), `dir: Vec3`, `cone_angle: f32` (spot half-angle;
   `<= 0` encodes Point).  Spot fields are future-proofed but not yet emitted.
 - **⚠️ `position` is in light space, not screen space.**  Light space is
   `iso_world_light_matrix · world` (metric, **+Z up**) — the same space

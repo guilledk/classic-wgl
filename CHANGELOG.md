@@ -34,6 +34,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- `Light.radius` is world metres end to end: `gather_lights` no longer divides
+  it by `PPM_TARGET` and the default is `3.125` m (was `200` px).  Lights
+  authored in px (published ROMs before the metre re-author) render with a
+  64x radius until re-published.
 - Dump every registered component through one generic
   `classic_core::registry::dump_as::<T>` instead of 15 hand-written dumpers;
   `ComponentReg::dump_value` adds the `"type"` key, so a `Dumper` now returns

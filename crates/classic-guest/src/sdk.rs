@@ -608,7 +608,7 @@ impl GuestHost {
             position: glam::Vec3::ZERO,
             color: [1.0, 1.0, 1.0],
             intensity: 1.0,
-            radius: 200.0,
+            radius: 3.125,
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
             parent: None,

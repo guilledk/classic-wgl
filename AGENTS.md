@@ -151,8 +151,8 @@ plans/
   `light_spawn`/`light_set`/`light_release` API returns a stable handle backed by
   a `LightHandles` entity table (`classic-engine/src/light.rs`) with optional TTL
   decay.  A `Light` may set `parent` (an entity name): its `position` is then a
-  **light-space offset from the parent's ground point** (`iso_to_world` of the
-  parent's tile position), so lights follow moving objects.  `Engine::iso_to_world(x, y,
+  **world-metre offset from the parent's ground point** (`iso_to_world` of the
+  parent's tile position), so lights follow moving objects.  `Light.radius` is metres.  `Engine::iso_to_world(x, y,
   elevation)` is the single iso-tile → light-space conversion.  An animation may
   carry typed `light.*` channels (see `AnimationData::channels`); an `Animator`
   targeting `"<entity>.Light"` samples them and drives the light in lockstep with

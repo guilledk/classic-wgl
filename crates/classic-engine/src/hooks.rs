@@ -1115,12 +1115,9 @@ impl Engine {
             }
             lights.push(l);
         }
-        // `Light.radius` is authored in legacy light-space px (64 px/metre, the
-        // pre-unification unit the shader used); convert it to world metres so
-        // `dist / radius` in the shader compares like-for-like with `position`.
-        for l in &mut lights {
-            l.radius /= PPM_TARGET;
-        }
+        // `Light.radius` is world metres, the same unit as `position` (the
+        // assets-side `light.radius` channel emits metres), so `dist / radius`
+        // in the shader compares like-for-like with no conversion.
         // `MAX_LIGHTS` bounds the UBO block, but `gather_lights` reads every
         // `Light` entity — including `state.json`-declared and directly-spawned
         // ones that never went through `LightHandles`.  Enforce the budget here

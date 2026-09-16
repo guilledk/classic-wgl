@@ -369,7 +369,7 @@ mod tests {
         Animator, IsoSprite, Light, LightKind, NavMesh, Role, SdfTextRender, Tilemap,
     };
     use classic_core::math::{iso_view_depth, iso_world_pos, DEPTH_FAR, DEPTH_NEAR};
-    use classic_core::tilemap::{sample_height_mesh, PPM_TARGET};
+    use classic_core::tilemap::sample_height_mesh;
     use classic_core::{RoleKind, SpriteRender, Transform};
     use glam::Vec3;
 
@@ -787,8 +787,8 @@ mod tests {
         let gathered = engine.gather_lights();
         assert_eq!(gathered.len(), 1);
         assert!((gathered[0].position - world_pos).length() < 1e-2);
-        // `radius` is authored in legacy light-space px and converted to metres.
-        assert!((gathered[0].radius - light.radius / PPM_TARGET).abs() < 1e-3);
+        // `radius` is world metres, uploaded verbatim.
+        assert_eq!(gathered[0].radius, light.radius);
 
         // A dangling parent must *not* silently turn the offset into an
         // absolute position — the light is dropped (and a warning logged).
