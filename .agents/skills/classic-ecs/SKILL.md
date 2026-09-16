@@ -278,7 +278,7 @@ It is an immutable `OnceLock<Vec<ComponentReg>>` populated once by
 pub struct ComponentReg {
     pub name: &'static str,          // "type" field in state.json
     pub spawn: Spawner,              // JSON → EntityBuilder
-    pub dump: Option<Dumper>,        // World + Entity → Option<Value>
+    pub dump: Option<Dumper>,        // World + Entity → Option<Value> (body, no "type")
     pub order: i32,                  // dump priority (lower = earlier)
     pub subsumes: &'static [&'static str],  // fan-out de-duplication
 }
@@ -325,13 +325,18 @@ registry::init(vec![
     ComponentReg {
         name: "Sprite",
         spawn: |b, v| { ... b.add(sprite); Ok(()) },
-        dump: Some(dumper_sprite),
+        dump: Some(dump_as::<SpriteRender>),
         order: 20,
         subsumes: &["Transform"],
     },
     // ...
 ]);
 ```
+
+Every dumper is the generic `registry::dump_as::<T>` (the component's serde
+body); `ComponentReg::dump_value(world, entity)` prepends the `"type"` key, so
+a new serializable component needs no hand-written dumper.  Spawners stay
+per-type closures, since several add companion components.
 
 ### Thread safety
 
@@ -645,10 +650,11 @@ registration order.
 
 ### No ECS serialization for non-spatial components
 
-`Collider`, `UiNode`, and `SdfTextRender` have no dumper
-implementations and are not part of the registry.  They are created
+`Collider` and `UiNode` have no dumper implementations and are not part of
+the registry.  They are created
 programmatically at runtime by `init_*` functions and are not persisted
-to `state.json`.  Serializing them would require dumper functions.
+to `state.json`.  Serializing one takes a `Serialize` impl and a registry
+entry with `dump: Some(dump_as::<T>)`.
 
 ### No mock hecs backend for testing
 

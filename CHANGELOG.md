@@ -28,6 +28,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Dump every registered component through one generic
+  `classic_core::registry::dump_as::<T>` instead of 15 hand-written dumpers;
+  `ComponentReg::dump_value` adds the `"type"` key, so a `Dumper` now returns
+  the component body only (#NN).
 - Collapse the app boot drivers onto `classic_engine::boot`'s `run_sync`
   (headless) and `InterleavedBoot` (per frame while the loader renders; the
   windowed desktop's `InterleavedBoot::threaded` owns the boot thread, caps

@@ -154,13 +154,11 @@ impl Engine {
             if dumped.contains(reg.name) {
                 continue;
             }
-            if let Some(dump) = reg.dump {
-                if let Some(val) = dump(&self.world, entity) {
-                    components.push(val);
-                    dumped.insert(reg.name);
-                    for sub in reg.subsumes {
-                        dumped.insert(sub);
-                    }
+            if let Some(val) = reg.dump_value(&self.world, entity) {
+                components.push(val);
+                dumped.insert(reg.name);
+                for sub in reg.subsumes {
+                    dumped.insert(sub);
                 }
             }
             // Try subsumed components first (they may match)
@@ -169,11 +167,13 @@ impl Engine {
                     continue;
                 }
                 // Check if there's a subsumed reg with a dumper
-                if let Some(sub_dump) = regs.iter().find(|r| r.name == *sub).and_then(|r| r.dump) {
-                    if let Some(val) = sub_dump(&self.world, entity) {
-                        components.push(val);
-                        dumped.insert(sub);
-                    }
+                if let Some(val) = regs
+                    .iter()
+                    .find(|r| r.name == *sub)
+                    .and_then(|r| r.dump_value(&self.world, entity))
+                {
+                    components.push(val);
+                    dumped.insert(sub);
                 }
             }
         }

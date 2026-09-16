@@ -35,7 +35,7 @@ pub use classic_pathfinder as pathfinder;
 /// Install all known component types into the registry.  Idempotent — the
 /// first call wins and later calls are no-ops.
 pub fn register_all_components() {
-    use registry::ComponentReg;
+    use registry::{dump_as, ComponentReg};
 
     // Transform — emitted last; subsumed by components that embed position.
     registry::init(vec![
@@ -46,7 +46,7 @@ pub fn register_all_components() {
                 b.add(tf);
                 Ok(())
             },
-            dump: Some(dumper_transform),
+            dump: Some(dump_as::<Transform>),
             order: 50,
             subsumes: &[],
         },
@@ -58,7 +58,7 @@ pub fn register_all_components() {
                 b.add(s);
                 Ok(())
             },
-            dump: Some(dumper_sprite),
+            dump: Some(dump_as::<SpriteRender>),
             order: 20,
             subsumes: &["Transform"],
         },
@@ -70,7 +70,7 @@ pub fn register_all_components() {
                 b.add(tm);
                 Ok(())
             },
-            dump: Some(dumper_tilemap),
+            dump: Some(dump_as::<Tilemap>),
             order: 10,
             subsumes: &["Transform"],
         },
@@ -82,7 +82,7 @@ pub fn register_all_components() {
                 b.add(s);
                 Ok(())
             },
-            dump: Some(dumper_isosprite),
+            dump: Some(dump_as::<IsoSprite>),
             order: 30,
             subsumes: &["Transform"],
         },
@@ -108,7 +108,7 @@ pub fn register_all_components() {
                 b.add(a);
                 Ok(())
             },
-            dump: Some(dumper_isoagent),
+            dump: Some(dump_as::<IsoAgent>),
             order: 40,
             subsumes: &["IsoSprite", "Transform"],
         },
@@ -119,7 +119,7 @@ pub fn register_all_components() {
                 b.add(a);
                 Ok(())
             },
-            dump: Some(dumper_animator),
+            dump: Some(dump_as::<Animator>),
             order: 35,
             subsumes: &[],
         },
@@ -130,7 +130,7 @@ pub fn register_all_components() {
                 b.add(veh);
                 Ok(())
             },
-            dump: Some(dumper_isovehicle),
+            dump: Some(dump_as::<IsoVehicle>),
             order: 37,
             subsumes: &[],
         },
@@ -141,7 +141,7 @@ pub fn register_all_components() {
                 b.add(inv);
                 Ok(())
             },
-            dump: Some(dumper_inventory),
+            dump: Some(dump_as::<Inventory>),
             order: 38,
             subsumes: &[],
         },
@@ -152,7 +152,7 @@ pub fn register_all_components() {
                 b.add(s);
                 Ok(())
             },
-            dump: Some(dumper_selectable),
+            dump: Some(dump_as::<Selectable>),
             order: 39,
             subsumes: &[],
         },
@@ -164,7 +164,7 @@ pub fn register_all_components() {
                 b.add(n);
                 Ok(())
             },
-            dump: Some(dumper_navmesh),
+            dump: Some(dump_as::<NavMesh>),
             order: 15,
             subsumes: &["Transform"],
         },
@@ -175,7 +175,7 @@ pub fn register_all_components() {
                 b.add(r);
                 Ok(())
             },
-            dump: Some(dumper_rect),
+            dump: Some(dump_as::<RectRender>),
             order: 45,
             subsumes: &[],
         },
@@ -186,7 +186,7 @@ pub fn register_all_components() {
                 b.add(t);
                 Ok(())
             },
-            dump: Some(dumper_sdftext),
+            dump: Some(dump_as::<SdfTextRender>),
             order: 46,
             subsumes: &[],
         },
@@ -197,7 +197,7 @@ pub fn register_all_components() {
                 b.add(c);
                 Ok(())
             },
-            dump: Some(dumper_camera),
+            dump: Some(dump_as::<Camera>),
             order: 48,
             subsumes: &[],
         },
@@ -208,7 +208,7 @@ pub fn register_all_components() {
                 b.add(r);
                 Ok(())
             },
-            dump: Some(dumper_role),
+            dump: Some(dump_as::<Role>),
             order: 60,
             subsumes: &[],
         },
@@ -219,98 +219,9 @@ pub fn register_all_components() {
                 b.add(l);
                 Ok(())
             },
-            dump: Some(dumper_light),
+            dump: Some(dump_as::<Light>),
             order: 59,
             subsumes: &[],
         },
     ]);
-}
-
-// Dumper helpers
-
-fn dumper_sprite(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let s = world.get::<&SpriteRender>(entity).ok()?;
-    serde_json::to_value(&*s).ok().map(|v| component_value("Sprite", v))
-}
-
-fn dumper_tilemap(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let tm = world.get::<&Tilemap>(entity).ok()?;
-    serde_json::to_value(&*tm).ok().map(|v| component_value("Tilemap", v))
-}
-
-fn dumper_isosprite(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let s = world.get::<&IsoSprite>(entity).ok()?;
-    serde_json::to_value(&*s).ok().map(|v| component_value("IsoSprite", v))
-}
-
-fn dumper_isoagent(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let a = world.get::<&IsoAgent>(entity).ok()?;
-    serde_json::to_value(&*a).ok().map(|v| component_value("IsoAgent", v))
-}
-
-fn dumper_animator(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let a = world.get::<&Animator>(entity).ok()?;
-    serde_json::to_value(&*a).ok().map(|v| component_value("Animator", v))
-}
-
-fn dumper_isovehicle(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let v = world.get::<&IsoVehicle>(entity).ok()?;
-    serde_json::to_value(&*v).ok().map(|v| component_value("IsoVehicle", v))
-}
-
-fn dumper_inventory(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let inv = world.get::<&Inventory>(entity).ok()?;
-    serde_json::to_value(&*inv).ok().map(|v| component_value("Inventory", v))
-}
-
-fn dumper_selectable(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let s = world.get::<&Selectable>(entity).ok()?;
-    serde_json::to_value(*s).ok().map(|v| component_value("Selectable", v))
-}
-
-fn dumper_navmesh(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let n = world.get::<&NavMesh>(entity).ok()?;
-    serde_json::to_value(&*n).ok().map(|v| component_value("IsometricNavMesh", v))
-}
-
-/// Prepend the `"type"` key to a serde-serialized component body.
-fn component_value(type_name: &str, body: serde_json::Value) -> serde_json::Value {
-    let mut m = serde_json::Map::new();
-    m.insert("type".into(), serde_json::Value::String(type_name.into()));
-    if let serde_json::Value::Object(obj) = body {
-        for (k, v) in obj {
-            m.insert(k, v);
-        }
-    }
-    serde_json::Value::Object(m)
-}
-
-fn dumper_transform(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let tf = world.get::<&Transform>(entity).ok()?;
-    serde_json::to_value(&*tf).ok().map(|v| component_value("Transform", v))
-}
-
-fn dumper_rect(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let r = world.get::<&RectRender>(entity).ok()?;
-    serde_json::to_value(&*r).ok().map(|v| component_value("Rect", v))
-}
-
-fn dumper_sdftext(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let t = world.get::<&SdfTextRender>(entity).ok()?;
-    serde_json::to_value(&*t).ok().map(|v| component_value("SdfText", v))
-}
-
-fn dumper_camera(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let c = world.get::<&Camera>(entity).ok()?;
-    serde_json::to_value(&*c).ok().map(|v| component_value("Camera", v))
-}
-
-fn dumper_role(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let r = world.get::<&Role>(entity).ok()?;
-    serde_json::to_value(*r).ok().map(|v| component_value("Role", v))
-}
-
-fn dumper_light(world: &hecs::World, entity: hecs::Entity) -> Option<serde_json::Value> {
-    let l = world.get::<&Light>(entity).ok()?;
-    serde_json::to_value((*l).clone()).ok().map(|v| component_value("Light", v))
 }
