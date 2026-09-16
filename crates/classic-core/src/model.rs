@@ -434,8 +434,8 @@ fn image_to_rgba8(
         Format::R8G8B8A8 => pixels.to_vec(),
         Format::R8G8B8 => {
             let mut out = Vec::with_capacity(count * 4);
-            for px in pixels.chunks_exact(3) {
-                out.extend_from_slice(&[px[0], px[1], px[2], 255]);
+            for &[r, g, b] in pixels.as_chunks::<3>().0 {
+                out.extend_from_slice(&[r, g, b, 255]);
             }
             out
         }
