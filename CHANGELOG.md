@@ -15,25 +15,25 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   LINEAR/STEP/CUBICSPLINE clip sampling, node world transforms, rig-origin
   translation) as real geometry through a new world-lit `mesh` shader
   (`Gfx::draw_model` / `draw_shadow_model`, `DrawKind::Model`) that writes true
-  camera view depth and casts sun shadows.  ROMs declare models in
-  `models[]` (`{name, src}`, `src` = `/models/<name>.glb`; `ResourceKind::Model`
-  in `classic-rom`), loaded by a `BootStep::LoadModel`; `Model.model` and
+  camera view depth and casts sun shadows.  ROMs declare models in `models[]`
+  (`{name, src}`, `src` = `/models/<name>.glb`; `ResourceKind::Model` in
+  `classic-rom`), loaded by a `BootStep::LoadModel`; `Model.model` and
   `Model.tilemap` resolve through the namespace rewrite passes.  The clip is
   played by the `start_model_clip` host import and advanced by
-  `Engine::update_models`; a `Light` parented to a model tracks its animated
-  rig origin, and `has_resource` kind 3 queries models.
+  `Engine::update_models`; a `Light` parented to a model tracks its animated rig
+  origin, and `has_resource` kind 3 queries models (#100).
 - `rocket_motion` gate test: parses the exported US Rocket glbs through
-  `classic_core::model` (from `CLASSIC_ROCKET_GLB_DIR`, skipped when unset)
-  and checks per-key |Δv|, touchdown speed, foot contact and the
-  landing-end/launch-start pose, writing a per-frame z/v/tilt CSV.
+  `classic_core::model` (from `CLASSIC_ROCKET_GLB_DIR`, skipped when unset) and
+  checks per-key |Δv|, touchdown speed, foot contact and the
+  landing-end/launch-start pose, writing a per-frame z/v/tilt CSV (#100).
 - `lit_shaders_share_the_lighting_block` pins the shared dynamic-light block
-  across `sheet.frag`, `iso_tilemap.frag` and `mesh.frag`.
-- 3D models keep the sprite pixel look: they render into a `NEAREST`
-  pixelation target sized to the sprite texel (`viewport × min(1, 1/zoom)`,
-  `classic_gfx::model_target_size`) and a `modelComposite` pass writes them
-  back with their depth (`gl_FragDepth`); a second composite ghosts a model at
-  40% behind sprites and terrain, like sprites, on a reserved stencil group
-  (`MODEL_GHOST_GROUP` = 255; vehicle groups now cycle 1..254).
+  across `sheet.frag`, `iso_tilemap.frag` and `mesh.frag` (#100).
+- 3D models keep the sprite pixel look: they render into a `NEAREST` pixelation
+  target sized to the sprite texel (`viewport × min(1, 1/zoom)`,
+  `classic_gfx::model_target_size`) and a `modelComposite` pass writes them back
+  with their depth (`gl_FragDepth`); a second composite ghosts a model at 40%
+  behind sprites and terrain, like sprites, on a reserved stencil group
+  (`MODEL_GHOST_GROUP` = 255; vehicle groups now cycle 1..254) (#100).
 - `cargo xtask check-patterns`: a CI-gated guard for the codified architecture
   patterns (no raw thread/`Worker` spawns outside `classic-worker`, no
   hand-numbered `OP_*` tables), with a per-line `xtask-allow` opt-out (#98).
@@ -60,11 +60,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 - `Light.radius` is world metres end to end: `gather_lights` no longer divides
   it by `PPM_TARGET` and the default is `3.125` m (was `200` px).  Lights
-  authored in px (published ROMs before the metre re-author) render with a
-  64x radius until re-published.
-- `gather_lights` skips a `Light` while it or its parent is hidden
-  (`Disabled`): a hidden rocket's burn light goes dark instead of lingering
-  at its last animated values.
+  authored in px (published ROMs before the metre re-author) render with a 64x
+  radius until re-published (#100).
+- `gather_lights` skips a `Light` while it or its parent is hidden (`Disabled`):
+  a hidden rocket's burn light goes dark instead of lingering at its last
+  animated values (#100).
 - Dump every registered component through one generic
   `classic_core::registry::dump_as::<T>` instead of 15 hand-written dumpers;
   `ComponentReg::dump_value` adds the `"type"` key, so a `Dumper` now returns
@@ -131,23 +131,24 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 - `Rom::pack` writes each archive path once: every frame-table texture of a
   packed atlas aliases the same sheet `src`, so the sheet was appended to the
-  archive once per alias.  zstd hid it for small ETC1S sheets; with UASTC
-  sheets `lunar-common.rom` packed to 16.5 MB instead of 4.95 MB.
-- Terrain and 3D models no longer wobble along screen X while zooming on
-  native GPUs: `iso_tilemap.vert`, `mesh.vert`, `shadow_depth.vert` and
+  archive once per alias.  zstd hid it for small ETC1S sheets; with UASTC sheets
+  `lunar-common.rom` packed to 16.5 MB instead of 4.95 MB (#100).
+- Terrain and 3D models no longer wobble along screen X while zooming on native
+  GPUs: `iso_tilemap.vert`, `mesh.vert`, `shadow_depth.vert` and
   `shadow_sprite.vert` declared `precision mediump float`, which Mesa radeonsi
   (and other GLES drivers) really evaluates as 16-bit float, so pixel-space
   positions in the tens of thousands snapped to 2-4 px steps.  They now default
   to `highp` (sprites and the web target already computed these in full
-  precision).
+  precision) (#100).
 - Container inventory tooltips show item icons again: a frame table loads with
   its key **and** frame names qualified by its ROM namespace (`lunar::icons` /
   `lunar::regolith`), but the tooltip looked up the bare `icons` sheet and bare
-  item names, so every icon was silently skipped and only the counts rendered.
+  item names, so every icon was silently skipped and only the counts rendered
+  (#100).
 - Namespace-qualify `Light.parent` in the ROM cross-reference pass: a parented
   light in a namespaced ROM (the lunar rocket burn light, basetest's
   `controlLight`) looked up its bare parent name, never found it, and was
-  skipped every frame.
+  skipped every frame (#100).
 - Web (trusted) guests: a failed background task no longer panics with a
   `RefCell` double borrow in `poll_task`, and a second guest runtime no longer
   re-points every earlier runtime's wide host imports at itself (#98).
