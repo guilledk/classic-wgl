@@ -10,6 +10,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `cargo xtask check-patterns`: a CI-gated guard for the codified architecture
+  patterns (no raw thread/`Worker` spawns outside `classic-worker`, no
+  hand-numbered `OP_*` tables), with a per-line `xtask-allow` opt-out (#NN).
+- `AGENTS.md` "Patterns": the eight rules this codebase keeps itself to, with
+  `# Architecture` rustdoc notes on `classic-worker`, `classic-guest` and
+  `classic-engine::boot`, and a refreshed `docs/architecture.d2`/`.svg` (#NN).
 - Declarative host-import ABI table (`classic_core::abi_manifest`): one entry
   per import records its typed params, return kind and backend set, with a
   runtime `HOST_IMPORTS` descriptor.  The wasmi/wasmtime linker layer and the

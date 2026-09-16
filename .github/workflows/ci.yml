@@ -43,6 +43,8 @@ jobs:
                   components: rustfmt, clippy
             - run: cargo fmt --all -- --check
             - run: cargo clippy -p classic-core -p classic-pathfinder -p classic-terrain -p classic-worker -p classic-gfx -p classic-engine -p classic-platform -p classic-rom -p classic-guest -p classic-demo --all-targets -- -D warnings
+            - name: codified patterns (AGENTS.md "Patterns")
+              run: cargo xtask check-patterns
 
     test:
         name: test

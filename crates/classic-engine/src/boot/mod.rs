@@ -1,5 +1,14 @@
 //! ROM boot: the [`BootPipeline`] sequencer over a precomputed [`BootPlan`].
 //!
+//! # Architecture (AGENTS.md "Patterns" 3)
+//!
+//! Every boot — headless, windowed desktop, web — runs the same stages through
+//! [`BootPipeline`]; the apps poll a [`driver`] rather than sequencing
+//! boot steps themselves, so there is one hydration order and one place where
+//! the CPU half can move off the GL thread ([`BootPipeline::prepare`]).  The
+//! app-specific tail is the [`BootFinish`] hook, because `classic-engine`
+//! cannot depend on the app layer.
+//!
 //! [`BootPlan`] is a `Vec<BootStep>` built once from the resolved ROM DAG.  Each
 //! texture is split into a CPU [`BootStep::Decode`] (owned [`DecodedTexture`],
 //! `Send`) and a GL [`BootStep::Upload`], so decode can move off the GL thread

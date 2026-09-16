@@ -46,6 +46,7 @@ cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm t
 
 # Versioning / releases (see VERSIONING.md)
 cargo xtask check-version            # fail when Cargo.toml/CHANGELOG.md drift
+cargo xtask check-patterns           # fail when the codified patterns regress (see "Patterns")
 cargo xtask release patch            # bump version + freeze changelog (prints commit/tag cmds)
 ```
 
@@ -233,6 +234,42 @@ plans/
   idle/walk animation + terrain-z) lives in the demo ROM's compiled guest wasm, not Rust.  Heavy systems
   (UIManager layout, animator, physics, pathfinding, terrain) stay host-side; guests
   register + update into them rather than reimplementing them.  See `classic-guest` skill.
+
+## Patterns
+
+The rules this codebase keeps itself to.  `cargo xtask check-patterns` enforces
+the greppable ones (raw thread/`Worker` spawns, hand-numbered op tables); a
+single line may opt out with a trailing `xtask-allow` comment stating why.
+
+1. **One table, N generated views.**  A surface mirrored across backends is
+   declared once and generated, never hand-mirrored.  The host-import ABI is
+   `classic_core::abi_manifest::for_each_host_import!`; the native (wasmi /
+   wasmtime), browser-`WebAssembly`, untrusted-`Worker` and Tier-3 backends are
+   all generated from it, and `worker.js` builds its stubs from the descriptor
+   Rust posts (the table index *is* the op code).  Tests assert each backend
+   exposes exactly its table subset.
+2. **Background work lives in `classic-worker`.**  `JobQueue<J>` runs it
+   (`threaded` / `pooled` / `synchronous`); `spawn_thread` and
+   `spawn_web_worker` are the only places a thread or `Worker` is created.
+3. **Boot goes through `BootPipeline`.**  One stage machine
+   (`classic_engine::boot`), driven by `run_sync` (headless) or
+   `InterleavedBoot` (per frame, optionally fed by a boot thread).  Apps poll a
+   driver; they do not sequence boot steps.
+4. **Portability via `#[cfg]` at crate boundaries.**  A backend split is a
+   `native.rs` / `web.rs` pair behind one API (`pathfinder_worker/`,
+   `guest_worker/`), not `#[cfg]` scattered through shared code.
+5. **Determinism is decided in one place.**  `Engine::set_synchronous_workers`
+   picks `JobQueue::synchronous`, so the golden/test path never branches into a
+   separate inline implementation.
+6. **Content-addressed caches carry magic + version, and never fail the boot.**
+   A miss or a stale entry recomputes (`classic-demo/src/module_cache.rs`, the
+   web ROM cache).
+7. **Zero-copy web transport.**  Every buffer posted to or from a `Worker` is
+   transferred, not cloned (`classic_worker::post_transfer`); `SharedArrayBuffer`
+   use stays gated behind `sab_available()` with a fallback, because only
+   `trunk serve` sends COOP/COEP.
+8. **Split files at ~2k lines.**  Modules are focused: `lib.rs` keeps the type,
+   its methods live in siblings (`lifecycle.rs`, `hooks.rs`, `boot_api.rs`, …).
 
 ## Conventions
 

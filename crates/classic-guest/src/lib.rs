@@ -5,6 +5,23 @@
 //! runtime abstraction ([`GuestRuntime`]), the wasmi-backed implementation
 //! ([`WasmiRuntime`]), the host-side SDK ([`sdk::GuestHost`]) that bridges
 //! guest imports to the engine, and the ABI contract ([`abi`]).
+//!
+//! # Architecture (AGENTS.md "Patterns" 1, 4)
+//!
+//! - **One table, N generated views.**  Every backend's host imports are
+//!   generated from `classic_core::abi_manifest::for_each_host_import!` — the
+//!   single declaration of the guest ABI.  Adding an import means adding one
+//!   table row (plus its `GuestHost` body), never editing a per-backend list:
+//!   native wasmi / wasmtime ([`imports`]), the browser-`WebAssembly` runtime,
+//!   the untrusted `Worker` runtime ([`worker_bridge`], whose `worker.js` builds
+//!   its stubs from a posted descriptor, so the table index is the op code) and
+//!   the Tier-3 worker in `classic-worker`.  Tests assert each backend exposes
+//!   exactly its table subset; `cargo xtask check-patterns` rejects
+//!   hand-numbered `OP_*` tables.
+//! - **Backends split at the crate boundary** (`runtime_wasmtime` /
+//!   `runtime_web` / `runtime_worker` behind [`GuestRuntime`]), with the
+//!   `Worker` runtime reporting readiness through `GuestRuntime::is_ready`
+//!   because a `Worker` only boots once the main thread yields.
 
 pub mod abi;
 pub mod imports;
