@@ -52,8 +52,8 @@ layout(std140) uniform LightBlock {
 
 out vec4 fragColor;
 
-// --- BEGIN SHARED LIGHTING (must stay byte-identical to iso_tilemap.frag;
-// --- pinned by `lit_shaders_share_the_lighting_block`) ---
+// --- BEGIN SHARED LIGHTING (byte-identical in sheet.frag / iso_tilemap.frag /
+// --- mesh.frag; pinned by `lit_shaders_share_the_lighting_block`) ---
 //
 // `p` and `l.pos_radius.xyz` are both **metric world space** (+Z up, metres),
 // so `length` is a true distance and `dot(n, L)` a true cosine.  They previously

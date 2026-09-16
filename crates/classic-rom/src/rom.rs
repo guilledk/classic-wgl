@@ -105,65 +105,83 @@ impl Rom {
     /// borrowing the bytes straight from the resource set (no intermediate
     /// clone).  `pack_zip`/`pack_tar_zst` stream these directly into their
     /// writers instead of materialising a `Vec<(String, Vec<u8>)>`.
+    ///
+    /// Each archive path is emitted **once**: several manifest entries share a
+    /// file (every frame-table texture of a packed atlas points at the same
+    /// sheet `src`), and writing it per entry duplicated the sheet in the tar.
+    /// With small sheets zstd's match window hid that; a multi-megabyte sheet
+    /// (UASTC) was re-compressed once per alias.
     fn for_each_entry(
         &self,
         mut f: impl FnMut(&str, &[u8]) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
-        f(MANIFEST_ENTRY, self.manifest_json.as_bytes())?;
-        f(self.manifest.state.as_str(), self.state.as_bytes())?;
+        let mut seen = std::collections::HashSet::new();
+        let mut emit = |path: &str, bytes: &[u8]| -> anyhow::Result<()> {
+            if seen.insert(path.to_string()) {
+                f(path, bytes)?;
+            }
+            Ok(())
+        };
+        emit(MANIFEST_ENTRY, self.manifest_json.as_bytes())?;
+        emit(self.manifest.state.as_str(), self.state.as_bytes())?;
 
         for entry in &self.manifest.manifest.textures {
             if let Some(bytes) = self.resources.textures().get(&entry.name) {
-                f(crate::rom_path(&entry.src), bytes)?;
+                emit(crate::rom_path(&entry.src), bytes)?;
             }
             if let (Some(path), Some(bytes)) =
                 (&entry.frames, self.resources.frames().get(&entry.name))
             {
-                f(crate::rom_path(path), bytes)?;
+                emit(crate::rom_path(path), bytes)?;
             }
         }
         for entry in &self.manifest.manifest.textures {
             if let Some(path) = &entry.depth {
                 if let Some(bytes) = self.resources.depths().get(&entry.name) {
-                    f(crate::rom_path(path), bytes)?;
+                    emit(crate::rom_path(path), bytes)?;
                 }
             }
             if let Some(path) = &entry.normal {
                 if let Some(bytes) = self.resources.normals().get(&entry.name) {
-                    f(crate::rom_path(path), bytes)?;
+                    emit(crate::rom_path(path), bytes)?;
                 }
             }
         }
         for entry in &self.manifest.manifest.sdf_fonts {
             if let Some(metrics) = self.resources.fonts().get(&entry.name) {
-                f(crate::rom_path(&entry.metrics), metrics)?;
+                emit(crate::rom_path(&entry.metrics), metrics)?;
             }
         }
         for entry in &self.manifest.code {
             if let Some(src) = self.resources.code().get(&entry.name) {
-                f(crate::rom_path(&entry.src), src)?;
+                emit(crate::rom_path(&entry.src), src)?;
             }
         }
         for entry in &self.manifest.manifest.animations {
             if let Some(metadata) = self.resources.animations().get(&entry.name) {
                 if let Some(path) = &entry.metadata {
-                    f(crate::rom_path(path), metadata)?;
+                    emit(crate::rom_path(path), metadata)?;
                 }
             }
         }
         for entry in &self.manifest.grids {
             if let Some(bytes) = self.resources.grids().get(&entry.name) {
-                f(crate::rom_path(&entry.src), bytes)?;
+                emit(crate::rom_path(&entry.src), bytes)?;
             }
         }
         for entry in &self.manifest.manifest.vehicles {
             if let Some(bytes) = self.resources.vehicles().get(&entry.name) {
-                f(crate::rom_path(&entry.src), bytes)?;
+                emit(crate::rom_path(&entry.src), bytes)?;
+            }
+        }
+        for entry in &self.manifest.manifest.models {
+            if let Some(bytes) = self.resources.models().get(&entry.name) {
+                emit(crate::rom_path(&entry.src), bytes)?;
             }
         }
         for entry in &self.manifest.manifest.data {
             if let Some(bytes) = self.resources.data().get(&entry.name) {
-                f(crate::rom_path(&entry.src), bytes)?;
+                emit(crate::rom_path(&entry.src), bytes)?;
             }
         }
         Ok(())
@@ -323,5 +341,77 @@ mod tests {
             Some(b"normal".as_slice())
         );
         assert_eq!(loaded.resources.get(ResourceKind::Normal, "tree"), None);
+    }
+
+    #[test]
+    fn pack_writes_a_shared_sheet_once() {
+        // A packed atlas plus a frame-table texture aliasing the same sheet
+        // `src`: the archive must hold the sheet once, and both names must still
+        // load its bytes.
+        let manifest_json = r#"{
+            "format_version": 1,
+            "entrypoint": "demo",
+            "shaders": [],
+            "textures": [
+                {"name": "atlas", "src": "/res/atlas.png"},
+                {"name": "tree", "src": "/res/atlas.png"}
+            ],
+            "animations": []
+        }"#;
+        let manifest: RomManifest = serde_json::from_str(manifest_json).unwrap();
+        let mut resources = ResourceSet::default();
+        resources.insert(ResourceKind::Texture, "atlas", b"sheet-bytes".to_vec());
+        resources.insert(ResourceKind::Texture, "tree", b"sheet-bytes".to_vec());
+        let rom = Rom {
+            manifest,
+            manifest_json: manifest_json.into(),
+            resources,
+            state: "{\"entities\":{}}".into(),
+        };
+
+        for bytes in [rom.pack_tar_zst().unwrap(), rom.pack_zip().unwrap()] {
+            let mut archive = RomArchive::from_bytes(&bytes).unwrap();
+            let listed = archive.list();
+            assert_eq!(listed.iter().filter(|p| **p == "res/atlas.png").count(), 1, "{listed:?}");
+            let loaded = Rom::load(&mut archive, &crate::NullBootSink).unwrap();
+            for name in ["atlas", "tree"] {
+                assert_eq!(
+                    loaded.resources.get(ResourceKind::Texture, name),
+                    Some(b"sheet-bytes".as_slice())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pack_and_load_round_trips_models() {
+        let manifest_json = r#"{
+            "format_version": 1,
+            "entrypoint": "lunar",
+            "shaders": [],
+            "textures": [],
+            "animations": [],
+            "models": [{"name": "landing", "src": "/models/landing.glb"}]
+        }"#;
+        let manifest: RomManifest = serde_json::from_str(manifest_json).unwrap();
+        assert_eq!(manifest.manifest.models[0].src, "/models/landing.glb");
+        let mut resources = ResourceSet::default();
+        resources.insert(ResourceKind::Model, "landing", b"glTF-bytes".to_vec());
+        let rom = Rom {
+            manifest,
+            manifest_json: manifest_json.into(),
+            resources,
+            state: "{\"entities\":{}}".into(),
+        };
+
+        let bytes = rom.pack().unwrap();
+        let mut archive = RomArchive::from_bytes(&bytes).unwrap();
+        assert!(archive.list().contains(&"models/landing.glb"));
+        let loaded = Rom::load(&mut archive, &crate::NullBootSink).unwrap();
+        assert_eq!(
+            loaded.resources.get(ResourceKind::Model, "landing"),
+            Some(b"glTF-bytes".as_slice())
+        );
+        assert_eq!(loaded.resources.models().len(), 1);
     }
 }

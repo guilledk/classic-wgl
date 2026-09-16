@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use classic_core::components::{
-    Animator, ColliderData, DebugName, IsoAgent, IsoSprite, IsoVehicle, Light, NavMesh, RectRender,
-    Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
+    Animator, ColliderData, DebugName, IsoAgent, IsoSprite, IsoVehicle, Light, Model, NavMesh,
+    RectRender, Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::math::{iso_camera_matrix, iso_world_pos};
 use classic_core::pathfinder;
@@ -1063,10 +1063,15 @@ impl Engine {
     /// **world-metre** positions (the same space the lit shaders evaluate them
     /// in).  A parented light treats `Light.position` as a world-metre offset
     /// from the parent's ground point (`iso_to_world`); an unparented light's
-    /// position is already world metres.
+    /// position is already world metres.  A light is skipped while it — or its
+    /// parent — is hidden (`Disabled`), so a hidden rocket's burn light goes
+    /// dark instead of lingering at its last animated values.
     pub fn gather_lights(&self) -> Vec<Light> {
         let mut lights = Vec::new();
-        for (_e, light) in self.world.query::<&Light>().iter() {
+        for (e, light) in self.world.query::<&Light>().iter() {
+            if self.is_disabled(e) {
+                continue;
+            }
             let mut l = light.clone();
             if let Some(parent_name) = l.parent.as_deref() {
                 // Parent resolution must not fail *open*: a dangling name, a
@@ -1074,6 +1079,7 @@ impl Engine {
                 // reinterpret the relative offset as an absolute position, so
                 // the light teleported to a random spot with no warning.
                 match self.names.get(parent_name) {
+                    Some(&pe) if self.is_disabled(pe) => continue,
                     Some(&pe) => match self.world.get::<&Transform>(pe) {
                         Ok(tf) => match self.iso_to_world(tf.position.x, tf.position.y, 0.0) {
                             Some(base) => {
@@ -1115,12 +1121,9 @@ impl Engine {
             }
             lights.push(l);
         }
-        // `Light.radius` is authored in legacy light-space px (64 px/metre, the
-        // pre-unification unit the shader used); convert it to world metres so
-        // `dist / radius` in the shader compares like-for-like with `position`.
-        for l in &mut lights {
-            l.radius /= PPM_TARGET;
-        }
+        // `Light.radius` is world metres, the same unit as `position` (the
+        // assets-side `light.radius` channel emits metres), so `dist / radius`
+        // in the shader compares like-for-like with no conversion.
         // `MAX_LIGHTS` bounds the UBO block, but `gather_lights` reads every
         // `Light` entity — including `state.json`-declared and directly-spawned
         // ones that never went through `LightHandles`.  Enforce the budget here
@@ -1145,14 +1148,21 @@ impl Engine {
     /// The visual `frame_offset` (Blender-world metres: drift in x/y, altitude
     /// in z) of a parent entity, or `Vec3::ZERO` when the parent has none (a
     /// static sprite).  Animated `IsoSprite` / `IsoAgent` entities carry the
-    /// descent/run offset here; `gather_lights` folds it into an attached
-    /// light's position so the light tracks the parent's animated motion.
+    /// descent/run offset here, a `Model` its animated rig-origin translation;
+    /// `gather_lights` folds it into an attached light's position so the light
+    /// tracks the parent's animated motion.
     fn parent_frame_offset(&self, parent: hecs::Entity) -> Vec3 {
         if let Ok(s) = self.world.get::<&IsoSprite>(parent) {
             return s.frame_offset;
         }
         if let Ok(a) = self.world.get::<&IsoAgent>(parent) {
             return a.frame_offset;
+        }
+        // A 3D model's animated rig origin (root-node world translation,
+        // refreshed by `update_models`): a parented light's `position` is then
+        // an offset from the rig origin, e.g. the rocket burn light.
+        if let Ok(m) = self.world.get::<&Model>(parent) {
+            return m.frame_offset;
         }
         Vec3::ZERO
     }

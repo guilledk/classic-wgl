@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use classic_core::components::{
-    Animator, IsoAgent, IsoSprite, IsoVehicle, NavMesh, SdfTextRender, Tilemap,
+    Animator, IsoAgent, IsoSprite, IsoVehicle, Light, Model, NavMesh, SdfTextRender, Tilemap,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{iso_basis, iso_camera_ray, Ray, DEPTH_FAR, DEPTH_NEAR};
@@ -285,6 +285,16 @@ impl Engine {
                 }
             }
 
+            // 3D glTF models: parsed + uploaded before the entity graph so the
+            // resource-ref rewrite pass can resolve `Model.model`.
+            for (name, bytes) in resources.models() {
+                steps.push(boot::BootStep::LoadModel {
+                    key: Self::qualify(&ns, name),
+                    rom: rom.clone(),
+                    bytes: bytes.clone(),
+                });
+            }
+
             // Entity graph + grids.
             steps.push(boot::BootStep::HydrateEntry { ns, entry: entry_idx });
         }
@@ -446,6 +456,16 @@ impl Engine {
                     self.namespace = ns;
                     let entry = &loaded.order[entry];
                     self.register_manifest_metadata(&entry.rom.manifest, &entry.rom.resources);
+                }
+                boot::BootStep::LoadModel { key, rom, bytes } => {
+                    if let Some(dims) = self.load_model_glb(&key, &bytes) {
+                        sink.on_event(classic_rom::BootEvent::ResourceDecoded {
+                            rom,
+                            kind: classic_rom::ResourceKind::Model,
+                            name: key,
+                            dims,
+                        });
+                    }
                 }
                 boot::BootStep::LoadSdfFont { key, metrics_json, atlas_png } => {
                     self.load_sdf_font(&key, &metrics_json, &atlas_png);
@@ -703,8 +723,8 @@ impl Engine {
     /// Rewrite the cross-entity references stored on a ROM's components into
     /// namespace-qualified keys, using the ROM's namespace as the referring
     /// namespace.  Covered: `NavMesh.map_entity`, `IsoSprite.tilemap` /
-    /// `IsoAgent.tilemap`, `Animator.target` (the `entity.component` entity
-    /// segment), and `IsoVehicle.tilemap` / `wheel_entities` / `tire_entities`.
+    /// `IsoAgent.tilemap`, `Model.tilemap`, `Light.parent`, `Animator.target` (the
+    /// `entity.component` entity segment), and `IsoVehicle.tilemap` / `wheel_entities` / `tire_entities`.
     /// A bare reference resolves in the referring namespace first, then the
     /// global namespace (see [`Engine::resolve_entity_name`]); a dangling
     /// reference is left untouched (the draw path reports it as missing).
@@ -743,6 +763,32 @@ impl Engine {
                     if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
                         if let Ok(mut a) = self.world.get::<&mut IsoAgent>(entity) {
                             a.tilemap = resolved;
+                        }
+                    }
+                }
+            }
+
+            if let Some(tilemap) = self.world.get::<&Model>(entity).ok().map(|m| m.tilemap.clone())
+            {
+                if !tilemap.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
+                        if let Ok(mut m) = self.world.get::<&mut Model>(entity) {
+                            m.tilemap = resolved;
+                        }
+                    }
+                }
+            }
+
+            // A parented light names its parent entity; `gather_lights` looks it
+            // up in `names` verbatim, so a bare name in a namespaced ROM must be
+            // qualified here or the light is skipped every frame.
+            if let Some(parent) =
+                self.world.get::<&Light>(entity).ok().and_then(|l| l.parent.clone())
+            {
+                if !parent.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &parent) {
+                        if let Ok(mut l) = self.world.get::<&mut Light>(entity) {
+                            l.parent = Some(resolved);
                         }
                     }
                 }
@@ -802,7 +848,8 @@ impl Engine {
     /// namespace-qualified keys, using the ROM's namespace as the referring
     /// namespace.  Covered: `Tilemap.tile_set`, `NavMesh.tile_set`,
     /// `IsoSprite.texture`, `IsoAgent.texture`, `SpriteRender.texture` (all
-    /// textures), `SdfTextRender.atlas_name` (font), and `Animator.animation`.
+    /// textures), `SdfTextRender.atlas_name` (font), `Animator.animation`, and `Model.model`
+    /// (model).
     /// A bare reference resolves in the referring namespace first, then the
     /// global namespace (see [`Engine::resolve_resource`]); a dangling
     /// reference is left untouched (the draw path reports it as missing).
@@ -903,6 +950,16 @@ impl Engine {
                     {
                         if let Ok(mut a) = self.world.get::<&mut Animator>(entity) {
                             a.animation = Some(resolved);
+                        }
+                    }
+                }
+            }
+
+            if let Some(model) = self.world.get::<&Model>(entity).ok().map(|m| m.model.clone()) {
+                if !model.is_empty() {
+                    if let Some(resolved) = self.resolve_resource(ns, ResourceKind::Model, &model) {
+                        if let Ok(mut m) = self.world.get::<&mut Model>(entity) {
+                            m.model = resolved;
                         }
                     }
                 }
@@ -1145,6 +1202,7 @@ impl Engine {
             ResourceKind::Animation => self.animations.contains_key(name),
             ResourceKind::FrameTable => self.frame_tables.contains_key(name),
             ResourceKind::Vehicle => self.vehicles.contains_key(name),
+            ResourceKind::Model => self.models.contains_key(name),
         }
     }
 
@@ -1317,6 +1375,47 @@ impl Engine {
             return dims;
         }
         None
+    }
+
+    /// Load a 3D glTF model (`.glb`) under `name` (namespace-qualified): parse
+    /// it into a CPU-side [`classic_core::model::ModelAsset`], upload each mesh
+    /// as `"{name}::{mesh}"` and each embedded image as the texture
+    /// `"{name}::image::{i}"`.  Safe without a `Gfx` (the model still registers
+    /// for resolution and animation).  Returns the first image's dimensions
+    /// (`(0, 0)` when untextured), or `None` when the file fails to parse.
+    pub fn load_model_glb(&mut self, name: &str, bytes: &[u8]) -> Option<(u32, u32)> {
+        let mut asset = match classic_core::model::parse_model_glb(bytes) {
+            Ok(asset) => asset,
+            Err(e) => {
+                classic_core::cl_error!(Chan::Render, "model '{name}' parse failed: {e}");
+                return None;
+            }
+        };
+        let dims = asset.images.first().map_or((0, 0), |i| (i.width, i.height));
+        if let Some(gfx) = self.gfx.as_mut() {
+            for (mi, mesh) in asset.meshes.iter().enumerate() {
+                let gpu = classic_gfx::ModelMeshGpu::new(
+                    &gfx.gl,
+                    &mesh.positions,
+                    &mesh.normals,
+                    &mesh.uvs,
+                    &mesh.indices,
+                );
+                self.model_gpu.insert(format!("{name}::{mi}"), gpu);
+            }
+            for (ii, img) in asset.images.iter_mut().enumerate() {
+                gfx.add_texture_rgba8(
+                    &format!("{name}::image::{ii}"),
+                    &img.rgba8,
+                    img.width,
+                    img.height,
+                );
+                // The pixels live on the GPU now; drop the CPU copy.
+                img.rgba8 = Vec::new();
+            }
+        }
+        self.models.insert(name.to_string(), asset);
+        Some(dims)
     }
 
     /// Load an SDF font from its metrics JSON and atlas PNG, keyed by the

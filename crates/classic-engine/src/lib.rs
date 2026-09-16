@@ -5,7 +5,8 @@
 //!
 //! `Engine`'s methods are split by concern: `lifecycle` (construction +
 //! `frame`), `hooks` (callback registration + the host API), `boot_api` (ROM
-//! boot and hydration) and `render` (GPU rebuilds + sprite resolution).
+//! boot and hydration), `render` (GPU rebuilds + sprite resolution) and `model`
+//! (3D glTF `Model` clip playback + draw prep).
 //!
 //! **Skills to read before working here:**
 //! - [classic-ecs](.agents/skills/classic-ecs/SKILL.md) — ECS patterns, components, update_fns
@@ -32,6 +33,7 @@ pub mod vehicle;
 mod boot_api;
 mod hooks;
 mod lifecycle;
+mod model;
 mod render;
 
 pub use classic_core::fields;
@@ -171,6 +173,8 @@ pub enum ResourceKind {
     Animation,
     FrameTable,
     Vehicle,
+    /// A 3D glTF model (`models[]`), referenced by `Model.model`.
+    Model,
 }
 
 pub struct Engine {
@@ -252,6 +256,13 @@ pub struct Engine {
     /// Blender-exported vehicle anchors data artifacts keyed by name, loaded
     /// from the ROM's `data` resources (referenced by `VehicleDef::anchors`).
     pub vehicle_anchors: HashMap<String, classic_core::types::VehicleAnchors>,
+    /// Parsed 3D glTF models keyed by (qualified) name, loaded from the ROM's
+    /// `models` resources at boot: node hierarchy + clips + CPU mesh data (the
+    /// embedded texture pixels are released once uploaded to GL).
+    pub models: HashMap<String, classic_core::model::ModelAsset>,
+    /// GPU model meshes keyed by `"{model}::{mesh_index}"`, uploaded from
+    /// [`Self::models`] when a `Gfx` context is present.
+    model_gpu: HashMap<String, classic_gfx::ModelMeshGpu>,
     /// The ROM-namespaced item catalog, interned once at `load_rom`.  Read-only
     /// after load; the inventory mechanics look items up by [`ItemId`].
     pub items: classic_core::inventory::ItemRegistry,
@@ -357,6 +368,8 @@ pub enum DrawKind {
     Sprite,
     Tilemap,
     IsoSprite,
+    /// A 3D glTF model (`Model`): real geometry in the depth-tested world pass.
+    Model,
     UiRect,
     UiSprite,
     SdfText,
@@ -369,7 +382,7 @@ mod tests {
         Animator, IsoSprite, Light, LightKind, NavMesh, Role, SdfTextRender, Tilemap,
     };
     use classic_core::math::{iso_view_depth, iso_world_pos, DEPTH_FAR, DEPTH_NEAR};
-    use classic_core::tilemap::{sample_height_mesh, PPM_TARGET};
+    use classic_core::tilemap::sample_height_mesh;
     use classic_core::{RoleKind, SpriteRender, Transform};
     use glam::Vec3;
 
@@ -787,8 +800,8 @@ mod tests {
         let gathered = engine.gather_lights();
         assert_eq!(gathered.len(), 1);
         assert!((gathered[0].position - world_pos).length() < 1e-2);
-        // `radius` is authored in legacy light-space px and converted to metres.
-        assert!((gathered[0].radius - light.radius / PPM_TARGET).abs() < 1e-3);
+        // `radius` is world metres, uploaded verbatim.
+        assert_eq!(gathered[0].radius, light.radius);
 
         // A dangling parent must *not* silently turn the offset into an
         // absolute position — the light is dropped (and a warning logged).
@@ -799,6 +812,67 @@ mod tests {
             ..light.clone()
         },));
         assert_eq!(engine.gather_lights().len(), 0, "dangling parent must skip the light");
+    }
+
+    #[test]
+    fn hidden_light_or_parent_is_skipped() {
+        // A hidden (`Disabled`) parent darkens its attached light — the lunar
+        // guest hides the rocket between cycles, and its burn light must not
+        // linger at the last launch values — and a hidden light is skipped
+        // too.  Re-enabling restores both.
+        let mut engine = Engine::new_for_test();
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            size_x: 8,
+            size_y: 8,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 64],
+            height_data: vec![0.0f32; 81],
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::splat(-1.0),
+            selection_iso_end: Vec3::splat(-1.0),
+        };
+        let tm = engine.world.spawn((
+            tilemap,
+            Transform::new(Vec3::ZERO, Vec3::ONE),
+            Role::new(RoleKind::Tilemap),
+        ));
+        engine.names.insert("tilemap".into(), tm);
+        let parent = engine.world.spawn((Transform::new(Vec3::new(2.0, 1.0, 0.0), Vec3::ONE),));
+        engine.names.insert("rocket".into(), parent);
+        let light = Light {
+            kind: LightKind::Point,
+            position: Vec3::new(0.0, 0.0, -1.0),
+            color: [1.0, 0.55, 0.15],
+            intensity: 1.0,
+            radius: 8.125,
+            dir: Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: Some("rocket".into()),
+        };
+        engine.world.spawn((light.clone(),));
+        let free = engine.world.spawn((Light { parent: None, ..light },));
+        assert_eq!(engine.gather_lights().len(), 2);
+
+        engine.set_enabled(parent, false);
+        assert_eq!(engine.gather_lights().len(), 1, "hidden parent darkens its light");
+        engine.set_enabled(parent, true);
+        assert_eq!(engine.gather_lights().len(), 2);
+
+        engine.set_enabled(free, false);
+        let gathered = engine.gather_lights();
+        assert_eq!(gathered.len(), 1, "hidden light is skipped");
+        assert_eq!(gathered[0].parent.as_deref(), Some("rocket"));
+        engine.set_enabled(free, true);
+        assert_eq!(engine.gather_lights().len(), 2);
     }
 
     #[test]
@@ -987,6 +1061,47 @@ mod tests {
             .unwrap();
         e.apply_vehicle_overrides(&unknown);
         assert!(!e.vehicles.contains_key("missing::lrv"));
+    }
+
+    #[test]
+    fn hydrate_roms_qualifies_light_parent() {
+        // `gather_lights` looks `Light.parent` up in `names` verbatim, so the
+        // cross-ref pass must qualify it: a bare own-ROM parent resolves into
+        // the ROM's namespace, a qualified one is kept as-is.  Unqualified, a
+        // namespaced ROM's parented lights (the rocket burn light, basetest's
+        // `controlLight`) are skipped every frame.
+        let loaded = classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: "common".into(),
+                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                    sha256: None,
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom(
+                        "scene",
+                        "scene",
+                        r#"{"entities":{
+                            "rocket":{"components":[]},
+                            "burn":{"components":[{"type":"Light","position":[0,0,0],"color":[1,1,1],"parent":"rocket"}]},
+                            "lamp":{"components":[{"type":"Light","position":[0,0,0],"color":[1,1,1],"parent":"common::tile"}]},
+                            "free":{"components":[{"type":"Light","position":[0,0,0],"color":[1,1,1]}]}}}"#,
+                    ),
+                    sha256: None,
+                },
+            ],
+        };
+        let mut e = Engine::new_for_test();
+        e.hydrate_roms(&loaded, &classic_rom::NullBootSink);
+        let parent =
+            |e: &Engine, n: &str| e.world.get::<&Light>(e.names[n]).unwrap().parent.clone();
+        assert_eq!(parent(&e, "scene::burn").as_deref(), Some("scene::rocket"));
+        assert_eq!(parent(&e, "scene::lamp").as_deref(), Some("common::tile"));
+        assert_eq!(parent(&e, "scene::free"), None);
     }
 
     #[test]

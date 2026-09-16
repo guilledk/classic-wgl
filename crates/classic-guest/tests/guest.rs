@@ -2,7 +2,7 @@
 //! always; wasmtime on native) with small hand-written WAT guest modules.
 
 use classic_core::components::{
-    Animator, ColliderData, Disabled, IsoSprite, Light, NavMesh, Role, Shape, Tilemap,
+    Animator, ColliderData, Disabled, IsoSprite, Light, Model, NavMesh, Role, Shape, Tilemap,
 };
 use classic_core::types::{AnimationData, SdfFontMetrics};
 use classic_core::RoleKind;
@@ -991,6 +991,34 @@ fn guest_start_anim_import_is_wired() {
             let a = engine.world.get::<&Animator>(entity).unwrap();
             assert_eq!(a.animation.as_deref(), Some("landing"));
             assert_eq!(a.counter, 0.0);
+        },
+    );
+}
+
+#[test]
+fn guest_start_model_clip_import_is_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "start_model_clip" (func $smc (param i32 i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "rocket")
+            (data (i32.const 16) "launch")
+            (func (export "update") (param f64)
+                (drop (call $smc (i32.const 0) (i32.const 6) (i32.const 16) (i32.const 6) (i32.const 1)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.spawn_named("rocket");
+            let entity = *engine.names.get("rocket").unwrap();
+            let mut model = Model::new("landing", "tilemap");
+            model.time = 3.0;
+            engine.world.insert_one(entity, model).unwrap();
+            rt.update(&mut engine, 0.016).unwrap();
+            let m = engine.world.get::<&Model>(entity).unwrap();
+            assert_eq!(m.model, "launch");
+            assert_eq!(m.clip.as_deref(), Some("launch"));
+            assert!(m.playing && m.repeat);
+            assert_eq!(m.time, 0.0);
         },
     );
 }

@@ -34,6 +34,9 @@ hecs = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
+# glTF 3D-model parsing (`classic-core::model`; GL upload lives in classic-gfx)
+gltf = { version = "1", default-features = false, features = ["import", "names", "utils"] }
+
 # Graphics
 glow = "0.16"
 

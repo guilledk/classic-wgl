@@ -99,6 +99,7 @@ test — layering is purely draw-order (z-sort on the render list).
 
 ```
 draw_tilemap()          → ENABLE; draw; DISABLE
+draw_model()            → ENABLE; LEQUAL; depthMask(true); draw; DISABLE
 draw_iso_sprite(Normal) → ENABLE; LEQUAL; depthMask(depth_map.is_some());
                            stencil ALWAYS/REPLACE group; draw; DISABLE
 draw_iso_sprite(Ghost)  → ENABLE; GREATER; depthMask(false);
@@ -429,6 +430,9 @@ the field may be absent.
 | `imageSheet` | draw_sprite, draw_iso_sprite | `direct_tex.vert` | `sheet.frag` |
 | `sdf` | draw_sdf | `sdf.vert` | `sdf.frag` |
 | `isoTilemap` | draw_tilemap | `iso_tilemap.vert` | `iso_tilemap.frag` |
+| `mesh` | draw_model | `mesh.vert` | `mesh.frag` |
+| `modelComposite` | composite_models | `model_composite.vert` | `model_composite.frag` |
+| `shadowDepth` | draw_shadow_tilemap, draw_shadow_model | `shadow_depth.vert` | `shadow_depth.frag` |
 
 `image` and `imageColorize` are compiled but have no public `draw_*` functions.
 
@@ -728,3 +732,55 @@ float shadowFactor(vec3 lightPos, vec3 n) {
   by `draw_buffers([NONE])`; the alpha discard in `shadow_sprite.frag` is still
   what shapes the silhouette.
 - `iso_tilemap.vert`/`frag` must use `highp` for `vNormal` and `vLightPos`.
+
+---
+
+## 18. 3D models (`draw_model`, `mesh` shader)
+
+Node-parented glTF meshes (the US Rocket) drawn as real geometry — no billboard,
+no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
+(`ModelAsset`); the GL side is here.
+
+- `ModelMeshGpu::new(gl, positions, normals, uvs, indices)` — interleaved VBO
+  `pos(3) normal(3) uv(2)` (`MODEL_VERTEX_STRIDE = 32`) + `u32` index buffer
+  (`UNSIGNED_INT` elements are core in WebGL2).
+- `draw_model(model, camera, world_matrix, mesh, texture, base_color, settings)`
+  — `model` is the instance's full world matrix
+  (`placement · gltf_to_world() · node_world[node]`); `world_matrix` is
+  `iso_camera_matrix`.  `mesh.vert` runs the tilemap's canonical view-depth
+  formula (`clipPos.z` from `depth_span`), so models occlude terrain/sprites
+  through the shared depth buffer.  `mesh.frag` is the world-space Lambertian +
+  sun shadow + the **shared lighting block** (byte-identical to `sheet.frag` /
+  `iso_tilemap.frag`, pinned by `lit_shaders_share_the_lighting_block`).
+  `use_texture = 0` falls back to `base_color`.
+- **No V-flip** in `mesh.vert`: textures upload top-to-bottom and every sampler
+  uses a top-left origin (same as `direct_tex.vert`); a flip inverts the albedo.
+- The normal is `normalize(mat3(model) · normal)` — valid for the rigid
+  (rotation + translation, near-unit scale) node transforms the exporter emits.
+- `draw_shadow_model(model, view_proj, mesh)` — depth-only into the sun shadow
+  map with the `shadowDepth` program.  Draw model casters **before**
+  `set_shadow_sprite_offset` (they want the terrain's constant offset).
+- Engine order (`Engine::frame`): shadow pass (terrain → models → sprites),
+  Phase 1 terrain, **Phase 1b models** (pixelation target → normal composite),
+  Phase 2 sprite normals, Phase 3 sprite ghosts, **Phase 3b model ghost
+  composite**.  Models composite before sprites so a sprite behind a model
+  depth-fails its normal pass and shows in the ghost pass.  Trace kind
+  `"Model"`, one entry per mesh instance.  The model phase is skipped entirely
+  when no model is visible.
+- **Pixel look (`model_pass.rs`)** — models must read like the sprites, which
+  are pre-rendered at `PPM_TARGET` (no quantize/dither, `NEAREST`), so one
+  sprite texel spans `zoom` screen px.  `begin_model_pass(zoom)` binds a
+  `ModelTarget` (RGBA8 + `DEPTH_COMPONENT24` textures, `NEAREST`) sized
+  `model_target_size = ceil(viewport × min(1, 1/zoom))` and clears it; draw the
+  meshes with the unchanged projection (the smaller viewport does the
+  pixelation); `end_model_pass()` rebinds the main target.
+  `composite_models(pass, MODEL_GHOST_GROUP)` draws a fullscreen quad
+  (`modelComposite`) sampling colour + depth and writing `gl_FragDepth`
+  (WebGL2 cannot scale-blit depth): `Normal` = `LEQUAL`, depth write, stencil
+  `REPLACE` the group; `Ghost` = `GREATER`, alpha 0.4, stencil `NOTEQUAL` the
+  group — the exact sprite pass states, so a model ghosts behind sprites and
+  terrain.  `MODEL_GHOST_GROUP` = 255 is reserved (vehicle groups cycle 1..254).
+  No MSAA anywhere (the look depends on hard edges).
+- GPU keys: meshes `"{model}::{mesh_index}"` (`Engine.model_gpu`), textures
+  `"{model}::image::{i}"` (`Gfx.textures`); the embedded image's CPU pixels are
+  dropped after upload.

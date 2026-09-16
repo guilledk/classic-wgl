@@ -70,6 +70,8 @@ impl Engine {
             texture_names: HashSet::new(),
             vehicles: HashMap::new(),
             vehicle_anchors: HashMap::new(),
+            models: HashMap::new(),
+            model_gpu: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),
             next_ghost_group: 1,
             rom_manifest_json: None,
@@ -440,6 +442,15 @@ impl Engine {
             let iso_order = tf.position.x - tf.position.y;
             items.push((iso_order, e, DrawKind::IsoSprite));
         }
+        for (e, (tf, _)) in
+            self.world.query::<(&Transform, &classic_core::components::Model)>().iter()
+        {
+            if self.is_disabled(e) {
+                continue;
+            }
+            // Same `tx - ty` depth-major key as iso sprites.
+            items.push((tf.position.x - tf.position.y, e, DrawKind::Model));
+        }
         for (e, (tf, _)) in self.world.query::<(&Transform, &RectRender)>().iter() {
             if self.is_disabled(e) {
                 continue;
@@ -615,6 +626,10 @@ impl Engine {
             });
         }
 
+        // 3D model draws (every node mesh instance), shared by the shadow
+        // casters and the model pass.
+        let model_draws = self.model_draws(&items, &name_by_entity);
+
         // Fit the directional shadow matrix to the primary tilemap's extents
         // plus the sprite casters' world quads (so their shadows aren't clipped
         // at the light box's near plane).  Still before the `gfx` mutable borrow.
@@ -623,7 +638,8 @@ impl Engine {
                 let tm = self.world.get::<&Tilemap>(e).ok()?;
                 let tf = self.world.get::<&Transform>(e).ok()?;
                 let z_max = tm.height_data.iter().cloned().fold(0.0f32, f32::max);
-                let casters: Vec<Mat4> = iso_draws.iter().map(|d| d.model).collect();
+                let mut casters: Vec<Mat4> = iso_draws.iter().map(|d| d.model).collect();
+                casters.extend(model_draws.iter().flat_map(|d| d.shadow_casters()));
                 Some(shadow::fit_directional_light_matrix(
                     tf.position,
                     tm.size_x as f32,
@@ -682,6 +698,15 @@ impl Engine {
                                 gpu.vertex_count as i32,
                                 &gpu.mesh_buf,
                             );
+                        }
+                    }
+                    // 3D model casters: real geometry, drawn with the terrain's
+                    // constant offset (before the sprite slope-scaled switch).
+                    for draw in &model_draws {
+                        for inst in &draw.instances {
+                            if let Some(mesh) = self.model_gpu.get(&inst.mesh_key) {
+                                gfx.draw_shadow_model(&inst.model, &m.view_proj, mesh);
+                            }
                         }
                     }
                     // Sprite shadow casters: each iso sprite casts its alpha
@@ -876,6 +901,57 @@ impl Engine {
             }
         }
 
+        // Phase 1b: 3D models — real geometry drawn into the pixelation target at
+        // the sprite texel size (`viewport × min(1, 1/zoom)`), then composited
+        // with its true camera view depth before the sprites, so a sprite behind
+        // a model depth-fails its normal pass and shows through the ghost pass.
+        // Skipped entirely without models (model-less frames are unchanged).
+        let has_models = model_draws.iter().any(|d| !d.instances.is_empty());
+        if has_models {
+            gfx.begin_model_pass(self.camera.scale.x);
+        }
+        let model_settings = RenderSettings {
+            ambient: self.light_ambient,
+            light_dir: self.light_dir,
+            light_color: self.light_color,
+            depth_span: [DEPTH_NEAR, DEPTH_FAR],
+            ppm: PPM_TARGET,
+            shadow: shadow_settings,
+        };
+        for draw in &model_draws {
+            for inst in &draw.instances {
+                let Some(mesh) = self.model_gpu.get(&inst.mesh_key) else { continue };
+                if let Some(ref mut t) = self.trace {
+                    t.push(golden::TraceItemParams {
+                        order: draw.order,
+                        kind: "Model",
+                        name: &draw.name,
+                        model: &inst.model,
+                        camera_ignored: false,
+                        texture: inst.texture.as_deref(),
+                        frame: None,
+                        color: None,
+                        depth: None,
+                        normal: None,
+                        screen: Some(golden::project_rect(&cam, &inst.model, false)),
+                    });
+                }
+                gfx.draw_model(
+                    &inst.model,
+                    &cam,
+                    &iso_camera_matrix(),
+                    mesh,
+                    inst.texture.as_deref(),
+                    &[0.8, 0.8, 0.8, 1.0],
+                    &model_settings,
+                );
+            }
+        }
+        if has_models {
+            gfx.end_model_pass();
+            gfx.composite_models(IsoSpritePass::Normal, classic_gfx::MODEL_GHOST_GROUP);
+        }
+
         // Phase 2: isometric normal passes — draw on top of terrain, writing
         // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
         // `RenderSettings` (shared by both sprite passes) carries the light
@@ -946,10 +1022,15 @@ impl Engine {
                 OUTLINE_RADIUS_PX,
             );
         }
+        // Phase 3b: model ghost — 40% alpha wherever a model is behind sprites or
+        // terrain, skipping pixels its own composite covers (like sprites).
+        if has_models {
+            gfx.composite_models(IsoSpritePass::Ghost, classic_gfx::MODEL_GHOST_GROUP);
+        }
 
         // Phase 4: UI + sprites + text (no depth test — draw-order layering).
         for (order, entity, kind) in &items {
-            if matches!(kind, DrawKind::Tilemap | DrawKind::IsoSprite) {
+            if matches!(kind, DrawKind::Tilemap | DrawKind::IsoSprite | DrawKind::Model) {
                 continue;
             }
             let Ok(tf) = self.world.get::<&Transform>(*entity) else {

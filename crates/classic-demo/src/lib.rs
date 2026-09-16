@@ -313,6 +313,7 @@ fn finish_init_engine(
     prefabs::init_cursor(e);
     prefabs::init_camera_wasd(e);
     prefabs::init_animator_system(e);
+    prefabs::init_model_system(e);
 
     // Default lighting (sunny) is applied before the guest installs, so a
     // guest that sets its own look (lunar) wins over the default.

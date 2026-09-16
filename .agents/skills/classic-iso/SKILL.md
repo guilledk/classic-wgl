@@ -583,6 +583,31 @@ the tire reuses the wheel's ground-origin anchor.
 
 ---
 
+## 8b. 3D models (`Model`)
+
+A `Model` is placed, not billboarded: each mesh instance is drawn with
+
+```text
+placement = T(iso_world_pos(tx, ty, h) + tilemap.position) · S(tf.scale) · gltf_to_world()
+instance  = placement · node_world[node]
+```
+
+- `h` is `sample_height_mesh` at the entity's tile; the glb origin sits on the
+  terrain.  **No ground offset**: the exporter keeps the deployed feet at `z = 0`
+  at the origin (the US Rocket rig origin rests 1.983 m above the pad).
+- `gltf_to_world()` = `Rx(+90°)`, the inverse of Blender's glTF exporter
+  (`(x, y, z)_blender → (x, z, −y)_gltf`), so glb coordinates land back in
+  Blender world = engine world (`+tx → +X`, `+ty → −Y`).  The rig's local up is
+  glTF `+Y`: world up of a node is `(gltf_to_world · node_world) · Y`.
+- Drift reads on screen through `iso_camera_px`: Blender world `(−4, 4)` (the
+  landing's start) is tile offset `(−5.69, −5.69)` and projects straight
+  **left** of the pad by `4·√2` m (362 px at zoom 1) with no vertical screen
+  offset, so the settle onto the pad is a pure rightward slide.
+- Depth is the real view depth per vertex (`mesh.vert`), not footprint corners.
+- The motion gates (`crates/classic-core/tests/rocket_motion.rs`,
+  `CLASSIC_ROCKET_GLB_DIR`) measure the rig origin and lowest vertex through
+  this exact path.
+
 ## 9. IsoAgent
 
 `IsoAgent` is a pathfinding-capable `IsoSprite` subtype (its registry spawner
@@ -690,6 +715,7 @@ items and sorts descending (larger order = farther = drawn first).
 | `Tilemap` | `20000.0` | Always behind everything |
 | `Tilemap` (nav) | `19999.0` | Behind sprites, on top of terrain |
 | `IsoSprite` | `tf.position.x - tf.position.y` | Depth-major sort |
+| `Model` | `tf.position.x - tf.position.y` | Depth-tested real geometry; order is informational |
 | `Sprite` (non-UI) | `tf.position.z` (or `-20000.0` if `ignore_cam`) | Z-order |
 | `UiSprite` | `tf.position.z` | UI z-slice |
 | `UiRect` | `tf.position.z` | |
@@ -787,6 +813,14 @@ for the `Light` component.  Only two points matter for iso placement:
   renderer's isometric shear (`p.y -= z_px`), which put lights in screen space
   while the normals they are dotted against stayed in light space; `dot(n, L)`
   then mixed spaces.  See `classic-gfx` §17.
+
+- **Parented lights** (`Light.parent`): `gather_lights` resolves
+  `iso_to_world(parent tile) + parent frame_offset + Light.position`.  The
+  parent's `frame_offset` is the `IsoSprite`/`IsoAgent` animated drift+altitude
+  or, for a `Model`, its animated **rig-origin** (glTF root node) world
+  translation — so a burn light authored as a `light.position` offset from the
+  rig origin tracks the 3D rocket's descent and drift.  `Light.radius` is
+  world metres (no `PPM_TARGET` conversion).
 
 Point lights are **unoccluded** (no point-light shadows).  A bare point light on
 terrain reads as a symmetric "sphere"; that's expected until point-light shadows

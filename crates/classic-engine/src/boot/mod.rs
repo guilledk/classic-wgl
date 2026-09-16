@@ -84,6 +84,10 @@ pub enum BootStep {
     /// bookkeeping, animations, frame tables, animation channels, vehicles,
     /// data artifacts).
     RegisterMetadata { ns: String, entry: usize },
+    /// Load one 3D glTF model (`.glb`): parse the node hierarchy + clips, upload
+    /// its meshes and embedded texture.  Runs before the ROM's `HydrateEntry`
+    /// so `Model.model` references resolve in the resource-ref rewrite pass.
+    LoadModel { key: String, rom: String, bytes: Arc<[u8]> },
     /// Load one SDF font (decode atlas + upload + register metrics).
     LoadSdfFont { key: String, metrics_json: String, atlas_png: Arc<[u8]> },
     /// Hydrate one ROM's entity state + grids.

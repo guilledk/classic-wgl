@@ -76,6 +76,7 @@ macro_rules! for_each_host_import {
             height_at(x: f64, y: f64) -> f64 [native web worker tier3_trap];
             set_anim(name: str, anim: str) -> i32 [native web worker tier3_trap];
             start_anim(name: str, anim: str, repeat: i32) -> i32 [native web worker tier3_trap];
+            start_model_clip(name: str, model: str, repeat: i32) -> i32 [native web worker tier3_trap];
             set_enabled(name: str, enabled: i32) -> i32 [native web worker];
             agent_selected() -> i32 [native web worker];
             ui_consumed_click() -> i32 [native web worker];
@@ -943,11 +944,11 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 110);
-        assert_eq!(imports_for(Backend::Web).count(), 110);
-        assert_eq!(imports_for(Backend::Worker).count(), 110);
+        assert_eq!(imports_for(Backend::Native).count(), 111);
+        assert_eq!(imports_for(Backend::Web).count(), 111);
+        assert_eq!(imports_for(Backend::Worker).count(), 111);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
-        assert_eq!(imports_for(Backend::Tier3Trap).count(), 23);
+        assert_eq!(imports_for(Backend::Tier3Trap).count(), 24);
     }
 
     #[test]
