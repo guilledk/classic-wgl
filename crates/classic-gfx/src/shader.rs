@@ -211,6 +211,7 @@ impl ShaderSourceRegistry {
         r.override_vertex("shadow_depth.vert", shaders::SHADOW_DEPTH_VERT);
         r.override_vertex("shadow_sprite.vert", shaders::SHADOW_SPRITE_VERT);
         r.override_vertex("mesh.vert", shaders::MESH_VERT);
+        r.override_vertex("model_composite.vert", shaders::MODEL_COMPOSITE_VERT);
         r.override_fragment("solid.frag", shaders::SOLID_FRAG);
         r.override_fragment("image.frag", shaders::IMAGE_FRAG);
         r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
@@ -220,6 +221,7 @@ impl ShaderSourceRegistry {
         r.override_fragment("shadow_depth.frag", shaders::SHADOW_DEPTH_FRAG);
         r.override_fragment("shadow_sprite.frag", shaders::SHADOW_SPRITE_FRAG);
         r.override_fragment("mesh.frag", shaders::MESH_FRAG);
+        r.override_fragment("model_composite.frag", shaders::MODEL_COMPOSITE_FRAG);
         r
     }
 
@@ -440,6 +442,13 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "shadow_debug",
                 "shadow_normal_offset",
             ],
+        },
+        BuiltinShader {
+            name: "modelComposite",
+            vertex: "model_composite.vert",
+            fragment: "model_composite.frag",
+            attr: &["vertex_pos"],
+            unif: &["color_tex", "depth_tex", "ghost_alpha"],
         },
     ]
 }

@@ -20,6 +20,8 @@ pub const SHADOW_DEPTH_FRAG: &str = include_str!("shaders/shadow_depth.frag");
 pub const SHADOW_SPRITE_FRAG: &str = include_str!("shaders/shadow_sprite.frag");
 pub const MESH_VERT: &str = include_str!("shaders/mesh.vert");
 pub const MESH_FRAG: &str = include_str!("shaders/mesh.frag");
+pub const MODEL_COMPOSITE_VERT: &str = include_str!("shaders/model_composite.vert");
+pub const MODEL_COMPOSITE_FRAG: &str = include_str!("shaders/model_composite.frag");
 
 #[cfg(test)]
 mod tests {

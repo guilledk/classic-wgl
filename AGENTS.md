@@ -148,7 +148,10 @@ plans/
 - **3D models**: a `Model` component draws a node-parented glTF `.glb` (a ROM
   `models[]` resource, `/models/<name>.glb`) as real geometry via `draw_model`
   (`mesh` shader: shared world-space lighting block, sun shadow, true view
-  depth), between the terrain and the sprite passes.  `classic_core::model`
+  depth), between the terrain and the sprite passes.  Models keep the sprite
+  pixel look: they render into a `NEAREST` pixelation target at the sprite
+  texel size (`viewport × min(1, 1/zoom)`) that is composited back with its
+  depth, and ghost at 40% behind sprites/terrain like sprites do.  `classic_core::model`
   parses + samples clips; `Engine::update_models` advances them and caches the
   pose (`Model.node_world`) and the rig-origin translation (`Model.frame_offset`,
   which a parented `Light` tracks); guests restart clips with

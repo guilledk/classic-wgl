@@ -229,3 +229,99 @@ impl Drop for GlFrameBuffer {
         // process lifetime and Drop can't access the GL context.
     }
 }
+
+/// The 3D-model pixelation target: an RGBA8 colour texture + a
+/// `DEPTH_COMPONENT24` depth texture, both `NEAREST`-sampled so the composite
+/// pass (`model_composite`) can upscale colour **and** depth block-for-block
+/// and write the depth back with `gl_FragDepth` (WebGL2 cannot scale-blit a
+/// depth buffer).
+pub struct ModelTarget {
+    fbo: glow::Framebuffer,
+    pub(crate) color_tex: glow::Texture,
+    pub(crate) depth_tex: glow::Texture,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl ModelTarget {
+    pub fn new(gl: &glow::Context, width: u32, height: u32) -> Self {
+        let fbo = unsafe { gl.create_framebuffer() }.expect("create fbo");
+        let color_tex = unsafe { gl.create_texture() }.expect("create texture");
+        let depth_tex = unsafe { gl.create_texture() }.expect("create texture");
+        let target = Self { fbo, color_tex, depth_tex, width, height };
+        target.allocate(gl);
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(color_tex),
+                0,
+            );
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::DEPTH_ATTACHMENT,
+                glow::TEXTURE_2D,
+                Some(depth_tex),
+                0,
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        }
+        target
+    }
+
+    /// (Re)allocate both textures at the current `width` x `height`.
+    fn allocate(&self, gl: &glow::Context) {
+        let (w, h) = (self.width as i32, self.height as i32);
+        unsafe {
+            for (tex, internal, format, ty) in [
+                (self.color_tex, glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
+                (
+                    self.depth_tex,
+                    glow::DEPTH_COMPONENT24,
+                    glow::DEPTH_COMPONENT,
+                    glow::UNSIGNED_INT,
+                ),
+            ] {
+                gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    internal as i32,
+                    w,
+                    h,
+                    0,
+                    format,
+                    ty,
+                    glow::PixelUnpackData::Slice(None),
+                );
+                for (param, value) in [
+                    (glow::TEXTURE_MIN_FILTER, glow::NEAREST),
+                    (glow::TEXTURE_MAG_FILTER, glow::NEAREST),
+                    (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                    (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+                ] {
+                    gl.tex_parameter_i32(glow::TEXTURE_2D, param, value as i32);
+                }
+            }
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+    }
+
+    /// Resize both attachments (no-op when unchanged).
+    pub fn resize(&mut self, gl: &glow::Context, width: u32, height: u32) {
+        if width == self.width && height == self.height {
+            return;
+        }
+        self.width = width;
+        self.height = height;
+        self.allocate(gl);
+    }
+
+    pub fn bind(&self, gl: &glow::Context) {
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+        }
+    }
+}

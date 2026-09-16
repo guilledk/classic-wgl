@@ -431,6 +431,7 @@ the field may be absent.
 | `sdf` | draw_sdf | `sdf.vert` | `sdf.frag` |
 | `isoTilemap` | draw_tilemap | `iso_tilemap.vert` | `iso_tilemap.frag` |
 | `mesh` | draw_model | `mesh.vert` | `mesh.frag` |
+| `modelComposite` | composite_models | `model_composite.vert` | `model_composite.frag` |
 | `shadowDepth` | draw_shadow_tilemap, draw_shadow_model | `shadow_depth.vert` | `shadow_depth.frag` |
 
 `image` and `imageColorize` are compiled but have no public `draw_*` functions.
@@ -760,10 +761,26 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   map with the `shadowDepth` program.  Draw model casters **before**
   `set_shadow_sprite_offset` (they want the terrain's constant offset).
 - Engine order (`Engine::frame`): shadow pass (terrain → models → sprites),
-  Phase 1 terrain, **Phase 1b models**, Phase 2 sprite normals, Phase 3 sprite
-  ghosts.  Models draw before sprites so a sprite behind a model depth-fails its
-  normal pass and shows in the ghost pass.  Trace kind `"Model"`, one entry per
-  mesh instance.
+  Phase 1 terrain, **Phase 1b models** (pixelation target → normal composite),
+  Phase 2 sprite normals, Phase 3 sprite ghosts, **Phase 3b model ghost
+  composite**.  Models composite before sprites so a sprite behind a model
+  depth-fails its normal pass and shows in the ghost pass.  Trace kind
+  `"Model"`, one entry per mesh instance.  The model phase is skipped entirely
+  when no model is visible.
+- **Pixel look (`model_pass.rs`)** — models must read like the sprites, which
+  are pre-rendered at `PPM_TARGET` (no quantize/dither, `NEAREST`), so one
+  sprite texel spans `zoom` screen px.  `begin_model_pass(zoom)` binds a
+  `ModelTarget` (RGBA8 + `DEPTH_COMPONENT24` textures, `NEAREST`) sized
+  `model_target_size = ceil(viewport × min(1, 1/zoom))` and clears it; draw the
+  meshes with the unchanged projection (the smaller viewport does the
+  pixelation); `end_model_pass()` rebinds the main target.
+  `composite_models(pass, MODEL_GHOST_GROUP)` draws a fullscreen quad
+  (`modelComposite`) sampling colour + depth and writing `gl_FragDepth`
+  (WebGL2 cannot scale-blit depth): `Normal` = `LEQUAL`, depth write, stencil
+  `REPLACE` the group; `Ghost` = `GREATER`, alpha 0.4, stencil `NOTEQUAL` the
+  group — the exact sprite pass states, so a model ghosts behind sprites and
+  terrain.  `MODEL_GHOST_GROUP` = 255 is reserved (vehicle groups cycle 1..254).
+  No MSAA anywhere (the look depends on hard edges).
 - GPU keys: meshes `"{model}::{mesh_index}"` (`Engine.model_gpu`), textures
   `"{model}::image::{i}"` (`Gfx.textures`); the embedded image's CPU pixels are
   dropped after upload.

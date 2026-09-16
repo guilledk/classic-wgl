@@ -901,9 +901,15 @@ impl Engine {
             }
         }
 
-        // Phase 1b: 3D models — real geometry writing true camera view depth,
-        // drawn before the sprites so a sprite behind a model depth-fails its
-        // normal pass and shows through the ghost pass instead.
+        // Phase 1b: 3D models — real geometry drawn into the pixelation target at
+        // the sprite texel size (`viewport × min(1, 1/zoom)`), then composited
+        // with its true camera view depth before the sprites, so a sprite behind
+        // a model depth-fails its normal pass and shows through the ghost pass.
+        // Skipped entirely without models (model-less frames are unchanged).
+        let has_models = model_draws.iter().any(|d| !d.instances.is_empty());
+        if has_models {
+            gfx.begin_model_pass(self.camera.scale.x);
+        }
         let model_settings = RenderSettings {
             ambient: self.light_ambient,
             light_dir: self.light_dir,
@@ -940,6 +946,10 @@ impl Engine {
                     &model_settings,
                 );
             }
+        }
+        if has_models {
+            gfx.end_model_pass();
+            gfx.composite_models(IsoSpritePass::Normal, classic_gfx::MODEL_GHOST_GROUP);
         }
 
         // Phase 2: isometric normal passes — draw on top of terrain, writing
@@ -1011,6 +1021,11 @@ impl Engine {
                 &SELECTION_COLOR,
                 OUTLINE_RADIUS_PX,
             );
+        }
+        // Phase 3b: model ghost — 40% alpha wherever a model is behind sprites or
+        // terrain, skipping pixels its own composite covers (like sprites).
+        if has_models {
+            gfx.composite_models(IsoSpritePass::Ghost, classic_gfx::MODEL_GHOST_GROUP);
         }
 
         // Phase 4: UI + sprites + text (no depth test — draw-order layering).

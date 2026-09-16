@@ -28,6 +28,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   landing-end/launch-start pose, writing a per-frame z/v/tilt CSV.
 - `lit_shaders_share_the_lighting_block` pins the shared dynamic-light block
   across `sheet.frag`, `iso_tilemap.frag` and `mesh.frag`.
+- 3D models keep the sprite pixel look: they render into a `NEAREST`
+  pixelation target sized to the sprite texel (`viewport × min(1, 1/zoom)`,
+  `classic_gfx::model_target_size`) and a `modelComposite` pass writes them
+  back with their depth (`gl_FragDepth`); a second composite ghosts a model at
+  40% behind sprites and terrain, like sprites, on a reserved stencil group
+  (`MODEL_GHOST_GROUP` = 255; vehicle groups now cycle 1..254).
 - `cargo xtask check-patterns`: a CI-gated guard for the codified architecture
   patterns (no raw thread/`Worker` spawns outside `classic-worker`, no
   hand-numbered `OP_*` tables), with a per-line `xtask-allow` opt-out (#98).
