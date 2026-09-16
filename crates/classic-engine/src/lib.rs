@@ -815,6 +815,67 @@ mod tests {
     }
 
     #[test]
+    fn hidden_light_or_parent_is_skipped() {
+        // A hidden (`Disabled`) parent darkens its attached light — the lunar
+        // guest hides the rocket between cycles, and its burn light must not
+        // linger at the last launch values — and a hidden light is skipped
+        // too.  Re-enabling restores both.
+        let mut engine = Engine::new_for_test();
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            size_x: 8,
+            size_y: 8,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 64],
+            height_data: vec![0.0f32; 81],
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::splat(-1.0),
+            selection_iso_end: Vec3::splat(-1.0),
+        };
+        let tm = engine.world.spawn((
+            tilemap,
+            Transform::new(Vec3::ZERO, Vec3::ONE),
+            Role::new(RoleKind::Tilemap),
+        ));
+        engine.names.insert("tilemap".into(), tm);
+        let parent = engine.world.spawn((Transform::new(Vec3::new(2.0, 1.0, 0.0), Vec3::ONE),));
+        engine.names.insert("rocket".into(), parent);
+        let light = Light {
+            kind: LightKind::Point,
+            position: Vec3::new(0.0, 0.0, -1.0),
+            color: [1.0, 0.55, 0.15],
+            intensity: 1.0,
+            radius: 8.125,
+            dir: Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: Some("rocket".into()),
+        };
+        engine.world.spawn((light.clone(),));
+        let free = engine.world.spawn((Light { parent: None, ..light },));
+        assert_eq!(engine.gather_lights().len(), 2);
+
+        engine.set_enabled(parent, false);
+        assert_eq!(engine.gather_lights().len(), 1, "hidden parent darkens its light");
+        engine.set_enabled(parent, true);
+        assert_eq!(engine.gather_lights().len(), 2);
+
+        engine.set_enabled(free, false);
+        let gathered = engine.gather_lights();
+        assert_eq!(gathered.len(), 1, "hidden light is skipped");
+        assert_eq!(gathered[0].parent.as_deref(), Some("rocket"));
+        engine.set_enabled(free, true);
+        assert_eq!(engine.gather_lights().len(), 2);
+    }
+
+    #[test]
     fn parented_light_tracks_parent_frame_offset() {
         // A parented light must follow the parent sprite's animated
         // `frame_offset` (altitude → z, horizontal drift → x/y), not just the

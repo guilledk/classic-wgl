@@ -164,7 +164,8 @@ plans/
   decay.  A `Light` may set `parent` (an entity name): its `position` is then a
   **world-metre offset from the parent's ground point** (`iso_to_world` of the
   parent's tile position) plus the parent's animated `frame_offset` (a `Model`'s
-  rig origin), so lights follow moving objects.  `Light.radius` is metres.  `Engine::iso_to_world(x, y,
+  rig origin), so lights follow moving objects; a light whose parent (or itself)
+  is hidden (`Disabled`) is skipped.  `Light.radius` is metres.  `Engine::iso_to_world(x, y,
   elevation)` is the single iso-tile → light-space conversion.  An animation may
   carry typed `light.*` channels (see `AnimationData::channels`); an `Animator`
   targeting `"<entity>.Light"` samples them and drives the light in lockstep with

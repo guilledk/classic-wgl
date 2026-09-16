@@ -1063,10 +1063,15 @@ impl Engine {
     /// **world-metre** positions (the same space the lit shaders evaluate them
     /// in).  A parented light treats `Light.position` as a world-metre offset
     /// from the parent's ground point (`iso_to_world`); an unparented light's
-    /// position is already world metres.
+    /// position is already world metres.  A light is skipped while it — or its
+    /// parent — is hidden (`Disabled`), so a hidden rocket's burn light goes
+    /// dark instead of lingering at its last animated values.
     pub fn gather_lights(&self) -> Vec<Light> {
         let mut lights = Vec::new();
-        for (_e, light) in self.world.query::<&Light>().iter() {
+        for (e, light) in self.world.query::<&Light>().iter() {
+            if self.is_disabled(e) {
+                continue;
+            }
             let mut l = light.clone();
             if let Some(parent_name) = l.parent.as_deref() {
                 // Parent resolution must not fail *open*: a dangling name, a
@@ -1074,6 +1079,7 @@ impl Engine {
                 // reinterpret the relative offset as an absolute position, so
                 // the light teleported to a random spot with no warning.
                 match self.names.get(parent_name) {
+                    Some(&pe) if self.is_disabled(pe) => continue,
                     Some(&pe) => match self.world.get::<&Transform>(pe) {
                         Ok(tf) => match self.iso_to_world(tf.position.x, tf.position.y, 0.0) {
                             Some(base) => {

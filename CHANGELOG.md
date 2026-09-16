@@ -56,6 +56,9 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   it by `PPM_TARGET` and the default is `3.125` m (was `200` px).  Lights
   authored in px (published ROMs before the metre re-author) render with a
   64x radius until re-published.
+- `gather_lights` skips a `Light` while it or its parent is hidden
+  (`Disabled`): a hidden rocket's burn light goes dark instead of lingering
+  at its last animated values.
 - Dump every registered component through one generic
   `classic_core::registry::dump_as::<T>` instead of 15 hand-written dumpers;
   `ComponentReg::dump_value` adds the `"type"` key, so a `Dumper` now returns
