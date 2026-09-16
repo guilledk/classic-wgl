@@ -12,37 +12,37 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 - `cargo xtask check-patterns`: a CI-gated guard for the codified architecture
   patterns (no raw thread/`Worker` spawns outside `classic-worker`, no
-  hand-numbered `OP_*` tables), with a per-line `xtask-allow` opt-out (#NN).
+  hand-numbered `OP_*` tables), with a per-line `xtask-allow` opt-out (#98).
 - `AGENTS.md` "Patterns": the eight rules this codebase keeps itself to, with
   `# Architecture` rustdoc notes on `classic-worker`, `classic-guest` and
-  `classic-engine::boot`, and a refreshed `docs/architecture.d2`/`.svg` (#NN).
+  `classic-engine::boot`, and a refreshed `docs/architecture.d2`/`.svg` (#98).
 - Declarative host-import ABI table (`classic_core::abi_manifest`): one entry
   per import records its typed params, return kind and backend set, with a
   runtime `HOST_IMPORTS` descriptor.  The wasmi/wasmtime linker layer and the
   Tier-3 worker surface are now generated from it, and new tests check that
-  every table import links on each native backend (#NN).
+  every table import links on each native backend (#98).
 - Headless-browser test harness for the wasm-only guest backends
   (`wasm-bindgen-test` in Chromium, `crates/classic-guest/tests/web.rs`; the
   flake pins the matching `wasm-bindgen-cli` and provides Chromium +
-  chromedriver) and a `web tests` CI job (#NN).
+  chromedriver) and a `web tests` CI job (#98).
 - `GuestRuntime::is_ready()` readiness handshake: the untrusted web `Worker`
   runtime reports ready once its `Worker` has booted, and the demo defers a
   not-yet-ready guest's `init` to its first ready frame.  `trunk serve` now
   sends COOP/COEP (cross-origin isolation), so `SharedArrayBuffer` and that
   runtime are available in development; the GitHub Pages deploy stays
-  non-isolated (#NN).
+  non-isolated (#98).
 
 ### Changed
 
 - Dump every registered component through one generic
   `classic_core::registry::dump_as::<T>` instead of 15 hand-written dumpers;
   `ComponentReg::dump_value` adds the `"type"` key, so a `Dumper` now returns
-  the component body only (#NN).
+  the component body only (#98).
 - Collapse the app boot drivers onto `classic_engine::boot`'s `run_sync`
   (headless) and `InterleavedBoot` (per frame while the loader renders; the
   windowed desktop's `InterleavedBoot::threaded` owns the boot thread, caps
   hand-off and event forwarding), removing the desktop's `BootMsg` and
-  `ChannelBootSink` and the web app's hand-rolled boot loop (#NN).
+  `ChannelBootSink` and the web app's hand-rolled boot loop (#98).
 - Drive every boot through one `classic_engine::boot::BootPipeline` stage
   machine (`Uploading` → `UploadingBasis` → `Finishing` → `Done`): headless
   and golden runs poll it to completion, the windowed desktop prepares it on
@@ -54,17 +54,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `boot::decode_assets` and `BootPlan`'s cursor/decoded setters; `BootPlan` no
   longer borrows the ROMs or sink.  Now crate-private: `Engine::begin_boot`,
   `Engine::boot_step`, `boot::decode_plan`,
-  `classic_demo::{finish_init_engine, compile_guest_modules}` (#NN).
+  `classic_demo::{finish_init_engine, compile_guest_modules}` (#98).
 - Fan boot-time texture decode and native `.basis` transcode out on a pooled
   `JobQueue` (`JobQueue::pooled` + ordered `run_all`, loader threads now named
   `classic-decode-N`/`classic-basis-N`) instead of a separate thread pool; the
   web basis transcode `Worker` moves into `classic_worker::transcoder_worker`
-  (#NN).
+  (#98).
 - Web workers exchange bytes as transferred buffers instead of structured
   clones: nav snapshots, guest/transcoder modules, task arguments and transcode
   inputs going in, and path, task and transcode results coming out.  The
   pathfinder result no longer clones the whole Worker wasm heap per search
-  (#NN).
+  (#98).
 - Run background work on a generic `classic_worker::JobQueue<J>` (threaded or
   synchronous): `PathfinderWorker` and `GuestWorker` share its thread, FIFO
   update, flush barrier and result map, and `Engine::set_synchronous_workers`
@@ -72,41 +72,41 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   pathfinder instead of branching into separate inline paths (synchronous
   vehicle searches still use a snapshot of the live world).
   `GuestLimits::synchronous_workers` and the `synchronous` argument of
-  `Engine::install_guest_worker{,_compiled}` are removed (#NN).
+  `Engine::install_guest_worker{,_compiled}` are removed (#98).
 - Spawn every background thread and web `Worker` through shared helpers
   (`classic_worker::spawn_thread`, `classic_worker::spawn_web_worker`) instead
   of five copies of the thread setup and four copies of the Blob/URL/`onmessage`
-  worker setup; native background threads are now named (#NN).
+  worker setup; native background threads are now named (#98).
 - Generate the trusted browser `WebAssembly` guest backend's host imports from
   the ABI table, replacing ~1,500 hand-written closures and its hand-numbered
   `OP_*` dispatcher; imports with more than 8 wasm params are now one
-  self-contained shim each instead of a shared global dispatcher (#NN).
+  self-contained shim each instead of a shared global dispatcher (#98).
 - Generate the untrusted Worker guest backend from the ABI table: the
   main-thread dispatch is a table-built registry and `worker.js` builds its
   import stubs from a descriptor, so both hand-numbered `OP_*` tables are gone.
   The guest module is posted to the Worker instead of being copied into its
-  1 MiB `SharedArrayBuffer` (#NN).
+  1 MiB `SharedArrayBuffer` (#98).
 - Split the oversized source files into focused modules with no behaviour
   change: `classic-engine`'s `lib.rs` (`lifecycle`, `hooks`, `boot_api`,
   `render`) and `vehicle.rs` (`vehicle/`), `classic-gfx`'s `lib.rs`, and
-  `classic-guest`'s `runtime_web.rs` (`runtime_web/`) (#NN).
+  `classic-guest`'s `runtime_web.rs` (`runtime_web/`) (#98).
 
 ### Removed
 
-- Unused `classic-gfx` dependency from `classic-platform` (#NN).
-- `classic_worker::ThreadPool`, superseded by `JobQueue::pooled` (#NN).
+- Unused `classic-gfx` dependency from `classic-platform` (#98).
+- `classic_worker::ThreadPool`, superseded by `JobQueue::pooled` (#98).
 
 ### Fixed
 
 - Web (trusted) guests: a failed background task no longer panics with a
   `RefCell` double borrow in `poll_task`, and a second guest runtime no longer
-  re-points every earlier runtime's wide host imports at itself (#NN).
+  re-points every earlier runtime's wide host imports at itself (#98).
 - Web (untrusted Worker) guests: expose the 16 host imports the backend was
   missing (the field/kernel registry, `spawn_task`/`poll_task`,
   `vehicle_goto_poll`), stream host-import payloads of any size instead of
   failing above 6 KiB in / 64 KiB out, match the native return values (e.g.
   `set_camera`), and report guest traps and link errors as `GuestError::Trap`
-  instead of timing out (#NN).
+  instead of timing out (#98).
 
 ## [0.2.0] - 2026-09-09
 
