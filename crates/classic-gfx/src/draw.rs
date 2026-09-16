@@ -4,7 +4,10 @@ use glam::{Mat4, Vec3};
 use glow::HasContext;
 
 use crate::buffer::vertex_attrib_ptr_f32;
-use crate::{Gfx, GlBuffer, IsoSpritePass, RenderSettings, Shader, SpriteRegion, SHADOW_MAP_UNIT};
+use crate::{
+    Gfx, GlBuffer, IsoSpritePass, ModelMeshGpu, RenderSettings, Shader, SpriteRegion,
+    MODEL_VERTEX_STRIDE, SHADOW_MAP_UNIT,
+};
 
 impl Gfx {
     // -- draw calls --------------------------------------------------------
@@ -578,6 +581,62 @@ impl Gfx {
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(true);
             gl.draw_arrays(glow::TRIANGLES, 0, vertex_count);
+            gl.disable(glow::DEPTH_TEST);
+        }
+    }
+
+    /// Draw one mesh instance of a 3D glTF model (`mesh` shader).
+    ///
+    /// `model` is the node's full world transform in metres (placement ·
+    /// `gltf_to_world` · node world); `world_matrix` is `iso_camera_matrix`.
+    /// The vertex shader writes the canonical camera view depth, so the model
+    /// occludes against terrain and sprites through the shared depth buffer.
+    /// Lighting is the shared world-space block (sun + shadow + point lights).
+    /// Scoped depth test like `draw_tilemap`: enabled, drawn, disabled.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_model(
+        &self,
+        model: &Mat4,
+        camera: &Mat4,
+        world_matrix: &Mat4,
+        mesh: &ModelMeshGpu,
+        texture_name: Option<&str>,
+        base_color: &[f32; 4],
+        settings: &RenderSettings,
+    ) {
+        let gl = &self.gl;
+        let s = self.shader("mesh");
+
+        s.bind(gl);
+        self.bind_view(s, camera, model, false);
+        s.uniform_mat4(gl, "world_matrix", world_matrix);
+        s.uniform_vec2(gl, "depth_span", &settings.depth_span);
+        s.uniform_1f(gl, "ppm", settings.ppm);
+
+        match texture_name.and_then(|tn| self.textures.get(tn)) {
+            Some(t) => {
+                t.bind(gl, 0);
+                s.uniform_1i(gl, "tex_sampler", 0);
+                s.uniform_1f(gl, "use_texture", 1.0);
+            }
+            None => s.uniform_1f(gl, "use_texture", 0.0),
+        }
+        s.uniform_vec4(gl, "base_color", base_color);
+        s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
+        s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
+        s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
+        self.bind_shadow(s, settings);
+
+        vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("vertex_pos"), 3, MODEL_VERTEX_STRIDE, 0);
+        vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("normal"), 3, MODEL_VERTEX_STRIDE, 12);
+        vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("tex_coord"), 2, MODEL_VERTEX_STRIDE, 24);
+        mesh.indices.bind(gl);
+
+        unsafe {
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(true);
+            gl.draw_elements(glow::TRIANGLES, mesh.index_count as i32, glow::UNSIGNED_INT, 0);
             gl.disable(glow::DEPTH_TEST);
         }
     }

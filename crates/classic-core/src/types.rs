@@ -191,6 +191,19 @@ pub struct VehicleManifestEntry {
     pub src: String,
 }
 
+/// A manifest entry for a 3D glTF model (`.glb`), staged via the catalog's
+/// `models[]` (`src` = `/models/<name>.glb`) and referenced by name from a
+/// [`Model`](crate::components::Model) component.
+///
+/// The model's albedo texture is embedded in the `.glb` and decoded to RGBA8
+/// at load.  Externalizing it to Basis/KTX2 later grows this entry a texture
+/// field; it is a packaging change, not an engine rework.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct ModelManifestEntry {
+    pub name: String,
+    pub src: String,
+}
+
 /// A manifest entry for a Blender-exported data artifact (vehicle anchors,
 /// animation offsets, etc.), staged via the catalog's `data[]` and referenced
 /// by name from authored defs.
@@ -451,6 +464,9 @@ pub struct Manifest {
     pub animations: Vec<AnimationData>,
     #[serde(default)]
     pub vehicles: Vec<VehicleManifestEntry>,
+    /// 3D glTF models (`.glb`), referenced by name from `Model` components.
+    #[serde(default)]
+    pub models: Vec<ModelManifestEntry>,
     /// Blender-exported data artifacts (anchors, offsets, …), referenced by
     /// name from authored defs.
     #[serde(default)]

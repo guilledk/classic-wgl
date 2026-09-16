@@ -104,6 +104,7 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `height_at` | `(x: f64, y: f64) -> f64` | terrain height (world z) at an iso tile |
 | `set_anim` | `(name_ptr, name_len, anim_ptr, anim_len) -> i32` | set the entity's `Animator` to play a looping animation |
 | `start_anim` | `(name_ptr, name_len, anim_ptr, anim_len, repeat: i32) -> i32` | reset the `Animator` from frame zero and play (one-shot if `repeat == 0`) |
+| `start_model_clip` | `(name_ptr, name_len, model_ptr, model_len, repeat: i32) -> i32` | restart a `Model` entity on a model resource from time zero (clip = the model's own, one-shot if `repeat == 0`) |
 | `agent_selected` | `() -> i32` | editor agent-tool flag |
 | `ui_consumed_click` | `() -> i32` | whether a UI element consumed this frame's click |
 | `delta` / `elapsed` | `() -> f64` | frame time |
@@ -142,7 +143,7 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `poll_event` | `(out_ptr, out_cap) -> i32` | pop the next event as `kind:u32` + `name_len:u32` + `name` (kind 0=click, 1=enter, 2=exit; `0` if none) |
 | `spawn_collider` | `(name, x, y, w, h) -> i32` | attach an axis-aligned rectangle collider (screen space) to a named entity |
 | `get_anim` | `(name, out_ptr, out_cap) -> i32` | write the entity's current `frame: f64` + `name_len: u32` + animation name (`0` if no `Animator`) |
-| `has_resource` | `(kind: i32, name_ptr, name_len) -> i32` | resource existence (0=texture, 1=font, 2=animation) |
+| `has_resource` | `(kind: i32, name_ptr, name_len) -> i32` | resource existence (0=texture, 1=font, 2=animation, 3=model) |
 | `texture_size` | `(name_ptr, name_len, out_ptr) -> i32` | write a loaded texture's pixel size as two `f64` (`0` if not loaded) |
 | `request_path` | `(sx, sy, ex, ey) -> i32` | submit an A* request over the nav mesh; returns a request id to poll (async — the search runs on a host worker) |
 | `poll_path` | `(id, out_ptr, out_cap) -> i32` | poll a path request; `0` pending, `-1` no-path, `-2` buffer too small, `>0` waypoint count (writes little-endian `i32` `[x, y]` pairs) |

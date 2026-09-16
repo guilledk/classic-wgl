@@ -5,7 +5,8 @@
 //!
 //! `Engine`'s methods are split by concern: `lifecycle` (construction +
 //! `frame`), `hooks` (callback registration + the host API), `boot_api` (ROM
-//! boot and hydration) and `render` (GPU rebuilds + sprite resolution).
+//! boot and hydration), `render` (GPU rebuilds + sprite resolution) and `model`
+//! (3D glTF `Model` clip playback + draw prep).
 //!
 //! **Skills to read before working here:**
 //! - [classic-ecs](.agents/skills/classic-ecs/SKILL.md) — ECS patterns, components, update_fns
@@ -32,6 +33,7 @@ pub mod vehicle;
 mod boot_api;
 mod hooks;
 mod lifecycle;
+mod model;
 mod render;
 
 pub use classic_core::fields;
@@ -171,6 +173,8 @@ pub enum ResourceKind {
     Animation,
     FrameTable,
     Vehicle,
+    /// A 3D glTF model (`models[]`), referenced by `Model.model`.
+    Model,
 }
 
 pub struct Engine {
@@ -252,6 +256,13 @@ pub struct Engine {
     /// Blender-exported vehicle anchors data artifacts keyed by name, loaded
     /// from the ROM's `data` resources (referenced by `VehicleDef::anchors`).
     pub vehicle_anchors: HashMap<String, classic_core::types::VehicleAnchors>,
+    /// Parsed 3D glTF models keyed by (qualified) name, loaded from the ROM's
+    /// `models` resources at boot: node hierarchy + clips + CPU mesh data (the
+    /// embedded texture pixels are released once uploaded to GL).
+    pub models: HashMap<String, classic_core::model::ModelAsset>,
+    /// GPU model meshes keyed by `"{model}::{mesh_index}"`, uploaded from
+    /// [`Self::models`] when a `Gfx` context is present.
+    model_gpu: HashMap<String, classic_gfx::ModelMeshGpu>,
     /// The ROM-namespaced item catalog, interned once at `load_rom`.  Read-only
     /// after load; the inventory mechanics look items up by [`ItemId`].
     pub items: classic_core::inventory::ItemRegistry,
@@ -357,6 +368,8 @@ pub enum DrawKind {
     Sprite,
     Tilemap,
     IsoSprite,
+    /// A 3D glTF model (`Model`): real geometry in the depth-tested world pass.
+    Model,
     UiRect,
     UiSprite,
     SdfText,

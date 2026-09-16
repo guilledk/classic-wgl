@@ -241,6 +241,14 @@ impl GuestHost {
         self.engine_mut().start_anim(&name, &anim, repeat != 0) as i32
     }
 
+    /// Restart a named `Model` entity on a model resource from time zero
+    /// (one-shot if `repeat == 0`); the clip is the model's own (same name).
+    pub fn start_model_clip(&mut self, name: &str, model: &str, repeat: i32) -> i32 {
+        let name = self.resolve(name);
+        let model = self.resolve_resource(ResourceKind::Model, model);
+        self.engine_mut().start_model_clip(&name, &model, repeat != 0) as i32
+    }
+
     /// Show/hide a named entity (add/remove the `Disabled` marker).
     pub fn set_enabled(&mut self, name: &str, enabled: i32) -> i32 {
         let name = self.resolve(name);
@@ -884,12 +892,14 @@ impl GuestHost {
         self.engine().get_anim(&name).map(|(n, f)| (n, f as f64))
     }
 
-    /// Whether a named resource exists (0 = texture, 1 = font, 2 = animation).
+    /// Whether a named resource exists (0 = texture, 1 = font, 2 = animation,
+    /// 3 = model).
     pub fn has_resource(&mut self, kind: i32, name: &str) -> i32 {
         let resource_kind = match kind {
             0 => ResourceKind::Texture,
             1 => ResourceKind::Font,
             2 => ResourceKind::Animation,
+            3 => ResourceKind::Model,
             _ => return 0,
         };
         let name = self.resolve_resource(resource_kind, name);
@@ -897,6 +907,7 @@ impl GuestHost {
             0 => self.engine().has_texture(&name),
             1 => self.engine().has_font(&name),
             2 => self.engine().has_animation(&name),
+            3 => self.engine().has_model(&name),
             _ => false,
         }) as i32
     }

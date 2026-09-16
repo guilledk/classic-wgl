@@ -279,6 +279,18 @@ pub fn init_animator_system(engine: &mut Engine) {
     });
 }
 
+/// Register the model system: advance every `Model` clip and re-sample its pose
+/// once per frame, so the draw path and `gather_lights` (a light parented to a
+/// model tracks its animated rig origin) see this frame's pose.  Registered
+/// right after the animator system so a model clip and a light animation
+/// started together by the guest stay in lockstep.
+pub fn init_model_system(engine: &mut Engine) {
+    engine.on_update(|engine| {
+        let delta = engine.time.delta;
+        engine.update_models(delta);
+    });
+}
+
 /// Attach footprint Polygon colliders to all static (non-agent) IsoSprite
 /// entities.
 pub fn init_footprint_colliders(engine: &mut Engine) {

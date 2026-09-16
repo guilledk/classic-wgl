@@ -161,6 +161,11 @@ impl Rom {
                 f(crate::rom_path(&entry.src), bytes)?;
             }
         }
+        for entry in &self.manifest.manifest.models {
+            if let Some(bytes) = self.resources.models().get(&entry.name) {
+                f(crate::rom_path(&entry.src), bytes)?;
+            }
+        }
         for entry in &self.manifest.manifest.data {
             if let Some(bytes) = self.resources.data().get(&entry.name) {
                 f(crate::rom_path(&entry.src), bytes)?;
@@ -323,5 +328,37 @@ mod tests {
             Some(b"normal".as_slice())
         );
         assert_eq!(loaded.resources.get(ResourceKind::Normal, "tree"), None);
+    }
+
+    #[test]
+    fn pack_and_load_round_trips_models() {
+        let manifest_json = r#"{
+            "format_version": 1,
+            "entrypoint": "lunar",
+            "shaders": [],
+            "textures": [],
+            "animations": [],
+            "models": [{"name": "landing", "src": "/models/landing.glb"}]
+        }"#;
+        let manifest: RomManifest = serde_json::from_str(manifest_json).unwrap();
+        assert_eq!(manifest.manifest.models[0].src, "/models/landing.glb");
+        let mut resources = ResourceSet::default();
+        resources.insert(ResourceKind::Model, "landing", b"glTF-bytes".to_vec());
+        let rom = Rom {
+            manifest,
+            manifest_json: manifest_json.into(),
+            resources,
+            state: "{\"entities\":{}}".into(),
+        };
+
+        let bytes = rom.pack().unwrap();
+        let mut archive = RomArchive::from_bytes(&bytes).unwrap();
+        assert!(archive.list().contains(&"models/landing.glb"));
+        let loaded = Rom::load(&mut archive, &crate::NullBootSink).unwrap();
+        assert_eq!(
+            loaded.resources.get(ResourceKind::Model, "landing"),
+            Some(b"glTF-bytes".as_slice())
+        );
+        assert_eq!(loaded.resources.models().len(), 1);
     }
 }

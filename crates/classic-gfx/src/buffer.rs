@@ -47,6 +47,49 @@ impl GlBuffer {
 }
 
 // ---------------------------------------------------------------------------
+// 3D model meshes (glTF node-hierarchy path)
+// ---------------------------------------------------------------------------
+
+/// Vertex stride of a model mesh VBO: `pos(3) + normal(3) + uv(2)` = 8 `f32`.
+pub const MODEL_VERTEX_STRIDE: i32 = 32;
+
+/// A GPU-resident model mesh: interleaved `[position, normal, uv]` vertices +
+/// `u32` triangle indices (WebGL2 supports `UNSIGNED_INT` elements natively).
+pub struct ModelMeshGpu {
+    pub vbo: GlBuffer,
+    pub indices: GlBuffer,
+    pub index_count: usize,
+}
+
+impl ModelMeshGpu {
+    /// Upload a mesh.  Missing normals default to `+Z`, missing UVs to `0`.
+    pub fn new(
+        gl: &glow::Context,
+        positions: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        uvs: &[[f32; 2]],
+        indices: &[u32],
+    ) -> Self {
+        let mut verts: Vec<f32> = Vec::with_capacity(positions.len() * 8);
+        for (i, p) in positions.iter().enumerate() {
+            let n = normals.get(i).copied().unwrap_or([0.0, 0.0, 1.0]);
+            let uv = uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+            verts.extend_from_slice(&[p[0], p[1], p[2], n[0], n[1], n[2], uv[0], uv[1]]);
+        }
+        Self {
+            vbo: GlBuffer::from_slice(gl, glow::ARRAY_BUFFER, &verts, glow::STATIC_DRAW),
+            indices: GlBuffer::from_slice(
+                gl,
+                glow::ELEMENT_ARRAY_BUFFER,
+                indices,
+                glow::STATIC_DRAW,
+            ),
+            index_count: indices.len(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Quad buffers — shared by all drawables
 // ---------------------------------------------------------------------------
 

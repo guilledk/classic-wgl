@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 use buffer::build_quad;
 
-pub use buffer::{DynamicVb, GlBuffer, QuadBuffers};
+pub use buffer::{DynamicVb, GlBuffer, ModelMeshGpu, QuadBuffers, MODEL_VERTEX_STRIDE};
 pub use framebuffer::{DepthFramebuffer, GlFrameBuffer};
 pub use light::{
     pack_lights, LightBuffer, LIGHT_UBO_BINDING, MAX_LIGHTS, SHADOW_MAP_SIZE, SHADOW_MAP_UNIT,

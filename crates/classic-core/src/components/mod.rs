@@ -321,6 +321,79 @@ impl Default for IsoAgent {
     }
 }
 
+fn default_model_speed() -> f32 {
+    1.0
+}
+
+fn default_scale_one() -> Vec3 {
+    Vec3::ONE
+}
+
+/// A 3D glTF model entity: a node-hierarchy mesh (node-parented, not
+/// vertex-skinned) drawn in the engine's world-metre space.
+///
+/// The animation is **self-contained**: clips live inside the `.glb` model
+/// resource (`model`), `clip` names one of them, and `time`/`speed`/`repeat`/
+/// `playing` drive it (no `Animator`).  The model origin sits on the terrain
+/// ground point of `position`; the exported glb carries its own clearance (the
+/// deployed feet touch `z = 0` at the origin), so there is no ground offset.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Model {
+    /// Iso tile position `(tx, ty, z)`; the origin is placed on the terrain at
+    /// `(tx, ty)` via `iso_world_pos`.
+    pub position: Vec3,
+    /// Per-axis scale (the model is authored in metres; `1` = real scale).
+    #[serde(default = "default_scale_one")]
+    pub scale: Vec3,
+    /// Model resource name (a `models[]` manifest entry).
+    pub model: String,
+    /// Entity name of the tilemap this model stands on.
+    pub tilemap: String,
+    /// Clip to play, named *inside* the `.glb` (`None` = bind pose).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip: Option<String>,
+    /// Clip playback speed multiplier.
+    #[serde(default = "default_model_speed")]
+    pub speed: f32,
+    /// Whether the clip loops.
+    #[serde(default)]
+    pub repeat: bool,
+    /// Whether the clip is advancing.
+    #[serde(default)]
+    pub playing: bool,
+    /// Clip time in seconds (transient).
+    #[serde(skip)]
+    pub time: f32,
+    /// The animated root node's world translation in **world metres** (drift in
+    /// x/y, rig-origin altitude in z), refreshed each frame by
+    /// `Engine::update_models` so parented lights track the model.
+    #[serde(skip)]
+    pub frame_offset: Vec3,
+    /// Per-node world transforms (glTF space) of the current pose, refreshed
+    /// each frame and consumed by the draw path (transient).
+    #[serde(skip)]
+    pub node_world: Vec<Mat4>,
+}
+
+impl Model {
+    /// A model at the bind pose with no clip.
+    pub fn new(model: impl Into<String>, tilemap: impl Into<String>) -> Self {
+        Self {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            model: model.into(),
+            tilemap: tilemap.into(),
+            clip: None,
+            speed: 1.0,
+            repeat: false,
+            playing: false,
+            time: 0.0,
+            frame_offset: Vec3::ZERO,
+            node_world: Vec::new(),
+        }
+    }
+}
+
 /// A frame-animator tied to a sprite.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Animator {

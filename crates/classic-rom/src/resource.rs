@@ -15,7 +15,7 @@ use crate::archive::RomArchive;
 use crate::loader::AssetLoader;
 use crate::manifest::RomManifest;
 
-/// The seven categories of bundleable resource.
+/// The categories of bundleable resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
     Texture,
@@ -33,6 +33,8 @@ pub enum ResourceKind {
     Grid,
     /// Wheeled-vehicle definition sidecar (`vehicle.json`).
     Vehicle,
+    /// 3D glTF model binary (`.glb`), staged under `/models/<name>.glb`.
+    Model,
     /// Packed-atlas frame table (`frames.json`) sidecar for a texture.
     Frames,
     /// Blender-exported data artifact (vehicle anchors, animation offsets, …),
@@ -57,6 +59,7 @@ pub struct ResourceSet {
     animations: BTreeMap<String, Arc<[u8]>>,
     grids: BTreeMap<String, Arc<[u8]>>,
     vehicles: BTreeMap<String, Arc<[u8]>>,
+    models: BTreeMap<String, Arc<[u8]>>,
     frames: BTreeMap<String, Arc<[u8]>>,
     data: BTreeMap<String, Arc<[u8]>>,
 }
@@ -83,6 +86,7 @@ impl ResourceSet {
             + self.animations.len()
             + self.grids.len()
             + self.vehicles.len()
+            + self.models.len()
             + self.frames.len()
             + self.data.len()
     }
@@ -121,6 +125,10 @@ impl ResourceSet {
 
     pub fn vehicles(&self) -> &BTreeMap<String, Arc<[u8]>> {
         &self.vehicles
+    }
+
+    pub fn models(&self) -> &BTreeMap<String, Arc<[u8]>> {
+        &self.models
     }
 
     pub fn data(&self) -> &BTreeMap<String, Arc<[u8]>> {
@@ -189,6 +197,9 @@ impl ResourceSet {
         for entry in &manifest.manifest.vehicles {
             set.vehicles.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
+        for entry in &manifest.manifest.models {
+            set.models.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
+        }
         for entry in &manifest.manifest.data {
             set.data.insert(entry.name.clone(), load(crate::rom_path(&entry.src))?);
         }
@@ -210,6 +221,7 @@ impl ResourceSet {
             ResourceKind::Animation => &self.animations,
             ResourceKind::Grid => &self.grids,
             ResourceKind::Vehicle => &self.vehicles,
+            ResourceKind::Model => &self.models,
             ResourceKind::Frames => &self.frames,
             ResourceKind::Data => &self.data,
         }
@@ -225,6 +237,7 @@ impl ResourceSet {
             ResourceKind::Animation => &mut self.animations,
             ResourceKind::Grid => &mut self.grids,
             ResourceKind::Vehicle => &mut self.vehicles,
+            ResourceKind::Model => &mut self.models,
             ResourceKind::Frames => &mut self.frames,
             ResourceKind::Data => &mut self.data,
         }

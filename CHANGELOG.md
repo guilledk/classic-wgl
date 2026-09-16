@@ -10,6 +10,24 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- 3D glTF model rendering: a `Model` component (registered + dumpable, subsumes
+  `Transform`) draws a node-parented `.glb` (`classic_core::model`: parse,
+  LINEAR/STEP/CUBICSPLINE clip sampling, node world transforms, rig-origin
+  translation) as real geometry through a new world-lit `mesh` shader
+  (`Gfx::draw_model` / `draw_shadow_model`, `DrawKind::Model`) that writes true
+  camera view depth and casts sun shadows.  ROMs declare models in
+  `models[]` (`{name, src}`, `src` = `/models/<name>.glb`; `ResourceKind::Model`
+  in `classic-rom`), loaded by a `BootStep::LoadModel`; `Model.model` and
+  `Model.tilemap` resolve through the namespace rewrite passes.  The clip is
+  played by the `start_model_clip` host import and advanced by
+  `Engine::update_models`; a `Light` parented to a model tracks its animated
+  rig origin, and `has_resource` kind 3 queries models.
+- `rocket_motion` gate test: parses the exported US Rocket glbs through
+  `classic_core::model` (from `CLASSIC_ROCKET_GLB_DIR`, skipped when unset)
+  and checks per-key |Δv|, touchdown speed, foot contact and the
+  landing-end/launch-start pose, writing a per-frame z/v/tilt CSV.
+- `lit_shaders_share_the_lighting_block` pins the shared dynamic-light block
+  across `sheet.frag`, `iso_tilemap.frag` and `mesh.frag`.
 - `cargo xtask check-patterns`: a CI-gated guard for the codified architecture
   patterns (no raw thread/`Worker` spawns outside `classic-worker`, no
   hand-numbered `OP_*` tables), with a per-line `xtask-allow` opt-out (#98).

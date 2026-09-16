@@ -13,5 +13,6 @@ serde_json.workspace = true
 anyhow.workspace = true
 log.workspace = true
 bytemuck.workspace = true
+gltf.workspace = true
 
 [dev-dependencies]

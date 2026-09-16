@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use classic_core::components::{
-    Animator, ColliderData, DebugName, IsoAgent, IsoSprite, IsoVehicle, Light, NavMesh, RectRender,
-    Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
+    Animator, ColliderData, DebugName, IsoAgent, IsoSprite, IsoVehicle, Light, Model, NavMesh,
+    RectRender, Role, SdfTextRender, Selectable, TextJustify, Tilemap, UiAlign, UiAnchor, UiNode,
 };
 use classic_core::math::{iso_camera_matrix, iso_world_pos};
 use classic_core::pathfinder;
@@ -1142,14 +1142,21 @@ impl Engine {
     /// The visual `frame_offset` (Blender-world metres: drift in x/y, altitude
     /// in z) of a parent entity, or `Vec3::ZERO` when the parent has none (a
     /// static sprite).  Animated `IsoSprite` / `IsoAgent` entities carry the
-    /// descent/run offset here; `gather_lights` folds it into an attached
-    /// light's position so the light tracks the parent's animated motion.
+    /// descent/run offset here, a `Model` its animated rig-origin translation;
+    /// `gather_lights` folds it into an attached light's position so the light
+    /// tracks the parent's animated motion.
     fn parent_frame_offset(&self, parent: hecs::Entity) -> Vec3 {
         if let Ok(s) = self.world.get::<&IsoSprite>(parent) {
             return s.frame_offset;
         }
         if let Ok(a) = self.world.get::<&IsoAgent>(parent) {
             return a.frame_offset;
+        }
+        // A 3D model's animated rig origin (root-node world translation,
+        // refreshed by `update_models`): a parented light's `position` is then
+        // an offset from the rig origin, e.g. the rocket burn light.
+        if let Ok(m) = self.world.get::<&Model>(parent) {
+            return m.frame_offset;
         }
         Vec3::ZERO
     }

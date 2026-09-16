@@ -210,6 +210,7 @@ impl ShaderSourceRegistry {
         r.override_vertex("sdf.vert", shaders::SDF_VERT);
         r.override_vertex("shadow_depth.vert", shaders::SHADOW_DEPTH_VERT);
         r.override_vertex("shadow_sprite.vert", shaders::SHADOW_SPRITE_VERT);
+        r.override_vertex("mesh.vert", shaders::MESH_VERT);
         r.override_fragment("solid.frag", shaders::SOLID_FRAG);
         r.override_fragment("image.frag", shaders::IMAGE_FRAG);
         r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
@@ -218,6 +219,7 @@ impl ShaderSourceRegistry {
         r.override_fragment("sdf.frag", shaders::SDF_FRAG);
         r.override_fragment("shadow_depth.frag", shaders::SHADOW_DEPTH_FRAG);
         r.override_fragment("shadow_sprite.frag", shaders::SHADOW_SPRITE_FRAG);
+        r.override_fragment("mesh.frag", shaders::MESH_FRAG);
         r
     }
 
@@ -398,6 +400,34 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "grid_radius",
                 "show_grid",
                 "grid_color",
+                "ambient_color",
+                "light_direction",
+                "light_color",
+                "shadow_map",
+                "light_view_proj",
+                "shadow_bias",
+                "shadow_strength",
+                "shadow_texel",
+                "use_shadow",
+                "shadow_debug",
+                "shadow_normal_offset",
+            ],
+        },
+        BuiltinShader {
+            name: "mesh",
+            vertex: "mesh.vert",
+            fragment: "mesh.frag",
+            attr: &["vertex_pos", "normal", "tex_coord"],
+            unif: &[
+                "world_matrix",
+                "model_matrix",
+                "camera_matrix",
+                "projection_matrix",
+                "depth_span",
+                "ppm",
+                "tex_sampler",
+                "use_texture",
+                "base_color",
                 "ambient_color",
                 "light_direction",
                 "light_color",

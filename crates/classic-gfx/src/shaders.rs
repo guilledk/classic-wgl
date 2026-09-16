@@ -18,3 +18,26 @@ pub const SDF_FRAG: &str = include_str!("shaders/sdf.frag");
 pub const SOLID_FRAG: &str = include_str!("shaders/solid.frag");
 pub const SHADOW_DEPTH_FRAG: &str = include_str!("shaders/shadow_depth.frag");
 pub const SHADOW_SPRITE_FRAG: &str = include_str!("shaders/shadow_sprite.frag");
+pub const MESH_VERT: &str = include_str!("shaders/mesh.vert");
+pub const MESH_FRAG: &str = include_str!("shaders/mesh.frag");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `BEGIN SHARED LIGHTING` .. `END SHARED LIGHTING` span of a shader.
+    fn lighting_block(src: &str) -> &str {
+        let begin = src.find("// --- BEGIN SHARED LIGHTING").expect("BEGIN marker");
+        let end = src.find("// --- END SHARED LIGHTING ---").expect("END marker");
+        &src[begin..end]
+    }
+
+    /// Every lit shader evaluates the dynamic lights with the exact same code,
+    /// so a light reads identically on terrain, sprites and 3D models.
+    #[test]
+    fn lit_shaders_share_the_lighting_block() {
+        let sheet = lighting_block(SHEET_FRAG);
+        assert_eq!(sheet, lighting_block(ISO_TILEMAP_FRAG), "iso_tilemap.frag drifted");
+        assert_eq!(sheet, lighting_block(MESH_FRAG), "mesh.frag drifted");
+    }
+}
