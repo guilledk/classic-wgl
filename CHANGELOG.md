@@ -129,6 +129,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Terrain and 3D models no longer wobble along screen X while zooming on
+  native GPUs: `iso_tilemap.vert`, `mesh.vert`, `shadow_depth.vert` and
+  `shadow_sprite.vert` declared `precision mediump float`, which Mesa radeonsi
+  (and other GLES drivers) really evaluates as 16-bit float, so pixel-space
+  positions in the tens of thousands snapped to 2-4 px steps.  They now default
+  to `highp` (sprites and the web target already computed these in full
+  precision).
 - Namespace-qualify `Light.parent` in the ROM cross-reference pass: a parented
   light in a namespaced ROM (the lunar rocket burn light, basetest's
   `controlLight`) looked up its bare parent name, never found it, and was
