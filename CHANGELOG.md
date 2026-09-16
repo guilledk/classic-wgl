@@ -129,6 +129,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- `Rom::pack` writes each archive path once: every frame-table texture of a
+  packed atlas aliases the same sheet `src`, so the sheet was appended to the
+  archive once per alias.  zstd hid it for small ETC1S sheets; with UASTC
+  sheets `lunar-common.rom` packed to 16.5 MB instead of 4.95 MB.
 - Terrain and 3D models no longer wobble along screen X while zooming on
   native GPUs: `iso_tilemap.vert`, `mesh.vert`, `shadow_depth.vert` and
   `shadow_sprite.vert` declared `precision mediump float`, which Mesa radeonsi
