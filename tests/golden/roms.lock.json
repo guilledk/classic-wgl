@@ -6,10 +6,10 @@
     "assets_hash": "af490fb850722720c655fc06f9b61ed1485603f4112201afae2371c434f03850"
   },
   "lunar": {
-    "size": 6486151,
-    "sha256": "a5efe704fbfbf463e9ded5379cb6ff906fff978ff37c89f44223e01df29107b4",
+    "size": 1127688,
+    "sha256": "740cfb8378af182e53db845349130e51dedb4f4eecdf46202ba398557b9a8abd",
     "version": "0.2.0",
-    "assets_hash": "1341d67619b43bf6ab8bb7bb148e28ca0b3207faa50c0c95024b94047d852958"
+    "assets_hash": "8473c8adcc42cf900fa9f9e087976b5803807b55ad592a93cd0e5268ae440c5c"
   },
   "lrvtest": {
     "size": 1874,
@@ -18,21 +18,21 @@
     "assets_hash": "dd4221394174cc2f8f0ccff2ef90a322c03c83b9738dbd716f8b3a76b02ab28b"
   },
   "basetest": {
-    "size": 1503,
-    "sha256": "2286cd5f0106a707af2e4dda6c0913accf89a7c254d2fc03b3af8eeb62e20346",
+    "size": 1508,
+    "sha256": "c60b8368f2ec3f14773713d28e074630020f6c44d470fd979deba6cefc1fbe18",
     "version": "0.1.0",
     "assets_hash": "dd4221394174cc2f8f0ccff2ef90a322c03c83b9738dbd716f8b3a76b02ab28b"
   },
   "common": {
-    "size": 275871,
-    "sha256": "cf9f79cfa4cb93177eb7e6b4479e19a4889a8b69d726fd2be06960032c940483",
+    "size": 275870,
+    "sha256": "1013c01acfc614d164cb21aed33efd609a8e320affba5e7cbb71eaa17972f146",
     "version": "0.1.0",
-    "assets_hash": "9b53b35fa6bec1d4889e4398df60e2f09748909b54311cea1d4a00252dc75373"
+    "assets_hash": "27db7420dbf8d0102e3c6af313e450a7fbcda1feacc239048b89a05776e88261"
   },
   "lunar-common": {
     "size": 1379373,
-    "sha256": "b1f168913abafe4da3f9193040e687277f74a7ead942644d42f16bb024b19980",
+    "sha256": "9df4b82e4549ff575ac231ee4658b83ae15266c767b961664da1100dd632cbb9",
     "version": "0.1.0",
-    "assets_hash": "6d2c12b03495e6ea7735b68cc3a678be659411ac18d0c4e21ac4b8e5bd5c3f5f"
+    "assets_hash": "2947cc81e8dca79394b6fd5165fe1dae59957ae69a19b95d8b7f56b98eb190eb"
   }
 }
