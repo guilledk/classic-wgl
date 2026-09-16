@@ -136,6 +136,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   positions in the tens of thousands snapped to 2-4 px steps.  They now default
   to `highp` (sprites and the web target already computed these in full
   precision).
+- Container inventory tooltips show item icons again: a frame table loads with
+  its key **and** frame names qualified by its ROM namespace (`lunar::icons` /
+  `lunar::regolith`), but the tooltip looked up the bare `icons` sheet and bare
+  item names, so every icon was silently skipped and only the counts rendered.
 - Namespace-qualify `Light.parent` in the ROM cross-reference pass: a parented
   light in a namespaced ROM (the lunar rocket burn light, basetest's
   `controlLight`) looked up its bare parent name, never found it, and was
