@@ -20,11 +20,14 @@ nix develop                             # enter dev shell (sets LD_LIBRARY_PATH 
 
 # Run
 cargo run -p classic-desktop            # native, interactive
-trunk serve apps/web/index.html         # web dev server
+trunk serve apps/web/index.html         # web dev server (cross-origin isolated: COOP/COEP from Trunk.toml)
 trunk build apps/web/index.html --release  # web release
 
 # Test
 cargo test                            # all unit/integration tests
+cargo test --target wasm32-unknown-unknown -p classic-guest --test web
+                                        # web + Worker guest backends in headless Chromium
+                                        # (nix develop; needs `cargo xtask build-pathfinder` first)
 CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop
                                         # headless e2e + golden trace check (needs libEGL)
 
@@ -43,11 +46,12 @@ cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm t
 
 # Versioning / releases (see VERSIONING.md)
 cargo xtask check-version            # fail when Cargo.toml/CHANGELOG.md drift
+cargo xtask check-patterns           # fail when the codified patterns regress (see "Patterns")
 cargo xtask release patch            # bump version + freeze changelog (prints commit/tag cmds)
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
-`headless golden test` on every push to `master` and every PR.  Run
+`web tests` (headless Chrome) + `headless golden test` on every push to `master` and every PR.  Run
 `cargo fmt -- --check`, `cargo clippy`, and `cargo test`
 before considering a task done.  The CI golden job calls `cargo xtask fetch-roms`
 instead of the old `cargo xtask all` — the ROMs come from the published
@@ -66,16 +70,24 @@ crates/
   classic-pathfinder/     #![no_std] A* + footprint/slope/jump vehicle search (single source of
                           truth for native + web; compiled to `pathfinder.wasm` for the web Worker)
   classic-pathfinder-wasm/ thin `#[no_mangle]` wasm ABI over `classic-pathfinder` (cdylib)
-  classic-worker/         background workers: generic native ThreadPool, PathfinderWorker (native
-                          thread + web Worker), and the Tier-3 GuestWorker (a second .wasm instance
-                          running pure guest entries against a reduced import surface)
+  classic-worker/         background workers: the generic JobQueue<J> (jobs.rs: threaded, pooled
+                          or synchronous, the one determinism switch; also the boot decode
+                          fan-out), PathfinderWorker (JobQueue natively + web Worker), the Tier-3
+                          GuestWorker (a second .wasm instance running pure guest entries against
+                          a reduced import surface), the web basis TranscoderWorker, and the
+                          shared spawn helpers (spawn.rs: named threads, inline-JS Workers)
   classic-terrain/        #![no_std] open terrain/noise toolkit (simplex, fractal combinators, bulk
                           noise fields, and the grid-kernel catalog in kernels.rs) — the reusable
                           primitives ROM guests build map algorithms on
   classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
-  classic-engine/         generic engine: lib.rs (lifecycle + hook surface), ui.rs (UIManager),
-                          golden.rs (traces), env_config.rs, vehicle.rs (IsoVehicle sim + spawn API)
+  classic-engine/         generic engine: lib.rs (`Engine` struct), lifecycle.rs (new + frame),
+                          hooks.rs (hook surface + host API), boot/ (BootPlan, the BootPipeline
+                          stage machine + BootFinish app hook, and the drivers: run_sync,
+                          InterleavedBoot — per-frame, optionally fed by a boot thread),
+                          boot_api.rs (ROM hydration the pipeline steps through), render.rs,
+                          ui.rs (UIManager), golden.rs (traces), env_config.rs,
+                          vehicle/ (IsoVehicle sim + spawn API)
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
   classic-guest/          WASM guest runtime: GuestRuntime trait, WasmiRuntime + WasmtimeRuntime
@@ -105,7 +117,8 @@ plans/
   `crates/classic-core/src/components/mod.rs`.  Entities are `hecs::Entity` handles.
   There is no system scheduler; update logic lives in `Engine::on_update(FnMut(&mut Engine))`
   closures registered by `init_*` prefabs.
-- **The `Engine` struct** (`crates/classic-engine/src/lib.rs`) is the generic engine core:
+- **The `Engine` struct** (`crates/classic-engine/src/lib.rs`; its methods live in
+  `lifecycle.rs`, `hooks.rs`, `boot_api.rs` and `render.rs`) is the generic engine core:
   `World`, `PhysicsProvider`, `Camera`, `Time`, `InputState`, `Gfx`, `UIManager`, a
   `vehicles: HashMap<String, VehicleDef>` registry, and tilemap/nav plumbing.  It holds
   **no demo state** — editor/widget handles and light
@@ -123,7 +136,7 @@ plans/
   components, and register `on_update` / hook closures.  The demo layer is installed via
   `Engine`'s hook surface (`on_update`, `on_pre_update`, `on_selection_end`, `add_overlay`,
   `set_test_runner`).
-- **GL rendering** (`classic-gfx/src/lib.rs`) provides 7 `draw_*` functions (`draw_tilemap`,
+- **GL rendering** (`classic-gfx/src/draw.rs`) provides 7 `draw_*` functions (`draw_tilemap`,
   `draw_iso_sprite`, `draw_sprite`, `draw_rect`, `draw_sdf`, `draw_line_loop`, `draw_line_strip`).
   Each binds a named shader, sets projection/camera/model uniforms, and draws.
   **Important**: `begin_frame` does NOT enable `DEPTH_TEST` globally — tilemap/iso_sprite
@@ -181,7 +194,7 @@ plans/
   `pathfinder.wasm`); guests drive it through the
   async `request_path`/`poll_path` SDK imports (with a synchronous fallback for
   the deterministic harness).  See `classic-iso` and `classic-physics` skills.
-- **Wheeled vehicles**: `classic-engine/src/vehicle.rs` implements the `IsoVehicle`
+- **Wheeled vehicles**: `classic-engine/src/vehicle/` implements the `IsoVehicle`
   system — `spawn_vehicle` assembles a body + 4 wheel `IsoSprite`s from a
   `VehicleDef` sidecar (per-direction ground-origin anchors emitted by the Blender
   exporter), and `update_vehicles` drives the body as a single chassis plane
@@ -222,6 +235,42 @@ plans/
   (UIManager layout, animator, physics, pathfinding, terrain) stay host-side; guests
   register + update into them rather than reimplementing them.  See `classic-guest` skill.
 
+## Patterns
+
+The rules this codebase keeps itself to.  `cargo xtask check-patterns` enforces
+the greppable ones (raw thread/`Worker` spawns, hand-numbered op tables); a
+single line may opt out with a trailing `xtask-allow` comment stating why.
+
+1. **One table, N generated views.**  A surface mirrored across backends is
+   declared once and generated, never hand-mirrored.  The host-import ABI is
+   `classic_core::abi_manifest::for_each_host_import!`; the native (wasmi /
+   wasmtime), browser-`WebAssembly`, untrusted-`Worker` and Tier-3 backends are
+   all generated from it, and `worker.js` builds its stubs from the descriptor
+   Rust posts (the table index *is* the op code).  Tests assert each backend
+   exposes exactly its table subset.
+2. **Background work lives in `classic-worker`.**  `JobQueue<J>` runs it
+   (`threaded` / `pooled` / `synchronous`); `spawn_thread` and
+   `spawn_web_worker` are the only places a thread or `Worker` is created.
+3. **Boot goes through `BootPipeline`.**  One stage machine
+   (`classic_engine::boot`), driven by `run_sync` (headless) or
+   `InterleavedBoot` (per frame, optionally fed by a boot thread).  Apps poll a
+   driver; they do not sequence boot steps.
+4. **Portability via `#[cfg]` at crate boundaries.**  A backend split is a
+   `native.rs` / `web.rs` pair behind one API (`pathfinder_worker/`,
+   `guest_worker/`), not `#[cfg]` scattered through shared code.
+5. **Determinism is decided in one place.**  `Engine::set_synchronous_workers`
+   picks `JobQueue::synchronous`, so the golden/test path never branches into a
+   separate inline implementation.
+6. **Content-addressed caches carry magic + version, and never fail the boot.**
+   A miss or a stale entry recomputes (`classic-demo/src/module_cache.rs`, the
+   web ROM cache).
+7. **Zero-copy web transport.**  Every buffer posted to or from a `Worker` is
+   transferred, not cloned (`classic_worker::post_transfer`); `SharedArrayBuffer`
+   use stays gated behind `sab_available()` with a fallback, because only
+   `trunk serve` sends COOP/COEP.
+8. **Split files at ~2k lines.**  Modules are focused: `lib.rs` keeps the type,
+   its methods live in siblings (`lifecycle.rs`, `hooks.rs`, `boot_api.rs`, …).
+
 ## Conventions
 
 - Rust-stock: `cargo fmt` (default style, width 100 via `rustfmt.toml`), `cargo clippy` strict.
@@ -244,7 +293,7 @@ plans/
   guarantees — bounded slopes, flat landing pads, buildable area, and mutual
   reachability of every spawn pair (checked with the engine's own A*) across
   several seeds — rather than pixel output.
-- **classic-engine** unit tests live in the `vehicle.rs` `#[cfg(test)]` module
+- **classic-engine** unit tests live in `vehicle/tests.rs`
   (spawn/teleport/goto/stop, pitch/roll quantization + spring, wheel offset
   derivation) using `Engine::new_for_test()` — no GL needed.  **classic-gfx**
   still has no unit tests (no mock GL — deferred).

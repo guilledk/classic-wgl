@@ -26,8 +26,16 @@ function copyInto(arr) {
     return ptr;
 }
 
-function readResult(n) {
-    return new Int32Array(memory.buffer, exports.result_ptr(), n * 2);
+// Reply with a search result.  The path is copied out of wasm memory into its
+// own buffer and *transferred*: posting a view of `memory.buffer` would
+// structured-clone the entire wasm heap.
+function postResult(id, n) {
+    if (n < 0) {
+        self.postMessage({ type: "result", id: id, path: null });
+        return;
+    }
+    var path = new Int32Array(memory.buffer, exports.result_ptr(), n * 2).slice();
+    self.postMessage({ type: "result", id: id, path: path }, [path.buffer]);
 }
 
 function handle(msg) {
@@ -36,7 +44,7 @@ function handle(msg) {
         exports.set_snapshot(msg.sizeX, msg.sizeY, ptr, msg.data.length);
     } else if (msg.type === "find") {
         var n = exports.find(msg.from[0], msg.from[1], msg.to[0], msg.to[1]);
-        self.postMessage({ type: "result", id: msg.id, path: n < 0 ? null : readResult(n) });
+        postResult(msg.id, n);
     } else if (msg.type === "vehicleSnapshot") {
         var sp = copyInto(msg.structural);
         var hp = copyInto(msg.heights);
@@ -71,7 +79,7 @@ function handle(msg) {
             msg.jumpCost,
             msg.turnCost,
         );
-        self.postMessage({ type: "result", id: msg.id, path: n < 0 ? null : readResult(n) });
+        postResult(msg.id, n);
     }
 }
 

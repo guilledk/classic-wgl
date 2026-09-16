@@ -8,10 +8,20 @@ use std::sync::OnceLock;
 /// and adds one or more components to the builder.
 pub type Spawner = fn(&mut hecs::EntityBuilder, serde_json::Value) -> anyhow::Result<()>;
 
-/// Dumper function: given a world and entity, produce a JSON value for this
-/// component type (including the `type` key), or `None` if the entity doesn't
-/// have this component.
+/// Dumper function: given a world and entity, produce the JSON body of this
+/// component (without the `type` key — see [`ComponentReg::dump_value`]), or
+/// `None` if the entity doesn't have this component.  [`dump_as`] is the
+/// dumper for any serializable component.
 pub type Dumper = fn(&hecs::World, hecs::Entity) -> Option<serde_json::Value>;
+
+/// The [`Dumper`] for a serializable component type `T`: its serde body.
+pub fn dump_as<T: hecs::Component + serde::Serialize>(
+    world: &hecs::World,
+    entity: hecs::Entity,
+) -> Option<serde_json::Value> {
+    let component = world.get::<&T>(entity).ok()?;
+    serde_json::to_value(&*component).ok()
+}
 
 /// A registered component entry with bidirectional support.
 #[derive(Clone, Copy)]
@@ -26,6 +36,25 @@ pub struct ComponentReg {
     pub order: i32,
     /// Names of other component types that this component subsumes (fan-out de-duplication).
     pub subsumes: &'static [&'static str],
+}
+
+impl ComponentReg {
+    /// Dump this component of `entity` as a `state.json` component value: the
+    /// dumper's body with the `type` key first.  `None` when the component has no
+    /// dumper or the entity lacks it.
+    pub fn dump_value(
+        &self,
+        world: &hecs::World,
+        entity: hecs::Entity,
+    ) -> Option<serde_json::Value> {
+        let body = (self.dump?)(world, entity)?;
+        let mut value = serde_json::Map::new();
+        value.insert("type".into(), serde_json::Value::String(self.name.into()));
+        if let serde_json::Value::Object(fields) = body {
+            value.extend(fields);
+        }
+        Some(serde_json::Value::Object(value))
+    }
 }
 
 /// The immutable component registry.  Populated once via [`init`]; lookups are

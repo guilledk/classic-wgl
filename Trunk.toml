@@ -1,5 +1,13 @@
 # classic-wgl web target. `classic-worker` embeds the compiled `pathfinder.wasm`
 # via `include_bytes!`, so build it before trunk compiles the wasm32 app.
+[serve]
+# Cross-origin isolation, so `SharedArrayBuffer` (the untrusted guest Worker
+# runtime's synchronous host-import channel) is available under `trunk serve`.
+# The GitHub Pages deploy cannot send response headers, so production stays
+# non-isolated and untrusted guests fall back to wasmi there.  The ROM fetch from
+# classic-roms.com is CORS, which `require-corp` allows.
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }
+
 [[hooks]]
 stage = "pre_build"
 command = "cargo"

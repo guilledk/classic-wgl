@@ -36,6 +36,7 @@ use std::rc::Rc;
 use classic_core::cl_error;
 use classic_core::cl_info;
 use classic_core::instrument::Chan;
+use classic_engine::boot::BootFinish;
 use classic_engine::Engine;
 use classic_guest::{create_runtime, GuestLimits, GuestRuntime};
 use classic_rom::{BootEvent, BootSink, LoadedRom, LoadedRoms, Rom};
@@ -44,7 +45,7 @@ use crate::state::{DemoState, DemoStateRef};
 
 /// Compiled native guest modules keyed by ROM resolver name, plus the optional
 /// compiled Tier-3 worker module for the root ROM — the off-main-thread half of
-/// guest init (see [`compile_guest_modules`]).  Both are empty/`None` on web,
+/// guest init (see [`DemoFinish`]).  Both are empty/`None` on web,
 /// where guests and the worker compile inline.
 ///
 /// The fields are read on the native async path only (`init_guests` +
@@ -84,9 +85,6 @@ pub fn init_guest(
     rom: &str,
     sink: &dyn BootSink,
 ) {
-    // The deterministic harness forces synchronous workers so frame output is
-    // independent of background-thread scheduling.
-    e.set_synchronous_workers(limits.synchronous_workers);
     sink.on_event(BootEvent::GuestCompiling { rom: rom.to_string() });
     match create_runtime(wasm, limits) {
         Ok(rt) => install_guest_runtime(e, state, rt, namespace, rom, sink),
@@ -96,7 +94,7 @@ pub fn init_guest(
 
 /// Install a guest from a module already compiled off-thread.  The
 /// `GuestCompiling` event was emitted on the background thread during
-/// [`compile_guest_modules`]; only instantiation happens here (GL thread).
+/// `DemoFinish::prepare`; only instantiation happens here (GL thread).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn init_guest_compiled(
     e: &mut Engine,
@@ -107,7 +105,6 @@ pub fn init_guest_compiled(
     rom: &str,
     sink: &dyn BootSink,
 ) {
-    e.set_synchronous_workers(limits.synchronous_workers);
     match classic_guest::create_runtime_from_module(module, limits) {
         Ok(rt) => install_guest_runtime(e, state, rt, namespace, rom, sink),
         Err(err) => cl_error!(Chan::Guest, "init_guest: {err}"),
@@ -127,8 +124,14 @@ fn install_guest_runtime(
 ) {
     sink.on_event(BootEvent::GuestInstantiated { rom: rom.to_string() });
     rt.set_namespace(namespace);
-    if let Err(err) = rt.init(e) {
-        cl_error!(Chan::Guest, "guest init failed: {err}");
+    // Runtimes that instantiate synchronously run `init` right here, before the
+    // first frame.  A web `Worker` runtime only becomes ready once the main
+    // thread has yielded, so its `init` is deferred to the first ready frame.
+    let mut initialized = rt.is_ready();
+    if initialized {
+        if let Err(err) = rt.init(e) {
+            cl_error!(Chan::Guest, "guest init failed: {err}");
+        }
     }
     let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(rt));
     state.borrow_mut().guests.push(rt.clone());
@@ -136,6 +139,15 @@ fn install_guest_runtime(
     e.on_update(move |engine| {
         let dt = engine.time.delta as f64;
         let mut guest = rt.borrow_mut();
+        if !initialized {
+            if !guest.is_ready() {
+                return;
+            }
+            initialized = true;
+            if let Err(err) = guest.init(engine) {
+                cl_error!(Chan::Guest, "guest init failed: {err}");
+            }
+        }
         if let Err(err) = guest.update(engine, dt) {
             cl_error!(Chan::Guest, "guest update failed: {err}");
         }
@@ -149,24 +161,16 @@ fn install_guest_runtime(
 }
 
 /// The per-ROM guest limits used by both the off-thread compile and the on-
-/// thread instantiate, so the two halves agree on fuel/memory/sync config.
+/// thread instantiate, so the two halves agree on fuel/memory config.
 fn guest_limits(entry: &LoadedRom) -> GuestLimits {
-    let env = classic_engine::env_config::EnvConfig::get();
-    GuestLimits {
-        trusted: entry.rom.manifest.trusted,
-        // The deterministic harness (CLASSIC_TEST) and golden capture both
-        // force synchronous workers so frame output is independent of
-        // background-thread scheduling.
-        synchronous_workers: env.test_active() || env.golden_active(),
-        ..GuestLimits::default()
-    }
+    GuestLimits { trusted: entry.rom.manifest.trusted, ..GuestLimits::default() }
 }
 
 /// Compile every guest module in the DAG off the main thread (native
 /// wasmtime), keyed by ROM resolver name, plus the root ROM's Tier-3 worker
 /// module.  Emits `GuestCompiling` per compiled foreground guest.  On web this
 /// returns an empty payload (guests and the worker compile inline).
-pub fn compile_guest_modules(loaded: &LoadedRoms, sink: &dyn BootSink) -> CompiledModules {
+fn compile_guest_modules(loaded: &LoadedRoms, sink: &dyn BootSink) -> CompiledModules {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut modules = HashMap::new();
@@ -238,12 +242,12 @@ pub fn init_guests(
 /// off-thread-compiled worker module when present (the async native path);
 /// otherwise compiles inline (the sync / headless / golden / web path).
 #[cfg(not(target_arch = "wasm32"))]
-fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules, sync: bool) {
+fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules) {
     let Some(root) = loaded.root_rom() else { return };
     let Some(worker_wasm) = root.resources.code().get("worker") else { return };
     let result = match &compiled.worker {
-        Some(compiled_worker) => e.install_guest_worker_compiled(compiled_worker, sync),
-        None => e.install_guest_worker(worker_wasm, sync),
+        Some(compiled_worker) => e.install_guest_worker_compiled(compiled_worker),
+        None => e.install_guest_worker(worker_wasm),
     };
     if let Err(err) = result {
         cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
@@ -253,39 +257,52 @@ fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModule
 /// Web variant: the worker compiles inline (browser-native wasm in a Worker, or
 /// wasmi in sync mode), so there is never a pre-compiled module to install.
 #[cfg(target_arch = "wasm32")]
-fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules, sync: bool) {
+fn install_worker(e: &mut Engine, loaded: &LoadedRoms, compiled: &CompiledModules) {
     let _ = compiled;
     let Some(root) = loaded.root_rom() else { return };
     let Some(worker_wasm) = root.resources.code().get("worker") else { return };
-    if let Err(err) = e.install_guest_worker(worker_wasm, sync) {
+    if let Err(err) = e.install_guest_worker(worker_wasm) {
         cl_error!(Chan::Guest, "init_engine: install_guest_worker: {err}");
+    }
+}
+
+/// The demo's [`BootFinish`] hook: the post-load setup every boot driver runs
+/// once a [`classic_engine::boot::BootPipeline`] has uploaded the ROM DAG.  Off the GL thread
+/// ([`classic_engine::boot::BootPipeline::prepare`], native) it compiles the guest modules ahead of
+/// time; otherwise the guests compile inline while finishing.
+#[derive(Default)]
+pub struct DemoFinish {
+    compiled: CompiledModules,
+}
+
+impl BootFinish for DemoFinish {
+    fn prepare(&mut self, loaded: &LoadedRoms, sink: &dyn BootSink) {
+        self.compiled = compile_guest_modules(loaded, sink);
+    }
+
+    fn finish(self: Box<Self>, engine: &mut Engine, loaded: &LoadedRoms, sink: &dyn BootSink) {
+        finish_init_engine(engine, loaded, &self.compiled, sink);
     }
 }
 
 /// Full demo engine bootstrap for a loaded multi-ROM dependency DAG.
 ///
-/// `load_roms` hydrates shaders, resources and the entity graph (deps before
-/// dependents); each ROM's guest owns its own scene look, and the shared host
-/// layer (editor HUD, widgets, lighting default, hooks, test runner) is
-/// installed on top.
+/// [`classic_engine::boot::run_sync`] hydrates shaders, resources and the entity
+/// graph (deps before dependents), then [`DemoFinish`] installs the guests —
+/// each ROM's guest owns its own scene look — and the shared host layer
+/// (editor HUD, widgets, lighting default, hooks, test runner) on top.
 pub fn init_engine_multi(
     gl: Rc<glow::Context>,
     loaded: &LoadedRoms,
     sink: &dyn BootSink,
 ) -> Engine {
-    let mut e = Engine::new();
-    e.load_roms(gl, loaded, sink);
-    finish_init_engine(&mut e, loaded, &CompiledModules::new(), sink);
-    e
+    classic_engine::boot::run_sync(gl, loaded.clone(), Box::new(DemoFinish::default()), sink)
 }
 
-/// The shared post-load tail of [`init_engine_multi`] (and its async variant):
-/// cursor/camera/animator prefabs, default lighting, the background guest
-/// worker, the ROM guests, terrain commit, colliders, and the editor/HUD host
-/// layer.  Public so an incremental caller (e.g. the web app interleaving
-/// [`classic_engine::Engine::boot_step`]s across frames) can finish boot after
-/// its plan drains.
-pub fn finish_init_engine(
+/// The post-load tail of every boot ([`DemoFinish::finish`]): cursor/camera/
+/// animator prefabs, default lighting, the background guest worker, the ROM
+/// guests, terrain commit, colliders, and the editor/HUD host layer.
+fn finish_init_engine(
     e: &mut Engine,
     loaded: &LoadedRoms,
     compiled: &CompiledModules,
@@ -305,8 +322,12 @@ pub fn finish_init_engine(
     // guests run their `init` hook, so a generating guest can submit work from
     // `init`.  Worker code stays root-only for now (per-ROM workers deferred).
     {
+        // The single determinism switch: the deterministic harness (CLASSIC_TEST)
+        // and golden capture run all background work (pathfinding, the guest
+        // worker) inline, so frame output is independent of thread scheduling.
         let env = classic_engine::env_config::EnvConfig::get();
-        install_worker(e, loaded, compiled, env.test_active() || env.golden_active());
+        e.set_synchronous_workers(env.test_active() || env.golden_active());
+        install_worker(e, loaded, compiled);
     }
 
     // ROM guest code.  Each guest owns its terrain — a generating guest

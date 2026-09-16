@@ -16,6 +16,7 @@
 //!   cargo xtask release <major|minor|patch>    # bump version + freeze changelog
 //!   cargo xtask release --version <X.Y.Z>      # set an explicit version
 //!   cargo xtask check-version                  # fail when Cargo.toml/CHANGELOG.md drift
+//!   cargo xtask check-patterns                 # fail when the codified patterns regress
 
 use std::fs;
 use std::io::Read;
@@ -58,6 +59,7 @@ fn main() -> anyhow::Result<()> {
         "check-roms" => return cmd_check_roms(arg_value(&args, "--url")),
         "release" => return cmd_release(&args),
         "check-version" => return cmd_check_version(),
+        "check-patterns" => return cmd_check_patterns(),
         "fetch-roms" | "all" => {}
         other => anyhow::bail!(
             "unknown command `{other}` (expected fetch-roms, lock-roms, check-roms, release, check-version, or build-pathfinder)"
@@ -415,6 +417,116 @@ fn cmd_check_version() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One codified pattern the source tree must keep (see `AGENTS.md`
+/// "Patterns"), expressed as needles that must not appear outside `allow`.
+struct PatternRule {
+    /// What the rule protects.
+    name: &'static str,
+    /// Literal snippets that violate it.
+    needles: &'static [&'static str],
+    /// Path prefixes (repo-relative, `/`-separated) allowed to contain them.
+    allow: &'static [&'static str],
+    /// What to do instead.
+    hint: &'static str,
+}
+
+/// The rules `cargo xtask check-patterns` enforces.  A single line may opt out
+/// with a trailing `xtask-allow` comment (state why).
+const PATTERN_RULES: &[PatternRule] = &[
+    PatternRule {
+        name: "background work lives in classic-worker",
+        needles: &["thread::spawn(", "thread::Builder::new("],
+        allow: &["crates/classic-worker/src/spawn.rs"],
+        hint: "spawn through `classic_worker::spawn_thread` (or run the work on a `JobQueue`)",
+    },
+    PatternRule {
+        name: "web Workers are spawned in classic-worker",
+        needles: &["web_sys::Worker::new(", "new Worker("],
+        allow: &["crates/classic-worker/src/spawn.rs"],
+        hint: "spawn through `classic_worker::spawn_web_worker`",
+    },
+    PatternRule {
+        name: "no hand-numbered opcode tables",
+        needles: &["const OP_"],
+        allow: &[],
+        hint:
+            "derive the op codes from `classic_core::abi_manifest` (the table index is the op code)",
+    },
+];
+
+/// `cargo xtask check-patterns`: grep the source tree for the architecture
+/// rules that are cheap to state and easy to regress (see `AGENTS.md`
+/// "Patterns").  The table-subset rule is covered by tests instead: the
+/// per-backend link-coverage tests in `classic-guest` and the browser tests in
+/// `classic-guest/tests/web.rs`.
+fn cmd_check_patterns() -> anyhow::Result<()> {
+    let root = repo_root()?;
+    let mut files = Vec::new();
+    for dir in ["crates", "apps"] {
+        collect_sources(&root.join(dir), &mut files)?;
+    }
+    files.sort();
+
+    let mut violations = Vec::new();
+    for file in &files {
+        let rel = file.strip_prefix(&root).unwrap_or(file).to_string_lossy().replace('\\', "/");
+        violations.extend(scan_patterns(&rel, &fs::read_to_string(file)?));
+    }
+
+    if !violations.is_empty() {
+        for violation in &violations {
+            eprintln!("{violation}");
+        }
+        anyhow::bail!("{} pattern violation(s)", violations.len());
+    }
+    println!("patterns ok ({} files, {} rules)", files.len(), PATTERN_RULES.len());
+    Ok(())
+}
+
+/// Every [`PATTERN_RULES`] violation in one file's `text` (`rel` is its
+/// repo-relative path, which decides the per-rule allow list).
+fn scan_patterns(rel: &str, text: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for rule in PATTERN_RULES {
+        if rule.allow.iter().any(|allowed| rel.starts_with(allowed)) {
+            continue;
+        }
+        for (i, line) in text.lines().enumerate() {
+            // One line may opt out with a trailing `xtask-allow` comment.
+            if line.contains("xtask-allow") {
+                continue;
+            }
+            if let Some(needle) = rule.needles.iter().find(|needle| line.contains(**needle)) {
+                violations.push(format!(
+                    "{rel}:{}: `{needle}` — {} ({})",
+                    i + 1,
+                    rule.name,
+                    rule.hint
+                ));
+            }
+        }
+    }
+    violations
+}
+
+/// Collect every `.rs` / `.js` source under `dir` (skipping build output).
+fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        if path.is_dir() {
+            if name != "target" {
+                collect_sources(&path, out)?;
+            }
+        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("rs") | Some("js")) {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
 /// `cargo xtask release <major|minor|patch>` (or `--version X.Y.Z`): bump the
 /// workspace version, refresh `Cargo.lock`, freeze the changelog, and verify.
 /// Prints the commit/tag commands — it does not mutate git.
@@ -456,6 +568,31 @@ mod tests {
     fn parse_ignores_prerelease() {
         assert_eq!(parse_version("0.1.0-alpha.0").unwrap(), (0, 1, 0));
         assert_eq!(parse_version("1.2.3").unwrap(), (1, 2, 3));
+    }
+
+    #[test]
+    fn patterns_catch_raw_spawns_and_op_tables() {
+        let src = "let h = std::thread::spawn(move || ());\nconst OP_SET_CAMERA: u32 = 12;\n";
+        let found = scan_patterns("crates/classic-engine/src/lib.rs", src);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(found[0].contains("classic-engine/src/lib.rs:1"));
+        assert!(found[1].contains("opcode"));
+
+        // The spawn helpers themselves, and an explicit opt-out, are allowed.
+        assert!(scan_patterns("crates/classic-worker/src/spawn.rs", src).len() == 1);
+        assert!(scan_patterns(
+            "crates/classic-engine/src/lib.rs",
+            "let h = std::thread::spawn(move || ()); // xtask-allow: why\n"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn patterns_accept_the_worker_apis() {
+        let src = "let w = classic_worker::spawn_web_worker(JS, None)?;\n\
+                   let q = JobQueue::<Job>::pooled(\"classic-decode\", 4)?;\n\
+                   let g = GuestWorker::new(&wasm, nav, false)?;\n";
+        assert!(scan_patterns("crates/classic-engine/src/boot/driver.rs", src).is_empty());
     }
 
     #[test]

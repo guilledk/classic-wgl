@@ -37,7 +37,10 @@ impl ResourceUsageSampler {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let stop_flag = Arc::clone(&stop);
-            let handle = std::thread::spawn(move || native_loop(stop_flag, sink, interval));
+            let handle = classic_worker::spawn_thread("classic-resource-sampler", move || {
+                native_loop(stop_flag, sink, interval)
+            })
+            .expect("failed to spawn resource-usage sampler thread");
             Self { stop, handle: Some(handle) }
         }
 

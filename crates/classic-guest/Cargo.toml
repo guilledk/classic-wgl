@@ -24,6 +24,12 @@ classic-rom = { path = "../classic-rom" }
 wasmtime = { version = "47", default-features = false, features = ["cranelift", "runtime"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+classic-worker = { path = "../classic-worker" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 web-sys.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# Must pair with the locked `wasm-bindgen` (see flake.nix).
+wasm-bindgen-test = "=0.3.77"
+wasm-bindgen-futures.workspace = true
