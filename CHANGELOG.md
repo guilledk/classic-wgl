@@ -123,6 +123,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Namespace-qualify `Light.parent` in the ROM cross-reference pass: a parented
+  light in a namespaced ROM (the lunar rocket burn light, basetest's
+  `controlLight`) looked up its bare parent name, never found it, and was
+  skipped every frame.
 - Web (trusted) guests: a failed background task no longer panics with a
   `RefCell` double borrow in `poll_task`, and a second guest runtime no longer
   re-points every earlier runtime's wide host imports at itself (#98).

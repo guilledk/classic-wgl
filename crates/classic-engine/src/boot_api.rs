@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use classic_core::components::{
-    Animator, IsoAgent, IsoSprite, IsoVehicle, Model, NavMesh, SdfTextRender, Tilemap,
+    Animator, IsoAgent, IsoSprite, IsoVehicle, Light, Model, NavMesh, SdfTextRender, Tilemap,
 };
 use classic_core::instrument::Chan;
 use classic_core::math::{iso_basis, iso_camera_ray, Ray, DEPTH_FAR, DEPTH_NEAR};
@@ -723,7 +723,7 @@ impl Engine {
     /// Rewrite the cross-entity references stored on a ROM's components into
     /// namespace-qualified keys, using the ROM's namespace as the referring
     /// namespace.  Covered: `NavMesh.map_entity`, `IsoSprite.tilemap` /
-    /// `IsoAgent.tilemap`, `Model.tilemap`, `Animator.target` (the
+    /// `IsoAgent.tilemap`, `Model.tilemap`, `Light.parent`, `Animator.target` (the
     /// `entity.component` entity segment), and `IsoVehicle.tilemap` / `wheel_entities` / `tire_entities`.
     /// A bare reference resolves in the referring namespace first, then the
     /// global namespace (see [`Engine::resolve_entity_name`]); a dangling
@@ -774,6 +774,21 @@ impl Engine {
                     if let Some(resolved) = self.resolve_entity_name(ns, &tilemap) {
                         if let Ok(mut m) = self.world.get::<&mut Model>(entity) {
                             m.tilemap = resolved;
+                        }
+                    }
+                }
+            }
+
+            // A parented light names its parent entity; `gather_lights` looks it
+            // up in `names` verbatim, so a bare name in a namespaced ROM must be
+            // qualified here or the light is skipped every frame.
+            if let Some(parent) =
+                self.world.get::<&Light>(entity).ok().and_then(|l| l.parent.clone())
+            {
+                if !parent.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &parent) {
+                        if let Ok(mut l) = self.world.get::<&mut Light>(entity) {
+                            l.parent = Some(resolved);
                         }
                     }
                 }

@@ -1064,6 +1064,47 @@ mod tests {
     }
 
     #[test]
+    fn hydrate_roms_qualifies_light_parent() {
+        // `gather_lights` looks `Light.parent` up in `names` verbatim, so the
+        // cross-ref pass must qualify it: a bare own-ROM parent resolves into
+        // the ROM's namespace, a qualified one is kept as-is.  Unqualified, a
+        // namespaced ROM's parented lights (the rocket burn light, basetest's
+        // `controlLight`) are skipped every frame.
+        let loaded = classic_rom::LoadedRoms {
+            root: "scene".into(),
+            order: vec![
+                classic_rom::LoadedRom {
+                    name: "common".into(),
+                    namespace: "common".into(),
+                    rom: test_rom("common", "common", r#"{"entities":{"tile":{"components":[]}}}"#),
+                    sha256: None,
+                },
+                classic_rom::LoadedRom {
+                    name: "scene".into(),
+                    namespace: "scene".into(),
+                    rom: test_rom(
+                        "scene",
+                        "scene",
+                        r#"{"entities":{
+                            "rocket":{"components":[]},
+                            "burn":{"components":[{"type":"Light","position":[0,0,0],"color":[1,1,1],"parent":"rocket"}]},
+                            "lamp":{"components":[{"type":"Light","position":[0,0,0],"color":[1,1,1],"parent":"common::tile"}]},
+                            "free":{"components":[{"type":"Light","position":[0,0,0],"color":[1,1,1]}]}}}"#,
+                    ),
+                    sha256: None,
+                },
+            ],
+        };
+        let mut e = Engine::new_for_test();
+        e.hydrate_roms(&loaded, &classic_rom::NullBootSink);
+        let parent =
+            |e: &Engine, n: &str| e.world.get::<&Light>(e.names[n]).unwrap().parent.clone();
+        assert_eq!(parent(&e, "scene::burn").as_deref(), Some("scene::rocket"));
+        assert_eq!(parent(&e, "scene::lamp").as_deref(), Some("common::tile"));
+        assert_eq!(parent(&e, "scene::free"), None);
+    }
+
+    #[test]
     fn resolve_entity_name_applies_namespace_rule() {
         let mut e = Engine::new_for_test();
         e.load_state(r#"{"entities":{"globalEnt":{"components":[]}}}"#).unwrap();
