@@ -15,7 +15,7 @@
         "kind": "pixelAtEntity",
         "region": [0, 0, 0, 0],
         "expected": 0.1,
-        "log": "rocket",
+        "log": "lunar::rocket",
         "color": [0.15, 0.15, 0.2, 1.0],
         "offset": [44.0, -44.0]
       },
@@ -23,7 +23,7 @@
         "kind": "pixelAtEntity",
         "region": [0, 0, 0, 0],
         "expected": 0.1,
-        "log": "rocket",
+        "log": "lunar::rocket",
         "color": [0.0, 0.97, 0.0, 1.0],
         "offset": [0.0, 0.0]
       }
