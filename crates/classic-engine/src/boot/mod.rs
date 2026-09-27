@@ -1,15 +1,33 @@
-//! Boot plan: a precomputed, incrementally-consumable hydration pipeline.
+//! ROM boot: the [`BootPipeline`] sequencer over a precomputed [`BootPlan`].
 //!
-//! [`BootPlan`] is a `Vec<BootStep>` built once by [`crate::Engine::begin_boot`]
-//! and drained one-or-many steps per frame by [`crate::Engine::boot_step`].  Each
+//! # Architecture (AGENTS.md "Patterns" 3)
+//!
+//! Every boot — headless, windowed desktop, web — runs the same stages through
+//! [`BootPipeline`]; the apps poll a [`driver`] rather than sequencing
+//! boot steps themselves, so there is one hydration order and one place where
+//! the CPU half can move off the GL thread ([`BootPipeline::prepare`]).  The
+//! app-specific tail is the [`BootFinish`] hook, because `classic-engine`
+//! cannot depend on the app layer.
+//!
+//! [`BootPlan`] is a `Vec<BootStep>` built once from the resolved ROM DAG.  Each
 //! texture is split into a CPU [`BootStep::Decode`] (owned [`DecodedTexture`],
-//! `Send`) and a GL [`BootStep::Upload`], so decode can later move off the main
-//! thread while upload stays on it.
+//! `Send`) and a GL [`BootStep::Upload`], so decode can move off the GL thread
+//! while upload stays on it.  [`BootPipeline`] owns the plan and walks every
+//! boot through the same stages — synchronously, time-budgeted per frame, or
+//! with the CPU half prepared off-thread (see [`pipeline`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use classic_rom::{BootEvent, BootSink, LoadedRoms, ResourceKind};
+use classic_rom::ResourceKind;
+#[cfg(not(target_arch = "wasm32"))]
+use classic_rom::{BootEvent, BootSink};
+
+pub mod driver;
+pub mod pipeline;
+
+pub use driver::{run_sync, BootFrame, InterleavedBoot, FRAME_BUDGET};
+pub use pipeline::{BootFinish, BootPipeline, BootPoll, BootStage};
 
 /// Owned, decoded texture pixels (Send), ready for GL upload.
 #[derive(Clone, Debug)]
@@ -84,10 +102,9 @@ impl Default for BootStep {
     }
 }
 
-/// A precomputed hydration plan, drained by [`crate::Engine::boot_step`].
-pub struct BootPlan<'a> {
-    pub(crate) loaded: &'a LoadedRoms,
-    pub(crate) sink: &'a dyn BootSink,
+/// A precomputed hydration plan for one resolved ROM DAG, drained by a
+/// [`BootPipeline`].
+pub struct BootPlan {
     pub(crate) steps: Vec<BootStep>,
     /// Pending basis uploads, uploaded after the plan drains.
     pub(crate) basis_jobs: Vec<BasisTextureJob>,
@@ -96,7 +113,7 @@ pub struct BootPlan<'a> {
     pub(crate) decoded: HashMap<String, DecodedTexture>,
 }
 
-impl<'a> BootPlan<'a> {
+impl BootPlan {
     /// The number of steps not yet consumed.
     pub fn remaining(&self) -> usize {
         self.steps.len().saturating_sub(self.cursor)
@@ -112,45 +129,24 @@ impl<'a> BootPlan<'a> {
         self.steps.len()
     }
 
-    /// The number of steps consumed so far (incremental booters persist this
-    /// across frames when they rebuild the plan each chunk).
+    /// The number of steps consumed so far.
     pub fn cursor(&self) -> usize {
         self.cursor
-    }
-
-    /// Set the step cursor (used by incremental booters to resume mid-plan).
-    pub fn set_cursor(&mut self, cursor: usize) {
-        self.cursor = cursor;
-    }
-
-    /// Inject pre-decoded texture pixels (the off-thread decode results) so the
-    /// matching [`BootStep::Upload`] steps skip their `Decode` work.
-    pub fn set_decoded(&mut self, decoded: HashMap<String, DecodedTexture>) {
-        self.decoded = decoded;
-    }
-
-    /// Take the decoded-texture map back out (to persist across a plan rebuild).
-    pub fn take_decoded(&mut self) -> HashMap<String, DecodedTexture> {
-        std::mem::take(&mut self.decoded)
     }
 }
 
 /// Decode every pending [`BootStep::Decode`] step in `plan` into owned, `Send`
-/// [`DecodedTexture`]s keyed for the matching [`BootStep::Upload`], emitting a
-/// [`BootEvent::ResourceDecoded`] per texture.
+/// [`DecodedTexture`]s, stored in `plan.decoded` for the matching
+/// [`BootStep::Upload`], emitting a [`BootEvent::ResourceDecoded`] per texture.
 ///
-/// This is the off-main-thread half of boot: it touches only `image` decode
-/// (no GL) and consumes each `Decode` step (replacing it with the default
-/// [`BootStep::Noop`]) so the large pixel payloads are moved, never cloned.
-/// Every non-decode step is left untouched for the GL thread to run.  The
-/// returned map is `Send` and crosses the thread boundary as the decoded-assets
-/// payload.
+/// This is the off-GL-thread half of texture boot: it touches only `image`
+/// decode (no GL) and consumes each `Decode` step (replacing it with the
+/// default [`BootStep::Noop`]) so the large pixel payloads are moved, never
+/// cloned.  Every non-decode step is left untouched for the GL thread to run.
 ///
-/// On native the individual decodes fan out across a
-/// [`classic_worker::ThreadPool`] (sized by `CLASSIC_LOADER_THREADS`); on wasm
-/// they run serially (the web path decodes inline via [`crate::Engine::boot_step`]
-/// instead of through this function).
-pub fn decode_plan(plan: &mut BootPlan<'_>) -> HashMap<String, DecodedTexture> {
+/// The individual decodes fan out across the loader thread pool.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn decode_plan(plan: &mut BootPlan, sink: &dyn BootSink) {
     // Move every Decode step out of the plan, leaving Noop placeholders.
     let mut jobs = Vec::new();
     for step in &mut plan.steps {
@@ -163,20 +159,31 @@ pub fn decode_plan(plan: &mut BootPlan<'_>) -> HashMap<String, DecodedTexture> {
         }
     }
     if jobs.is_empty() {
-        return HashMap::new();
+        return;
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        decode_jobs_parallel(jobs, plan.sink)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        decode_jobs_serial(jobs, plan.sink)
+    // `run_all` re-assembles in plan order, so `ResourceDecoded` events stay
+    // deterministic regardless of which loader thread finishes first.
+    for result in loader_queue("classic-decode").run_all(jobs) {
+        sink.on_event(BootEvent::ResourceDecoded {
+            rom: result.rom,
+            kind: result.kind,
+            name: result.key.clone(),
+            dims: result.texture.dims(),
+        });
+        plan.decoded.insert(result.key, result.texture);
     }
 }
 
+/// The pool boot-time decode fans out on: `CLASSIC_LOADER_THREADS` named threads.
+#[cfg(not(target_arch = "wasm32"))]
+fn loader_queue<J: classic_worker::Job<State = ()>>(name: &str) -> classic_worker::JobQueue<J> {
+    let threads = crate::env_config::EnvConfig::get().loader_threads;
+    classic_worker::JobQueue::pooled(name, threads).expect("failed to spawn loader threads")
+}
+
 /// A single moved-out `Decode` step, fully owned and `Send`.
+#[cfg(not(target_arch = "wasm32"))]
 struct DecodeJob {
     key: String,
     rom: String,
@@ -185,130 +192,69 @@ struct DecodeJob {
     bytes: Arc<[u8]>,
 }
 
-/// Decode `jobs` serially (wasm fallback; the native path uses the pool).
-#[cfg(target_arch = "wasm32")]
-fn decode_jobs_serial(
-    jobs: Vec<DecodeJob>,
-    sink: &dyn BootSink,
-) -> HashMap<String, DecodedTexture> {
-    let mut decoded = HashMap::new();
-    for job in jobs {
-        let texture = decode_texture(job.format, &job.bytes);
-        let dims = texture.dims();
-        sink.on_event(BootEvent::ResourceDecoded {
-            rom: job.rom,
-            kind: job.kind,
-            name: job.key.clone(),
-            dims,
-        });
-        decoded.insert(job.key, texture);
-    }
-    decoded
-}
-
-/// A decoded texture plus its plan-order metadata, re-assembled after the
-/// parallel decode fan-out so `ResourceDecoded` events stay in plan order.
+/// A decoded texture plus the metadata of the step it came from.
 #[cfg(not(target_arch = "wasm32"))]
 struct DecodedResult {
     rom: String,
     kind: ResourceKind,
     key: String,
-    dims: (u32, u32),
     texture: DecodedTexture,
 }
 
-/// Decode `jobs` in parallel on a [`classic_worker::ThreadPool`], emitting
-/// `ResourceDecoded` events in the original plan order so the observable event
-/// stream is identical to the serial path.
 #[cfg(not(target_arch = "wasm32"))]
-fn decode_jobs_parallel(
-    jobs: Vec<DecodeJob>,
-    sink: &dyn BootSink,
-) -> HashMap<String, DecodedTexture> {
-    use std::sync::mpsc;
+impl classic_worker::Job for DecodeJob {
+    type State = ();
+    type Output = DecodedResult;
 
-    let threads = crate::env_config::EnvConfig::get().loader_threads;
-    let pool = classic_worker::ThreadPool::new(threads);
-    let total = jobs.len();
-    let (tx, rx) = mpsc::channel();
-
-    for (index, job) in jobs.into_iter().enumerate() {
-        let tx = tx.clone();
-        pool.spawn(move || {
-            let texture = decode_texture(job.format, &job.bytes);
-            let dims = texture.dims();
-            let result =
-                DecodedResult { rom: job.rom, kind: job.kind, key: job.key, dims, texture };
-            let _ = tx.send((index, result));
-        });
+    fn run(self, _: &mut ()) -> DecodedResult {
+        let texture = decode_texture(self.format, &self.bytes);
+        DecodedResult { rom: self.rom, kind: self.kind, key: self.key, texture }
     }
-    drop(tx);
+}
 
-    // Re-assemble in plan order so `ResourceDecoded` events stay deterministic
-    // regardless of which pool thread finishes first.
-    let mut ordered: Vec<Option<DecodedResult>> = (0..total).map(|_| None).collect();
-    for _ in 0..total {
-        let (index, result) = rx.recv().expect("decode worker panicked");
-        ordered[index] = Some(result);
-    }
+/// One `.basis` sheet to transcode for the given GL capabilities.
+#[cfg(not(target_arch = "wasm32"))]
+struct BasisDecodeJob {
+    bytes: Arc<[u8]>,
+    format: String,
+    caps: classic_gfx::Caps,
+}
 
-    let mut decoded = HashMap::new();
-    for result in ordered.into_iter().flatten() {
-        sink.on_event(BootEvent::ResourceDecoded {
-            rom: result.rom,
-            kind: result.kind,
-            name: result.key.clone(),
-            dims: result.dims,
-        });
-        decoded.insert(result.key, result.texture);
+#[cfg(not(target_arch = "wasm32"))]
+impl classic_worker::Job for BasisDecodeJob {
+    type State = ();
+    type Output = Option<classic_gfx::DecodedBasis>;
+
+    fn run(self, _: &mut ()) -> Self::Output {
+        classic_gfx::transcode_basis(&self.bytes, &self.format, self.caps)
     }
-    decoded
 }
 
 /// Transcode every pending `.basis` job in parallel (CPU, native only),
 /// returning the decoded payload keyed by job index.  `None` marks a job that
 /// failed to transcode (its texture is treated as missing).  Mirrors
 /// [`decode_plan`] but for GPU-compressed sheets: the `basis_universal` decode
-/// fans out across the loader pool while the GL upload stays on the render
+/// fans out across the loader queue while the GL upload stays on the render
 /// thread via `Engine::upload_basis_predecoded`.
 ///
 /// Emits a [`BootEvent::ResourceDecoded`] per successfully-transcoded sheet, in
 /// plan order (so the observable stream is deterministic regardless of which
-/// pool thread finishes first).
+/// loader thread finishes first).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn decode_basis_jobs(
     jobs: &[BasisTextureJob],
     caps: classic_gfx::Caps,
     sink: &dyn BootSink,
 ) -> Vec<Option<classic_gfx::DecodedBasis>> {
-    let total = jobs.len();
-    if total == 0 {
+    if jobs.is_empty() {
         return Vec::new();
     }
-    use std::sync::mpsc;
+    let ordered = loader_queue("classic-basis").run_all(jobs.iter().map(|job| BasisDecodeJob {
+        bytes: Arc::clone(&job.bytes),
+        format: job.format.clone(),
+        caps,
+    }));
 
-    let threads = crate::env_config::EnvConfig::get().loader_threads;
-    let pool = classic_worker::ThreadPool::new(threads);
-    let (tx, rx) = mpsc::channel();
-
-    for (index, job) in jobs.iter().enumerate() {
-        let tx = tx.clone();
-        let bytes = Arc::clone(&job.bytes);
-        let format = job.format.clone();
-        pool.spawn(move || {
-            let decoded = classic_gfx::transcode_basis(&bytes, &format, caps);
-            let _ = tx.send((index, decoded));
-        });
-    }
-    drop(tx);
-
-    let mut ordered: Vec<Option<classic_gfx::DecodedBasis>> = (0..total).map(|_| None).collect();
-    for _ in 0..total {
-        let (index, decoded) = rx.recv().expect("basis worker panicked");
-        ordered[index] = decoded;
-    }
-
-    // Re-assemble in plan order so `ResourceDecoded` events stay deterministic.
     for (job, decoded) in jobs.iter().zip(&ordered) {
         if let Some(payload) = decoded {
             let dims = match payload {
@@ -324,24 +270,6 @@ pub(crate) fn decode_basis_jobs(
         }
     }
     ordered
-}
-
-/// Decode every pending texture *and* `.basis` sheet off-thread (native only),
-/// returning the decoded payloads.  `basis` is indexed to match the plan's
-/// `basis_jobs` order (upload one at a time with
-/// [`crate::Engine::upload_basis_predecoded_at`]).  The heavy work fans out
-/// across the loader pool; the caller uploads on the GL thread.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn decode_assets(
-    loaded: &LoadedRoms,
-    caps: classic_gfx::Caps,
-    sink: &dyn BootSink,
-) -> (HashMap<String, DecodedTexture>, Vec<Option<classic_gfx::DecodedBasis>>) {
-    let engine = crate::Engine::new();
-    let mut plan = engine.begin_boot(loaded, sink);
-    let decoded = decode_plan(&mut plan);
-    let basis = decode_basis_jobs(&plan.basis_jobs, caps, sink);
-    (decoded, basis)
 }
 
 /// Decode a PNG into owned pixels of the given channel layout.

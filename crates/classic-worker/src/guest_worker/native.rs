@@ -1,34 +1,24 @@
 //! Background guest worker (native backend): a second `.wasm` instance running
 //! pure guest entry points.
 //!
-//! Two modes share one API:
-//! - **Threaded** (default): the runtime is built once on the creating thread
-//!   (so build errors surface synchronously), then moved onto a dedicated
-//!   `std::thread` that owns it for its lifetime.  The engine submits a
-//!   `Run { entry, arg }` and polls for the result; a `Flush` barrier (the
-//!   determinism hook) rides the same FIFO channel as `Run`, so it completes
-//!   only after all earlier tasks.
-//! - **Sync**: the runtime stays on the calling thread and each entry runs
-//!   inline at `spawn_task` time (the `synchronous_workers` fallback used by
+//! The runtime is built once on the creating thread (so build errors surface
+//! synchronously), then owned by a [`JobQueue`]:
+//! - **Threaded** (default): the queue moves it onto a dedicated `std::thread`.
+//!   The engine submits `run(entry, arg)` jobs and polls for results; `join` is
+//!   a FIFO barrier (the determinism hook) that completes only after all earlier
+//!   tasks.
+//! - **Synchronous**: the runtime stays on the calling thread and each entry
+//!   runs inline at `spawn_task` time (the `synchronous_workers` mode used by
 //!   the deterministic test/golden harness).
 
-use std::collections::HashMap;
-use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 
 use classic_core::pathfinder::NavSnapshot;
 use wasmtime::{Caller, Engine as WasmtimeEngine, Instance, Linker, Module, Store};
 
 use super::install_worker_imports;
 use super::{TaskId, WorkerHost};
-
-enum Command {
-    Run { id: TaskId, entry: String, arg: Vec<u8> },
-    SetNav(Arc<NavSnapshot>),
-    Flush(mpsc::Sender<()>),
-    Shutdown,
-}
+use crate::jobs::{Job, JobQueue};
 
 /// A completed task result: the guest's returned bytes, or the error that
 /// trapped/panicked while running its entry point.
@@ -57,13 +47,7 @@ impl CompiledWorker {
 
 /// The engine-facing handle to the background guest worker.
 pub struct GuestWorker {
-    mode: Mode,
-    results: HashMap<TaskId, TaskResult>,
-}
-
-enum Mode {
-    Threaded { tx: mpsc::Sender<Command>, rx: mpsc::Receiver<(TaskId, TaskResult)> },
-    Sync(Runtime),
+    queue: JobQueue<GuestJob>,
 }
 
 /// The wasmtime runtime pieces (owned by the worker thread, or the calling
@@ -92,6 +76,21 @@ impl Runtime {
     }
 }
 
+/// One background task: run the guest export `entry` against `arg`.
+struct GuestJob {
+    entry: String,
+    arg: Vec<u8>,
+}
+
+impl Job for GuestJob {
+    type State = Runtime;
+    type Output = TaskResult;
+
+    fn run(self, runtime: &mut Runtime) -> TaskResult {
+        runtime.run(&self.entry, self.arg)
+    }
+}
+
 impl GuestWorker {
     /// Compile and instantiate the worker guest.  When `synchronous` is true the
     /// runtime runs entries inline on the calling thread; otherwise it runs on a
@@ -110,88 +109,36 @@ impl GuestWorker {
         nav: Arc<NavSnapshot>,
         synchronous: bool,
     ) -> Result<Self, String> {
-        if synchronous {
-            let runtime = instantiate(&compiled.engine, &compiled.module, Arc::clone(&nav))?;
-            return Ok(Self { mode: Mode::Sync(runtime), results: HashMap::new() });
-        }
-
-        let runtime = instantiate(&compiled.engine, &compiled.module, Arc::clone(&nav))?;
-        let (tx, worker_rx) = mpsc::channel::<Command>();
-        let (worker_tx, rx) = mpsc::channel::<(TaskId, TaskResult)>();
-
-        thread::Builder::new()
-            .name("classic-worker-guest".to_string())
-            .spawn(move || {
-                let mut runtime = runtime;
-                while let Ok(command) = worker_rx.recv() {
-                    match command {
-                        Command::Run { id, entry, arg } => {
-                            let result = runtime.run(&entry, arg);
-                            let _ = worker_tx.send((id, result));
-                        }
-                        Command::SetNav(nav) => runtime.store.data_mut().set_nav(nav),
-                        Command::Flush(ack) => {
-                            let _ = ack.send(());
-                        }
-                        Command::Shutdown => break,
-                    }
-                }
-            })
-            .map_err(|e| format!("failed to spawn worker guest thread: {e}"))?;
-
-        Ok(Self { mode: Mode::Threaded { tx, rx }, results: HashMap::new() })
+        let runtime = instantiate(&compiled.engine, &compiled.module, nav)?;
+        let queue = if synchronous {
+            JobQueue::synchronous(runtime)
+        } else {
+            JobQueue::threaded("classic-worker-guest", runtime)
+                .map_err(|e| format!("failed to spawn worker guest thread: {e}"))?
+        };
+        Ok(Self { queue })
     }
 
     /// Replace the nav snapshot shared with the worker.
     pub fn set_nav(&mut self, nav: Arc<NavSnapshot>) {
-        match &mut self.mode {
-            Mode::Threaded { tx, .. } => {
-                let _ = tx.send(Command::SetNav(nav));
-            }
-            Mode::Sync(runtime) => runtime.store.data_mut().set_nav(nav),
-        }
+        self.queue.update(move |runtime| runtime.store.data_mut().set_nav(nav));
     }
 
     /// Submit a task under a caller-chosen id.  Non-blocking in threaded mode;
     /// runs inline in sync mode.
     pub fn spawn_task(&mut self, id: TaskId, entry: &str, arg: Vec<u8>) {
-        match &mut self.mode {
-            Mode::Threaded { tx, .. } => {
-                let _ = tx.send(Command::Run { id, entry: entry.to_string(), arg });
-            }
-            Mode::Sync(runtime) => {
-                let result = runtime.run(entry, arg);
-                self.results.insert(id, result);
-            }
-        }
+        self.queue.submit(id, GuestJob { entry: entry.to_string(), arg });
     }
 
     /// Poll a previously submitted task (non-blocking).  `None` while pending.
     pub fn poll_task(&mut self, id: TaskId) -> Option<TaskResult> {
-        if let Mode::Threaded { rx, .. } = &self.mode {
-            while let Ok((id, result)) = rx.try_recv() {
-                self.results.insert(id, result);
-            }
-        }
-        self.results.remove(&id)
+        self.queue.poll(id)
     }
 
     /// Block until every previously submitted task has completed (no-op in sync
     /// mode, where tasks run inline).
     pub fn join(&self) {
-        if let Mode::Threaded { tx, .. } = &self.mode {
-            let (ack_tx, ack_rx) = mpsc::channel();
-            let _ = tx.send(Command::Flush(ack_tx));
-            let _ = ack_rx.recv();
-        }
-    }
-}
-
-impl Drop for GuestWorker {
-    fn drop(&mut self) {
-        if let Mode::Threaded { tx, .. } = &self.mode {
-            let _ = tx.send(Command::Shutdown);
-        }
+        self.queue.join();
     }
 }
 
@@ -259,6 +206,7 @@ fn write_bytes(caller: &mut Caller<'_, WorkerHost>, ptr: i32, bytes: &[u8]) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use std::time::Duration;
 
     fn open_nav() -> Arc<NavSnapshot> {
@@ -355,6 +303,24 @@ mod tests {
             Err(msg) => assert!(msg.contains("trapped"), "unexpected error: {msg}"),
             Ok(_) => panic!("mutating import should have trapped"),
         }
+    }
+
+    #[test]
+    fn links_every_tier3_table_import() {
+        use classic_core::abi_manifest::{imports_for, Backend};
+
+        let imports: Vec<String> = imports_for(Backend::Tier3)
+            .chain(imports_for(Backend::Tier3Trap))
+            .map(|import| import.wat_import("env"))
+            .collect();
+        let wat = format!(
+            "(module {} (memory (export \"memory\") 1) (func (export \"entry\")))",
+            imports.join(" ")
+        );
+        let wasm = wat::parse_str(&wat).unwrap();
+
+        GuestWorker::new(&wasm, open_nav(), true)
+            .expect("the worker surface links every tier3 + tier3_trap table import");
     }
 
     #[test]

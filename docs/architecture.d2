@@ -14,19 +14,20 @@ platform: Platform trait {
 
 engine: "classic-engine\nEngine core" {
   Engine: "World · Time\nInputState · Gfx"
+  boot: "boot: BootPipeline\nrun_sync · InterleavedBoot"
   UIManager: "retained-mode\nlayout"
   PhysicsProvider: "click · hover\ncollision"
   IsoVehicle: "wheeled vehicles\nchassis plane"
 }
 
 crates: "supporting crates" {
-  classic-core: "ECS (hecs)\nregistry · math\ncollision · tilemap"
+  classic-core: "ECS (hecs)\nregistry · math\ncollision · tilemap\nabi_manifest (ABI table)"
   classic-gfx: "GL layer\ndraw_* · shaders"
   classic-terrain: "noise toolkit\n(no_std)"
   classic-pathfinder: "A* · vehicle search\n(no_std)"
   classic-rom: "RomArchive · Rom\nmanifest · resources"
-  classic-guest: "Wasmi / Wasmtime\nguest ABI + SDK"
-  classic-worker: "PathfinderWorker\nGuestWorker"
+  classic-guest: "Wasmi / Wasmtime / web\nbackends generated\nfrom the ABI table"
+  classic-worker: "JobQueue<J>\nPathfinder · Guest ·\nTranscoder Workers"
 }
 
 production: "ROM production" {
@@ -54,5 +55,8 @@ engine -> crates.classic-worker
 crates.classic-core -> crates.classic-terrain
 crates.classic-core -> crates.classic-pathfinder
 crates.classic-worker -> crates.classic-pathfinder: pathfinder.wasm
+crates.classic-core -> crates.classic-guest: "ABI table →\ngenerated backends"
+crates.classic-core -> crates.classic-worker: "ABI table →\nTier-3 imports"
+engine.boot -> crates.classic-worker: "decode / transcode\non the JobQueue"
 
 production.bucket -> crates.classic-rom: "cargo xtask\nfetch-roms"

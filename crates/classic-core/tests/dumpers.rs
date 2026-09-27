@@ -21,7 +21,7 @@ fn sprite_dumper_round_trip_keys() {
 
     let regs = classic_core::registry::ordered_regs();
     let sprite_reg = regs.iter().find(|r| r.name == "Sprite").unwrap();
-    let val = sprite_reg.dump.unwrap()(&world, e).unwrap();
+    let val = sprite_reg.dump_value(&world, e).unwrap();
 
     assert_eq!(val["type"], "Sprite");
     assert_eq!(val["texture"], "cursor");
@@ -59,7 +59,7 @@ fn tilemap_dumper_round_trip_keys() {
     // Find the Tilemap dumper from the registry
     let regs = classic_core::registry::ordered_regs();
     let tilemap_reg = regs.iter().find(|r| r.name == "Tilemap").unwrap();
-    let val = tilemap_reg.dump.unwrap()(&world, e).unwrap();
+    let val = tilemap_reg.dump_value(&world, e).unwrap();
 
     assert_eq!(val["type"], "Tilemap");
     assert_eq!(val["position"], serde_json::json!([1.0, 2.0, 3.0]));
@@ -120,7 +120,7 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
 
     let regs = classic_core::registry::ordered_regs();
     let agent_reg = regs.iter().find(|r| r.name == "IsoAgent").unwrap();
-    let val = agent_reg.dump.unwrap()(&world, e).unwrap();
+    let val = agent_reg.dump_value(&world, e).unwrap();
 
     assert_eq!(val["type"], "IsoAgent");
     assert_eq!(val["texture"], "humanoid");
@@ -153,7 +153,7 @@ fn animator_dumper_works() {
 
     let regs = classic_core::registry::ordered_regs();
     let anim_reg = regs.iter().find(|r| r.name == "Animator").unwrap();
-    let val = anim_reg.dump.unwrap()(&world, e).unwrap();
+    let val = anim_reg.dump_value(&world, e).unwrap();
 
     assert_eq!(val["type"], "Animator");
     assert_eq!(val["target"], "navAgent.IsoAgent");
@@ -181,7 +181,7 @@ fn animator_state_round_trips() {
 
     let regs = classic_core::registry::ordered_regs();
     let anim_reg = regs.iter().find(|r| r.name == "Animator").unwrap();
-    let val = anim_reg.dump.unwrap()(&world, e).unwrap();
+    let val = anim_reg.dump_value(&world, e).unwrap();
 
     assert_eq!(val["animation"], "rocketLanding");
     assert_eq!(val["repeat"], false);
@@ -232,7 +232,7 @@ fn navmesh_dumper_uses_map_entity_key() {
 
     let regs = classic_core::registry::ordered_regs();
     let nav_reg = regs.iter().find(|r| r.name == "IsometricNavMesh").unwrap();
-    let val = nav_reg.dump.unwrap()(&world, e).unwrap();
+    let val = nav_reg.dump_value(&world, e).unwrap();
 
     assert_eq!(val["type"], "IsometricNavMesh");
     assert_eq!(val["map_entity"], "tilemap");
@@ -252,14 +252,13 @@ fn rect_and_transform_dumpers_round_trip() {
     let e = world.spawn((Transform::new([10.0, 20.0, 0.0].into(), [2.0, 3.0, 1.0].into()), rect));
 
     let regs = classic_core::registry::ordered_regs();
-    let rect_val =
-        regs.iter().find(|r| r.name == "Rect").unwrap().dump.unwrap()(&world, e).unwrap();
+    let rect_val = regs.iter().find(|r| r.name == "Rect").unwrap().dump_value(&world, e).unwrap();
     assert_eq!(rect_val["type"], "Rect");
     assert_eq!(rect_val["color"], serde_json::json!([1.0, 0.0, 0.0, 1.0]));
     assert_eq!(rect_val["ignore_cam"], true);
 
     let tf_val =
-        regs.iter().find(|r| r.name == "Transform").unwrap().dump.unwrap()(&world, e).unwrap();
+        regs.iter().find(|r| r.name == "Transform").unwrap().dump_value(&world, e).unwrap();
     assert_eq!(tf_val["type"], "Transform");
     assert_eq!(tf_val["position"], serde_json::json!([10.0, 20.0, 0.0]));
 }
@@ -275,8 +274,7 @@ fn camera_dumper() {
 
     let regs = classic_core::registry::ordered_regs();
 
-    let cam_val =
-        regs.iter().find(|r| r.name == "Camera").unwrap().dump.unwrap()(&world, ce).unwrap();
+    let cam_val = regs.iter().find(|r| r.name == "Camera").unwrap().dump_value(&world, ce).unwrap();
     assert_eq!(cam_val["type"], "Camera");
     assert_eq!(cam_val["position"], serde_json::json!([5.0, 6.0, 0.0]));
     assert_eq!(cam_val["scale"], serde_json::json!([0.5, 0.5, 1.0]));
@@ -294,7 +292,7 @@ fn role_dumper_round_trips() {
 
     let regs = classic_core::registry::ordered_regs();
     let role_reg = regs.iter().find(|r| r.name == "Role").unwrap();
-    let val = role_reg.dump.unwrap()(&world, e).unwrap();
+    let val = role_reg.dump_value(&world, e).unwrap();
     assert_eq!(val["type"], "Role");
     assert_eq!(val["value"], "tilemap");
 
@@ -319,7 +317,7 @@ fn selectable_dumper_round_trips() {
 
     let regs = classic_core::registry::ordered_regs();
     let reg = regs.iter().find(|r| r.name == "Selectable").unwrap();
-    let val = reg.dump.unwrap()(&world, e).unwrap();
+    let val = reg.dump_value(&world, e).unwrap();
     assert_eq!(val["type"], "Selectable");
     assert_eq!(val["priority"], 5);
     assert_eq!(val["group"], 1);
@@ -349,7 +347,7 @@ fn inventory_dumper_round_trips() {
 
     let regs = classic_core::registry::ordered_regs();
     let reg = regs.iter().find(|r| r.name == "Inventory").unwrap();
-    let val = reg.dump.unwrap()(&world, e).unwrap();
+    let val = reg.dump_value(&world, e).unwrap();
     assert_eq!(val["type"], "Inventory");
     assert_eq!(val["capacity"], 100);
     assert_eq!(val["kind"], "cargo_bay");
@@ -387,7 +385,7 @@ fn light_dumper_round_trips() {
 
     let regs = classic_core::registry::ordered_regs();
     let light_reg = regs.iter().find(|r| r.name == "Light").unwrap();
-    let val = light_reg.dump.unwrap()(&world, e).unwrap();
+    let val = light_reg.dump_value(&world, e).unwrap();
 
     assert_eq!(val["type"], "Light");
     assert_eq!(val["kind"], "spot");

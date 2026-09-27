@@ -38,20 +38,27 @@ crates/classic-guest/
                           linear-memory slice
   src/sdk.rs              GuestHost: raw-pointer bridge to Engine + the SDK methods
                           (shared by every runtime backend)
-  src/imports.rs          the host-import surface (single source of truth): an
-                          `install_host_imports!` macro expanded by the wasmi and
-                          wasmtime backends (marshals args and forwards to `GuestHost`)
+  src/imports.rs          `install_host_imports!`: binds the wasmi and wasmtime
+                          linkers to the ABI table (`classic_core::abi_manifest`,
+                          the single source of truth) via `link_host_imports!`
+                          (marshals args and forwards to `GuestHost`)
   src/runtime.rs          WasmiRuntime (native + wasm): config (fuel) + the shared
                           import macro + memory helpers
   src/runtime_wasmtime.rs WasmtimeRuntime (native only): config (fuel) + the shared
                           import macro + memory helpers
-  src/runtime_web.rs      WebWasmRuntime (wasm only, trusted): browser-native
-                          `WebAssembly`, host imports as `Closure`s (+ a dispatcher
-                          for the 13 imports with >8 args)
-  src/runtime_worker.rs   WorkerWasmRuntime (wasm only, untrusted): `Worker` +
-                          SAB/Atomics synchronous host-import bridge + terminate watchdog
-  src/worker.js           the Worker script (SAB host-import stubs + update loop)
-  tests/guest.rs          inline WAT fixtures (wat crate) driven against every backend
+  src/runtime_web/        WebWasmRuntime (wasm only, trusted): browser-native
+                          `WebAssembly`; host imports generated from the ABI table
+                          as typed `Closure`s (imports with >8 wasm params use an
+                          arity-1 `Closure` behind a JS `arguments` shim)
+  src/worker_bridge.rs    the Worker backend's request format + host-import registry
+                          (generated from the ABI table; op code = table index) and
+                          the import descriptor sent to worker.js
+  src/runtime_worker.rs   WorkerWasmRuntime (wasm only, untrusted): `Worker` + chunked
+                          SAB/Atomics synchronous transport + terminate watchdog
+  src/worker.js           the Worker script (descriptor-built import stubs, chunked
+                          transport, fault reporting, update loop)
+  tests/guest.rs          inline WAT fixtures (wat crate) driven against every native backend
+  tests/web.rs            headless-browser tests for the web + Worker backends
 ```
 
 `create_runtime(wasm, limits)` picks the backend: **wasmtime on native**; on
@@ -59,9 +66,14 @@ wasm, **browser-native `WebAssembly` for `trusted` guests** (no fuel API) and a
 **`Worker`-isolated browser-native runtime for untrusted guests** (terminate
 watchdog), falling back to **wasmi** when `SharedArrayBuffer` is unavailable.
 All implement the same `GuestRuntime` trait and the same `env` import surface.
-The wasmi and wasmtime linker layers are generated from the single
-`imports.rs::install_host_imports!` macro; only the `GuestHost` SDK bodies
-(`sdk.rs`) and the web/worker closure/SAB layers are backend-specific.
+The import surface is declared once, in the ABI table
+(`classic-core/src/abi_manifest.rs`, `for_each_host_import!`): each entry
+records the name, typed params (marshalling kind), return kind and backend set.
+Every backend's import layer — wasmi, wasmtime, browser `WebAssembly`, the
+untrusted Worker (plus its `worker.js` stubs, via a runtime descriptor) and the
+Tier-3 worker surface — is generated from it by `classic_core::host_imports!`,
+which holds the per-kind marshalling once and calls a small per-backend frontend
+macro.  Only the `GuestHost` SDK bodies (`sdk.rs`) are hand-written.
 
 ## 3. The ABI (host imports, module "env")
 
@@ -73,8 +85,8 @@ Guest exports (the host→guest side of the ABI):
 | `init` | `() -> ()` | once, synchronously at install, before the first frame (optional) |
 | `start` | `() -> ()` | once, after the first `update` completes (optional) |
 
-Host imports (defined once in `imports.rs::install_host_imports`, expanded by
-both the wasmi and wasmtime backends) are the SDK surface:
+Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
+`HOST_IMPORTS` is its runtime descriptor) are the SDK surface:
 
 | Import | Signature | Purpose |
 |---|---|---|
@@ -169,13 +181,13 @@ Bulk upload (guest writes grids into its memory, host reads them):
 | `commit_terrain` | `(height_scale: f64) -> i32` | install (first call) or rebuild the tilemap mesh + nav overlay (no slope re-derivation) |
 
 The bulk fields are `f32` little-endian; the bulk grids are `u32`/`i32`/`f32`
-little-endian, matching the path-waypoint binary convention.  Note: the
-untrusted Worker backend's SAB bridge caps bulk payloads (see §4).
+little-endian, matching the path-waypoint binary convention.  The untrusted
+Worker backend streams payloads of any size through its SAB in chunks.
 
 ### 3b. Field-buffer registry + grid kernels (host-owned scratch)
 
 Instead of round-tripping intermediate grids through guest memory mid-generation
-(which hits the SAB bridge's payload cap on web), a guest can allocate a named
+(each round trip copies the grid across the host boundary), a guest can allocate a named
 host-resident field, drive grid kernels over it by name, and only download the
 final grids:
 
@@ -216,7 +228,17 @@ Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
   past the cap traps.
 - **Web Worker watchdog**: browser Wasm has no fuel API, so `WorkerWasmRuntime`
   enforces a wall-clock budget (`GuestLimits.max_frame_millis`) per call and
-  `worker.terminate()`s on overrun, surfacing `GuestError::FuelExhausted`.
+  `worker.terminate()`s on overrun, surfacing `GuestError::FuelExhausted`.  A
+  guest trap or link error inside the Worker is reported back as
+  `GuestError::Trap` (a trap fails that call only; a link error fails every
+  call).  **Readiness handshake:** a new `Worker` only boots once the main
+  thread yields to the event loop, so `GuestRuntime::is_ready()` is `false`
+  until it has instantiated the module; never run `init`/`update` before that
+  (they would busy-poll a worker that cannot start and time out).  The demo's
+  `install_guest_runtime` defers `init` to the first ready frame; synchronous
+  runtimes are ready immediately.  SAB (and so this backend) needs cross-origin
+  isolation: `trunk serve` sends COOP/COEP (`Trunk.toml`), the GitHub Pages
+  deploy cannot, so production untrusted guests use the wasmi fallback.
 - **Trusted**: `RomManifest.trusted` (`#[serde(default)]` = false).  The shipped
   demo/lunar ROMs set it true (skip fuel, intended for the fast browser path).
 
@@ -255,25 +277,15 @@ confined to `GuestHost::engine`/`engine_mut`.
 ## 7. Adding a host import (the SDK is a reviewed surface)
 
 1. Add the method to `GuestHost` in `sdk.rs` (call the safe `Engine` helper).
-2. Register it in every backend's import surface: the `imports.rs`
-   `install_host_imports!` macro (shared by the wasmi and wasmtime backends);
-   `runtime_web.rs` (browser-Wasm: a `Closure`, or a dispatcher arm for the
-   >8-arg imports); `runtime_worker.rs`'s dispatch match plus the matching
-   stub in `worker.js`.
-3. Marshal strings with the local `read_str`/`write_str` helpers; pairs with
-   `write_f64_pair` (they wrap the backend-agnostic `abi::read_str_from` /
-   `abi::write_*_to` slice helpers).
-4. Add a WAT test in `tests/guest.rs` (it runs against every backend).
-5. Update this skill's import table.
-
-**Gotcha — worker/web OP codes are hand-numbered.** `runtime_worker.rs` and
-`worker.js` carry a parallel `OP_*` table (and `runtime_web.rs` a separate
-`OP_*` dispatcher table).  New high-arity imports must take the **next free
-code** in each table — codes 77–80 are already taken by the sprite
-`set_sprite_frame`/`set_sprite_color`/`spawn_sprite_clone`/`set_enabled`
-imports.  The `light_*` imports use 81–83 (worker) and 13–14 (web dispatcher).
-`light_spawn`/`light_set` are >8 args → web dispatcher; `light_release` is a
-direct `Closure`.
+2. Add **one table entry** (`classic-core/src/abi_manifest.rs`): typed params
+   (`str`, `f64`, …), return kind (`i32`, `json`, `pair_opt`, …) and backends.
+   That is the whole registration — every backend (wasmi, wasmtime, browser
+   `WebAssembly`, the untrusted Worker and its `worker.js` stubs, and for
+   `tier3`/`tier3_trap` the background-worker surface) is generated from it,
+   and there are no op codes to number.  If no existing return kind fits, add
+   one to `__host_import!` (plus any new frontend hook) and the descriptor enums.
+3. Add a WAT test in `tests/guest.rs` (it runs against every native backend).
+4. Update this skill's import table.
 
 Treat every new import as a sandbox-surface change: it is reachable by untrusted
 guest code and must not expose raw engine internals or leak borrows.
@@ -283,14 +295,28 @@ guest code and must not expose raw engine internals or leak borrows.
 `cargo test -p classic-guest` runs `tests/guest.rs`: every
 guest-driven test runs against **both** `WasmiRuntime` and (on native)
 `WasmtimeRuntime` — no-op run, spawn + move, fuel-exhaustion trap, memory-cap
-trap, and the full SDK surface.  Fixtures are inline WAT (`wat::parse_str`) — no
+trap, and the full SDK surface — plus `native_backends_link_every_table_import`,
+which links a module importing every `native` table entry (with its table
+signature) on each backend.  Fixtures are inline WAT (`wat::parse_str`) — no
 committed binaries needed for tests.  The shipped ROM guests live as Rust
 sources in the `classic-roms` repo (`guest/`) and are compiled to
 `roms/out/code/*.wasm` by that repo's `xtask`, then fetched by
-`cargo xtask fetch-roms`.  The web backends
-(`WebWasmRuntime`, `WorkerWasmRuntime`) are wasm-only and have no unit test —
-they're compile-verified via
-`cargo check --target wasm32-unknown-unknown -p classic-web` and `trunk build`.
+`cargo xtask fetch-roms`.
+
+The wasm-only backends (`WebWasmRuntime`, `WorkerWasmRuntime`) run in headless
+Chromium via `wasm-bindgen-test` (`tests/web.rs`; the flake provides the
+matching `wasm-bindgen-test-runner`, Chromium and chromedriver, and the runner
+serves the page cross-origin isolated so `SharedArrayBuffer` works):
+
+```
+cargo xtask build-pathfinder
+cargo test --target wasm32-unknown-unknown -p classic-guest --test web
+```
+
+They cover: each backend links exactly its table subset, a 1 MiB field
+round-trip through the Worker's chunked transport, >8-param imports on both
+backends, and Worker trap/link-error reporting.  The Worker's request format
+and registry (`worker_bridge.rs`) are also unit-tested natively.
 
 ## 9. Background guest worker (Tier 3)
 
@@ -300,7 +326,8 @@ foreground `GuestRuntime` — see `classic-worker/src/guest_worker`:
 
 - `WorkerHost` (Send, engine-free) owns an `Arc<NavSnapshot>`, a scratch
   `FieldRegistry`, and the current task's argument/result buffers.
-- The reduced import surface (`install_worker_imports!`) exposes only the pure
+- The reduced import surface (`install_worker_imports!`, generated from the ABI
+  table's `tier3` / `tier3_trap` entries) exposes only the pure
   subset — `log`, the noise fields, the field/kernel registry, a synchronous
   `find_path`, and `task_arg`/`task_return`.  Engine-mutating imports
   (`spawn`, `set_*`, `commit_terrain`, camera/light/input/UI) are registered as
@@ -310,4 +337,7 @@ foreground `GuestRuntime` — see `classic-worker/src/guest_worker`:
   writes `task_return`.  Native runs it on a `std::thread` (wasmtime); web uses
   a synchronous wasmi fallback (a real async web `Worker` is deferred).
 - `GuestWorker::new(wasm, nav, synchronous)` — `synchronous` runs entries inline
-  (the deterministic harness forces it under `CLASSIC_TEST`/`CLASSIC_GOLDEN`).
+  on a synchronous `classic_worker::JobQueue`.  The engine passes its single
+  determinism switch, `Engine::set_synchronous_workers` (which the demo sets
+  under `CLASSIC_TEST`/`CLASSIC_GOLDEN`), from `install_guest_worker`; the same
+  switch makes the pathfinder run inline.
