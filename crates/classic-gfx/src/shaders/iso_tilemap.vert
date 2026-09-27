@@ -1,6 +1,6 @@
 #version 300 es
 
-precision mediump float;
+precision highp float;
 
 in vec3 vertex_pos;
 in vec2 map_coord;
@@ -13,8 +13,8 @@ uniform mat4 model_matrix;
 uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
 
-uniform vec2 map_size;
-uniform vec2 tile_pixel_size;
+uniform mediump vec2 map_size;
+uniform mediump vec2 tile_pixel_size;
 // Camera view-depth bounds `[near, far]` (metres).  `near` is the closest view
 // depth (most positive `dot(back, world)`), `far` the farthest; `near > far`
 // numerically.

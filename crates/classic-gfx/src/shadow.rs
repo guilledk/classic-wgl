@@ -5,8 +5,8 @@ use glow::HasContext;
 
 use crate::buffer::vertex_attrib_ptr_f32;
 use crate::{
-    DepthFramebuffer, Gfx, GlBuffer, SpriteRegion, SHADOW_MAP_SIZE, SHADOW_SPRITE_SLOPE_OFFSET,
-    SHADOW_SPRITE_UNIT_OFFSET,
+    DepthFramebuffer, Gfx, GlBuffer, ModelMeshGpu, SpriteRegion, MODEL_VERTEX_STRIDE,
+    SHADOW_MAP_SIZE, SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET,
 };
 
 impl Gfx {
@@ -72,6 +72,23 @@ impl Gfx {
         s.uniform_mat4(gl, "light_view_proj", view_proj);
         unsafe {
             gl.draw_arrays(glow::TRIANGLES, 0, vertex_count);
+        }
+    }
+
+    /// Draw one 3D model mesh instance into the shadow map (depth only, real
+    /// geometry — no alpha silhouette).  `model` is the instance's world
+    /// transform.  Draw model casters with the terrain's constant offset, i.e.
+    /// before [`Gfx::set_shadow_sprite_offset`] switches to slope scaling.
+    pub fn draw_shadow_model(&self, model: &Mat4, view_proj: &Mat4, mesh: &ModelMeshGpu) {
+        let gl = &self.gl;
+        let s = self.shader("shadowDepth");
+        s.bind(gl);
+        vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("vertex_pos"), 3, MODEL_VERTEX_STRIDE, 0);
+        s.uniform_mat4(gl, "model_matrix", model);
+        s.uniform_mat4(gl, "light_view_proj", view_proj);
+        mesh.indices.bind(gl);
+        unsafe {
+            gl.draw_elements(glow::TRIANGLES, mesh.index_count as i32, glow::UNSIGNED_INT, 0);
         }
     }
 

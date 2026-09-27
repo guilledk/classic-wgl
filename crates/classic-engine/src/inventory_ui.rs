@@ -19,7 +19,7 @@ use classic_core::components::{
 use classic_core::inventory::Inventory;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 
-use crate::Engine;
+use crate::{Engine, ResourceKind};
 
 /// Packed-atlas texture holding the item icons (frame name == item name).
 const ICON_TEXTURE: &str = "icons";
@@ -102,7 +102,7 @@ impl InventoryUi {
 
         let changed = self.built_for != Some(target) || self.signature != stacks;
         if changed {
-            self.rebuild(engine, &stacks);
+            self.rebuild(engine, target, &stacks);
             self.signature = stacks;
             self.built_for = Some(target);
         }
@@ -130,7 +130,7 @@ impl InventoryUi {
     }
 
     /// Rebuild the grid children from `stacks` (icon + amount per item).
-    fn rebuild(&mut self, engine: &mut Engine, stacks: &[(u32, u32)]) {
+    fn rebuild(&mut self, engine: &mut Engine, target: Entity, stacks: &[(u32, u32)]) {
         let Some(grid) = self.grid else { return };
 
         // Despawn the previous cells and reset the grid's child list.
@@ -141,21 +141,30 @@ impl InventoryUi {
             node.children.clear();
         }
 
+        // Resolve each stack's icon before borrowing the UI: only spawn the icon
+        // when its frame resolves in the `icons` sheet — otherwise the UiSprite
+        // render arm would fall back to a blank grid frame.
+        let icons: Vec<Option<(String, String)>> = stacks
+            .iter()
+            .map(|(item_id, _)| {
+                let def = engine.items.def(*item_id)?;
+                icon_frame(engine, target, def.icon_frame_name())
+            })
+            .collect();
+
         // Spawn fresh icon + amount cells in order (row-major, 2 columns).
         let mut cells = Vec::new();
         {
             let Some(ui) = engine.ui.as_mut() else { return };
-            for (item_id, count) in stacks {
-                // Only spawn the icon when its frame resolves in the shared
-                // `icons` sheet — otherwise the UiSprite render arm would fall
-                // back to a blank grid frame.
-                let Some(def) = engine.items.def(*item_id) else { continue };
-                let icon = def.icon_frame_name().to_string();
-                if Engine::resolve_frame(&engine.frame_tables, ICON_TEXTURE, &icon).is_some() {
+            for ((item_id, count), icon) in stacks.iter().zip(icons) {
+                if engine.items.def(*item_id).is_none() {
+                    continue;
+                }
+                if let Some((tex, frame)) = icon {
                     let se = ui.spawn_sprite_frame(
                         &mut engine.world,
-                        ICON_TEXTURE,
-                        &icon,
+                        &tex,
+                        &frame,
                         ICON_SIZE,
                         ICON_SIZE,
                     );
@@ -257,5 +266,84 @@ impl InventoryUi {
                 }
             }
         }
+    }
+}
+
+/// The `(texture, frame)` keys of an item's icon for an inventory shown on
+/// `target`, or `None` when the icon sheet has no such frame.
+///
+/// Frame tables load under their ROM namespace: the table key **and** every
+/// frame name are qualified (`lunar::icons` / `lunar::regolith`), while item
+/// definitions keep bare names (`regolith`).  So resolve the sheet from the
+/// hovered entity's namespace (its qualified `DebugName`, else the engine's root
+/// namespace), then qualify the icon name with the sheet's own namespace.
+fn icon_frame(engine: &Engine, target: Entity, icon: &str) -> Option<(String, String)> {
+    let ns = engine
+        .world
+        .get::<&classic_core::components::DebugName>(target)
+        .ok()
+        .map(|n| Engine::namespace_of(&n.0))
+        .filter(|ns| !ns.is_empty())
+        .unwrap_or_else(|| engine.namespace.clone());
+    let texture = engine.resolve_resource(&ns, ResourceKind::FrameTable, ICON_TEXTURE)?;
+    let sheet_ns = Engine::namespace_of(&texture);
+    let frame = if sheet_ns.is_empty() || icon.contains("::") {
+        icon.to_string()
+    } else {
+        format!("{sheet_ns}::{icon}")
+    };
+    Engine::resolve_frame(&engine.frame_tables, &texture, &frame)?;
+    Some((texture, frame))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A namespaced ROM whose manifest ships the `icons` packed atlas, hydrated
+    /// through the real loader (which qualifies the table and frame keys).
+    fn engine_with_icon_rom() -> Engine {
+        let manifest_json = r#"{"entrypoint": "lunar", "namespace": "lunar", "shaders": [],
+            "textures": [{"name": "icons", "src": "/res/icons_sheet.png",
+                          "frames": "/res/icons.frames.json"}],
+            "animations": []}"#;
+        let frames = br#"{"version": 1,
+            "sheets": [{"name": "icons", "src": "/res/icons_sheet.png", "size": [64, 64]}],
+            "frames": {"regolith": {"sheet": 0, "rect": [0, 0, 32, 32]}}}"#;
+        let mut resources = classic_rom::ResourceSet::default();
+        resources.insert(classic_rom::ResourceKind::Frames, "icons", frames.to_vec());
+        let rom = classic_rom::Rom {
+            manifest: serde_json::from_str(manifest_json).unwrap(),
+            manifest_json: manifest_json.into(),
+            resources,
+            state: r#"{"entities": {"container_1": {"components": []}}}"#.into(),
+        };
+        let loaded = classic_rom::LoadedRoms {
+            root: "lunar".into(),
+            order: vec![classic_rom::LoadedRom {
+                name: "lunar".into(),
+                namespace: "lunar".into(),
+                rom,
+                sha256: None,
+            }],
+        };
+        let mut e = Engine::new_for_test();
+        e.hydrate_roms(&loaded, &classic_rom::NullBootSink);
+        e
+    }
+
+    #[test]
+    fn icon_frame_resolves_qualified_sheet_and_frame() {
+        let mut e = engine_with_icon_rom();
+        assert!(e.frame_tables.contains_key("lunar::icons"), "{:?}", e.frame_tables.keys());
+        let container = e.names["lunar::container_1"];
+        let expected = Some(("lunar::icons".to_string(), "lunar::regolith".to_string()));
+        // The hovered container's namespace resolves the qualified keys ...
+        assert_eq!(icon_frame(&e, container, "regolith"), expected);
+        // ... an unnamed entity falls back to the root namespace ...
+        let anon = e.world.spawn(());
+        assert_eq!(icon_frame(&e, anon, "regolith"), expected);
+        // ... and an item without an icon frame spawns nothing.
+        assert_eq!(icon_frame(&e, container, "unobtainium"), None);
     }
 }

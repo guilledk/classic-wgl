@@ -64,7 +64,8 @@ submodule.
 Cargo.toml               workspace root (11 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, tilemap,
-                          instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder, plus the
+                          instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder, model.rs (glTF
+                          parse + clip sampling), plus the
                           shared ABI marshalling (abi.rs) and field-buffer registry (fields.rs);
                           re-exports `classic-pathfinder` as `pathfinder`
   classic-pathfinder/     #![no_std] A* + footprint/slope/jump vehicle search (single source of
@@ -86,6 +87,7 @@ crates/
                           stage machine + BootFinish app hook, and the drivers: run_sync,
                           InterleavedBoot — per-frame, optionally fed by a boot thread),
                           boot_api.rs (ROM hydration the pipeline steps through), render.rs,
+                          model.rs (3D `Model` clip playback + draw prep),
                           ui.rs (UIManager), golden.rs (traces), env_config.rs,
                           vehicle/ (IsoVehicle sim + spawn API)
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
@@ -143,6 +145,18 @@ plans/
   toggle it within their scopes.  The UI/SDF phase runs with depth test off; layering is
    purely draw-order (z-sort).  Enabling it globally depth-rejects UI under ortho projection.
    See `classic-gfx` skill.
+- **3D models**: a `Model` component draws a node-parented glTF `.glb` (a ROM
+  `models[]` resource, `/models/<name>.glb`) as real geometry via `draw_model`
+  (`mesh` shader: shared world-space lighting block, sun shadow, true view
+  depth), between the terrain and the sprite passes.  Models keep the sprite
+  pixel look: they render into a `NEAREST` pixelation target at the sprite
+  texel size (`viewport × min(1, 1/zoom)`) that is composited back with its
+  depth, and ghost at 40% behind sprites/terrain like sprites do.  `classic_core::model`
+  parses + samples clips; `Engine::update_models` advances them and caches the
+  pose (`Model.node_world`) and the rig-origin translation (`Model.frame_offset`,
+  which a parented `Light` tracks); guests restart clips with
+  `start_model_clip`.  The glb origin sits on the terrain (no ground offset).
+  See `classic-gfx` §18 and `classic-iso` §8b.
 - **Dynamic lights (UBO)**: beyond the Lambertian sun (`light_ambient`/`light_dir`/
   `light_color`), dynamic point/spot lights are **first-class ECS entities** — a
   `Light` component (registered + dumpable, declarable in `state.json`) gathered
@@ -151,8 +165,10 @@ plans/
   `light_spawn`/`light_set`/`light_release` API returns a stable handle backed by
   a `LightHandles` entity table (`classic-engine/src/light.rs`) with optional TTL
   decay.  A `Light` may set `parent` (an entity name): its `position` is then a
-  **light-space offset from the parent's ground point** (`iso_to_world` of the
-  parent's tile position), so lights follow moving objects.  `Engine::iso_to_world(x, y,
+  **world-metre offset from the parent's ground point** (`iso_to_world` of the
+  parent's tile position) plus the parent's animated `frame_offset` (a `Model`'s
+  rig origin), so lights follow moving objects; a light whose parent (or itself)
+  is hidden (`Disabled`) is skipped.  `Light.radius` is metres.  `Engine::iso_to_world(x, y,
   elevation)` is the single iso-tile → light-space conversion.  An animation may
   carry typed `light.*` channels (see `AnimationData::channels`); an `Animator`
   targeting `"<entity>.Light"` samples them and drives the light in lockstep with
@@ -288,6 +304,12 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
 - **Unit/integration tests**: `cargo test`.  Tests in `classic-core`
   cover pathfinding, GJK, quadtree, camera, tile mesh building, SDF builder, dumper
   round-trips, camera math, fractal noise, and the lunar terrain generator.
+- **Rocket motion gates**: `crates/classic-core/tests/rocket_motion.rs` parses the
+  exported US Rocket glbs through `classic_core::model` and checks the motion
+  gates (per-key |Δv|, touchdown speed, foot contact, landing-end == launch-start),
+  writing a z/v/tilt CSV.  The glbs are classic-assets build output, so it
+  reads `CLASSIC_ROCKET_GLB_DIR` (`landing.glb` + `launch.glb`) and skips when
+  unset.
 - **Terrain generator**: `crates/classic-core/tests/terrain_lunar.rs` is the primary
   regression net for the lunar scene.  It needs no GL and asserts the *gameplay*
   guarantees — bounded slopes, flat landing pads, buildable area, and mutual
@@ -310,8 +332,7 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
   real delta and lands on a different frame each run:
   `CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar cargo run -p classic-desktop`
   Under `LIBGL_ALWAYS_SOFTWARE=1`, llvmpipe's multithreaded rasterizer can race on
-  the sprite ghost-pass depth rendering (the landing rocket is the first iso
-  sprite in the lunar scene); pin it to one thread with `LP_NUM_THREADS=0`
+  the sprite ghost-pass depth rendering; pin it to one thread with `LP_NUM_THREADS=0`
   (CI does this — see `.github/workflows/ci.yml`).
 - **Pixel golden**: `CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=check` compares a pixel buffer
   against `tests/golden/baseline/baseline.png` (not run in CI by default — software-

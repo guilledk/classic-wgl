@@ -1,6 +1,6 @@
 #version 300 es
 
-precision mediump float;
+precision highp float;
 
 in vec4 vertex_pos;
 in vec2 tex_coord;

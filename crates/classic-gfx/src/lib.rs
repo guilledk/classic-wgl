@@ -15,6 +15,7 @@ mod buffer;
 mod draw;
 mod framebuffer;
 mod light;
+mod model_pass;
 mod shader;
 mod shadow;
 mod texture;
@@ -33,12 +34,13 @@ use std::rc::Rc;
 
 use buffer::build_quad;
 
-pub use buffer::{DynamicVb, GlBuffer, QuadBuffers};
-pub use framebuffer::{DepthFramebuffer, GlFrameBuffer};
+pub use buffer::{DynamicVb, GlBuffer, ModelMeshGpu, QuadBuffers, MODEL_VERTEX_STRIDE};
+pub use framebuffer::{DepthFramebuffer, GlFrameBuffer, ModelTarget};
 pub use light::{
     pack_lights, LightBuffer, LIGHT_UBO_BINDING, MAX_LIGHTS, SHADOW_MAP_SIZE, SHADOW_MAP_UNIT,
     SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET,
 };
+pub use model_pass::{model_target_size, MODEL_GHOST_GROUP};
 pub use shader::{builtin_shaders, BuiltinShader, Shader, ShaderSourceRegistry};
 pub use texture::GlTexture;
 
@@ -124,6 +126,8 @@ pub struct Gfx {
     pub render_target: Option<GlFrameBuffer>,
     lights: LightBuffer,
     shadow_map: Option<DepthFramebuffer>,
+    /// The 3D-model pixelation target (see `model_pass`), created lazily.
+    model_target: Option<ModelTarget>,
     vao: glow::VertexArray,
 }
 
@@ -142,6 +146,7 @@ impl Gfx {
             render_target: None,
             lights,
             shadow_map: None,
+            model_target: None,
             vao,
         }
     }

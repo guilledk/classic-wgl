@@ -159,6 +159,20 @@ categories:
   (`"entityName.ComponentName"` format).  Fields: `speed: f32`, plus
   runtime-only `animation`, `counter`, `frame`, `repeat`, `playing`.
 
+- **`Model`** — a 3D glTF model (`.glb`, node-parented, not skinned).
+  Fields: `position` (iso tile; the glb origin sits on the terrain ground point,
+  no ground offset), `scale`, `model` (a `models[]` resource), `tilemap`,
+  `clip` (named inside the glb; `None` = bind pose), `speed`, `repeat`,
+  `playing`; transient (`#[serde(skip)]`) `time`, `node_world` (per-node glTF
+  pose) and `frame_offset` (the animated rig-origin/root-node translation in
+  world metres).  `Engine::update_models(delta)` (registered by the demo's
+  `init_model_system`, right after the animator) advances the clip and
+  re-samples both; `Engine::start_model_clip(name, model, repeat)` restarts it
+  (the clip is the model name's last `::` segment).  `Model.tilemap` is in the
+  cross-ref rewrite pass and `Model.model` in the resource-ref rewrite pass —
+  **a new reference field must go in both passes**, or a namespaced ROM skips
+  the draw.  Drawn as `DrawKind::Model` (see `classic-gfx` §18).
+
 ### Vehicles
 
 - **`IsoVehicle`** — wheeled-vehicle sim.  Lives on the **body** entity (which
@@ -194,9 +208,12 @@ categories:
   it can be authored in `state.json` and round-trips through the registry).
   Fields: `kind: LightKind` (`Point`/`Spot`, `#[serde(rename_all = "snake_case")]`),
   `position: Vec3` (**light space**, +Z up — see below),
-  `color: [f32;3]`, `intensity: f32`, `radius: f32` (attenuation, world px;
-  `<= 0` disables falloff), `dir: Vec3`, `cone_angle: f32` (spot half-angle;
+  `color: [f32;3]`, `intensity: f32`, `radius: f32` (attenuation, **world metres**,
+  uploaded verbatim; `<= 0` disables falloff), `dir: Vec3`, `cone_angle: f32` (spot half-angle;
   `<= 0` encodes Point).  Spot fields are future-proofed but not yet emitted.
+- A `Light` with `parent` treats `position` as a world-metre offset from the
+  parent's ground point plus the parent's `frame_offset` (a `Model` parent
+  contributes its animated rig-origin translation).
 - **⚠️ `position` is in light space, not screen space.**  Light space is
   `iso_world_light_matrix · world` (metric, **+Z up**) — the same space
   `light_dir`, `vNormal` and the shadow map live in.  It must **not** be mixed
@@ -256,6 +273,7 @@ Render-list items are sorted by z-depth and drawn back-to-front:
 | Tilemap       | `20000.0`                             |
 | NavMesh       | `19999.0`                             |
 | IsoSprite     | `tf.position.x - tf.position.y`       |
+| Model         | `tf.position.x - tf.position.y`       |
 | UiRect        | `tf.position.z`                       |
 | SdfText       | `tf.position.z`                       |
 
@@ -296,6 +314,7 @@ so `Transform` is not emitted separately.  The current subsumes graph:
 | Sprite            | Transform             |
 | Tilemap           | Transform             |
 | IsoSprite         | Transform             |
+| Model             | Transform             |
 | IsoAgent          | IsoSprite, Transform  |
 | IsometricNavMesh  | Transform             |
 | Animator          | (none)                |
@@ -310,7 +329,7 @@ so `Transform` is not emitted separately.  The current subsumes graph:
 
 During `dump_state`, `ordered_regs()` sorts by `order` (ascending).  The
 current priorities: Tilemap(10), IsometricNavMesh(15), Sprite(20),
-IsoSprite(30), Animator(35), IsoAgent(40), Rect(45), SdfText(46),
+IsoSprite(30), Model(33), Animator(35), IsoAgent(40), Rect(45), SdfText(46),
 Camera(48), Transform(50), Light(59), Role(60).  This controls the field order in the
 serialized JSON.  Note `Transform` is **not** "emitted last" — `Role(60)`
 sorts after it.

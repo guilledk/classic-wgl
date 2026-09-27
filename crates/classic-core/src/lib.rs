@@ -7,6 +7,7 @@ pub mod fields;
 pub mod instrument;
 pub mod inventory;
 pub mod math;
+pub mod model;
 pub mod registry;
 pub mod sdf_builder;
 pub mod terrain;
@@ -18,7 +19,7 @@ pub mod quadtree;
 pub mod simplex_noise;
 
 use components::{
-    Animator, IsoAgent, IsoSprite, IsoVehicle, NavMesh, RectRender, Role, SdfTextRender,
+    Animator, IsoAgent, IsoSprite, IsoVehicle, Model, NavMesh, RectRender, Role, SdfTextRender,
     Selectable, Tilemap,
 };
 use inventory::Inventory;
@@ -111,6 +112,18 @@ pub fn register_all_components() {
             dump: Some(dump_as::<IsoAgent>),
             order: 40,
             subsumes: &["IsoSprite", "Transform"],
+        },
+        ComponentReg {
+            name: "Model",
+            spawn: |b, v| {
+                let m: Model = serde_json::from_value(v)?;
+                b.add(Transform::new(m.position, m.scale));
+                b.add(m);
+                Ok(())
+            },
+            dump: Some(dump_as::<Model>),
+            order: 33,
+            subsumes: &["Transform"],
         },
         ComponentReg {
             name: "Animator",

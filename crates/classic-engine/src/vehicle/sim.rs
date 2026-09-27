@@ -184,7 +184,9 @@ impl Engine {
         // ghost through terrain and other entities).  Ids live in 1..=255; 0 is
         // reserved for ungrouped sprites.
         let ghost_group = self.next_ghost_group;
-        self.next_ghost_group = (self.next_ghost_group % 255) + 1;
+        // Groups cycle through 1..255; `MODEL_GHOST_GROUP` (255) is reserved for
+        // the 3D-model composite.
+        self.next_ghost_group = (self.next_ghost_group % (classic_gfx::MODEL_GHOST_GROUP - 1)) + 1;
 
         // Spawn the four wheel sprites.
         for i in 0..4 {
