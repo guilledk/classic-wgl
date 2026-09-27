@@ -8,6 +8,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-27
+
 ### Added
 
 - 3D glTF model rendering: a `Model` component (registered + dumpable, subsumes
