@@ -1,5 +1,7 @@
 use glam::Vec3;
 
+use classic_core::collision::{polygon_from_verts, PhysicsProvider};
+use classic_core::components::{ColliderData, Shape};
 use classic_core::gjk::{GjkContext, GjkShape};
 
 /// A simple unit-square shape for testing.
@@ -128,4 +130,101 @@ fn panics_on_4d_simplex() {
     ctx.verts.push(Vec3::ZERO);
     ctx.verts.push(Vec3::ZERO);
     ctx.evolve_simplex();
+}
+
+// ---------------------------------------------------------------------------
+// Concentric shapes
+//
+// A zero centre-delta used to leave the first search direction at `Vec3::ZERO`.
+// `Shape::support` normalizes `dir` for a circle, so that produced a NaN
+// support point, `dir.dot(diff) >= 0.0` was false, and two fully overlapping
+// shapes reported *no* collision.
+// ---------------------------------------------------------------------------
+
+/// A circle usable directly as a `GjkShape`, going through the real
+/// `Shape::support` implementation (the one that normalizes `dir`).
+struct Circle {
+    pos: Vec3,
+    diameter: f32,
+}
+
+impl GjkShape for Circle {
+    fn center(&self) -> Vec3 {
+        self.pos
+    }
+
+    fn support(&self, dir: Vec3) -> Option<Vec3> {
+        Shape::Circle { diameter: self.diameter }.support(self.pos, Vec3::ONE, dir)
+    }
+}
+
+#[test]
+fn detects_concentric_circles() {
+    let a = Circle { pos: Vec3::new(100.0, 100.0, 0.0), diameter: 20.0 };
+    let b = Circle { pos: Vec3::new(100.0, 100.0, 0.0), diameter: 10.0 };
+    assert!(GjkContext::new(&a, &b).perform_test());
+    // ...and the other way round, since the first direction is derived from
+    // `b.center() - a.center()`.
+    assert!(GjkContext::new(&b, &a).perform_test());
+}
+
+#[test]
+fn detects_identical_circles() {
+    let a = Circle { pos: Vec3::new(-3.5, 12.0, 0.0), diameter: 8.0 };
+    let b = Circle { pos: Vec3::new(-3.5, 12.0, 0.0), diameter: 8.0 };
+    assert!(GjkContext::new(&a, &b).perform_test());
+}
+
+#[test]
+fn detects_concentric_circle_and_polygon() {
+    // Unit square centred on the origin, so it shares the circle's centre.
+    let square = polygon_from_verts(vec![
+        Vec3::new(-0.5, -0.5, 0.0),
+        Vec3::new(0.5, -0.5, 0.0),
+        Vec3::new(0.5, 0.5, 0.0),
+        Vec3::new(-0.5, 0.5, 0.0),
+    ]);
+    let poly = ShapeAt { shape: square, pos: Vec3::ZERO };
+    let circle = Circle { pos: Vec3::ZERO, diameter: 4.0 };
+
+    assert!(GjkContext::new(&circle, &poly).perform_test());
+    assert!(GjkContext::new(&poly, &circle).perform_test());
+}
+
+/// A `Shape` placed at a position, as a `GjkShape`.
+struct ShapeAt {
+    shape: Shape,
+    pos: Vec3,
+}
+
+impl GjkShape for ShapeAt {
+    fn center(&self) -> Vec3 {
+        self.shape.center(self.pos, Vec3::ONE)
+    }
+
+    fn support(&self, dir: Vec3) -> Option<Vec3> {
+        self.shape.support(self.pos, Vec3::ONE, dir)
+    }
+}
+
+#[test]
+fn circle_support_of_zero_dir_is_finite() {
+    let s = Shape::Circle { diameter: 6.0 };
+    let p = s.support(Vec3::new(7.0, -2.0, 0.0), Vec3::ONE, Vec3::ZERO).unwrap();
+    assert!(p.is_finite(), "zero-dir support must not be NaN, got {p:?}");
+}
+
+#[test]
+fn concentric_colliders_collide_through_the_provider() {
+    let mut physics = PhysicsProvider::new();
+    let a = physics.register_collider(ColliderData {
+        position: Vec3::new(100.0, 100.0, 0.0),
+        ..ColliderData::new(Shape::Circle { diameter: 20.0 })
+    });
+    let b = physics.register_collider(ColliderData {
+        position: Vec3::new(100.0, 100.0, 0.0),
+        ..ColliderData::new(Shape::Circle { diameter: 10.0 })
+    });
+    assert!(physics.gjk_test(a, b));
+    assert!(physics.gjk_test(b, a));
 }

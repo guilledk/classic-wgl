@@ -8,6 +8,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Fixed
+
+- GJK no longer reports "no collision" for concentric shapes.  A zero
+  centre-delta left the first search direction at `Vec3::ZERO`, and
+  `Shape::support` normalizes `dir` for a circle, so the support point came
+  back NaN, `dir.dot(diff) >= 0.0` was false, and two fully overlapping
+  same-centre colliders read as disjoint.  `evolve_simplex` now falls back to a
+  fixed axis when the centres coincide and terminates with `Intersection` when
+  the 2-simplex perpendicular degenerates (the origin lying *on* segment CB);
+  `Shape::support` uses `normalize_or_zero` so a zero direction can never
+  produce a NaN support point at all (#109).
+
 ## [0.3.0] - 2026-09-27
 
 ### Added
