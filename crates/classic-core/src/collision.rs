@@ -623,9 +623,15 @@ impl PhysicsProvider {
             ColliderHandle { pid: 0, rect: self.mouse.rect }
         } else if pid == 1 {
             ColliderHandle { pid: 1, rect: self.selection.rect }
-        } else if let Some(e) = self.entries.get(&pid) {
-            let r = e.collider.shape.rect(e.collider.position, e.collider.scale);
-            ColliderHandle { pid, rect: r }
+        } else if self.entries.contains_key(&pid) {
+            // Derive the rect from `shape_of` so this can never drift out of
+            // the space the quadtree lives in.  `begin_frame` inserts a
+            // `ColliderSpace::World` collider by its *screen* projection and
+            // `shape_of` reads it back the same way; returning the
+            // un-projected world rect here made every Enter/Exit query for a
+            // world-space collider run in the wrong space.
+            let (shape, pos, scl) = self.shape_of(pid);
+            ColliderHandle { pid, rect: shape.rect(pos, scl) }
         } else {
             ColliderHandle { pid, rect: Rect::default() }
         }

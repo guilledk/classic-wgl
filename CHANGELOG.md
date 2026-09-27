@@ -19,6 +19,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   the 2-simplex perpendicular degenerates (the origin lying *on* segment CB);
   `Shape::support` uses `normalize_or_zero` so a zero direction can never
   produce a NaN support point at all (#109).
+- Enter/Exit collision handlers fire again for `ColliderSpace::World`
+  colliders.  `begin_frame` inserts a world collider into the *screen* quadtree
+  by its projected rect, but `handle_for` handed back the un-projected *world*
+  rect, so `perform_calls` built its candidate set from the wrong region of the
+  tree.  `handle_for` now derives from `shape_of`, which already projects, so
+  the two cannot drift apart again (#110).
 
 ## [0.3.0] - 2026-09-27
 
