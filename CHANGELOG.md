@@ -8,6 +8,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-28
+
 ### Added
 
 - `CLASSIC_TEST=<name>` selects an e2e scenario.  `build_test_scenario` took a
