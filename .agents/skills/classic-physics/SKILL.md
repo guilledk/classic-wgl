@@ -300,6 +300,23 @@ pub trait RectBounds {
 field is the cached bounding rect of the collider's shape (in screen-space),
 computed at insertion time in `begin_frame`.
 
+**The quadtree is screen-space, always.**  A `ColliderSpace::World` collider is
+inserted by the projection `begin_frame` computes and stores on
+`ColliderEntry.projected`.  Every reader of that entry must go through the same
+projection, so both `shape_of` and `handle_for` derive from it (`handle_for`
+calls `shape_of` rather than re-deriving the rect).  Handing a *world* rect to
+`Quadtree::retrieve` looks harmless in a small scene, because `retrieve`
+returns everything held at each visited level, but it silently drops candidates
+the moment the tree subdivides — which is how Enter/Exit stopped firing for
+world colliders under a non-identity camera.  A test for this needs >10
+colliders to force the split.
+
+Known gap: `project_shape`'s `Circle` arm scales the diameter but drops the
+position, so a world-space *circle* collider still projects to screen origin.
+Every world collider in the engine today is a polygon
+(`selectable_world_polygon`, the footprint prefab), so nothing hits it — but do
+not add a world circle collider without fixing that first.
+
 ### Spatial Partition Behaviour
 
 - **max\_objects = 10, max\_levels = 4** — the quadtree splits a node into 4
