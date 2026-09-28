@@ -58,7 +58,11 @@ impl Shape {
         match self {
             Shape::Circle { diameter } => {
                 let r = diameter / 2.0;
-                let d = dir.normalize() * r * scale;
+                // `normalize()` of a zero-length `dir` is NaN, and a NaN support
+                // point propagates through GJK as a false "no intersection".
+                // Any point is a valid support for a zero direction; the centre
+                // will do.
+                let d = dir.normalize_or_zero() * r * scale;
                 let c = position;
                 Some(Vec3::new(c.x + d.x, c.y + d.y, 0.0))
             }

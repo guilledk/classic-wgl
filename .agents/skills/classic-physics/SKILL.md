@@ -227,8 +227,11 @@ methods on `Shape`, passing through the position and scale.
 
 ### Circle Support
 
-Returns `position + normalize(dir) * radius * scale`, with `z = 0`.  The
-radius is `diameter / 2.0`.
+Returns `position + normalize_or_zero(dir) * radius * scale`, with `z = 0`.
+The radius is `diameter / 2.0`.  `normalize_or_zero` is load-bearing: a plain
+`normalize()` of a zero-length `dir` is NaN, and a NaN support point makes
+`add_support`'s `dir.dot(diff) >= 0.0` false, which GJK reads as
+`NoIntersection`.
 
 ### Polygon Support
 
@@ -239,16 +242,36 @@ returns the vertex with the largest dot product against `dir`.
 
 `GjkContext::evolve_simplex` handles 0, 1, 2, and 3-vertex cases:
 
-- **0 verts**: seed direction = `center(B) - center(A)`.
+- **0 verts**: seed direction = `center(B) - center(A)`, falling back to
+  `Vec3::X` when that delta is degenerate (concentric shapes).
 - **1 vert**: flip direction.
 - **2 verts**: use triple product to find perpendicular direction towards
-  origin.
+  origin; a degenerate perpendicular returns `Intersection` (see below).
 - **3 verts**: check which Voronoi region the origin lies in, drop a vertex if
   needed, or return `Intersection`.
 - **`panics` on > 3 verts** (only 2D simplex is supported).
 
 The outer loop in `perform_test` runs up to 1000 iterations; a panic fires if
 this is exceeded.
+
+### Degenerate Directions
+
+**A zero search direction is a wrong answer, not a crash.**  GJK used to hand
+`Vec3::ZERO` to `support` for concentric shapes and silently report
+`NoIntersection` for two fully overlapping colliders.  Two guards keep that
+from recurring:
+
+- **Coincident centres** (0-vert case).  `center(B) - center(A)` is zero, so the
+  seed direction falls back to `FALLBACK_DIR` (`Vec3::X`).  Any fixed axis does;
+  only non-zero matters.
+- **Collinear 2-simplex.**  `c` and `b` were found along opposite directions, so
+  the origin already lies between them.  When `triple_product(cb, c0, cb)`
+  degenerates, the origin sits *on* segment CB and is inside the Minkowski
+  difference: return `Intersection` rather than searching along nothing.
+
+Both use `MIN_DIR_LEN_SQ` (`1e-12`) as the squared-length floor.  Regression
+coverage is the `detects_concentric_*` / `circle_support_of_zero_dir_is_finite`
+tests in `crates/classic-core/tests/gjk.rs`.
 
 ### Known Edge Case
 
