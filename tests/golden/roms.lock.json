@@ -1,15 +1,15 @@
 {
   "demo": {
-    "size": 879110,
-    "sha256": "c1151e00bc99754007d3e37077f15cac1514412804462d791c311ac1d23ae901",
-    "version": "0.1.1",
+    "size": 879077,
+    "sha256": "87419e2910e4893f8f200040e5b9ab847c7183c4b77f94e6afa47cbd55906c4d",
+    "version": "0.1.2",
     "assets_hash": "af490fb850722720c655fc06f9b61ed1485603f4112201afae2371c434f03850"
   },
   "lunar": {
-    "size": 1127641,
-    "sha256": "b27184eab44799b68703be1736bf3c0e35bf3ec2b7fc5ee17b6cf0faadbe041c",
-    "version": "0.3.0",
-    "assets_hash": "973a346b12ad3368ba888b4eef898c4fd03789b79a386f97c2ffe199cc21c29e"
+    "size": 1127774,
+    "sha256": "db1b3ffb61e1903aff00c3a3c1e711c5ab006a1ee83b41f3c69530e6355efde1",
+    "version": "0.3.1",
+    "assets_hash": "2e4211b7d1490c846903e18986c2f76f946b74ac53a0857365312343234e7a21"
   },
   "lrvtest": {
     "size": 1874,
@@ -30,9 +30,9 @@
     "assets_hash": "7ff765037d79d8a245889a8c383c6c36a5d2121a549d46083fe45b9cccaff97a"
   },
   "lunar-common": {
-    "size": 4953045,
-    "sha256": "8ae3ddfd8bf433c6f92831a9ce6aee6536f4f2a621fe936bf1ca49de429d3907",
+    "size": 4953011,
+    "sha256": "e322c4b0049b5875aaaefcdc006e670f991cfa45ca6064f453cf11bf9a3bcc3d",
     "version": "0.1.0",
-    "assets_hash": "8859c515f7e1b89b037162e94fe7940fb5d6fe2be978b230806f5308bff8836a"
+    "assets_hash": "39e2e010dd9bb2a33f22020fbacfdf0891704d3382139dffd29993dd5df54cca"
   }
 }
