@@ -106,8 +106,46 @@ passed ==="`).
 
 ## 4. Writing a Test Scenario
 
-Scenarios are `Vec<TestStep>` values, defined either in Rust (hardcoded in
-`build_test_scenario`) or as a JSON file pointed to by `CLASSIC_TEST_FILE`.
+Scenarios are `Vec<TestStep>` values.  Each lives in
+`tests/scenarios/<name>.test.json` and is registered in the `SCENARIOS` table
+in `classic-demo/src/testing.rs`, which `include_str!`s it so a run never
+depends on the process cwd.  An ad-hoc scenario can still be passed by path
+through `CLASSIC_TEST_FILE`, which takes precedence over everything below.
+
+### 4a. Selecting a scenario
+
+`CLASSIC_TEST=<name>` picks `tests/scenarios/<name>.test.json`.  An unknown
+name panics with the list of known ones — it does **not** silently fall back
+to the default, which is how three scenarios sat unrun.
+
+`CLASSIC_TEST=1` / `true` / `all` / `default` are all aliases for the
+`default` scenario.  `all` is a misnomer kept for compatibility: CI,
+AGENTS.md and the golden runbooks all use it, and the demo baseline's golden
+capture frame is derived from the default scenario's last step, so
+repointing `all` would silently invalidate that baseline.
+
+**A scenario is bound to one ROM**, because it names entities and those names
+are namespaced by the ROM that declares them.  There is no "run everything in
+one process":
+
+| scenario | ROM | invocation |
+|---|---|---|
+| `default` | `demo` | `CLASSIC_TEST=all` (CI golden) |
+| `render_order` | `lrvtest` | `CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order` |
+| `container_ghost` | unpublished `container` scene | not runnable, see section 9 |
+| `rocket` | `lunar` | `CLASSIC_ROM=rom:lunar CLASSIC_TEST=rocket` |
+
+Two `classic-demo` unit tests keep the table honest:
+`scenario_table_covers_the_directory` (a file not in `SCENARIOS` is
+unreachable) and `every_registered_scenario_parses` (a scenario whose JSON has
+rotted past the `TestStep` schema is a test that cannot run).
+
+**Entity names in assertions must be namespaced** (`lunar::rocket`,
+`lunar-common::lrv`), matching what the ROM rewrite passes produce.  Dump the
+real names with
+`CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=<tmp> CLASSIC_FRAMES=60` and grep
+`"name"` out of the emitted trace — note the default capture frame is 55, so
+`CLASSIC_FRAMES` must exceed it or nothing is written.
 
 ### JSON format
 
@@ -441,11 +479,26 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
 
 ## 9. Known-divergent / non-functional
 
-- **`build_test_scenario(name)` ignores the `name` parameter**: the
-  parameter is accepted but discarded.  The only hardcoded scenario is
-  always loaded.  `CLASSIC_TEST=all` and `CLASSIC_TEST=1` are equivalent.
-  Named scenario support requires `CLASSIC_TEST_FILE` for custom scenarios
-  or extending `build_test_scenario` with a match arm.
+- **Three scenarios are stale, not merely unwired.**  `build_test_scenario`
+  now dispatches on its name (see section 4a), but `render_order`,
+  `container_ghost` and `rocket` still fail their assertions because they
+  were authored before ROM namespacing and never ran afterwards:
+  - `render_order` (ROM `lrvtest`) and `rocket` (ROM `lunar`) had their
+    entity names repaired to `lunar-common::lrv` /
+    `lunar-common::lrvWheelFl` / `lunar::rocket`, which resolve.  They now
+    fail on substance: `render_order` reads alpha ~0.76 at both the LRV
+    body and front-left wheel ground origins where it wants >= 0.9, and
+    `rocket` samples off-screen (x = 1738 at 1280 wide), so its camera
+    framing no longer matches the scene.
+  - `container_ghost` targets an entity named `container`, which exists in
+    **no fetchable ROM**: `lunar` ships only `containerTemplate`, and the
+    `container` scene is deliberately excluded from `classic-roms`'
+    `PUBLISHED` set.  `basetest`'s `containerA` (same footprint, already at
+    frame 56) looks like its successor, but retargeting it is authoring a
+    new scenario, not reviving one.
+
+  None of the three are wired into the golden CI job for that reason --
+  they would turn it red immediately.  Revive them before wiring them.
 
 - **`Wait` action is a no-op**: the `Wait { frames }` action does nothing
   in `run_test_frame`.  To wait, schedule a `TestStep` on a later frame

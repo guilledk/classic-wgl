@@ -17,14 +17,14 @@
         "kind": "pixelAtEntity",
         "region": [0, 0, 0, 0],
         "expected": 0.9,
-        "log": "lrv",
+        "log": "lunar-common::lrv",
         "color": null
       },
       {
         "kind": "pixelAtEntity",
         "region": [0, 0, 0, 0],
         "expected": 0.9,
-        "log": "lrvWheelFl",
+        "log": "lunar-common::lrvWheelFl",
         "color": null
       }
     ],

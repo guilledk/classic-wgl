@@ -139,7 +139,28 @@ pub fn install(engine: &mut Engine, state: &DemoStateRef) {
     });
 }
 
-fn build_test_scenario(_name: &str) -> Vec<TestStep> {
+/// Every scenario under `tests/scenarios/`, compiled in so a run never depends
+/// on the process cwd.  The key is both the file stem and the `CLASSIC_TEST`
+/// value that selects it.
+///
+/// One table, N views (AGENTS.md "Patterns" #1): the `scenario_table_*` tests
+/// assert this covers the directory exactly, so a new scenario file cannot go
+/// silently unrun the way `render_order`, `container_ghost` and `rocket` did
+/// while `build_test_scenario` discarded its argument.
+pub const SCENARIOS: &[(&str, &str)] = &[
+    ("default", include_str!("../../../tests/scenarios/default.test.json")),
+    ("render_order", include_str!("../../../tests/scenarios/render_order.test.json")),
+    ("container_ghost", include_str!("../../../tests/scenarios/container_ghost.test.json")),
+    ("rocket", include_str!("../../../tests/scenarios/rocket.test.json")),
+];
+
+/// `CLASSIC_TEST` values that only mean "turn the runner on".  Kept because CI,
+/// AGENTS.md and the golden runbooks all invoke `CLASSIC_TEST=all`, and the
+/// demo baseline's capture frame is derived from the default scenario's last
+/// step — repointing `all` would silently invalidate it.
+const DEFAULT_ALIASES: &[&str] = &["1", "true", "all", "default"];
+
+fn build_test_scenario(name: &str) -> Vec<TestStep> {
     let config = EnvConfig::get();
     if !config.test_file.is_empty() {
         match std::fs::read_to_string(&config.test_file) {
@@ -150,8 +171,15 @@ fn build_test_scenario(_name: &str) -> Vec<TestStep> {
             Err(e) => panic!("cannot read CLASSIC_TEST_FILE {}: {}", config.test_file, e),
         }
     }
-    serde_json::from_str(include_str!("../../../tests/scenarios/default.test.json"))
-        .expect("deserialize default test scenario")
+    let key = if DEFAULT_ALIASES.contains(&name) { "default" } else { name };
+    let Some((_, json)) = SCENARIOS.iter().find(|(k, _)| *k == key) else {
+        let known: Vec<&str> = SCENARIOS.iter().map(|(k, _)| *k).collect();
+        panic!(
+            "CLASSIC_TEST={name:?}: no such scenario.  Known: {known:?} \
+             (or point CLASSIC_TEST_FILE at a scenario JSON)"
+        );
+    };
+    serde_json::from_str(json).unwrap_or_else(|e| panic!("scenario {key}: {e}"))
 }
 
 fn run_frame(
@@ -595,4 +623,65 @@ fn assert_ui_text_centered(engine: &Engine, state: &DemoStateRef, tolerance: f32
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TestStep, DEFAULT_ALIASES, SCENARIOS};
+
+    fn scenarios_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/scenarios")
+    }
+
+    /// The gate that was missing: a scenario file that is not in `SCENARIOS` is
+    /// unreachable via `CLASSIC_TEST=<name>`, and a table entry with no file
+    /// would not compile.  Keep the two in lockstep.
+    #[test]
+    fn scenario_table_covers_the_directory() {
+        let mut on_disk: Vec<String> = std::fs::read_dir(scenarios_dir())
+            .expect("tests/scenarios must exist")
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name().to_string_lossy().into_owned();
+                name.strip_suffix(".test.json").map(str::to_string)
+            })
+            .collect();
+        on_disk.sort();
+
+        let mut registered: Vec<String> = SCENARIOS.iter().map(|(k, _)| k.to_string()).collect();
+        registered.sort();
+
+        assert_eq!(
+            on_disk, registered,
+            "every tests/scenarios/<name>.test.json must appear in SCENARIOS, else \
+             CLASSIC_TEST=<name> cannot reach it"
+        );
+    }
+
+    /// A scenario whose JSON has rotted past the `TestStep` schema is a test
+    /// that cannot run.  Parse them all, every `cargo test`.
+    #[test]
+    fn every_registered_scenario_parses() {
+        for (name, json) in SCENARIOS {
+            let steps: Vec<TestStep> =
+                serde_json::from_str(json).unwrap_or_else(|e| panic!("scenario {name}: {e}"));
+            assert!(!steps.is_empty(), "scenario {name} has no steps");
+            assert!(
+                steps.windows(2).all(|w| w[0].frame <= w[1].frame),
+                "scenario {name}: steps must be in non-decreasing frame order, the runner 
+                 only ever advances `step_index` (equal frames are fine, its inner loop 
+                 drains every step scheduled for the current frame)"
+            );
+        }
+    }
+
+    #[test]
+    fn default_aliases_all_resolve() {
+        for alias in DEFAULT_ALIASES {
+            assert!(
+                *alias == "default" || !SCENARIOS.iter().any(|(k, _)| k == alias),
+                "alias {alias:?} collides with a real scenario name"
+            );
+        }
+        assert!(SCENARIOS.iter().any(|(k, _)| *k == "default"), "no `default` scenario");
+    }
 }

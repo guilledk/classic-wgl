@@ -321,9 +321,14 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
   still has no unit tests (no mock GL — deferred).
 - **CLASSIC_TEST e2e**: `CLASSIC_TEST=1 CLASSIC_FRAMES=60 cargo run -p classic-desktop`.
   One scenario (12 assertions) testing height blend/set, tile painting, zero-delta,
-  menu text centering, and text demo visibility.  `build_test_scenario(name)` is defined
-  but the `name` parameter is currently ignored (one hardcoded scenario).
-  See `classic-testing` skill for the complete DSL.
+  menu text centering, and text demo visibility.  `CLASSIC_TEST=<name>` selects
+  `tests/scenarios/<name>.test.json` through the `SCENARIOS` table in
+  `classic-demo/src/testing.rs`; `1`/`true`/`all`/`default` are aliases for the
+  `default` scenario and an unknown name panics with the known list.  Each
+  scenario is bound to one ROM (entity names are ROM-namespaced), so there is no
+  single run that covers them all.  `render_order`, `container_ghost` and
+  `rocket` are registered but still fail their assertions and are deliberately
+  not in CI — see `classic-testing` §9.  That skill also has the complete DSL.
 - **Golden trace**: `CLASSIC_GOLDEN=check|update` compares a render-trace `.jsonl`
   against `tests/golden/baseline/baseline.trace.jsonl`.  Run with:
   `CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop`.

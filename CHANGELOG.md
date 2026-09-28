@@ -8,6 +8,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- `CLASSIC_TEST=<name>` selects an e2e scenario.  `build_test_scenario` took a
+  `name` and discarded it, so `tests/scenarios/render_order`,
+  `container_ghost` and `rocket` were unreachable and only `default` ever ran.
+  Scenarios now come from a `SCENARIOS` table in `classic-demo/src/testing.rs`
+  that `include_str!`s each file, an unknown name panics with the known list
+  instead of silently falling back to `default`, and `1`/`true`/`all` stay
+  aliases for `default`.  Two unit tests keep the table in lockstep with
+  `tests/scenarios/` and parse every entry, which is the gate that was missing
+  (#111).
+
 ### Fixed
 
 - GJK no longer reports "no collision" for concentric shapes.  A zero
@@ -25,6 +37,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   rect, so `perform_calls` built its candidate set from the wrong region of the
   tree.  `handle_for` now derives from `shape_of`, which already projects, so
   the two cannot drift apart again (#110).
+- Repair the ROM-namespaced entity names in the `render_order` and `rocket`
+  scenarios (`lunar-common::lrv`, `lunar-common::lrvWheelFl`,
+  `lunar::rocket`).  They were authored before namespacing and never ran
+  afterwards, so their assertions could not resolve an entity at all.  Both
+  still fail on substance and remain out of CI; `classic-testing` section 9
+  records each one's blocker (#111).
 
 ## [0.3.0] - 2026-09-27
 
