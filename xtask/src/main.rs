@@ -46,6 +46,7 @@ const ROMS: &[(&str, &str)] = &[
     ("demo", "demo.rom"),
     ("lunar", "lunar.rom"),
     ("lrvtest", "lrvtest.rom"),
+    ("lighttest", "lighttest.rom"),
     ("common", "common.rom"),
     ("lunar-common", "lunar-common.rom"),
 ];

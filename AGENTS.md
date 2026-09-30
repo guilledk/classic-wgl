@@ -327,8 +327,9 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
   `default` scenario and an unknown name panics with the known list.  Each
   scenario is bound to one ROM (entity names are ROM-namespaced), so there is no
   single run that covers them all.  `render_order` (`rom:lrvtest`) and
-  `rocket` (`rom:lunar`, under `CLASSIC_FIXED_DT=0.05`) run in the CI golden
-  job — see `classic-testing` §9.  That skill also has the complete DSL.
+  `rocket` (`rom:lunar`, under `CLASSIC_FIXED_DT=0.05`) and `lighttest`
+  (`rom:lighttest`, the lighting reference, with its own trace golden) run
+  in the CI golden job — see `classic-testing` §9.  That skill also has the complete DSL.
 - **Golden trace**: `CLASSIC_GOLDEN=check|update` compares a render-trace `.jsonl`
   against `tests/golden/baseline/baseline.trace.jsonl`.  Run with:
   `CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop`.

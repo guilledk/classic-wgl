@@ -151,6 +151,7 @@ pub const SCENARIOS: &[(&str, &str)] = &[
     ("default", include_str!("../../../tests/scenarios/default.test.json")),
     ("render_order", include_str!("../../../tests/scenarios/render_order.test.json")),
     ("rocket", include_str!("../../../tests/scenarios/rocket.test.json")),
+    ("lighttest", include_str!("../../../tests/scenarios/lighttest.test.json")),
 ];
 
 /// `CLASSIC_TEST` values that only mean "turn the runner on".  Kept because CI,
