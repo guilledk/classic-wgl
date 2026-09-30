@@ -8,6 +8,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- A `lighttest` golden: classic-roms' new lighting-reference ROM joins the
+  ROM tables (`fetch-roms`, desktop, web), with a `lighttest` scenario and a
+  trace-only golden in CI.  It asserts three colours, each shown to fail
+  with its subject removed: the red container's top (static packed sprites,
+  #117), a spot pool on the ground (#118) and the rocket's sun shadow.  The
+  `lunar` trace is re-baselined for the rocket moving into `lunar-common`
+  (texture names only) (#119).
+
 ### Changed
 
 - The `classic-testing` skill and the golden job's comment now record what

@@ -157,6 +157,21 @@ jobs:
                   CLASSIC_FRAMES=225 CLASSIC_FIXED_DT=0.05
                   CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
                   RUST_LOG=info ./target/debug/classic-desktop
+            # The lighting reference: coloured point lights, spots, parented and
+            # guest-orbited lights, and container/LRV/rocket casters under a low
+            # sun.  Colour assertions (static sprites, a spot pool, the rocket's
+            # shadow) plus a trace golden; see `classic-testing` skill 5b.
+            - name: lighttest scene (lighting assertions + golden trace)
+              env:
+                  LIBGL_ALWAYS_SOFTWARE: 1
+                  EGL_PLATFORM: surfaceless
+                  LP_NUM_THREADS: 0
+              run: >-
+                  CLASSIC_ROM=rom:lighttest CLASSIC_TEST=lighttest CLASSIC_NO_UI=1
+                  CLASSIC_HEADLESS=1 CLASSIC_FRAMES=62 CLASSIC_FIXED_DT=0.016666668
+                  CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
+                  CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lighttest
+                  RUST_LOG=info ./target/debug/classic-desktop
             # The procedural scene needs a fixed timestep: without one the idle
             # animator lands on a different frame each run and the trace differs.
             - name: lunar scene (golden trace)
