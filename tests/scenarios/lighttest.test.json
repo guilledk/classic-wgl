@@ -1,0 +1,39 @@
+[
+  {
+    "frame": 2,
+    "actions": [],
+    "assertions": [],
+    "log": "the guest pins the sun + camera in init; let the rocket's sped-up landing clip play out"
+  },
+  {
+    "frame": 59,
+    "actions": [],
+    "assertions": [
+      {
+        "kind": "pixelAtEntity",
+        "region": [0, 0, 0, 0],
+        "expected": 0.1,
+        "log": "lighttest::containerB",
+        "color": [0.44, 0.11, 0.09, 1.0],
+        "offset": [4.0, -4.0]
+      },
+      {
+        "kind": "pixelAtEntity",
+        "region": [0, 0, 0, 0],
+        "expected": 0.12,
+        "log": "lighttest::containerA",
+        "color": [0.67, 0.65, 0.62, 1.0],
+        "offset": [-3.56, -1.42]
+      },
+      {
+        "kind": "pixelAtEntity",
+        "region": [0, 0, 0, 0],
+        "expected": 0.045,
+        "log": "lighttest::containerA",
+        "color": [0.16, 0.15, 0.16, 1.0],
+        "offset": [-8.29, -8.75]
+      }
+    ],
+    "log": "red container top renders (static packed sprite), spotA pools on the ground, the rocket casts the sun's shadow"
+  }
+]

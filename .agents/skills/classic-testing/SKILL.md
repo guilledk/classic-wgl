@@ -133,6 +133,7 @@ one process":
 | `default` | `demo` | `CLASSIC_TEST=all` (CI golden) |
 | `render_order` | `lrvtest` | `CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720` (CI) |
 | `rocket` | `lunar` | `CLASSIC_ROM=rom:lunar CLASSIC_TEST=rocket CLASSIC_FIXED_DT=0.05 CLASSIC_FRAMES=225 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720` (CI) |
+| `lighttest` | `lighttest` | `CLASSIC_ROM=rom:lighttest CLASSIC_TEST=lighttest CLASSIC_NO_UI=1 CLASSIC_FIXED_DT=0.016666668 CLASSIC_FRAMES=62 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720` (CI, + golden) |
 
 Two `classic-demo` unit tests keep the table honest:
 `scenario_table_covers_the_directory` (a file not in `SCENARIOS` is
@@ -253,26 +254,32 @@ golden comparison details.
 
 ## 5b. The scene / golden matrix
 
-There are two committed golden baselines.
+There are three committed golden baselines — **traces only**: never commit a
+`baseline.png` (capture pixels to a scratch `CLASSIC_GOLDEN_DIR` to look at
+them).
 
 | `CLASSIC_GOLDEN_DIR` | Scene | Distinguishing flags | Guards |
 |---|---|---|---|
 | `tests/golden/baseline` | demo | `CLASSIC_TEST=all` | e2e assertions + demo render |
 | `tests/golden/lunar` | lunar | `CLASSIC_ROM=rom:lunar CLASSIC_FIXED_DT=0.016666668` | procedural terrain, rocket anim |
+| **`tests/golden/lighttest`** | **lighttest** | **`CLASSIC_ROM=rom:lighttest CLASSIC_TEST=lighttest CLASSIC_NO_UI=1`** | **lighting, shadows, spots, static sprites** |
 
-**There is no committed lighting reference.**  `basetest-lit` used to be one
-(a 30° sun and two containers casting long shadows), but its containers had
-stopped rendering and, under `CLASSIC_NO_UI`, the nav-mesh overlay painted
-the whole map blue — so it was guarding neither; `basetest` was retired.
-For lighting or shadow work, capture a clean lit frame yourself and **look
-at it**: `CLASSIC_NO_UI=1` now hides the nav overlay as well as the
-editor/HUD, and the `render_order` scenario frames the LRV as a caster.
+**`lighttest` is the lighting reference** (classic-roms' `lighttest` ROM): a
+30° sun over a ramp/mound course, three containers, two LRVs and the rocket
+model as casters, a 4x4 grid of coloured point lights, two spots, parented
+lights and three guest-orbited ones — change anything about lighting and
+look at it.  Its scenario asserts three colours, each tied to a bug it
+guards: the red container's top (static packed sprites, #117), a spot pool
+on the ground (#118) and the rocket's sun shadow on the ground.  Each was
+shown to fail with its subject removed (no spots, `CLASSIC_SHADOWS=0`, the
+pre-#117 engine); the pre-#115 engine's `NO_UI` nav overlay fails all three.
+The trace is deterministic under the fixed timestep (the orbiting lights
+move on the frame clock).
 
 ```bash
-# a clean lit frame with a caster in shot (lrvtest's sun is 60°, so
-# shadows are short: compare against your own pre-change capture)
-CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_NO_UI=1 \
-CLASSIC_HEADLESS=1 CLASSIC_FRAMES=45 CLASSIC_FIXED_DT=0.016666668 \
+# look at the lighting reference
+CLASSIC_ROM=rom:lighttest CLASSIC_TEST=lighttest CLASSIC_NO_UI=1 \
+CLASSIC_HEADLESS=1 CLASSIC_FRAMES=62 CLASSIC_FIXED_DT=0.016666668 \
 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
 CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=/tmp/lit CLASSIC_GOLDEN_PNG=1 \
 LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 cargo run -p classic-desktop

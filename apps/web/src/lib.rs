@@ -12,6 +12,7 @@ const ROM_URLS: &[(&str, &str)] = &[
     ("lunar", "https://classic-roms.com/lunar.rom"),
     ("moon", "https://classic-roms.com/lunar.rom"),
     ("lrvtest", "https://classic-roms.com/lrvtest.rom"),
+    ("lighttest", "https://classic-roms.com/lighttest.rom"),
     ("common", "https://classic-roms.com/common.rom"),
     ("lunar-common", "https://classic-roms.com/lunar-common.rom"),
 ];
