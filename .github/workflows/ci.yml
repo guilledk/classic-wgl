@@ -124,9 +124,7 @@ jobs:
             # exits non-zero).  Both sample *colour* at points a captured frame
             # shows are solid sprite pixels, and both were checked to fail
             # when their subject is absent -- an alpha-only check over opaque
-            # terrain cannot fail.  `container_ghost` stays out: its target
-            # ships in no published rom.  See `classic-testing` skill
-            # section 9.
+            # terrain cannot fail.  See `classic-testing` skill section 9.
             - name: demo scene (e2e assertions + golden trace)
               env:
                   LIBGL_ALWAYS_SOFTWARE: 1
