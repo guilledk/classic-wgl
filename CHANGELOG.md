@@ -56,6 +56,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   demo's house, tree and semaphores fell back to their whole standalone
   textures.  Both goldens were re-baselined over it; the demo trace is
   re-baselined back to the atlas frames (#117).
+- Spot lights light what they point at.  All three lit shaders computed the
+  cone as `dot(L, dir)` with `L` the surface-to-light vector, so a spot only
+  lit what sat *behind* it (a downward spot lit nothing on the ground), and
+  softened its edge out to `acos(0.6 cos a)` -- ~56 deg for a 20 deg cone.
+  `dir` is now the beam direction and the edge softens to `1.25x` the
+  half-angle.  Found by the new `lighttest` ROM, the first scene to declare a
+  spot (#118).
 
 ### Removed
 

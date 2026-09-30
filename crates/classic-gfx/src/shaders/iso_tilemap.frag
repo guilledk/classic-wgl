@@ -81,9 +81,10 @@ vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     }
     float cone = 1.0;
     if (l.dir_cone.w > 0.0) {
-        float cosAngle = cos(l.dir_cone.w);
-        float cosTheta = dot(L, normalize(l.dir_cone.xyz));
-        cone = smoothstep(cosAngle * 0.6, cosAngle, cosTheta);
+        // `dir_cone.xyz` is the beam direction (light -> target) and `w` the
+        // half-angle of the full-intensity cone; the edge softens out to 1.25x.
+        float cosTheta = dot(-L, normalize(l.dir_cone.xyz));
+        cone = smoothstep(cos(l.dir_cone.w * 1.25), cos(l.dir_cone.w), cosTheta);
     }
     float diff = max(dot(n, L), 0.0);
     return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;

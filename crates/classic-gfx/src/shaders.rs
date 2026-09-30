@@ -42,4 +42,15 @@ mod tests {
         assert_eq!(sheet, lighting_block(ISO_TILEMAP_FRAG), "iso_tilemap.frag drifted");
         assert_eq!(sheet, lighting_block(MESH_FRAG), "mesh.frag drifted");
     }
+
+    /// Spot lights shipped with an inverted cone (`dot(L, dir)`, so a spot
+    /// only lit what sat *behind* it) and a soft edge reaching
+    /// `acos(0.6 cos a)` -- ~56 deg for a 20 deg cone.  Nothing noticed until
+    /// the `lighttest` ROM declared spots.  `dir` is the beam direction.
+    #[test]
+    fn spot_cone_faces_along_the_beam() {
+        let block = lighting_block(SHEET_FRAG);
+        assert!(block.contains("dot(-L, normalize(l.dir_cone.xyz))"), "spot dir must be the beam");
+        assert!(block.contains("smoothstep(cos(l.dir_cone.w * 1.25), cos(l.dir_cone.w)"));
+    }
 }

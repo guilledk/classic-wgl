@@ -841,8 +841,9 @@ pub enum LightKind {
 /// `kind` selects point (omnidirectional) vs spot (directional cone).  Point
 /// lights ignore the spot fields (`dir`, `cone_angle`); the GPU `std140`
 /// representation encodes the kind as a `cone_angle <= 0` sentinel so both
-/// kinds share one layout.  Spotlights are future-proofed here but not yet
-/// emitted by any system.
+/// kinds share one layout.  Spots are declared in `scene.json` (the
+/// `lighttest` ROM carries two); the guest `light_spawn` API cannot set `dir`
+/// or `cone_angle`, so a guest-spawned spot degenerates to a point light.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Light {
     #[serde(default)]
@@ -862,10 +863,12 @@ pub struct Light {
     /// uploaded verbatim by `gather_lights`.  `<= 0` disables distance falloff.
     #[serde(default = "default_light_radius")]
     pub radius: f32,
-    /// Spot direction (world space); ignored by point lights.
+    /// Spot beam direction in world space, from the light **toward** what it
+    /// lights (so a downward spot is `[0, 0, -1]`); ignored by point lights.
     #[serde(default)]
     pub dir: Vec3,
-    /// Spot half-angle in radians; `<= 0` encodes a point (omnidirectional) light.
+    /// Spot half-angle in radians of the full-intensity cone (the edge softens
+    /// out to `1.25 ×` it); `<= 0` encodes a point (omnidirectional) light.
     #[serde(default)]
     pub cone_angle: f32,
     /// Optional parent entity name.  When set, `position` is interpreted as a
