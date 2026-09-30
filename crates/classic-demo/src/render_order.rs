@@ -37,7 +37,10 @@ pub fn read_pixel_rgba(engine: &Engine, sx: f32, sy: f32) -> Option<[f32; 4]> {
 /// When `expected` is `None`, the pixel is checked for opacity (alpha must be
 /// at least `tol`, defaulting to a value passed by the caller) — useful for
 /// confirming a depth-mapped sprite renders fully where it is in front of
-/// terrain rather than ghosting or vanishing.
+/// terrain rather than ghosting or vanishing.  Beware: framebuffer alpha is
+/// blend bookkeeping, not visibility — it dips on every semi-transparent
+/// silhouette texel and reads 1.0 over opaque terrain when the sprite is
+/// absent — so prefer an `expected` colour (see `classic-testing` §5c).
 pub fn assert_pixel_at_entity(
     engine: &Engine,
     name: &str,

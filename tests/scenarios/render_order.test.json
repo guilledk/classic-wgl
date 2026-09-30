@@ -16,18 +16,20 @@
       {
         "kind": "pixelAtEntity",
         "region": [0, 0, 0, 0],
-        "expected": 0.9,
+        "expected": 0.12,
         "log": "lunar-common::lrv",
-        "color": null
+        "color": [0.094, 0.125, 0.18, 1.0],
+        "offset": [-0.58, -0.85]
       },
       {
         "kind": "pixelAtEntity",
         "region": [0, 0, 0, 0],
-        "expected": 0.9,
+        "expected": 0.2,
         "log": "lunar-common::lrvWheelFl",
-        "color": null
+        "color": [0.7, 0.42, 0.16, 1.0],
+        "offset": [0.7, -1.4]
       }
     ],
-    "log": "LRV body + front-left wheel render fully opaque at their ground origins"
+    "log": "LRV chassis instrument box + front-left fender render solid over the terrain"
   }
 ]
