@@ -254,42 +254,34 @@ golden comparison details.
 
 ## 5b. The scene / golden matrix
 
-There are four committed golden baselines.  Pick the right one — and when
-changing anything about lighting, **use `basetest-lit`**.
+There are two committed golden baselines.
 
 | `CLASSIC_GOLDEN_DIR` | Scene | Distinguishing flags | Guards |
 |---|---|---|---|
 | `tests/golden/baseline` | demo | `CLASSIC_TEST=all` | e2e assertions + demo render |
 | `tests/golden/lunar` | lunar | `CLASSIC_ROM=rom:lunar CLASSIC_FIXED_DT=0.016666668` | procedural terrain, rocket anim |
-| `tests/golden/basetest` | basetest | `CLASSIC_ROM=rom:basetest CLASSIC_TEST=all` | e2e assertions on a small map |
-| **`tests/golden/basetest-lit`** | **basetest** | **`CLASSIC_ROM=rom:basetest CLASSIC_NO_UI=1`, no `CLASSIC_TEST`** | **lighting, shadows, normals** |
 
-> **Caveat — the committed PNG is not what renders today.**  Under
-> `CLASSIC_NO_UI=1` the nav-mesh overlay (`tilemapNavigation`, drawn with
-> `common::navTileset`) is never hidden — hiding it is the editor's job, and
-> `NO_UI` skips the editor — so it paints the whole map flat blue, on every
-> ROM with a nav mesh.  Separately, `basetest`'s two containers are drawn
-> but render no pixels, with or without the UI (section 9).  The committed
-> `baseline.png` (last written at `4aee082`) still shows both containers on
-> grey regolith; the trace was re-baselined twice since without it, and
-> cannot see either difference.  Look at the PNG whenever you re-baseline
-> the trace.
-
-`basetest-lit` is the lighting reference because it is the only capture that is
-*just the lit scene*: `CLASSIC_NO_UI=1` drops the editor/HUD layer (which
-otherwise occludes ~40% of the frame) and omitting `CLASSIC_TEST` means the e2e
-never mutates the terrain.  Its scene also pins the sun at **30° elevation**,
-low enough that shadows are long; `demo`/`lrvtest` sit at 60° and `lunar` at
-~49°, where a shadow regression is easy to miss.
+**There is no committed lighting reference.**  `basetest-lit` used to be one
+(a 30° sun and two containers casting long shadows), but its containers had
+stopped rendering and, under `CLASSIC_NO_UI`, the nav-mesh overlay painted
+the whole map blue — so it was guarding neither; `basetest` was retired.
+For lighting or shadow work, capture a clean lit frame yourself and **look
+at it**: `CLASSIC_NO_UI=1` now hides the nav overlay as well as the
+editor/HUD, and the `render_order` scenario frames the LRV as a caster.
 
 ```bash
-# re-baseline the lighting reference
-CLASSIC_ROM=rom:basetest CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 \
-CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
-CLASSIC_NO_UI=1 CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=tests/golden/basetest-lit \
-CLASSIC_GOLDEN_PNG=1 LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 \
-cargo run -p classic-desktop
+# a clean lit frame with a caster in shot (lrvtest's sun is 60°, so
+# shadows are short: compare against your own pre-change capture)
+CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_NO_UI=1 \
+CLASSIC_HEADLESS=1 CLASSIC_FRAMES=45 CLASSIC_FIXED_DT=0.016666668 \
+CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
+CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=/tmp/lit CLASSIC_GOLDEN_PNG=1 \
+LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 cargo run -p classic-desktop
 ```
+
+Whenever you re-baseline a trace golden, regenerate and look at its PNG as
+well: `basetest-lit`'s trace was re-baselined twice after its containers
+vanished, and the trace could not see it.
 
 `LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0` are required for goldens (llvmpipe's
 multithreaded rasteriser races on the sprite ghost-pass depth rendering) and
@@ -531,27 +523,21 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
   - `container_ghost` targets an entity named `container`, which exists in
     **no fetchable ROM**: `lunar` ships only `containerTemplate`, and the
     `container` scene is deliberately excluded from `classic-roms`'
-    `PUBLISHED` set.  Retargeting at `basetest::containerA` passes 6/6
-    **vacuously** — it renders no pixels (next bullet), so every sample
-    reads opaque terrain.  Do not wire it until the containers render.
+    `PUBLISHED` set.  (Retargeting it at the retired `basetest`'s
+    `containerA` passed 6/6 *vacuously*: those containers rendered no
+    pixels, so every sample read opaque terrain.)  Do not wire it until a
+    published scene has a container that renders.
 
-- **`CLASSIC_NO_UI=1` shows the nav-mesh overlay.**  The overlay tilemap
-  (`tilemapNavigation`, `common::navTileset`) is hidden by the demo editor;
-  `NO_UI` skips installing the editor, so the overlay is drawn over the whole
-  map as flat blue.  `lrvtest` turns blue under `NO_UI` too, and `basetest`
-  renders grey regolith without it.  This is what `basetest-lit` has been
-  capturing.
-
-- **`basetest`'s containers render no pixels.**  `basetest::containerA` and
-  `containerB` are issued as `IsoSprite` draws every frame (2 of the 5
-  `basetest-lit` trace entries; frame 56 of
-  `lunar-common::shippingContainerBody` resolves to a non-empty atlas rect)
-  yet produce no pixels, with or without the UI.  The committed
-  `basetest-lit/baseline.png` (`4aee082`, 2026-08-29) shows both; the engine
-  at `a5fb6e3` (2026-09-08) and HEAD both render none against today's ROM
-  set, so the loss follows the published ROM content rather than the engine.
-  Not fixed; the trace golden cannot see it (a draw that rasterises nothing
-  still traces — section 5c).
+- **`basetest` was retired.**  Its two containers (`lunar-common::
+  shippingContainerBody` frame 56, a non-empty atlas rect) were drawn every
+  frame but produced no pixels against the current ROM set on both HEAD and
+  the `a5fb6e3` engine, while its `basetest-lit` golden PNG (`4aee082`) still
+  showed them.  Separately, its CI step ran under `CLASSIC_NO_UI=1`, which
+  until then left the nav-mesh overlay visible and painted the map flat
+  `common::navTileset` blue.  Without its containers the scene was a near-
+  flat plain (12.5k px of shadow vs ~110k with them), so it was removed
+  rather than repaired.  The container loss itself (ROM content) is
+  unexplained.
 
 - **`Wait` action is a no-op**: the `Wait { frames }` action does nothing
   in `run_test_frame`.  To wait, schedule a `TestStep` on a later frame

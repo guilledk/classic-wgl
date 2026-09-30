@@ -460,9 +460,9 @@ survived a full session of "verification" this way.
 3. **Render to a scratch dir and look at the PNG.**  Aggregate metrics cannot
    distinguish "subtle" from "absent":
    ```bash
-   CLASSIC_ROM=rom:basetest CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 \
-   CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
-   CLASSIC_NO_UI=1 CLASSIC_SHADOW_DEBUG=1 \
+   CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_HEADLESS=1 \
+   CLASSIC_FRAMES=45 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 \
+   CLASSIC_HEIGHT=720 CLASSIC_NO_UI=1 CLASSIC_SHADOW_DEBUG=1 \
    CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=/tmp/shot CLASSIC_GOLDEN_PNG=1 \
    LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 cargo run -p classic-desktop
    ```
@@ -472,7 +472,10 @@ survived a full session of "verification" this way.
    magick a.png b.png -alpha off -compose difference -composite -colorspace Gray \
      -threshold 2% -format "%[fx:int(mean*w*h)] px changed\n" info:
    ```
-   Healthy `basetest` is ~110k px (12%).  Under ~5k means it is not working.
+   There is no fixed "healthy" number: the retired `basetest` (30° sun, two
+   containers) read ~110k px, but `lrvtest` under the recipe above reads
+   ~6.9k because its 60° sun casts short shadows.  Capture the count before
+   your change; a collapse toward zero means the shadow is gone.
 5. **Verify impressions numerically.**  Simultaneous contrast is real: adding a
    large shadow makes unchanged ground *look* darker.  Probe exact pixels with
    `magick f.png -format '%[pixel:p{X,Y}]' info:` before believing your eyes.

@@ -48,6 +48,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   every ROM with a nav mesh; it now starts hidden when the editor is not
   installed (#115).
 
+### Removed
+
+- The `basetest` scene: its `basetest` and `basetest-lit` goldens, the
+  `basetest-lit` CI step, its `roms.lock.json` entry and its
+  `fetch-roms`/desktop/web ROM table entries.  Its two containers render
+  no pixels against the current ROM set and its CI capture showed the
+  nav-mesh overlay rather than the lit scene, so it guarded neither the
+  sprites nor the lighting it was credited with (#115).
+
 ## [0.3.1] - 2026-09-28
 
 ### Added

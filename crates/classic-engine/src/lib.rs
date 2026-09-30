@@ -1068,8 +1068,8 @@ mod tests {
         // `gather_lights` looks `Light.parent` up in `names` verbatim, so the
         // cross-ref pass must qualify it: a bare own-ROM parent resolves into
         // the ROM's namespace, a qualified one is kept as-is.  Unqualified, a
-        // namespaced ROM's parented lights (the rocket burn light, basetest's
-        // `controlLight`) are skipped every frame.
+        // namespaced ROM's parented lights (e.g. the rocket burn light) are
+        // skipped every frame.
         let loaded = classic_rom::LoadedRoms {
             root: "scene".into(),
             order: vec![
