@@ -56,6 +56,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   no pixels against the current ROM set and its CI capture showed the
   nav-mesh overlay rather than the lit scene, so it guarded neither the
   sprites nor the lighting it was credited with (#115).
+- The `container_ghost` e2e scenario.  It targeted the `container` entity
+  of classic-roms' one-off `container` test scene, which was never published
+  and is being deleted (classic-roms #44); its only runnable retarget, the
+  retired `basetest`, passed vacuously (#116).
 
 ## [0.3.1] - 2026-09-28
 
