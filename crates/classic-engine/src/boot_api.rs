@@ -898,6 +898,7 @@ impl Engine {
                     }
                 }
             }
+            self.qualify_sprite_frame_name(entity);
 
             if let Some(texture) =
                 self.world.get::<&IsoAgent>(entity).ok().map(|a| a.texture.clone())
@@ -1164,6 +1165,39 @@ impl Engine {
                     ],
                 })
                 .collect();
+        }
+    }
+
+    /// Qualify a statically declared `IsoSprite.frame_name` to match its
+    /// (already resolved) texture's frame table.
+    ///
+    /// Frame tables are keyed under the namespace of the ROM that ships them
+    /// (`lunar-common::shippingContainerBody_56`), but `scene.json` authors the
+    /// bare frame name (`shippingContainerBody_56`), and `resolve_frame` looks
+    /// it up verbatim.  Left bare, every packed-atlas sprite that nothing
+    /// re-frames at runtime (no animator, vehicle sim or guest
+    /// `set_sprite_frame`) resolves no frame and draws nothing — while still
+    /// appearing in the render trace.  The qualified name is only adopted when
+    /// the table really has it, so any other `frame_name` is left untouched.
+    fn qualify_sprite_frame_name(&mut self, entity: hecs::Entity) {
+        let Some((texture, frame_name)) = self
+            .world
+            .get::<&IsoSprite>(entity)
+            .ok()
+            .and_then(|s| s.frame_name.clone().map(|f| (s.texture.clone(), f)))
+        else {
+            return;
+        };
+        if frame_name.contains("::") {
+            return;
+        }
+        let qualified = Self::qualify(&Self::namespace_of(&texture), &frame_name);
+        let known =
+            self.frame_tables.get(&texture).is_some_and(|t| t.frames.contains_key(&qualified));
+        if known && qualified != frame_name {
+            if let Ok(mut s) = self.world.get::<&mut IsoSprite>(entity) {
+                s.frame_name = Some(qualified);
+            }
         }
     }
 
