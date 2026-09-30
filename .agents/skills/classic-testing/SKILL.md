@@ -131,9 +131,9 @@ one process":
 | scenario | ROM | invocation |
 |---|---|---|
 | `default` | `demo` | `CLASSIC_TEST=all` (CI golden) |
-| `render_order` | `lrvtest` | `CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order` |
+| `render_order` | `lrvtest` | `CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720` (CI) |
 | `container_ghost` | unpublished `container` scene | not runnable, see section 9 |
-| `rocket` | `lunar` | `CLASSIC_ROM=rom:lunar CLASSIC_TEST=rocket` |
+| `rocket` | `lunar` | `CLASSIC_ROM=rom:lunar CLASSIC_TEST=rocket CLASSIC_FIXED_DT=0.05 CLASSIC_FRAMES=225 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720` (CI) |
 
 Two `classic-demo` unit tests keep the table honest:
 `scenario_table_covers_the_directory` (a file not in `SCENARIOS` is
@@ -264,11 +264,16 @@ changing anything about lighting, **use `basetest-lit`**.
 | `tests/golden/basetest` | basetest | `CLASSIC_ROM=rom:basetest CLASSIC_TEST=all` | e2e assertions on a small map |
 | **`tests/golden/basetest-lit`** | **basetest** | **`CLASSIC_ROM=rom:basetest CLASSIC_NO_UI=1`, no `CLASSIC_TEST`** | **lighting, shadows, normals** |
 
-> **Caveat:** the two containers in `basetest` are drawn but render no visible
-> pixels (section 9), so `basetest-lit` currently guards the terrain, the one
-> light and the shadows — not the container sprites, their normals or their
-> depth maps.  Treat the "two normal/depth-mapped containers" below as the
-> scene's *intent* until that is fixed.
+> **Caveat — the committed PNG is not what renders today.**  Under
+> `CLASSIC_NO_UI=1` the nav-mesh overlay (`tilemapNavigation`, drawn with
+> `common::navTileset`) is never hidden — hiding it is the editor's job, and
+> `NO_UI` skips the editor — so it paints the whole map flat blue, on every
+> ROM with a nav mesh.  Separately, `basetest`'s two containers are drawn
+> but render no pixels, with or without the UI (section 9).  The committed
+> `baseline.png` (last written at `4aee082`) still shows both containers on
+> grey regolith; the trace was re-baselined twice since without it, and
+> cannot see either difference.  Look at the PNG whenever you re-baseline
+> the trace.
 
 `basetest-lit` is the lighting reference because it is the only capture that is
 *just the lit scene*: `CLASSIC_NO_UI=1` drops the editor/HUD layer (which
@@ -308,6 +313,15 @@ completely non-functional while five unit tests and every golden passed.
 - **Expect existing tests to encode the bug.**  Three tests had asserted the
   buggy behaviour as correct and had to be rewritten.  When a test fails after
   a fix, check whether it was testing the defect before "fixing" the fix.
+- **The framebuffer alpha channel is blend bookkeeping, not visibility.**  A
+  sprite's semi-transparent edge texels leave `srcA² + (1 − srcA)` in the
+  alpha channel over opaque terrain (0.7607843 for a 0.4 texel), so an
+  alpha-only `pixelAtEntity` on a silhouette edge flips between drivers,
+  and one over terrain passes even when the sprite is gone.  Assert
+  *colour* at a point a captured PNG shows is solid and distinct from what
+  lies behind it, check a 2–3 px radius holds on hardware GL and on
+  llvmpipe, and run a negative control (entity moved, frame changed, or a
+  frame where it is not yet in shot) that must fail.
 - **Goldens do not protect an effect you cannot see.**  A partial-strength
   effect (shadow strength `0.65`) makes "broken" and "subtle" numerically
   similar.  Turn the effect to full strength during bring-up, and use a debug
@@ -485,66 +499,59 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
 
 ## 9. Known-divergent / non-functional
 
-- **Three scenarios are stale, not merely unwired.**  `build_test_scenario`
-  now dispatches on its name (see section 4a), but `render_order`,
-  `container_ghost` and `rocket` still fail their assertions.  All three were
-  authored before ROM namespacing and never ran afterwards.  The blockers
-  below were re-measured at `86f74b0` with a freshly built `classic-desktop`
-  and a freshly fetched ROM set; each one is a *scene* fact that moved out
-  from under the scenario, not a name that needs repairing.
-  - `render_order` (ROM `lrvtest`) reads alpha **0.7607843** at both the LRV
-    body and front-left wheel ground origins where it wants >= 0.9.  That is
-    exactly `0.4·0.4 + 1·0.6` — the ghost pass composited over opaque
-    terrain — so the sprite is ghosting at the very point where it meets the
-    ground it stands on.  This is the sprite/terrain depth tie, and it is
-    almost the only place it happens: over a 7x7 grid of tile offsets around
-    each anchor, **45 of 49** sample points read alpha 1.0.  So the assertion
-    is ill-conditioned rather than the renderer being broken.  Re-aiming the
-    samples off the contact line would make it pass, but the result is a
-    per-pixel assertion — precisely what CI deliberately does not run (see
-    "No pixel golden in CI" below) — so it stays out until it can assert
-    something sturdier than one texel.
-  - `rocket` (ROM `lunar`) has three independent blockers, not the single
-    camera-framing one recorded earlier.  The scenario frames iso
-    (200, 165) and the ROM's `state.json` declares `Model.position` at
-    (100.5, 100.5), but **neither is where the rocket is**: the lunar guest
-    relocates it to a generated landing zone, measured at **(317.5, 277.5)**.
-    Frame the camera there and the ground anchor does land on-screen — but
-    the rocket still is not in shot, because at frame 8 the model is drawn
-    about **100 world metres up** (the `landing` clip), roughly 16 tiles of
-    `(d, -d)` offset above its anchor.  And that anchor is bare regolith
-    (`[0.42, 0.40, 0.40, 1]`), not the `[0, 0.97, 0, 1]` landing pad the
-    scenario samples.  Reviving it means re-authoring camera, offsets *and*
-    colours against a landing zone and an altitude curve the ROM
-    regenerates, so it would need re-tuning on every `lunar` republish.
+- **`render_order` and `rocket` are revived and in CI; `container_ghost` is
+  not.**  Both were re-derived from captured frames (hardware Mesa, and
+  llvmpipe single- and multi-threaded) with a freshly fetched ROM set.
+  - `render_order` (ROM `lrvtest`) used to read alpha 0.7607843 at the `lrv`
+    and `lrvWheelFl` ground origins under llvmpipe and 1.0 on hardware GL.
+    The frame shows **no ghosting anywhere**: every alpha-below-1 pixel is a
+    one-texel outline along a sprite silhouette (section 5c), and both old
+    sample points sat on such an edge.  `lrvWheelFl`'s ground origin is
+    moreover *behind the chassis* on screen (its `lrvTireFl` fender is the
+    upper, far-side one), so "opaque at the ground origin" was ill-posed.
+    It now asserts colour: the chassis's dark instrument box
+    (`lrv` + `[-0.58, -0.85]`, `[0.094, 0.125, 0.18] ± 0.12`) and the FL
+    fender's orange (`lrvWheelFl` + `[0.7, -1.4]`, `[0.7, 0.42, 0.16] ± 0.2`).
+    Negative controls fail: the body on another heading frame, and the FL
+    tire moved away (the sample reads bare regolith).
+  - `rocket` (ROM `lunar`): the lunar guest relocates the rocket to a
+    generated landing zone at **(317.5, 277.5)** (not `state.json`'s
+    (100.5, 100.5)), and the `landing` clip holds it ~100 m up early on;
+    it touches down at t ≈ 10 s and stays put (a cargo box appears from
+    t ≈ 13 s).  The scenario frames that anchor at scale 0.3 and asserts at
+    frame 220 **under `CLASSIC_FIXED_DT=0.05`** (t = 11 s; the same landed
+    pose as frame ~620 at 1/60, at a third of the llvmpipe cost): the black
+    base band (`+ [4.0, -6.75]`, `[0.039, 0.039, 0.047] ± 0.1`) and a light
+    body panel (`+ [10.25, -7.0]`, `[0.722, 0.71, 0.741] ± 0.1`).  Both
+    offsets stay on the flat stamped pad — `iso_to_screen_px` projects at
+    the terrain height of the *offset* tile, so a large up-screen offset
+    would couple the sample to off-pad terrain.  Run at 1/60 it fails
+    (frame 220 is mid-descent; both samples read regolith).  A `lunar`
+    republish that moves the landing zone needs these re-measured.
   - `container_ghost` targets an entity named `container`, which exists in
     **no fetchable ROM**: `lunar` ships only `containerTemplate`, and the
     `container` scene is deliberately excluded from `classic-roms`'
-    `PUBLISHED` set.  `basetest`'s `containerA` matches it on paper —
-    `position [24,24,0]`, `frame` 56, anchor `[0.5, 0.6715]`, footprint
-    corners `±1.735` — and retargeting at it makes the scenario pass 6/6.
-    **That pass is vacuous.**  `basetest::containerA` renders no visible
-    pixels at all (next bullet), so every `pixelAtEntity` is reading opaque
-    terrain, and an `alpha >= 0.9` assertion over opaque terrain can never
-    fail.  Do not wire it until the containers actually render.
+    `PUBLISHED` set.  Retargeting at `basetest::containerA` passes 6/6
+    **vacuously** — it renders no pixels (next bullet), so every sample
+    reads opaque terrain.  Do not wire it until the containers render.
 
-  None of the three are wired into the golden CI job for that reason --
-  they would turn it red immediately (or, for the `container_ghost`
-  retarget, green for the wrong reason).  Revive them before wiring them.
+- **`CLASSIC_NO_UI=1` shows the nav-mesh overlay.**  The overlay tilemap
+  (`tilemapNavigation`, `common::navTileset`) is hidden by the demo editor;
+  `NO_UI` skips installing the editor, so the overlay is drawn over the whole
+  map as flat blue.  `lrvtest` turns blue under `NO_UI` too, and `basetest`
+  renders grey regolith without it.  This is what `basetest-lit` has been
+  capturing.
 
-- **`basetest`'s containers are drawn but invisible.**  `basetest::containerA`
-  and `containerB` are issued as `IsoSprite` draws every frame — they are 2 of
-  the 5 entries in the `basetest-lit` golden trace — with a texture and frame
-  that both resolve (`lunar-common::shippingContainerBody` frame 56 is present
-  in `shippingContainerBody.frames.json`).  Yet neither appears on screen at
-  any zoom.  Moving `containerA` with `setEntityPos` and differencing the two
-  rendered frames changes only the glow of the `Light` parented to it, plus a
-  few shadow edges; not one container pixel moves.  Section 5b calls
-  `basetest-lit` the lighting reference "with two normal/depth-mapped
-  containers" — it is currently guarding terrain, one light and the shadows,
-  and nothing about the container sprites.  The trace golden cannot see this,
-  because a draw that rasterises nothing still traces: section 5c's cautionary
-  tale repeating.
+- **`basetest`'s containers render no pixels.**  `basetest::containerA` and
+  `containerB` are issued as `IsoSprite` draws every frame (2 of the 5
+  `basetest-lit` trace entries; frame 56 of
+  `lunar-common::shippingContainerBody` resolves to a non-empty atlas rect)
+  yet produce no pixels, with or without the UI.  The committed
+  `basetest-lit/baseline.png` (`4aee082`, 2026-08-29) shows both; the engine
+  at `a5fb6e3` (2026-09-08) and HEAD both render none against today's ROM
+  set, so the loss follows the published ROM content rather than the engine.
+  Not fixed; the trace golden cannot see it (a draw that rasterises nothing
+  still traces — section 5c).
 
 - **`Wait` action is a no-op**: the `Wait { frames }` action does nothing
   in `run_test_frame`.  To wait, schedule a `TestStep` on a later frame
@@ -555,7 +562,11 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
 - **No pixel golden in CI**: `CLASSIC_GOLDEN_PNG=1` is not set in
   `.github/workflows/ci.yml`.  Pixel comparison is sensitive to the Mesa
   llvmpipe version and produces false positives across Ubuntu image
-  updates.  The trace golden provides adequate coverage.
+  updates.  The trace golden provides adequate coverage.  Tolerant *point*
+  assertions are different: `render_order` and `rocket` each sample two
+  pixels chosen from a captured frame to sit inside a 5–7 px solid patch, with
+  a per-channel tolerance of 0.1–0.2, and hold on hardware GL and llvmpipe
+  alike.
 
 - **No headless on macOS or Windows**: `HeadlessPlatform` dynamically loads
   `libEGL.so.1` and is Linux-only.  CI golden tests only run on
