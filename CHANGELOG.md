@@ -42,6 +42,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `CLASSIC_FIXED_DT=0.05`, after touchdown, and asserts the base band and
   body panel colours.  Each assertion was checked to fail with its subject
   absent (#114).
+- `CLASSIC_NO_UI=1` no longer paints the map in nav-tile colours.  The
+  nav-mesh overlay is an editor view that only the editor's mode control
+  ever hid, so skipping the editor left it drawn over the lit terrain on
+  every ROM with a nav mesh; it now starts hidden when the editor is not
+  installed (#115).
 
 ## [0.3.1] - 2026-09-28
 

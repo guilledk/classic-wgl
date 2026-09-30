@@ -393,6 +393,12 @@ fn finish_init_engine(
         {
             e.add_overlay(hud::draw_rts_rubber_band);
         }
+    } else if let Some(nav) = e.entity_by_role(classic_core::RoleKind::NavMesh) {
+        // The nav-mesh overlay is an editor view: `init_editor_mode_control`
+        // shows it only in nav-edit mode.  Without the editor nothing would
+        // ever hide it, and it would paint the whole map in nav-tile colours
+        // over the lit terrain — the opposite of what `CLASSIC_NO_UI` is for.
+        e.set_enabled(nav, false);
     }
     testing::install(e, &state);
 
