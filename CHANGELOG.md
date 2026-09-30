@@ -47,6 +47,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   ever hid, so skipping the editor left it drawn over the lit terrain on
   every ROM with a nav mesh; it now starts hidden when the editor is not
   installed (#115).
+- Statically declared packed-atlas sprites render again.  Since ROM
+  namespacing (`7e5764b`), frame tables key their frames under the owning
+  ROM's namespace (`lunar-common::shippingContainerBody_56`) while
+  `scene.json` authors bare frame names, and the hydration pass qualified
+  `IsoSprite.texture` but never `frame_name`.  Every sprite nothing re-framed
+  at runtime missed its frame: `basetest`'s containers drew nothing, and the
+  demo's house, tree and semaphores fell back to their whole standalone
+  textures.  Both goldens were re-baselined over it; the demo trace is
+  re-baselined back to the atlas frames (#117).
 
 ### Removed
 
