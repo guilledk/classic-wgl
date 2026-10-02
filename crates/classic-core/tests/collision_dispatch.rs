@@ -80,6 +80,36 @@ fn click_does_not_fire_without_mouse_clicked() {
     assert!(!clicked.get());
 }
 
+/// The positive twin of `click_does_not_fire_without_mouse_clicked`.  A
+/// "handler did not fire" assertion passes just as happily when the handler
+/// could never have fired at all (a detached `Cell`, a mouse that misses the
+/// collider), so it only means something beside a same-geometry case that
+/// *does* fire.
+#[test]
+fn click_fires_with_mouse_clicked() {
+    let mut physics = PhysicsProvider::new();
+    physics.resize_screen(800.0, 600.0);
+
+    let clicked = Rc::new(Cell::new(false));
+    let pid = physics.register_collider(ColliderData {
+        position: glam::Vec3::new(200.0, 150.0, 0.0),
+        ..ColliderData::new(Shape::Circle { diameter: 30.0 })
+    });
+    physics.add_collider_handler(pid, HandlerKind::Click, {
+        let cl = Rc::clone(&clicked);
+        move || {
+            cl.set(true);
+            false
+        }
+    });
+
+    physics.mouse.position = glam::Vec3::new(203.0, 152.0, 0.0);
+    physics.mouse_clicked = true;
+    physics.begin_frame();
+    physics.perform_calls();
+    assert!(clicked.get(), "Click must fire when the mouse is pressed over the collider");
+}
+
 // ---------------------------------------------------------------------------
 // World-space colliders are queried in screen space
 //

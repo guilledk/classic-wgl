@@ -319,6 +319,13 @@ its placement into its verts and carries `position: ZERO`.  Both read back at
 unit scale.  `world_circle_is_hit_at_its_projected_position` and
 `world_circle_is_not_hit_at_screen_origin` guard it.
 
+**Handler tests share state through `Rc<Cell<_>>`, never `Cell::clone`.**  A
+cloned `Cell` (or a `Copy` flag moved into the closure) is a detached copy: the
+handler mutates it and the test's assertion can never fail.  Pair every
+"did not fire" assertion with a same-geometry case that *does* fire
+(`click_does_not_fire_without_mouse_clicked` / `click_fires_with_mouse_clicked`),
+or the negative passes just as well when nothing could have fired.
+
 ### Spatial Partition Behaviour
 
 - **max\_objects = 10, max\_levels = 4** — the quadtree splits a node into 4
