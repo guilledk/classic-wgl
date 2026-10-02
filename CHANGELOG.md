@@ -30,6 +30,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   containers render no pixels with or without the UI, on both HEAD and the
   `a5fb6e3` engine, while the committed PNG (`4aee082`) still shows them.
   Neither is fixed here (#114).
+- Every handler test in the workspace was swept for the `Cell::clone` trap (a
+  cloned `Cell` is a detached copy, so an assertion on it can never fail).
+  The one instance was already fixed in `e3cf553`; the sweep adds
+  `click_fires_with_mouse_clicked`, the positive twin that gives
+  `click_does_not_fire_without_mouse_clicked` something to fail against, and
+  records the rule in the `classic-physics` skill (#122).
 
 ### Fixed
 
@@ -63,6 +69,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `dir` is now the beam direction and the edge softens to `1.25x` the
   half-angle.  Found by the new `lighttest` ROM, the first scene to declare a
   spot (#118).
+- A world-space circle collider is hit where it is drawn.  `project_shape`
+  scaled a circle's diameter into screen space but dropped its position, so
+  every `ColliderSpace::World` circle projected to screen origin.  The
+  projection now carries a screen position beside the shape (#122).
 
 ### Removed
 

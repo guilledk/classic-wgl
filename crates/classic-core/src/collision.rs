@@ -188,7 +188,19 @@ struct ColliderEntry {
     enabled: bool,
     /// Screen-space projection of a [`ColliderSpace::World`] collider,
     /// recomputed each `begin_frame`.  `None` for screen-space colliders.
-    projected: Option<Shape>,
+    projected: Option<Projected>,
+}
+
+/// A world-space collider's geometry in screen space.
+///
+/// A `Shape::Circle` carries only a diameter, so its placement has to travel
+/// beside it: dropping `position` put every projected circle at screen origin.
+/// A projected polygon bakes its placement into its verts and so has a zero
+/// `position`.  Either way the scale is folded in, so it reads back at unit
+/// scale.
+struct Projected {
+    shape: Shape,
+    position: Vec3,
 }
 
 impl ColliderEntry {
@@ -204,20 +216,25 @@ impl ColliderEntry {
 /// Project a world-space collider geometry to screen space through the camera
 /// matrix, so a single screen-space quadtree serves both UI (screen) and
 /// gameplay (world) colliders.
-fn project_shape(shape: &Shape, position: Vec3, scale: Vec3, m: Mat4) -> Shape {
+fn project_shape(shape: &Shape, position: Vec3, scale: Vec3, m: Mat4) -> Projected {
     match shape {
         Shape::Circle { diameter } => {
             // The camera scale is uniform; recover it from the x-axis length.
             let cam_scale = m.transform_vector3(Vec3::X).length();
             let r = diameter * 0.5 * scale.x * cam_scale;
-            Shape::Circle { diameter: r * 2.0 }
+            // Same `z = 0` placement `Shape::model_matrix` gives a polygon.
+            let centre = m.transform_point3(Vec3::new(position.x, position.y, 0.0));
+            Projected {
+                shape: Shape::Circle { diameter: r * 2.0 },
+                position: Vec3::new(centre.x, centre.y, 0.0),
+            }
         }
         Shape::Polygon { verts, .. } => {
             let model = Mat4::from_translation(Vec3::new(position.x, position.y, 0.0))
                 * Mat4::from_scale(scale);
             let projected: Vec<Vec3> =
                 verts.iter().map(|v| m.transform_point3(model.transform_point3(*v))).collect();
-            polygon_from_verts(projected)
+            Projected { shape: polygon_from_verts(projected), position: Vec3::ZERO }
         }
     }
 }
@@ -433,7 +450,7 @@ impl PhysicsProvider {
         } else if let Some(e) = self.entries.get(&pid) {
             match &e.projected {
                 // World colliders are queried through their screen projection.
-                Some(p) => (p, Vec3::ZERO, Vec3::ONE),
+                Some(p) => (&p.shape, p.position, Vec3::ONE),
                 None => (&e.collider.shape, e.collider.position, e.collider.scale),
             }
         } else {
@@ -457,7 +474,7 @@ impl PhysicsProvider {
                     entry.collider.scale,
                     self.world_to_screen,
                 );
-                let r = projected.rect(Vec3::ZERO, Vec3::ONE);
+                let r = projected.shape.rect(projected.position, Vec3::ONE);
                 entry.projected = Some(projected);
                 r
             } else {

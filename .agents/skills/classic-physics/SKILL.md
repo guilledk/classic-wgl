@@ -311,11 +311,20 @@ the moment the tree subdivides — which is how Enter/Exit stopped firing for
 world colliders under a non-identity camera.  A test for this needs >10
 colliders to force the split.
 
-Known gap: `project_shape`'s `Circle` arm scales the diameter but drops the
-position, so a world-space *circle* collider still projects to screen origin.
-Every world collider in the engine today is a polygon
-(`selectable_world_polygon`, the footprint prefab), so nothing hits it — but do
-not add a world circle collider without fixing that first.
+The projection is a `Projected { shape, position }`, not a bare `Shape`.  A
+`Shape::Circle` carries only a diameter, so its screen position has to travel
+beside it — the `Circle` arm once scaled the diameter and dropped the position,
+putting every world-space circle at screen origin.  A projected polygon bakes
+its placement into its verts and carries `position: ZERO`.  Both read back at
+unit scale.  `world_circle_is_hit_at_its_projected_position` and
+`world_circle_is_not_hit_at_screen_origin` guard it.
+
+**Handler tests share state through `Rc<Cell<_>>`, never `Cell::clone`.**  A
+cloned `Cell` (or a `Copy` flag moved into the closure) is a detached copy: the
+handler mutates it and the test's assertion can never fail.  Pair every
+"did not fire" assertion with a same-geometry case that *does* fire
+(`click_does_not_fire_without_mouse_clicked` / `click_fires_with_mouse_clicked`),
+or the negative passes just as well when nothing could have fired.
 
 ### Spatial Partition Behaviour
 
