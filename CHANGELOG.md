@@ -63,6 +63,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `dir` is now the beam direction and the edge softens to `1.25x` the
   half-angle.  Found by the new `lighttest` ROM, the first scene to declare a
   spot (#118).
+- A world-space circle collider is hit where it is drawn.  `project_shape`
+  scaled a circle's diameter into screen space but dropped its position, so
+  every `ColliderSpace::World` circle projected to screen origin.  The
+  projection now carries a screen position beside the shape (#122).
 
 ### Removed
 
