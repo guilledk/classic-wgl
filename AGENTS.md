@@ -428,3 +428,4 @@ Engine skills (in `.agents/skills/`):
 | `classic-testing` | CLASSIC_TEST v2, golden harness, mock GL, scenario authoring workflow |
 | `classic-debugging` | CLASSIC_LOG channels, JSON format, runtime toggles, debugging playbook |
 | `classic-guest` | WASM guest runtime, ABI (host imports/guest exports), GuestRuntime trait, sandbox (fuel + memory) |
+| `classic-rom` | ROM crate (archive, manifest, `ResourceSet`, `LoadedRoms` DAG), namespacing + reference rewriting, boot hydration of a ROM |

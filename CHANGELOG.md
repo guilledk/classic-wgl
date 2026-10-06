@@ -8,6 +8,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- A `classic-rom` agent skill for the engine side of the ROM layer: the
+  crate map, every `RomManifest` field with its serde default and reader, the
+  `LoadedRoms` dependency DAG, the namespace resolution rule (a bare name
+  resolves in its own namespace, then the global one, never in a
+  dependency), the exact fields the boot rewrite passes qualify, the
+  `frame_name` case behind the #117 fix, boot hydration order, and the tests
+  plus the ROM-lock lockstep.  Authoring rules stay in classic-roms'
+  `rom-authoring` skill (#123).
+
 ### Changed
 
 - The `classic-testing` skill and the golden job's comment now record what
