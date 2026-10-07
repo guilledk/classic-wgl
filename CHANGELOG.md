@@ -21,26 +21,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
-- The `classic-testing` skill and the golden job's comment now record what
-  actually blocks the three unwired e2e scenarios, re-measured at `86f74b0`
-  against a freshly fetched ROM set.  The old text was written from a
-  pre-landing measurement and was wrong in three places: `rocket` is not
-  merely mis-framed (the lunar guest relocates it to a generated landing zone
-  at (317.5, 277.5) and the `landing` clip holds it ~100 m up at frame 8, and
-  the green pad it samples is gone), `render_order`'s 0.76 alpha is the ghost
-  pass over opaque terrain at the sprite/terrain depth tie rather than a
-  renderer fault (45 of 49 nearby sample points read 1.0), and retargeting
-  `container_ghost` at `basetest::containerA` passes 6/6 *vacuously*.  Also
-  documents that `basetest`'s two containers are drawn but render no visible
-  pixels, so the `basetest-lit` golden guards less than section 5b claims
-  (#113).
-- The `classic-testing` skill and the golden job now record what the
-  `basetest-lit` frame actually shows.  Under `CLASSIC_NO_UI=1` the nav-mesh
-  overlay is never hidden (the editor hides it, and `NO_UI` skips the
-  editor), so the map renders flat `common::navTileset` blue; and the two
-  containers render no pixels with or without the UI, on both HEAD and the
-  `a5fb6e3` engine, while the committed PNG (`4aee082`) still shows them.
-  Neither is fixed here (#114).
+- The `classic-testing` skill and the golden job's comments record what
+  actually blocked the three unwired e2e scenarios, re-measured against a
+  freshly fetched ROM set: `rocket` sampled a pad the lunar guest relocates
+  to a runtime landing zone, `render_order` sampled alpha on sprite
+  silhouette edges, and `container_ghost` targeted a scene that was never
+  published.  They also record why the `basetest-lit` golden guarded
+  neither lighting nor its containers: the nav-mesh overlay stayed drawn
+  under `CLASSIC_NO_UI=1`, and statically framed sprites missed their
+  namespaced frames.  The fixes are under *Fixed* and *Removed* (#113, #114).
 - Every handler test in the workspace was swept for the `Cell::clone` trap (a
   cloned `Cell` is a detached copy, so an assertion on it can never fail).
   The one instance was already fixed in `e3cf553`; the sweep adds

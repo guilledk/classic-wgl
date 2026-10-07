@@ -262,7 +262,8 @@ There are two committed golden baselines.
 
 **There is no committed lighting reference.**  `basetest-lit` used to be one
 (a 30° sun and two containers casting long shadows), but its containers had
-stopped rendering and, under `CLASSIC_NO_UI`, the nav-mesh overlay painted
+stopped rendering (static `frame_name`s were never namespace-qualified,
+fixed in #117) and, under `CLASSIC_NO_UI`, the nav-mesh overlay painted
 the whole map blue — so it was guarding neither; `basetest` was retired.
 For lighting or shadow work, capture a clean lit frame yourself and **look
 at it**: `CLASSIC_NO_UI=1` now hides the nav overlay as well as the
@@ -532,8 +533,10 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
   until then left the nav-mesh overlay visible and painted the map flat
   `common::navTileset` blue.  Without its containers the scene was a near-
   flat plain (12.5k px of shadow vs ~110k with them), so it was removed
-  rather than repaired.  The container loss itself (ROM content) is
-  unexplained.
+  rather than repaired.  The container loss was an engine bug, not ROM
+  content: hydration never namespace-qualified a static `IsoSprite.frame_name`,
+  so the bare `shippingContainerBody_56` missed the frame table's
+  `lunar-common::` key (fixed in #117).
 
 - **`Wait` action is a no-op**: the `Wait { frames }` action does nothing
   in `run_test_frame`.  To wait, schedule a `TestStep` on a later frame

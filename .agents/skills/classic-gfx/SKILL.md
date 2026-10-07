@@ -582,7 +582,10 @@ vec3 evaluateLight(Light l, vec3 n, vec3 p) {
            attenuation = clamp(1.0 - d * d, 0.0, 1.0);
            attenuation *= attenuation; }          // soft windowed falloff
     float cone = 1.0;
-    if (l.dir_cone.w > 0.0) { /* spot: smoothstep(cosAngle*0.6, cosAngle, dot(L, dir)) */ }
+    if (l.dir_cone.w > 0.0) {                 // spot: dir = beam (light -> target), w = half-angle
+        cone = smoothstep(cos(l.dir_cone.w * 1.25), cos(l.dir_cone.w),
+                          dot(-L, normalize(l.dir_cone.xyz)));
+    }
     float diff = max(dot(n, L), 0.0);
     return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;
 }
