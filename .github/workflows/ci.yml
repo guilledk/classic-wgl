@@ -122,8 +122,14 @@ jobs:
             # Only `default` runs here.  `render_order` (rom:lrvtest),
             # `container_ghost` and `rocket` (rom:lunar) are registered but still
             # fail their assertions -- they were authored before rom namespacing
-            # and never ran after it.  See `classic-testing` skill section 9 for
-            # each one's exact blocker; revive them before adding steps here.
+            # and never ran after it, and each is blocked on a scene fact that
+            # has since moved (the rocket's spawn and altitude, the LRV's
+            # ground-anchor depth tie, an entity that ships in no published rom).
+            # Retargeting `container_ghost` at rom:basetest does make it pass,
+            # but vacuously -- those container sprites render no pixels, so its
+            # assertions read opaque terrain.  See `classic-testing` skill
+            # section 9 for each one's exact blocker, re-measured at 86f74b0;
+            # revive them before adding steps here.
             - name: demo scene (e2e assertions + golden trace)
               env:
                   LIBGL_ALWAYS_SOFTWARE: 1

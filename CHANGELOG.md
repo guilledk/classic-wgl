@@ -8,6 +8,22 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Changed
+
+- The `classic-testing` skill and the golden job's comment now record what
+  actually blocks the three unwired e2e scenarios, re-measured at `86f74b0`
+  against a freshly fetched ROM set.  The old text was written from a
+  pre-landing measurement and was wrong in three places: `rocket` is not
+  merely mis-framed (the lunar guest relocates it to a generated landing zone
+  at (317.5, 277.5) and the `landing` clip holds it ~100 m up at frame 8, and
+  the green pad it samples is gone), `render_order`'s 0.76 alpha is the ghost
+  pass over opaque terrain at the sprite/terrain depth tie rather than a
+  renderer fault (45 of 49 nearby sample points read 1.0), and retargeting
+  `container_ghost` at `basetest::containerA` passes 6/6 *vacuously*.  Also
+  documents that `basetest`'s two containers are drawn but render no visible
+  pixels, so the `basetest-lit` golden guards less than section 5b claims
+  (#113).
+
 ## [0.3.1] - 2026-09-28
 
 ### Added

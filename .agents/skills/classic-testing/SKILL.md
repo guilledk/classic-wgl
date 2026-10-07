@@ -264,6 +264,12 @@ changing anything about lighting, **use `basetest-lit`**.
 | `tests/golden/basetest` | basetest | `CLASSIC_ROM=rom:basetest CLASSIC_TEST=all` | e2e assertions on a small map |
 | **`tests/golden/basetest-lit`** | **basetest** | **`CLASSIC_ROM=rom:basetest CLASSIC_NO_UI=1`, no `CLASSIC_TEST`** | **lighting, shadows, normals** |
 
+> **Caveat:** the two containers in `basetest` are drawn but render no visible
+> pixels (section 9), so `basetest-lit` currently guards the terrain, the one
+> light and the shadows — not the container sprites, their normals or their
+> depth maps.  Treat the "two normal/depth-mapped containers" below as the
+> scene's *intent* until that is fixed.
+
 `basetest-lit` is the lighting reference because it is the only capture that is
 *just the lit scene*: `CLASSIC_NO_UI=1` drops the editor/HUD layer (which
 otherwise occludes ~40% of the frame) and omitting `CLASSIC_TEST` means the e2e
@@ -481,24 +487,64 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
 
 - **Three scenarios are stale, not merely unwired.**  `build_test_scenario`
   now dispatches on its name (see section 4a), but `render_order`,
-  `container_ghost` and `rocket` still fail their assertions because they
-  were authored before ROM namespacing and never ran afterwards:
-  - `render_order` (ROM `lrvtest`) and `rocket` (ROM `lunar`) had their
-    entity names repaired to `lunar-common::lrv` /
-    `lunar-common::lrvWheelFl` / `lunar::rocket`, which resolve.  They now
-    fail on substance: `render_order` reads alpha ~0.76 at both the LRV
-    body and front-left wheel ground origins where it wants >= 0.9, and
-    `rocket` samples off-screen (x = 1738 at 1280 wide), so its camera
-    framing no longer matches the scene.
+  `container_ghost` and `rocket` still fail their assertions.  All three were
+  authored before ROM namespacing and never ran afterwards.  The blockers
+  below were re-measured at `86f74b0` with a freshly built `classic-desktop`
+  and a freshly fetched ROM set; each one is a *scene* fact that moved out
+  from under the scenario, not a name that needs repairing.
+  - `render_order` (ROM `lrvtest`) reads alpha **0.7607843** at both the LRV
+    body and front-left wheel ground origins where it wants >= 0.9.  That is
+    exactly `0.4·0.4 + 1·0.6` — the ghost pass composited over opaque
+    terrain — so the sprite is ghosting at the very point where it meets the
+    ground it stands on.  This is the sprite/terrain depth tie, and it is
+    almost the only place it happens: over a 7x7 grid of tile offsets around
+    each anchor, **45 of 49** sample points read alpha 1.0.  So the assertion
+    is ill-conditioned rather than the renderer being broken.  Re-aiming the
+    samples off the contact line would make it pass, but the result is a
+    per-pixel assertion — precisely what CI deliberately does not run (see
+    "No pixel golden in CI" below) — so it stays out until it can assert
+    something sturdier than one texel.
+  - `rocket` (ROM `lunar`) has three independent blockers, not the single
+    camera-framing one recorded earlier.  The scenario frames iso
+    (200, 165) and the ROM's `state.json` declares `Model.position` at
+    (100.5, 100.5), but **neither is where the rocket is**: the lunar guest
+    relocates it to a generated landing zone, measured at **(317.5, 277.5)**.
+    Frame the camera there and the ground anchor does land on-screen — but
+    the rocket still is not in shot, because at frame 8 the model is drawn
+    about **100 world metres up** (the `landing` clip), roughly 16 tiles of
+    `(d, -d)` offset above its anchor.  And that anchor is bare regolith
+    (`[0.42, 0.40, 0.40, 1]`), not the `[0, 0.97, 0, 1]` landing pad the
+    scenario samples.  Reviving it means re-authoring camera, offsets *and*
+    colours against a landing zone and an altitude curve the ROM
+    regenerates, so it would need re-tuning on every `lunar` republish.
   - `container_ghost` targets an entity named `container`, which exists in
     **no fetchable ROM**: `lunar` ships only `containerTemplate`, and the
     `container` scene is deliberately excluded from `classic-roms`'
-    `PUBLISHED` set.  `basetest`'s `containerA` (same footprint, already at
-    frame 56) looks like its successor, but retargeting it is authoring a
-    new scenario, not reviving one.
+    `PUBLISHED` set.  `basetest`'s `containerA` matches it on paper —
+    `position [24,24,0]`, `frame` 56, anchor `[0.5, 0.6715]`, footprint
+    corners `±1.735` — and retargeting at it makes the scenario pass 6/6.
+    **That pass is vacuous.**  `basetest::containerA` renders no visible
+    pixels at all (next bullet), so every `pixelAtEntity` is reading opaque
+    terrain, and an `alpha >= 0.9` assertion over opaque terrain can never
+    fail.  Do not wire it until the containers actually render.
 
   None of the three are wired into the golden CI job for that reason --
-  they would turn it red immediately.  Revive them before wiring them.
+  they would turn it red immediately (or, for the `container_ghost`
+  retarget, green for the wrong reason).  Revive them before wiring them.
+
+- **`basetest`'s containers are drawn but invisible.**  `basetest::containerA`
+  and `containerB` are issued as `IsoSprite` draws every frame — they are 2 of
+  the 5 entries in the `basetest-lit` golden trace — with a texture and frame
+  that both resolve (`lunar-common::shippingContainerBody` frame 56 is present
+  in `shippingContainerBody.frames.json`).  Yet neither appears on screen at
+  any zoom.  Moving `containerA` with `setEntityPos` and differencing the two
+  rendered frames changes only the glow of the `Light` parented to it, plus a
+  few shadow edges; not one container pixel moves.  Section 5b calls
+  `basetest-lit` the lighting reference "with two normal/depth-mapped
+  containers" — it is currently guarding terrain, one light and the shadows,
+  and nothing about the container sprites.  The trace golden cannot see this,
+  because a draw that rasterises nothing still traces: section 5c's cautionary
+  tale repeating.
 
 - **`Wait` action is a no-op**: the `Wait { frames }` action does nothing
   in `run_test_frame`.  To wait, schedule a `TestStep` on a later frame
