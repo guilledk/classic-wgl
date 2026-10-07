@@ -132,7 +132,6 @@ one process":
 |---|---|---|
 | `default` | `demo` | `CLASSIC_TEST=all` (CI golden) |
 | `render_order` | `lrvtest` | `CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720` (CI) |
-| `container_ghost` | unpublished `container` scene | not runnable, see section 9 |
 | `rocket` | `lunar` | `CLASSIC_ROM=rom:lunar CLASSIC_TEST=rocket CLASSIC_FIXED_DT=0.05 CLASSIC_FRAMES=225 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720` (CI) |
 
 Two `classic-demo` unit tests keep the table honest:
@@ -491,8 +490,7 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
 
 ## 9. Known-divergent / non-functional
 
-- **`render_order` and `rocket` are revived and in CI; `container_ghost` is
-  not.**  Both were re-derived from captured frames (hardware Mesa, and
+- **`render_order` and `rocket` are revived and in CI.**  Both were re-derived from captured frames (hardware Mesa, and
   llvmpipe single- and multi-threaded) with a freshly fetched ROM set.
   - `render_order` (ROM `lrvtest`) used to read alpha 0.7607843 at the `lrv`
     and `lrvWheelFl` ground origins under llvmpipe and 1.0 on hardware GL.
@@ -520,13 +518,11 @@ with a recording proxy, allowing unit tests to verify GL call sequences.
     would couple the sample to off-pad terrain.  Run at 1/60 it fails
     (frame 220 is mid-descent; both samples read regolith).  A `lunar`
     republish that moves the landing zone needs these re-measured.
-  - `container_ghost` targets an entity named `container`, which exists in
-    **no fetchable ROM**: `lunar` ships only `containerTemplate`, and the
-    `container` scene is deliberately excluded from `classic-roms`'
-    `PUBLISHED` set.  (Retargeting it at the retired `basetest`'s
-    `containerA` passed 6/6 *vacuously*: those containers rendered no
-    pixels, so every sample read opaque terrain.)  Do not wire it until a
-    published scene has a container that renders.
+  - `container_ghost` was deleted along with the `container` scene it
+    targeted (a one-off, never-published classic-roms test scene).  Its
+    only runnable retarget, the retired `basetest`'s `containerA`, passed
+    6/6 *vacuously* — those containers rendered no pixels, so every sample
+    read opaque terrain.
 
 - **`basetest` was retired.**  Its two containers (`lunar-common::
   shippingContainerBody` frame 56, a non-empty atlas rect) were drawn every

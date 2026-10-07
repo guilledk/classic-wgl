@@ -150,7 +150,6 @@ pub fn install(engine: &mut Engine, state: &DemoStateRef) {
 pub const SCENARIOS: &[(&str, &str)] = &[
     ("default", include_str!("../../../tests/scenarios/default.test.json")),
     ("render_order", include_str!("../../../tests/scenarios/render_order.test.json")),
-    ("container_ghost", include_str!("../../../tests/scenarios/container_ghost.test.json")),
     ("rocket", include_str!("../../../tests/scenarios/rocket.test.json")),
 ];
 
