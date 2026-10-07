@@ -80,6 +80,36 @@ fn click_does_not_fire_without_mouse_clicked() {
     assert!(!clicked.get());
 }
 
+/// The positive twin of `click_does_not_fire_without_mouse_clicked`.  A
+/// "handler did not fire" assertion passes just as happily when the handler
+/// could never have fired at all (a detached `Cell`, a mouse that misses the
+/// collider), so it only means something beside a same-geometry case that
+/// *does* fire.
+#[test]
+fn click_fires_with_mouse_clicked() {
+    let mut physics = PhysicsProvider::new();
+    physics.resize_screen(800.0, 600.0);
+
+    let clicked = Rc::new(Cell::new(false));
+    let pid = physics.register_collider(ColliderData {
+        position: glam::Vec3::new(200.0, 150.0, 0.0),
+        ..ColliderData::new(Shape::Circle { diameter: 30.0 })
+    });
+    physics.add_collider_handler(pid, HandlerKind::Click, {
+        let cl = Rc::clone(&clicked);
+        move || {
+            cl.set(true);
+            false
+        }
+    });
+
+    physics.mouse.position = glam::Vec3::new(203.0, 152.0, 0.0);
+    physics.mouse_clicked = true;
+    physics.begin_frame();
+    physics.perform_calls();
+    assert!(clicked.get(), "Click must fire when the mouse is pressed over the collider");
+}
+
 // ---------------------------------------------------------------------------
 // World-space colliders are queried in screen space
 //
@@ -177,4 +207,58 @@ fn world_collider_exit_fires_when_the_pair_separates() {
     physics.begin_frame();
     physics.perform_calls();
     assert!(exited.get(), "Exit must fire once a world-space pair separates");
+}
+
+// ---------------------------------------------------------------------------
+// World-space circles keep their position when projected
+//
+// `project_shape` used to scale a circle's diameter and drop its position, so
+// every `ColliderSpace::World` circle landed at screen origin whatever its
+// world position.
+// ---------------------------------------------------------------------------
+
+/// A world circle at (1000, 500) under `translate(100, 50) * scale(0.5)`
+/// projects to screen (600, 300), diameter 20.
+fn world_circle_physics() -> (PhysicsProvider, u32, Rc<Cell<bool>>) {
+    let mut physics = PhysicsProvider::new();
+    physics.resize_screen(1280.0, 720.0);
+    physics.set_world_to_screen(
+        Mat4::from_translation(Vec3::new(100.0, 50.0, 0.0))
+            * Mat4::from_scale(Vec3::new(0.5, 0.5, 1.0)),
+    );
+    let pid = physics.register_collider(ColliderData {
+        position: Vec3::new(1000.0, 500.0, 0.0),
+        ..ColliderData::world(Shape::Circle { diameter: 40.0 })
+    });
+    let clicked = Rc::new(Cell::new(false));
+    physics.add_collider_handler(pid, HandlerKind::Click, {
+        let cl = Rc::clone(&clicked);
+        move || {
+            cl.set(true);
+            false
+        }
+    });
+    (physics, pid, clicked)
+}
+
+#[test]
+fn world_circle_is_hit_at_its_projected_position() {
+    let (mut physics, pid, clicked) = world_circle_physics();
+    physics.mouse.position = Vec3::new(605.0, 302.0, 0.0);
+    physics.mouse_clicked = true;
+    physics.begin_frame();
+    assert!(physics.gjk_test(0, pid), "mouse over the projected centre must hit the circle");
+    physics.perform_calls();
+    assert!(clicked.get(), "Click must fire on a world circle at its projected position");
+}
+
+#[test]
+fn world_circle_is_not_hit_at_screen_origin() {
+    let (mut physics, pid, clicked) = world_circle_physics();
+    physics.mouse.position = Vec3::new(2.0, 2.0, 0.0);
+    physics.mouse_clicked = true;
+    physics.begin_frame();
+    assert!(!physics.gjk_test(0, pid), "a world circle must not project to screen origin");
+    physics.perform_calls();
+    assert!(!clicked.get());
 }
