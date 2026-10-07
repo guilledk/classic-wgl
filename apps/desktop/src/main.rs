@@ -61,6 +61,7 @@ fn rom_lookup(dir: String) -> impl Fn(&str) -> Option<String> {
             "demo" => "demo.rom".into(),
             "lunar" | "moon" => "lunar.rom".into(),
             "lrvtest" => "lrvtest.rom".into(),
+            "lighttest" => "lighttest.rom".into(),
             "common" => "common.rom".into(),
             "lunar-common" => "lunar-common.rom".into(),
             _ => return None,
