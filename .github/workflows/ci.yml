@@ -119,17 +119,14 @@ jobs:
             # bound to ONE rom, because it names entities and those names are
             # rom-namespaced, so there is no single run that covers them all.
             #
-            # Only `default` runs here.  `render_order` (rom:lrvtest),
-            # `container_ghost` and `rocket` (rom:lunar) are registered but still
-            # fail their assertions -- they were authored before rom namespacing
-            # and never ran after it, and each is blocked on a scene fact that
-            # has since moved (the rocket's spawn and altitude, the LRV's
-            # ground-anchor depth tie, an entity that ships in no published rom).
-            # Retargeting `container_ghost` at rom:basetest does make it pass,
-            # but vacuously -- those container sprites render no pixels, so its
-            # assertions read opaque terrain.  See `classic-testing` skill
-            # section 9 for each one's exact blocker, re-measured at 86f74b0;
-            # revive them before adding steps here.
+            # `render_order` (rom:lrvtest) and `rocket` (rom:lunar) run below as
+            # assertion-only steps (no trace golden: a failed assertion already
+            # exits non-zero).  Both sample *colour* at points a captured frame
+            # shows are solid sprite pixels, and both were checked to fail
+            # when their subject is absent -- an alpha-only check over opaque
+            # terrain cannot fail.  `container_ghost` stays out: its target
+            # ships in no published rom, and `basetest`'s look-alike containers
+            # render no pixels.  See `classic-testing` skill section 9.
             - name: demo scene (e2e assertions + golden trace)
               env:
                   LIBGL_ALWAYS_SOFTWARE: 1
@@ -138,6 +135,30 @@ jobs:
                   # ghost-pass depth rendering; pin to a single thread.
                   LP_NUM_THREADS: 0
               run: CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=default CLASSIC_GOLDEN=check RUST_LOG=info ./target/debug/classic-desktop
+            - name: lrvtest scene (render_order assertions)
+              env:
+                  LIBGL_ALWAYS_SOFTWARE: 1
+                  EGL_PLATFORM: surfaceless
+                  LP_NUM_THREADS: 0
+              run: >-
+                  CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_HEADLESS=1
+                  CLASSIC_FRAMES=45 CLASSIC_FIXED_DT=0.016666668
+                  CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
+                  RUST_LOG=info ./target/debug/classic-desktop
+            # The rocket's `landing` clip touches down at t~10s.  A 0.05s step
+            # reaches the same landed pose in 220 frames instead of ~620 at
+            # 1/60 (~2 min vs ~6 min under llvmpipe); the scenario's frame
+            # numbers assume this step.
+            - name: lunar scene (rocket assertions)
+              env:
+                  LIBGL_ALWAYS_SOFTWARE: 1
+                  EGL_PLATFORM: surfaceless
+                  LP_NUM_THREADS: 0
+              run: >-
+                  CLASSIC_ROM=rom:lunar CLASSIC_TEST=rocket CLASSIC_HEADLESS=1
+                  CLASSIC_FRAMES=225 CLASSIC_FIXED_DT=0.05
+                  CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720
+                  RUST_LOG=info ./target/debug/classic-desktop
             # The procedural scene needs a fixed timestep: without one the idle
             # animator lands on a different frame each run and the trace differs.
             - name: lunar scene (golden trace)
@@ -153,10 +174,10 @@ jobs:
                   CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar
                   RUST_LOG=info ./target/debug/classic-desktop
             # The lighting/shadow reference: a small deterministic ramp+mound
-            # course with two normal/depth-mapped containers, a fixed sun and a
-            # fixed camera.  CLASSIC_NO_UI drops the editor/HUD layer and no
-            # CLASSIC_TEST runs, so the frame is nothing but lit terrain and
-            # sprites -- any shadow or normal regression shows up directly.
+            # course, a fixed sun and a fixed camera.  Under CLASSIC_NO_UI the
+            # nav-mesh overlay is never hidden and paints the map blue, and the
+            # two containers rasterise nothing, so this currently guards far
+            # less than it claims -- see `classic-testing` skill section 9.
             - name: basetest scene (lighting + shadow golden)
               env:
                   LIBGL_ALWAYS_SOFTWARE: 1

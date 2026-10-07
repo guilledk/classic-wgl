@@ -23,6 +23,25 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   documents that `basetest`'s two containers are drawn but render no visible
   pixels, so the `basetest-lit` golden guards less than section 5b claims
   (#113).
+- The `classic-testing` skill and the golden job now record what the
+  `basetest-lit` frame actually shows.  Under `CLASSIC_NO_UI=1` the nav-mesh
+  overlay is never hidden (the editor hides it, and `NO_UI` skips the
+  editor), so the map renders flat `common::navTileset` blue; and the two
+  containers render no pixels with or without the UI, on both HEAD and the
+  `a5fb6e3` engine, while the committed PNG (`4aee082`) still shows them.
+  Neither is fixed here (#114).
+
+### Fixed
+
+- The `render_order` and `rocket` e2e scenarios pass again and run in the
+  CI golden job.  `render_order`'s alpha-only samples sat on sprite
+  silhouette edges (alpha 0.76 under llvmpipe, 1.0 on hardware GL, and 1.0
+  over bare terrain had the LRV vanished); it now asserts colour inside the
+  chassis and the front-left fender.  `rocket` now frames the guest's
+  runtime landing zone (317.5, 277.5) at frame 220 under
+  `CLASSIC_FIXED_DT=0.05`, after touchdown, and asserts the base band and
+  body panel colours.  Each assertion was checked to fail with its subject
+  absent (#114).
 
 ## [0.3.1] - 2026-09-28
 
