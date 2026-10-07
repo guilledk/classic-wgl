@@ -1105,6 +1105,57 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_resource_refs_qualifies_sprite_frame_name() {
+        // Frame tables key their frames under the owning ROM's namespace, but
+        // `scene.json` authors bare frame names.  Unqualified, a static
+        // packed-atlas sprite resolves no frame and draws nothing (the retired
+        // `basetest` containers).  Only a frame the table really has is adopted.
+        let table = |keys: &[&str]| -> classic_core::types::FrameTable {
+            let frames: serde_json::Map<String, serde_json::Value> = keys
+                .iter()
+                .map(|k| (k.to_string(), serde_json::json!({"sheet": 0, "rect": [0, 0, 1, 1]})))
+                .collect();
+            serde_json::from_value(serde_json::json!({
+                "sheets": [{"name": "s", "src": "/res/s.png", "size": [4, 4]}],
+                "frames": frames,
+            }))
+            .unwrap()
+        };
+        let mut e = Engine::new_for_test();
+        e.frame_tables.insert(
+            "lunar-common::box".into(),
+            table(&["lunar-common::box_56", "lunar-common::box_0"]),
+        );
+        e.frame_tables.insert("scene::crate".into(), table(&["scene::crate_3"]));
+        e.namespace = "scene".into();
+        let sprite = |tex: &str, frame: &str| {
+            format!(
+                r#"{{"components":[{{"type":"IsoSprite","position":[0,0,0],"scale":[1,1,1],
+                    "texture":"{tex}","tilemap":"tilemap","frame":0,"frame_name":"{frame}","anchor":[0.5,0.5],
+                    "tile_set_size":[1,1]}}]}}"#
+            )
+        };
+        e.load_state(&format!(
+            r#"{{"entities":{{"dep":{},"own":{},"unknown":{},"qualified":{}}}}}"#,
+            sprite("lunar-common::box", "box_56"),
+            sprite("scene::crate", "crate_3"),
+            sprite("lunar-common::box", "box_99"),
+            sprite("lunar-common::box", "lunar-common::box_0"),
+        ))
+        .unwrap();
+        let keys: Vec<String> =
+            ["dep", "own", "unknown", "qualified"].iter().map(|k| format!("scene::{k}")).collect();
+        e.rewrite_resource_refs("scene", &keys);
+        let frame = |e: &Engine, n: &str| {
+            e.world.get::<&IsoSprite>(e.names[&format!("scene::{n}")]).unwrap().frame_name.clone()
+        };
+        assert_eq!(frame(&e, "dep").as_deref(), Some("lunar-common::box_56"));
+        assert_eq!(frame(&e, "own").as_deref(), Some("scene::crate_3"));
+        assert_eq!(frame(&e, "unknown").as_deref(), Some("box_99"));
+        assert_eq!(frame(&e, "qualified").as_deref(), Some("lunar-common::box_0"));
+    }
+
+    #[test]
     fn resolve_entity_name_applies_namespace_rule() {
         let mut e = Engine::new_for_test();
         e.load_state(r#"{"entities":{"globalEnt":{"components":[]}}}"#).unwrap();
