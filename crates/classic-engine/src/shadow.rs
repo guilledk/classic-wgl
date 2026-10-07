@@ -37,9 +37,10 @@ pub const SHADOW_NORMAL_OFFSET: f32 = 1.5;
 /// Diffuse fraction a fully-shadowed pixel keeps (`0..=1`).  Lit pixels keep
 /// `1.0`.
 ///
-/// Tuned against `basetest`: shadowed terrain lands at luma 48 against 73 lit —
-/// dark enough to read as occlusion, light enough that terrain relief stays
-/// visible inside the shadow.
+/// Tuned against the since-retired `basetest` scene (a 30° sun): shadowed
+/// terrain landed at luma 48 against 73 lit — dark enough to read as
+/// occlusion, light enough that terrain relief stays visible inside the
+/// shadow.
 ///
 /// **When changing the shadow geometry, set this to `0.0` first.**  A partial
 /// value makes "the shadow map is broken" and "the shadow is subtle"
@@ -305,8 +306,8 @@ mod tests {
         assert!((recede_max - recede_min).abs() < 1e-2, "sprite recedes along the depth axis");
     }
 
-    /// The basetest sun in world space (azimuth 120° light-space, elevation 30°,
-    /// already unit length).
+    /// A low test sun in world space (azimuth 120° light-space, elevation 30°,
+    /// already unit length) — long shadows make placement errors obvious.
     const SUN: Vec3 = Vec3::new(0.224_144, -0.836_516, 0.5);
 
     /// The real depth-target resolution, so the tests cannot drift from it.
