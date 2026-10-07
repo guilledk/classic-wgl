@@ -1,3 +1,7 @@
+//! # Skill: `classic-rom`
+//!
+//! **Read `.agents/skills/classic-rom/SKILL.md` before working on this crate.**
+//!
 //! classic-rom: self-contained "ROM" archive reading.
 //!
 //! A ROM is a playable artifact bundled into a single archive (zip, tar.gz,

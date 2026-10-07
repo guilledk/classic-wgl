@@ -210,7 +210,10 @@ categories:
   `position: Vec3` (**light space**, +Z up — see below),
   `color: [f32;3]`, `intensity: f32`, `radius: f32` (attenuation, **world metres**,
   uploaded verbatim; `<= 0` disables falloff), `dir: Vec3`, `cone_angle: f32` (spot half-angle;
-  `<= 0` encodes Point).  Spot fields are future-proofed but not yet emitted.
+  `<= 0` encodes Point).  `dir` is the **beam** direction (light → target,
+  light space); full intensity inside `cone_angle`, softening to `1.25×` it.
+  Spots are authored in `scene.json`; a guest `light_spawn` has no `dir`/cone,
+  so a guest-spawned `kind` 1 is a point light (#120).
 - A `Light` with `parent` treats `position` as a world-metre offset from the
   parent's ground point plus the parent's `frame_offset` (a `Model` parent
   contributes its animated rig-origin translation).

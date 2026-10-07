@@ -124,7 +124,7 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `pick_at` | `(x: f64, y: f64, out_ptr, out_cap) -> i32` | name of the top gameplay entity under a screen point (bytes written, `0` if none) |
 | `get_light` | `(out_ptr) -> i32` | writes 9 f64 (ambient, direction, color) |
 | `set_light` | `(a0..a2, d0..d2, c0..c2: f64) -> i32` | set light uniforms |
-| `light_spawn` | `(kind: i32, x,y,z, r,g,b, intensity, radius, ttl: f64) -> i32` | spawn a pooled dynamic light (`kind` 0=point, 1=spot; `ttl <= 0` = persistent); returns handle, `-1` when the pool is full |
+| `light_spawn` | `(kind: i32, x,y,z, r,g,b, intensity, radius, ttl: f64) -> i32` | spawn a pooled dynamic light (`kind` 0=point, 1=spot — but there is no `dir`/cone parameter, so a spawned spot lights as a point, #120; `ttl <= 0` = persistent); returns handle, `-1` when the pool is full |
 | `light_set` | `(handle: i32, x,y,z, r,g,b, intensity, radius: f64) -> i32` | overwrite an active pooled light by handle (`1` ok, `0` bad handle) |
 | `light_release` | `(handle: i32) -> i32` | release a pooled light back to the free-list (`1` ok, `0` bad handle) |
 | `spawn_rect` | `(name, x, y, w, h, r, g, b, a) -> i32` | spawn a named screen-space solid-color rectangle |
