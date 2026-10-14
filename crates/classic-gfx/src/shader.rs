@@ -124,6 +124,14 @@ impl Shader {
         }
     }
 
+    /// Set a `vec4` array uniform (`name` is the array, e.g. `u_color_v`).
+    pub fn uniform_vec4_array(&self, gl: &glow::Context, name: &str, v: &[[f32; 4]]) {
+        if let Some(loc) = self.unif(gl, name) {
+            let flat: &[f32] = bytemuck::cast_slice(v);
+            unsafe { gl.uniform_4_f32_slice(Some(&loc), flat) }
+        }
+    }
+
     pub fn uniform_vec3(&self, gl: &glow::Context, name: &str, v: Vec3) {
         if let Some(loc) = self.unif(gl, name) {
             unsafe { gl.uniform_3_f32(Some(&loc), v[0], v[1], v[2]) }
@@ -212,6 +220,7 @@ impl ShaderSourceRegistry {
         r.override_vertex("shadow_sprite.vert", shaders::SHADOW_SPRITE_VERT);
         r.override_vertex("mesh.vert", shaders::MESH_VERT);
         r.override_vertex("model_composite.vert", shaders::MODEL_COMPOSITE_VERT);
+        r.override_vertex("particle.vert", shaders::PARTICLE_VERT);
         r.override_fragment("solid.frag", shaders::SOLID_FRAG);
         r.override_fragment("image.frag", shaders::IMAGE_FRAG);
         r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
@@ -222,6 +231,7 @@ impl ShaderSourceRegistry {
         r.override_fragment("shadow_sprite.frag", shaders::SHADOW_SPRITE_FRAG);
         r.override_fragment("mesh.frag", shaders::MESH_FRAG);
         r.override_fragment("model_composite.frag", shaders::MODEL_COMPOSITE_FRAG);
+        r.override_fragment("particle.frag", shaders::PARTICLE_FRAG);
         r
     }
 
@@ -456,6 +466,16 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             fragment: "model_composite.frag",
             attr: &["vertex_pos"],
             unif: &["color_tex", "depth_tex", "ghost_alpha"],
+        },
+        BuiltinShader {
+            name: "particle",
+            vertex: "particle.vert",
+            fragment: "particle.frag",
+            // Locations 0..=2 match the per-instance attributes `ParticleGpu`
+            // binds in its own VAO.
+            attr: &["a_p0t", "a_v0l", "a_misc"],
+            // The remaining uniforms resolve lazily (`Shader::unif`).
+            unif: &["world_matrix", "camera_matrix", "projection_matrix", "depth_span", "ppm"],
         },
     ]
 }
