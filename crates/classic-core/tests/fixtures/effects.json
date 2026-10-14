@@ -1,0 +1,298 @@
+{
+  "effects": [
+    {
+      "name": "dust_puff",
+      "layers": [
+        {
+          "type": "particles", "name": "puff", "max": 512,
+          "spawn": { "burst": 110, "shape": "disc", "radius": 0.4 },
+          "velocity": { "radial": [0.6, 3.0], "up": [0.6, 2.8] },
+          "motion": { "gravity": 1.0, "drag": 0.55, "spin": [-0.6, 0.6] },
+          "life": [1.6, 3.2], "size": [0.5, 1.0],
+          "size_curve": [[0, 0.5], [0.35, 1.6], [1, 2.6]],
+          "color": [[0, [0.88, 0.86, 0.82, 0.0]], [0.05, [0.88, 0.86, 0.82, 0.9]], [0.45, [0.86, 0.84, 0.8, 0.55]], [1, [0.84, 0.82, 0.78, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 1.2 },
+          "ground": { "mode": "clamp", "offset": 0.1 }
+        }
+      ]
+    },
+    {
+      "name": "rocket_blast",
+      "layers": [
+        {
+          "type": "particles", "name": "wall", "max": 2400,
+          "spawn": { "rate": 300, "shape": "ring", "radius": 1.75, "thickness": 0.75, "on_ground": true, "ground_falloff": [4, 30] },
+          "velocity": { "radial": [15, 26], "up": [0.0, 0.9] },
+          "motion": { "gravity": -1.08, "drag": 1.25, "spin": [-0.3, 0.3],
+                      "turbulence": { "amp": 1.1, "freq": 0.35, "ramp": 3.0 } },
+          "life": [3.5, 6.0], "size": [1.8, 3.0],
+          "size_curve": [[0, 0.3], [0.3, 1.3], [1, 2.6]],
+          "color": [[0, [0.8, 0.77, 0.72, 0.0]], [0.12, [0.8, 0.77, 0.72, 0.92]], [0.6, [0.78, 0.76, 0.72, 0.68]], [1, [0.76, 0.74, 0.7, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 0.8, "depth_bias": 0.35 },
+          "ground": { "mode": "clamp", "offset": 0.5 }
+        },
+        {
+          "type": "particles", "name": "billow", "max": 3400,
+          "spawn": { "rate": 460, "shape": "ring", "radius": 1.75, "thickness": 0.75, "on_ground": true, "ground_falloff": [4, 32] },
+          "velocity": { "radial": [8, 24], "up": [0.6, 3.6] },
+          "motion": { "gravity": -0.07, "drag": 1.0, "spin": [-0.4, 0.4],
+                      "turbulence": { "amp": 0.8, "freq": 0.5, "ramp": 2.0 } },
+          "life": [3.0, 5.5], "size": [1.45, 2.5],
+          "size_curve": [[0, 0.35], [0.25, 1.6], [1, 3.2]],
+          "color": [[0, [0.8, 0.77, 0.72, 0.0]], [0.1, [0.8, 0.77, 0.72, 0.88]], [0.55, [0.78, 0.76, 0.72, 0.68]], [1, [0.76, 0.74, 0.7, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 0.8, "depth_bias": 0.35 },
+          "ground": { "mode": "clamp", "offset": 0.36 }
+        },
+        {
+          "type": "particles", "name": "core", "max": 800,
+          "spawn": { "rate": 260, "shape": "ring", "radius": 1.5, "thickness": 0.75, "on_ground": true, "ground_falloff": [4, 26] },
+          "velocity": { "radial": [2.5, 8], "up": [1.2, 4.8] },
+          "motion": { "gravity": 0.12, "drag": 1.8, "turbulence": { "amp": 0.35, "freq": 0.9, "ramp": 0.8 } },
+          "life": [1.0, 2.0], "size": [1.2, 2.0],
+          "size_curve": [[0, 0.5], [1, 2.4]],
+          "color": [[0, [0.85, 0.8, 0.74, 0.0]], [0.15, [0.85, 0.8, 0.74, 0.8]], [1, [0.8, 0.77, 0.72, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 0.8, "depth_bias": 0.35 },
+          "ground": { "mode": "clamp", "offset": 0.36 }
+        },
+        {
+          "type": "particles", "name": "rollup", "max": 3400,
+          "spawn": { "rate": 600, "shape": "ring", "radius": 1.75, "thickness": 0.75, "on_ground": true, "ground_falloff": [4, 30] },
+          "velocity": { "radial": [11, 20], "up": [0.0, 0.5] },
+          "motion": {
+            "gravity": 0.24, "drag": 0.7, "spin": [-1.0, 1.0],
+            "swirl": { "slots": 6, "kick_radius": 13, "kick_jitter": 0.12, "omega": 4.0, "decay": 0.15,
+                       "lift": 10.8, "lift_time": 2.6, "growth": 0.08, "core": 0.65, "pinch_time": 0.5,
+                       "drift": 1.5, "arms": 2 }
+          },
+          "life": [3.0, 4.5], "size": [0.6, 1.2],
+          "size_curve": [[0, 0.5], [0.3, 1.4], [1, 2.8]],
+          "color": [[0, [0.8, 0.78, 0.74, 0.0]], [0.1, [0.82, 0.8, 0.76, 0.9]], [0.6, [0.8, 0.78, 0.74, 0.65]], [1, [0.76, 0.74, 0.7, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 1.0 },
+          "ground": { "mode": "clamp", "offset": 0.18 }
+        },
+        {
+          "type": "particles", "name": "debris", "max": 520,
+          "spawn": { "rate": 200, "shape": "disc", "radius": 0.5, "on_ground": true, "ground_falloff": [4, 22] },
+          "velocity": { "radial": [9, 20], "up": [0.25, 2.4] },
+          "motion": { "gravity": 0.6, "drag": 0.12 },
+          "life": [0.6, 1.3], "size": [0.04, 0.09],
+          "color": [[0, [0.95, 0.9, 0.82, 0.9]], [1, [0.8, 0.77, 0.72, 0.0]]],
+          "render": { "mode": "streak", "streak": 0.07, "shape": "soft", "lit": true },
+          "ground": { "mode": "bounce", "restitution": 0.3 }
+        },
+        {
+          "type": "particles", "name": "haze", "max": 340,
+          "spawn": { "rate": 40, "shape": "disc", "radius": 4.0, "on_ground": true, "ground_falloff": [4, 32] },
+          "velocity": { "radial": [1.5, 4.5], "up": [0.12, 0.72] },
+          "motion": { "gravity": 0.03, "drag": 0.3, "turbulence": { "amp": 0.9, "freq": 0.4, "ramp": 2.0 } },
+          "life": [4.0, 6.0], "size": [3.0, 5.4],
+          "size_curve": [[0, 0.6], [1, 2.0]],
+          "color": [[0, [0.78, 0.76, 0.72, 0.0]], [0.15, [0.78, 0.76, 0.72, 0.22]], [1, [0.76, 0.74, 0.7, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 1.6 },
+          "ground": { "mode": "clamp", "offset": 0.6 }
+        }
+      ]
+    },
+    {
+      "name": "nozzle_plume",
+      "layers": [
+        {
+          "type": "particles", "name": "core", "max": 3000,
+          "spawn": { "rate": 450, "shape": "sphere", "radius": 0.25 },
+          "velocity": { "speed": [22, 34], "cone": 0.08 },
+          "motion": { "gravity": 0.0 },
+          "life": [0.08, 0.16], "size": [0.45, 0.7],
+          "size_curve": [[0, 0.7], [1, 2.2]],
+          "color": [[0, [1.0, 0.97, 0.9, 1.0]], [0.4, [1.0, 0.72, 0.35, 0.8]], [1, [0.9, 0.3, 0.08, 0.0]]],
+          "render": { "shape": "glow", "blend": "additive", "emissive": 0.8 },
+          "ground": { "mode": "clamp", "offset": 0.3 }
+        },
+        {
+          "type": "particles", "name": "exhaust", "max": 3000,
+          "spawn": { "rate": 240, "shape": "sphere", "radius": 0.4 },
+          "velocity": { "speed": [16, 26], "cone": 0.22 },
+          "motion": { "gravity": 0.0, "drag": 1.2 },
+          "life": [0.25, 0.5], "size": [0.8, 1.4],
+          "size_curve": [[0, 0.8], [1, 3.0]],
+          "color": [[0, [1.0, 0.62, 0.28, 0.5]], [0.5, [0.9, 0.35, 0.1, 0.22]], [1, [0.45, 0.12, 0.04, 0.0]]],
+          "render": { "shape": "smoke", "blend": "additive", "emissive": 0.35, "softness": 1.4 },
+          "ground": { "mode": "clamp", "offset": 0.4 }
+        },
+        {
+          "type": "light", "name": "burn", "duration": null,
+          "color": [1.0, 0.6, 0.25], "peak": 2.2, "radius": 12.0, "offset": [0.0, 0.0, -1.5],
+          "flicker": 0.15, "flicker_hz": 24
+        }
+      ]
+    },
+    {
+      "name": "sparks",
+      "layers": [
+        {
+          "type": "particles", "name": "sparks", "max": 600,
+          "spawn": { "burst": 90, "shape": "sphere", "radius": 0.05 },
+          "velocity": { "speed": [3, 9], "cone": 1.2 },
+          "motion": { "gravity": 1.0, "drag": 0.15 },
+          "life": [0.6, 1.4], "size": [0.05, 0.09],
+          "color": [[0, [1.0, 0.95, 0.75, 1.0]], [0.3, [1.0, 0.7, 0.3, 1.0]], [1, [0.9, 0.25, 0.05, 0.0]]],
+          "render": { "mode": "streak", "streak": 0.06, "shape": "glow", "blend": "additive", "emissive": 2.2 },
+          "ground": { "mode": "bounce", "restitution": 0.45, "offset": 0.03 }
+        },
+        {
+          "type": "light", "name": "spark_flash", "duration": 0.25,
+          "color": [1.0, 0.8, 0.5], "intensity": [[0, 1], [1, 0]], "peak": 3.0, "radius": 5.0, "offset": [0, 0, 0.3]
+        }
+      ]
+    },
+    {
+      "name": "explosion",
+      "layers": [
+        {
+          "type": "light", "name": "flash", "duration": 0.7,
+          "color": [1.0, 0.78, 0.45], "intensity": [[0, 1], [0.12, 0.5], [1, 0]], "peak": 3.0, "radius": 12.0,
+          "offset": [0, 0, 1.0]
+        },
+        {
+          "type": "particles", "name": "fireball", "max": 200,
+          "spawn": { "burst": 45, "shape": "sphere", "radius": 0.6 },
+          "velocity": { "speed": [1, 5], "cone": 3.14 },
+          "motion": { "gravity": 0.0, "drag": 3.0 },
+          "life": [0.25, 0.6], "size": [1.2, 2.2],
+          "size_curve": [[0, 0.6], [1, 1.8]],
+          "color": [[0, [1.0, 0.85, 0.6, 1.0]], [0.25, [1.0, 0.55, 0.2, 0.85]], [1, [0.5, 0.15, 0.04, 0.0]]],
+          "render": { "shape": "glow", "blend": "additive", "emissive": 1.0 },
+          "ground": { "mode": "clamp", "offset": 0.4 }
+        },
+        {
+          "type": "particles", "name": "debris", "max": 300,
+          "spawn": { "burst": 70, "shape": "sphere", "radius": 0.3 },
+          "velocity": { "speed": [5, 13], "cone": 1.35 },
+          "motion": { "gravity": 1.0, "drag": 0.05 },
+          "life": [1.5, 3.5], "size": [0.07, 0.14],
+          "color": [[0, [1.0, 0.85, 0.6, 1.0]], [0.15, [0.75, 0.7, 0.65, 1.0]], [1, [0.55, 0.53, 0.5, 1.0]]],
+          "render": { "mode": "streak", "streak": 0.05, "shape": "soft", "lit": true },
+          "ground": { "mode": "die", "sub_effect": "dust_kick", "sub_chance": 0.35 }
+        },
+        {
+          "type": "particles", "name": "smoke", "max": 200,
+          "spawn": { "burst": 30, "shape": "sphere", "radius": 0.7 },
+          "velocity": { "speed": [0.6, 2.4], "cone": 1.6 },
+          "motion": { "gravity": 0.0, "drag": 0.9, "turbulence": { "amp": 0.4, "freq": 0.9, "ramp": 1.0 }, "spin": [-0.5, 0.5] },
+          "life": [2.5, 4.5], "size": [1.4, 2.6],
+          "size_curve": [[0, 0.6], [1, 2.0]],
+          "color": [[0, [0.3, 0.28, 0.26, 0.0]], [0.08, [0.32, 0.3, 0.28, 0.65]], [1, [0.45, 0.43, 0.4, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 1.2 },
+          "ground": { "mode": "clamp", "offset": 0.5 }
+        },
+        {
+          "type": "particles", "name": "ejecta", "max": 400,
+          "spawn": { "burst": 120, "shape": "ring", "radius": 0.6, "thickness": 0.4, "on_ground": true },
+          "velocity": { "radial": [2, 7], "up": [0.5, 2.5] },
+          "motion": { "gravity": 1.0, "drag": 0.8 },
+          "life": [1.5, 3.0], "size": [0.4, 0.9],
+          "size_curve": [[0, 0.6], [1, 2.0]],
+          "color": [[0, [0.78, 0.76, 0.72, 0.0]], [0.06, [0.78, 0.76, 0.72, 0.6]], [1, [0.76, 0.74, 0.7, 0.0]]],
+          "render": { "shape": "smoke", "lit": true },
+          "ground": { "mode": "clamp", "offset": 0.15 }
+        }
+      ]
+    },
+    {
+      "name": "dust_kick",
+      "layers": [
+        {
+          "type": "particles", "name": "kick", "max": 64,
+          "spawn": { "burst": 10, "shape": "disc", "radius": 0.1 },
+          "velocity": { "radial": [0.3, 1.2], "up": [0.3, 1.0] },
+          "motion": { "gravity": 1.0, "drag": 1.0 },
+          "life": [0.8, 1.6], "size": [0.2, 0.4],
+          "size_curve": [[0, 0.6], [1, 1.8]],
+          "color": [[0, [0.78, 0.76, 0.72, 0.0]], [0.1, [0.78, 0.76, 0.72, 0.6]], [1, [0.76, 0.74, 0.7, 0.0]]],
+          "render": { "shape": "smoke", "lit": true },
+          "ground": { "mode": "clamp", "offset": 0.05 }
+        }
+      ]
+    },
+    {
+      "name": "smoke_column",
+      "layers": [
+        {
+          "type": "particles", "name": "smoke", "max": 400,
+          "spawn": { "rate": 22, "shape": "disc", "radius": 0.3 },
+          "velocity": { "up": [0.7, 1.3], "radial": [0.0, 0.2] },
+          "motion": { "gravity": -0.06, "drag": 0.25, "turbulence": { "amp": 0.7, "freq": 0.9, "ramp": 2.0 }, "spin": [-0.4, 0.4] },
+          "life": [5.0, 7.5], "size": [0.6, 1.0],
+          "size_curve": [[0, 0.5], [1, 4.0]],
+          "color": [[0, [0.22, 0.21, 0.2, 0.0]], [0.08, [0.24, 0.23, 0.22, 0.6]], [0.7, [0.35, 0.34, 0.33, 0.3]], [1, [0.4, 0.39, 0.38, 0.0]]],
+          "render": { "shape": "smoke", "lit": true, "softness": 1.1 },
+          "ground": { "mode": "none" }
+        }
+      ]
+    },
+    {
+      "name": "smoke_flipbook",
+      "layers": [
+        {
+          "type": "particles", "name": "puffs", "max": 300,
+          "spawn": { "rate": 26, "shape": "disc", "radius": 0.2 },
+          "velocity": { "up": [0.6, 1.0] },
+          "motion": { "gravity": -0.05, "drag": 0.3, "turbulence": { "amp": 0.5, "freq": 0.7, "ramp": 1.5 }, "spin": [-0.3, 0.3] },
+          "life": [4.0, 6.0], "size": [1.0, 1.6],
+          "size_curve": [[0, 0.5], [1, 3.0]],
+          "color": [[0, [0.9, 0.88, 0.85, 0.0]], [0.1, [0.9, 0.88, 0.85, 1.0]], [0.7, [0.9, 0.88, 0.85, 0.8]], [1, [0.9, 0.88, 0.85, 0.0]]],
+          "render": { "lit": true, "texture": "fx::smoke_flipbook", "flipbook": { "cols": 4, "rows": 4, "frames": 16, "fps": 0 } },
+          "ground": { "mode": "none" }
+        }
+      ]
+    },
+    {
+      "name": "arc",
+      "layers": [
+        {
+          "type": "ribbon", "name": "arc", "mode": "arc", "end": [3.5, 0.0, 0.0],
+          "depth": 6, "jitter": 0.32, "branches": 3, "width": 0.04, "glow": 0.4,
+          "color": [0.45, 0.65, 1.0], "intensity": 2.2, "regen_hz": 18
+        },
+        {
+          "type": "particles", "name": "sparks", "max": 200,
+          "spawn": { "rate": 40, "shape": "sphere", "radius": 0.05 },
+          "velocity": { "speed": [1.5, 4], "cone": 1.4 },
+          "motion": { "gravity": 1.0 },
+          "life": [0.3, 0.7], "size": [0.03, 0.05],
+          "color": [[0, [0.85, 0.92, 1.0, 1.0]], [1, [0.4, 0.6, 1.0, 0.0]]],
+          "render": { "mode": "streak", "streak": 0.04, "shape": "glow", "blend": "additive", "emissive": 2.0 },
+          "ground": { "mode": "bounce", "restitution": 0.4 }
+        },
+        {
+          "type": "light", "name": "glow", "duration": null,
+          "color": [0.5, 0.7, 1.0], "peak": 0.9, "radius": 5.0, "offset": [1.75, 0.0, 0.0],
+          "flicker": 0.5, "flicker_hz": 18
+        }
+      ]
+    },
+    {
+      "name": "lightning",
+      "layers": [
+        {
+          "type": "ribbon", "name": "bolt", "mode": "lightning", "strike_radius": 3.0,
+          "depth": 6, "jitter": 0.28, "branches": 3, "width": 0.08, "glow": 0.9,
+          "color": [0.7, 0.8, 1.0], "intensity": 3.0, "interval": [0.5, 1.4], "strike_time": 0.22,
+          "flash": 2.5, "flash_radius": 12.0
+        }
+      ]
+    },
+    {
+      "name": "ember",
+      "layers": [
+        {
+          "type": "particles", "name": "ember", "max": 64,
+          "spawn": { "rate": 20, "shape": "point" },
+          "velocity": { "speed": [1.0, 2.0], "cone": 0.5 },
+          "life": [0.4, 0.8], "size": [0.03, 0.06],
+          "color": [[0, [1.0, 0.9, 0.6, 1.0]], [1, [1.0, 0.5, 0.2, 0.0]]],
+          "render": { "shape": "glow", "blend": "additive", "emissive": 1.0 }
+        }
+      ]
+    }
+  ]
+}
