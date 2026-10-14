@@ -7,8 +7,10 @@
 
 use classic_core::components::Light;
 
+use crate::handles::EntityHandles;
+
 /// Handle to a dynamic light (a slot index into the handle table).
-pub type LightHandle = u32;
+pub type LightHandle = crate::handles::Handle;
 
 /// Transient-light lifetime marker.  Present on guest-spawned lights with a
 /// finite TTL; the engine decays it each frame and despawns expired lights.
@@ -19,18 +21,17 @@ pub struct LightTtl {
     pub handle: LightHandle,
 }
 
-/// A fixed-capacity handle→entity table with a free-list allocator.
+/// The light handle→entity table.
 ///
 /// Capacity is bounded by `classic_gfx::MAX_LIGHTS` (the UBO block size); a
 /// spawn beyond capacity returns `None` rather than reallocating.
 pub struct LightHandles {
-    slots: Vec<Option<hecs::Entity>>,
-    free: Vec<LightHandle>,
+    slots: EntityHandles,
 }
 
 impl LightHandles {
     pub fn new() -> Self {
-        Self { slots: Vec::new(), free: Vec::new() }
+        Self { slots: EntityHandles::new(classic_gfx::MAX_LIGHTS) }
     }
 
     /// Spawn a light entity, returning its handle (or `None` when full).
@@ -40,61 +41,38 @@ impl LightHandles {
         light: Light,
         ttl: Option<f32>,
     ) -> Option<LightHandle> {
-        let handle = if let Some(h) = self.free.pop() {
-            h
-        } else if self.slots.len() >= classic_gfx::MAX_LIGHTS {
-            return None;
-        } else {
-            let h = self.slots.len() as LightHandle;
-            self.slots.push(None);
-            h
-        };
+        let handle = self.slots.reserve()?;
         let mut builder = hecs::EntityBuilder::new();
         builder.add(light);
         if let Some(ttl) = ttl {
             builder.add(LightTtl { remaining: ttl, handle });
         }
-        let entity = world.spawn(builder.build());
-        self.slots[handle as usize] = Some(entity);
+        self.slots.bind(handle, world.spawn(builder.build()));
         Some(handle)
     }
 
     /// Overwrite an active light's parameters by handle.
     pub fn set(&mut self, world: &mut hecs::World, handle: LightHandle, light: Light) -> bool {
-        match self.slots.get(handle as usize) {
-            Some(Some(e)) => world.insert(*e, (light,)).is_ok(),
-            _ => false,
+        match self.slots.get(handle) {
+            Some(e) => world.insert(e, (light,)).is_ok(),
+            None => false,
         }
     }
 
     /// Read an active light's parameters by handle.
     pub fn get(&self, world: &hecs::World, handle: LightHandle) -> Option<Light> {
-        match self.slots.get(handle as usize) {
-            Some(Some(e)) => world.get::<&Light>(*e).ok().map(|r| (*r).clone()),
-            _ => None,
-        }
+        let e = self.slots.get(handle)?;
+        world.get::<&Light>(e).ok().map(|r| (*r).clone())
     }
 
     /// Despawn a light entity and release its handle back to the free-list.
     pub fn release(&mut self, world: &mut hecs::World, handle: LightHandle) -> bool {
-        if let Some(slot) = self.slots.get_mut(handle as usize) {
-            if let Some(e) = slot.take() {
+        match self.slots.take(handle) {
+            Some(e) => {
                 let _ = world.despawn(e);
-                self.free.push(handle);
-                return true;
+                true
             }
-        }
-        false
-    }
-
-    /// Mark a handle as freed after its entity was despawned elsewhere (e.g. by
-    /// TTL decay).
-    fn free_handle(&mut self, handle: LightHandle) {
-        if let Some(slot) = self.slots.get_mut(handle as usize) {
-            if slot.is_some() {
-                *slot = None;
-                self.free.push(handle);
-            }
+            None => false,
         }
     }
 
@@ -113,7 +91,11 @@ impl LightHandles {
         }
         for (e, handle) in expired {
             let _ = world.despawn(e);
-            self.free_handle(handle);
+            // The slot may already be gone (released this frame); only free a
+            // handle still bound to this entity.
+            if self.slots.get(handle) == Some(e) {
+                self.slots.take(handle);
+            }
         }
     }
 }

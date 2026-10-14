@@ -22,6 +22,7 @@ pub mod boot;
 pub mod boot_loader;
 pub mod env_config;
 pub mod golden;
+pub mod handles;
 pub mod inventory;
 pub mod inventory_ui;
 pub mod light;
