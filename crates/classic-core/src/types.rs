@@ -300,6 +300,16 @@ pub struct VehicleDef {
     #[serde(default)]
     pub tires: Vec<VehiclePartDef>,
     pub parts: Vec<VehiclePartDef>,
+    /// Effect each wheel kicks up while driving (resolved against the loaded
+    /// effect libraries).  Per wheel, its spawn rate and launch speed scale
+    /// with ground speed, and every change in speed adds bursts.  `None` = no
+    /// dust (and no emitters).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dust_effect: Option<String>,
+    /// One-shot effect fired under the body when it lands after being
+    /// airborne, scaled by the impact speed.  `None` = no touchdown puff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub touchdown_effect: Option<String>,
 }
 
 /// One part (body or wheel) of a [`VehicleDef`].  The part's per-direction
@@ -339,6 +349,14 @@ pub struct VehicleOverrides {
     pub reverse_speed: Option<f32>,
     #[serde(default)]
     pub turn_cost: Option<f32>,
+    /// Opt a scene's copy of the vehicle into wheel dust (see
+    /// [`VehicleDef::dust_effect`]).
+    #[serde(default)]
+    pub dust_effect: Option<String>,
+    /// Opt a scene's copy of the vehicle into a touchdown puff (see
+    /// [`VehicleDef::touchdown_effect`]).
+    #[serde(default)]
+    pub touchdown_effect: Option<String>,
 }
 
 impl VehicleOverrides {
@@ -359,6 +377,12 @@ impl VehicleOverrides {
         }
         if let Some(v) = self.turn_cost {
             def.turn_cost = v;
+        }
+        if let Some(v) = &self.dust_effect {
+            def.dust_effect = Some(v.clone());
+        }
+        if let Some(v) = &self.touchdown_effect {
+            def.touchdown_effect = Some(v.clone());
         }
     }
 }
@@ -649,11 +673,29 @@ mod tests {
             turn_cost: 0.0,
             tires: vec![],
             parts: vec![],
+            dust_effect: None,
+            touchdown_effect: None,
         };
         ov.apply_to(&mut def);
         assert_eq!(def.turn_rate_deg_per_sec, 55.0);
         assert_eq!(def.safe_fall_m, 1.5);
         assert_eq!(def.steer_rate_deg_per_sec, 360.0);
+        assert_eq!(def.dust_effect, None, "unset overrides leave dust off");
+
+        // A scene opts its copy of a shared vehicle into dust + touchdown.
+        let ov: VehicleOverrides = serde_json::from_value(serde_json::json!({
+            "dust_effect": "lunar-common::lrv_dust",
+            "touchdown_effect": "lunar-common::touchdown_puff"
+        }))
+        .unwrap();
+        ov.apply_to(&mut def);
+        assert_eq!(def.dust_effect.as_deref(), Some("lunar-common::lrv_dust"));
+        assert_eq!(def.touchdown_effect.as_deref(), Some("lunar-common::touchdown_puff"));
+        // An authored def without the keys serializes without them.
+        def.dust_effect = None;
+        def.touchdown_effect = None;
+        let out = serde_json::to_value(&def).unwrap();
+        assert!(out.get("dust_effect").is_none() && out.get("touchdown_effect").is_none());
     }
 
     /// A texture manifest entry without `frames` leaves it `None` (backward

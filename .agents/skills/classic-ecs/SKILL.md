@@ -202,6 +202,22 @@ categories:
   `should_reverse` hysteresis when the target is ~100° behind.  See
   `classic-physics` (turn-cost A\*) and `classic-iso` (steering tire frames).
 
+  **Wheel dust / touchdown** (`vehicle/dust.rs`): `dust_effect` and
+  `touchdown_effect` are *serialized* `Option<String>`s (omitted from dumps when
+  `None`, so scenes that never opt in dump unchanged), copied from the
+  `VehicleDef` keys of the same name at spawn, or opted in per scene through
+  the manifest's `vehicle_overrides`.  With `dust_effect` set, the first sim
+  step spawns four ordinary `Emitter` entities `<body>Dust{Fl,Fr,Rl,Rr}`
+  parented to the body; each step moves them to the wheel ground contacts,
+  aims them up and back against the travel direction, sets `rate`/`speed`
+  to `ground speed / DUST_REF_SPEED` (2 m/s) for grounded wheels (`0`
+  airborne) and adds `|Δspeed| · DUST_BURSTS_PER_MPS` to `burst` — so pulling
+  away and braking puff.  The effect is read when the emitters spawn.  On the
+  airborne→grounded step, `touchdown_effect` fires once under the body via
+  `fx_emit`, scaled by the impact speed (`/ TOUCHDOWN_REF_IMPACT`, 1 m/s,
+  clamped 0.5–2; below 0.3 m/s nothing fires).  The transient `dust_speed`
+  (last step's ground speed) is reset by `vehicle_teleport`.
+
 ### Dynamic lights
 
 - **`Light`** — a pooled dynamic point/spot light (registered as a component so

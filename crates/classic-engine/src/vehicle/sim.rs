@@ -14,8 +14,8 @@ use super::kinematics::{
     straight_steer, wrap_pi,
 };
 use super::{
-    TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DIRECTIONS, GOAL_TOLERANCE,
-    MOON_GRAVITY, WHEEL_SUFFIXES,
+    TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DIRECTIONS, DUST_CONTACT_M,
+    GOAL_TOLERANCE, MOON_GRAVITY, WHEEL_SUFFIXES,
 };
 
 impl Engine {
@@ -288,6 +288,8 @@ impl Engine {
             steer_rate: def.steer_rate_deg_per_sec.to_radians(),
             reverse_speed: def.reverse_speed,
             turn_cost: def.turn_cost,
+            dust_effect: def.dust_effect.clone(),
+            touchdown_effect: def.touchdown_effect.clone(),
             ..Default::default()
         };
         let be = self.world.spawn((
@@ -336,6 +338,8 @@ impl Engine {
             let mut x = body_x;
             let mut y = body_y;
             let mut following = false;
+            // Signed ground speed this step (tiles/s; negative = reversing).
+            let mut drive_tiles = 0.0f32;
             if !v.path.is_empty() {
                 // Arrive once the final waypoint is within tolerance; snap to
                 // its center and stop.
@@ -382,6 +386,7 @@ impl Engine {
                     let step = drive_speed * delta;
                     x += dir * v.heading.cos() * step;
                     y += dir * v.heading.sin() * step;
+                    drive_tiles = dir * drive_speed;
                     following = true;
                 }
             }
@@ -421,9 +426,12 @@ impl Engine {
             // wheel-plane centre when grounded and going airborne when the
             // ground beneath it drops away.
             let body_terrain = terrain.height(x, y);
+            let was_airborne = v.airborne;
             v.vel_z -= MOON_GRAVITY * delta;
             v.altitude += v.vel_z * delta;
             let airborne = v.altitude > alt_target + 0.5 / PPM_TARGET;
+            // Impact (downward) speed on the frame the body lands.
+            let touchdown = (was_airborne && !airborne).then_some((-v.vel_z).max(0.0));
             if !airborne {
                 v.altitude = alt_target;
                 if v.vel_z < 0.0 {
@@ -504,6 +512,16 @@ impl Engine {
             let body_frame =
                 ((v.pitch_index * v.roll_levels + v.roll_index) * DIRECTIONS + v.direction) as f32;
 
+            // Dust drivers: ground speed (m/s), its change since last frame,
+            // and which wheels touch the ground.
+            let speed_mps = drive_tiles.abs() * TILE_M;
+            let dspeed_mps = (speed_mps - v.dust_speed).abs();
+            v.dust_speed = speed_mps;
+            let mut grounded = [false; 4];
+            for (i, g) in grounded.iter_mut().enumerate() {
+                *g = !airborne && wheel_altitude[i] <= DUST_CONTACT_M;
+            }
+
             VehicleWrite {
                 body: [x, y, v.altitude],
                 body_altitude,
@@ -515,10 +533,17 @@ impl Engine {
                 wheel_z,
                 wheel_anchors,
                 steer_index: v.steer_index,
+                heading: v.heading,
+                motion_sign: drive_tiles.signum(),
+                speed_mps,
+                dspeed_mps,
+                grounded,
+                touchdown,
             }
         };
 
         self.apply_pose(ve, &wheel_handles, &tire_handles, &write);
+        self.drive_vehicle_fx(ve, &write);
     }
 
     /// Write a computed pose into the body + wheel `Transform`/`IsoSprite`s.

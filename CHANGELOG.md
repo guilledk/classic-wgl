@@ -76,6 +76,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   an ordinary `Emitter` entity in a 256-slot pool, so it attaches, traces and
   finishes its particles on release like a scene emitter.  The light pool's
   slot allocator moved to a shared `classic_engine::handles::EntityHandles`.
+- Vehicle wheel dust and touchdown puffs (M10): optional
+  `VehicleDef`/`IsoVehicle` `dust_effect` and `touchdown_effect` (also
+  settable per scene through `vehicle_overrides`).  Each grounded wheel gets
+  a body-parented `Emitter` whose rate and launch speed follow ground speed,
+  with bursts on every speed change, aimed up and back against the travel
+  direction; landing from an airborne arc fires the touchdown effect, scaled
+  by the impact speed.  Vehicles without the keys spawn nothing and dump
+  unchanged.
 
 ### Fixed
 

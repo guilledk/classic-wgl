@@ -649,6 +649,15 @@ pub struct IsoVehicle {
     /// A* turn penalty (copied from the vehicle def at spawn); see `VehicleDef`.
     #[serde(skip)]
     pub turn_cost: f32,
+    /// Wheel dust effect (copied from the vehicle def at spawn; settable per
+    /// instance).  The engine spawns one `Emitter` per wheel, named
+    /// `<body>Dust{Fl,Fr,Rl,Rr}` and parented to the body, the first frame
+    /// this is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dust_effect: Option<String>,
+    /// Touchdown one-shot effect (copied from the vehicle def at spawn).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub touchdown_effect: Option<String>,
 
     // -- transient simulation state (not serialized) ----------------------
     /// Per-wheel, per-direction tile-space offset from the body, derived from
@@ -695,6 +704,9 @@ pub struct IsoVehicle {
     /// Whether the vehicle is currently reversing (`true`) or driving forward.
     #[serde(skip)]
     pub reversing: bool,
+    /// Ground speed (metres/second) last frame, for the dust burst term.
+    #[serde(skip)]
+    pub dust_speed: f32,
 }
 
 fn default_vehicle_speed() -> f32 {
@@ -735,6 +747,8 @@ impl Default for IsoVehicle {
             steer_rate: 360.0f32.to_radians(),
             reverse_speed: 1.3,
             turn_cost: 0.0,
+            dust_effect: None,
+            touchdown_effect: None,
             wheel_tile_offsets: [[[0.0, 0.0]; 8]; 4],
             altitude: 0.0,
             vel_z: 0.0,
@@ -746,6 +760,7 @@ impl Default for IsoVehicle {
             heading: 0.0,
             steer: 0.0,
             reversing: false,
+            dust_speed: 0.0,
         }
     }
 }

@@ -33,6 +33,8 @@ impl Engine {
             v.steer_index = straight_steer(v.steer_levels);
             v.steer = 0.0;
             v.reversing = false;
+            // A teleport is not a speed change: no dust burst next step.
+            v.dust_speed = 0.0;
 
             let mut wheel_xy = [[0.0f32; 2]; 4];
             let mut wheel_z = [0.0f32; 4];
@@ -81,6 +83,12 @@ impl Engine {
                 wheel_z,
                 wheel_anchors,
                 steer_index: v.steer_index,
+                heading: v.heading,
+                motion_sign: 0.0,
+                speed_mps: 0.0,
+                dspeed_mps: 0.0,
+                grounded: [true; 4],
+                touchdown: None,
             }
         };
 
