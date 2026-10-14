@@ -126,6 +126,10 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `light_spawn` | `(kind: i32, x,y,z, r,g,b, intensity, radius, ttl: f64) -> i32` | spawn a pooled dynamic light (`kind` 0=point, 1=spot — but there is no `dir`/cone parameter, so a spawned spot lights as a point, #120; `ttl <= 0` = persistent); returns handle, `-1` when the pool is full |
 | `light_set` | `(handle: i32, x,y,z, r,g,b, intensity, radius: f64) -> i32` | overwrite an active pooled light by handle (`1` ok, `0` bad handle) |
 | `light_release` | `(handle: i32) -> i32` | release a pooled light back to the free-list (`1` ok, `0` bad handle) |
+| `fx_emit` | `(effect_ptr, effect_len, x,y,z, dx,dy,dz, scale: f64) -> i32` | fire a one-shot effect (see §3c); `1` ok, `0` unknown effect |
+| `emitter_spawn` | `(effect_ptr, effect_len, x,y,z, dx,dy,dz, scale: f64) -> i32` | spawn a continuous emitter; returns a handle, `-1` for an unknown effect or a full pool (256) |
+| `emitter_set` | `(handle: i32, x,y,z, dx,dy,dz, scale, rate, intensity: f64) -> i32` | move/steer/drive an emitter by handle (`rate` 0 pauses spawning); `1` ok, `0` bad handle |
+| `emitter_release` | `(handle: i32) -> i32` | release an emitter (its live particles finish); `1` ok, `0` bad handle |
 | `spawn_rect` | `(name, x, y, w, h, r, g, b, a) -> i32` | spawn a named screen-space solid-color rectangle |
 | `spawn_text` | `(name, x, y, text, scale, r, g, b, a) -> i32` | spawn a named screen-space SDF text label |
 | `set_text` | `(name, text) -> i32` | update a named SDF text label's string |
@@ -216,6 +220,46 @@ guest linear memory.  Functions returning bytes write into a caller-provided
 `out_ptr`/`out_cap` buffer and return bytes written (`-1` if too small).
 Position/mouse pairs are written as little-endian `f64`s (`get_pos` is a 3-f64
 `[x, y, z]`; `mouse`/`mouse_iso` are 2-f64 `[x, y]`).
+
+### 3c. Particle / VFX imports
+
+`fx_emit` and `emitter_spawn`/`emitter_set`/`emitter_release` drive the
+engine's particle system (`classic-gfx` §19) the way the light imports drive
+the light pool: positions are **world metres in light space, `+Z` up** (the
+`light_spawn` convention, not iso tiles), `(dx, dy, dz)` is the emission
+direction (normalized; a zero vector means straight up) and `scale` the
+effect's spatial scale.  `effect` resolves against every loaded effect
+library — an exact `ns::name`, else the first library effect with that bare
+name — so a guest may write `"rocket_blast"` or `"lunar-common::rocket_blast"`.
+
+- `emitter_spawn` returns a handle into a 256-slot pool (`-1` when the effect
+  is unknown or the pool is full); the handle maps to an ordinary `Emitter`
+  entity, so it spawns, attaches and traces like a `state.json` emitter.
+- `emitter_set` overwrites position, direction, `scale`, the `rate` and
+  `intensity` multipliers; the effect, tint, speed and burst counter are
+  kept (as `light_set` keeps a light's kind and parent).  Negative handles
+  are rejected (they never alias slot 0).
+- `emitter_release` despawns the emitter; particles it already spawned live
+  out their lifetimes.  A released handle is recycled by the next spawn.
+- All four are `[native web worker tier3_trap]`: a background (Tier 3)
+  worker guest that calls them traps.
+
+Guest-side declarations live in the ROM guest crates (`classic-roms`
+`guest/`), not here.  The `extern` block a guest adds (pointers and
+lengths as `i32`, like the existing guest `host` modules) is:
+
+```rust
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn fx_emit(effect_ptr: i32, effect_len: i32,
+               x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, scale: f64) -> i32;
+    fn emitter_spawn(effect_ptr: i32, effect_len: i32,
+                     x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, scale: f64) -> i32;
+    fn emitter_set(handle: i32, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64,
+                   scale: f64, rate: f64, intensity: f64) -> i32;
+    fn emitter_release(handle: i32) -> i32;
+}
+```
 
 ## 4. Sandbox (untrusted guests)
 

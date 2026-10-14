@@ -240,6 +240,9 @@ pub struct Engine {
     pub light_handles: light::LightHandles,
     /// The particle / VFX system (effect library, live instances, GPU rings).
     pub particles: particles::ParticleSystem,
+    /// Guest emitter handle table (`emitter_spawn`/`emitter_set`/
+    /// `emitter_release`): each handle maps to a spawned `Emitter` entity.
+    pub emitter_handles: particles::EmitterHandles,
     pub animations: HashMap<String, AnimationData>,
     /// Packed-atlas frame tables keyed by texture name, loaded from the ROM's
     /// `frames` resources at boot (issue #45).  A sprite with `frame_name` set

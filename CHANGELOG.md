@@ -69,6 +69,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   visual review of motion; `1` keeps the pixel golden.  A reference effect
   library test fixture (`classic-core` `tests/fixtures/effects.json`)
   covers every layer kind, spawn shape, ground and render mode (#126).
+- Guest particle ABI (M5): `fx_emit(effect, x, y, z, dx, dy, dz, scale)`
+  one-shots and the handle-based `emitter_spawn`/`emitter_set`/
+  `emitter_release`, mirroring the light pool (world metres, `+Z` up;
+  `[native web worker]`, trapping in the Tier-3 worker).  A guest emitter is
+  an ordinary `Emitter` entity in a 256-slot pool, so it attaches, traces and
+  finishes its particles on release like a scene emitter.  The light pool's
+  slot allocator moved to a shared `classic_engine::handles::EntityHandles`.
 
 ### Fixed
 

@@ -289,3 +289,54 @@ fn burst_driven_flash_lights_fire_per_burst_not_forever() {
     run(&mut e, 30, 1.0 / 60.0);
     assert_eq!(e.world.query::<&Light>().iter().count(), 0, "the 0.25 s flash ends");
 }
+
+#[test]
+fn guest_emitter_handles_spawn_set_and_release() {
+    let mut e = engine();
+    assert_eq!(e.spawn_emitter(Emitter::new("nope", Vec3::ZERO)), None, "unknown effect");
+    let h = e.spawn_emitter(Emitter::new("t::stream", Vec3::new(5.0, -5.0, 1.0))).unwrap();
+    run(&mut e, 30, 1.0 / 60.0);
+    assert!(e.particle_stats().live > 0);
+
+    let mut em = e.emitter_by_handle(h).unwrap();
+    em.position = Vec3::new(8.0, -8.0, 1.0);
+    em.rate = 0.0;
+    assert!(e.update_emitter(h, em));
+    assert_eq!(e.emitter_by_handle(h).unwrap().position.x, 8.0);
+    run(&mut e, 70, 1.0 / 60.0);
+    assert_eq!(e.particle_stats().live, 0, "rate 0 pauses spawning");
+    assert_eq!(e.particle_stats().instances, 1);
+
+    assert!(e.release_emitter(h));
+    assert!(!e.release_emitter(h), "double release");
+    assert!(!e.update_emitter(h, Emitter::new("t::stream", Vec3::ZERO)));
+    assert!(e.emitter_by_handle(h).is_none());
+}
+
+#[test]
+fn recycled_emitter_handles_get_fresh_instances() {
+    // A released emitter keeps its instance until its particles die; the
+    // next spawn recycles the handle (and the entity index) but must drive a
+    // fresh instance, not the dying one.
+    let mut e = engine();
+    let a = e.spawn_emitter(Emitter::new("t::stream", Vec3::new(5.0, -5.0, 1.0))).unwrap();
+    run(&mut e, 30, 1.0 / 60.0);
+    assert!(e.release_emitter(a));
+    let b = e.spawn_emitter(Emitter::new("t::stream", Vec3::new(9.0, -9.0, 1.0))).unwrap();
+    assert_eq!(a, b, "the handle is recycled");
+    run(&mut e, 1, 1.0 / 60.0);
+    assert_eq!(e.particle_stats().instances, 2, "the dying instance and the new one");
+    run(&mut e, 120, 1.0 / 60.0);
+    let s = e.particle_stats();
+    assert_eq!(s.instances, 1, "only the dead emitter's instance retires");
+    assert!(s.live > 0, "the new emitter keeps spawning");
+}
+
+#[test]
+fn guest_emitter_pool_is_bounded() {
+    let mut e = engine();
+    for _ in 0..MAX_EMITTER_HANDLES {
+        assert!(e.spawn_emitter(Emitter::new("t::stream", Vec3::ZERO)).is_some());
+    }
+    assert_eq!(e.spawn_emitter(Emitter::new("t::stream", Vec3::ZERO)), None);
+}

@@ -143,6 +143,19 @@ macro_rules! for_each_host_import {
             ) -> i32 [native web worker];
             light_release(handle: i32) -> i32 [native web worker];
 
+            // ---- Particles / VFX (world metres, +Z up, like lights) -------
+            fx_emit(
+                effect: str, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, scale: f64
+            ) -> i32 [native web worker tier3_trap];
+            emitter_spawn(
+                effect: str, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, scale: f64
+            ) -> i32 [native web worker tier3_trap];
+            emitter_set(
+                handle: i32, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, scale: f64,
+                rate: f64, intensity: f64
+            ) -> i32 [native web worker tier3_trap];
+            emitter_release(handle: i32) -> i32 [native web worker tier3_trap];
+
             // ---- Screen-space + managed UI -------------------------------
             spawn_rect(
                 name: str, x: f64, y: f64, w: f64, h: f64, r: f64, g: f64, b: f64, a: f64
@@ -944,11 +957,11 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 111);
-        assert_eq!(imports_for(Backend::Web).count(), 111);
-        assert_eq!(imports_for(Backend::Worker).count(), 111);
+        assert_eq!(imports_for(Backend::Native).count(), 115);
+        assert_eq!(imports_for(Backend::Web).count(), 115);
+        assert_eq!(imports_for(Backend::Worker).count(), 115);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
-        assert_eq!(imports_for(Backend::Tier3Trap).count(), 24);
+        assert_eq!(imports_for(Backend::Tier3Trap).count(), 28);
     }
 
     #[test]
