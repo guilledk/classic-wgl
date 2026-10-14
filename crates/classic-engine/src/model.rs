@@ -108,7 +108,7 @@ impl Engine {
     /// The world placement of a model entity: its origin on the terrain ground
     /// point of its tile position (no ground offset — the exported glb carries
     /// its own clearance), scaled by its `Transform`, axis-fixed from glTF.
-    fn model_placement(&self, tf: &Transform, tilemap_name: &str) -> Option<Mat4> {
+    pub(crate) fn model_placement(&self, tf: &Transform, tilemap_name: &str) -> Option<Mat4> {
         let &tm_entity = self.names.get(tilemap_name)?;
         let tilemap_tf = self.world.get::<&Transform>(tm_entity).ok()?;
         let tilemap = self.world.get::<&Tilemap>(tm_entity).ok()?;
@@ -121,6 +121,15 @@ impl Engine {
         );
         let ground = iso_world_pos(tf.position.x, tf.position.y, h) + tilemap_tf.position;
         Some(Mat4::from_translation(ground) * Mat4::from_scale(tf.scale) * gltf_to_world())
+    }
+
+    /// The world transform (metres) of the named glTF node of a model entity
+    /// (`placement · node_world[node]`), for `node`-attached lights and emitters.
+    pub(crate) fn model_node_world(&self, tf: &Transform, m: &Model, node: &str) -> Option<Mat4> {
+        let asset = self.models.get(&m.model)?;
+        let idx = asset.nodes.iter().position(|n| n.name == node)?;
+        let pose = m.node_world.get(idx)?;
+        Some(self.model_placement(tf, &m.tilemap)? * *pose)
     }
 
     /// Build the per-entity model draws for the `DrawKind::Model` render items.

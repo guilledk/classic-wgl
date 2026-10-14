@@ -20,8 +20,8 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
 use crate::{
-    env_config, fields, golden, inventory_ui, light, selection, shadow, DrawKind, Engine,
-    GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, OUTLINE_RADIUS_PX, RTS_DRAG_THRESHOLD_PX,
+    env_config, fields, golden, inventory_ui, light, particles, selection, shadow, DrawKind,
+    Engine, GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, OUTLINE_RADIUS_PX, RTS_DRAG_THRESHOLD_PX,
     SELECTION_COLOR,
 };
 
@@ -62,6 +62,7 @@ impl Engine {
             light_dir: [0.566_422, -0.070_803, 0.821_068],
             light_color: [1.0, 0.95, 0.85],
             light_handles: light::LightHandles::new(),
+            particles: particles::ParticleSystem::default(),
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
             frame_tables: HashMap::new(),
@@ -289,6 +290,11 @@ impl Engine {
         // (so a `vehicle_goto` issued this frame is honoured) and before the
         // render list is built.
         self.update_vehicles();
+
+        // Particles after every mover (models posed, vehicles stepped) so
+        // attached emitters spawn from this frame's positions.  A scene
+        // without emitters never creates an instance (a no-op).
+        self.update_particles(delta);
 
         // ---- CLASSIC_TEST automated test runner (registered by the demo) ----
         if env_config::EnvConfig::get().test_active() {
@@ -1029,6 +1035,18 @@ impl Engine {
         if has_models {
             gfx.composite_models(IsoSpritePass::Ghost, classic_gfx::MODEL_GHOST_GROUP);
         }
+
+        // Phase 3c: particles — depth-tested against the scene, no
+        // depth write, premultiplied blend (see `particles`).
+        let particle_settings = RenderSettings {
+            ambient: self.light_ambient,
+            light_dir: self.light_dir,
+            light_color: self.light_color,
+            depth_span: [DEPTH_NEAR, DEPTH_FAR],
+            ppm: PPM_TARGET,
+            shadow: None,
+        };
+        self.particles.draw(gfx, &cam, &particle_settings, self.trace.as_mut());
 
         // Phase 4: UI + sprites + text (no depth test — draw-order layering).
         for (order, entity, kind) in &items {

@@ -1073,6 +1073,15 @@ impl Engine {
                 continue;
             }
             let mut l = light.clone();
+            // A `node`-attached light rides that glTF node's full transform.
+            if let (Some(parent), Some(node)) = (l.parent.as_deref(), l.node.as_deref()) {
+                if let Some((pos, _, _)) =
+                    self.attachment_frame(Some(parent), Some(node), l.position, l.dir)
+                {
+                    l.position = pos;
+                    l.parent = None;
+                }
+            }
             if let Some(parent_name) = l.parent.as_deref() {
                 // Parent resolution must not fail *open*: a dangling name, a
                 // missing `Transform`, or a missing tilemap used to silently
@@ -1151,7 +1160,7 @@ impl Engine {
     /// descent/run offset here, a `Model` its animated rig-origin translation;
     /// `gather_lights` folds it into an attached light's position so the light
     /// tracks the parent's animated motion.
-    fn parent_frame_offset(&self, parent: hecs::Entity) -> Vec3 {
+    pub(crate) fn parent_frame_offset(&self, parent: hecs::Entity) -> Vec3 {
         if let Ok(s) = self.world.get::<&IsoSprite>(parent) {
             return s.frame_offset;
         }

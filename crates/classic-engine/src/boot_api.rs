@@ -398,6 +398,21 @@ impl Engine {
         // Blender-exported data artifacts (vehicle anchors, …) from the `data`
         // resources, keyed by name and referenced by authored defs' `anchors`.
         for (name, bytes) in resources.data() {
+            // A particle effect library (`{"effects": [...]}`), registered
+            // under the ROM namespace so `Emitter.effect` resolves `ns::name`.
+            if classic_core::effects::EffectLibrary::sniff(bytes) {
+                match classic_core::effects::EffectLibrary::from_json(bytes) {
+                    Ok(lib) => {
+                        let ns = self.namespace.clone();
+                        self.register_effects(&ns, lib);
+                    }
+                    Err(e) => classic_core::cl_error!(
+                        Chan::Guest,
+                        "effect library '{name}' parse failed: {e}"
+                    ),
+                }
+                continue;
+            }
             match serde_json::from_slice::<classic_core::types::VehicleAnchors>(bytes) {
                 Ok(anchors) => {
                     self.vehicle_anchors.insert(self.entity_key(name), anchors);
