@@ -71,6 +71,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   visual review of motion; `1` keeps the pixel golden.  A reference effect
   library test fixture (`classic-core` `tests/fixtures/effects.json`)
   covers every layer kind, spawn shape, ground and render mode (#126).
+- A `camera` step for `CLASSIC_TEST` scenarios:
+  `{"camera": {"follow": "rocket", "zoom": 0.3}}` follows a named entity
+  every frame (an exact name, else the bare part of `ns::name`; emitters
+  and lights frame their resolved attachment via
+  `Engine::named_world_point`), `{"tile": [x, y]}` holds an iso tile and
+  `{}` releases the pin.  With `CLASSIC_GOLDEN_PNG=<frames>` it frames
+  headless review captures of ROM-authored effects.
 - Guest particle ABI (M5): `fx_emit(effect, x, y, z, dx, dy, dz, scale)`
   one-shots and the handle-based `emitter_spawn`/`emitter_set`/
   `emitter_release` (#127), mirroring the light pool (world metres, `+Z` up;

@@ -908,7 +908,9 @@ form.  No transform feedback, no per-frame CPU simulation.
   every layer kind, spawn shape, ground/render mode, shape and blend in it.
 - **Review loop**: effects are authored as ROM data, so look at them in a
   ROM (`rom:lunar` has the rocket landing and launch).  A
-  `CLASSIC_TEST_FILE` scenario frames the shot (`setCameraIso`) and
+  `CLASSIC_TEST_FILE` scenario frames the shot (a `camera` step follows an
+  entity, `{"follow": "rocket", "zoom": 0.3}`, via
+  `Engine::named_world_point`, or holds a tile) and
   `CLASSIC_GOLDEN_PNG=10,30,60` + a scratch `CLASSIC_GOLDEN_DIR` write PNGs
   at those frames (`classic-testing` "Review captures").  Look at them —
   never commit them.
