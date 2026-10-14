@@ -109,9 +109,11 @@ roms/
 xtask/                    Rust build tool: `cargo xtask fetch-roms` (stages published demo/lunar ROMs)
 docs/
   picom-nixos-i3.md       dev-env notes (picom + nixos + i3 compositor setup)
-plans/
-  opencode/               per-session plans and audit notes
 ```
+
+Plans, summaries and audit notes do not live in this repo: they are tracked in
+the sibling `classic-plans` repo (`~/repos/classic/classic-plans`). Never
+create a `plans/` dir here (`.gitignore` keeps `/plans/` as a guard).
 
 ## Architecture essentials
 

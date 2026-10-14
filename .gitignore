@@ -41,5 +41,5 @@ apps/web/dist/
 .claude/wkts/
 claude_wkts
 
-# Per-session AI plans (kept local, never committed)
+# Guard: plans live in the sibling classic-plans repo, never here
 /plans/

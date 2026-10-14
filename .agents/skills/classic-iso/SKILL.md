@@ -33,8 +33,7 @@ render sort order is covered here.
 > has been migrated to that model; if you spot any of the old tile-space terms
 > (`cartesian_to_iso_4`, `iso_to_cartesian_4`, `iso_matrix`, `height_scale`,
 > `depth_scale`, `depth_range`, or `cart_pos.y -= …`), treat them as stale and
-> prefer `math.rs`.  See `plans/opencode/coordinate-system.md` for the full
-> cheat-sheet.
+> prefer `math.rs`.
 
 All code lives in three crates:
 
