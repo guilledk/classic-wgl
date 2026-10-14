@@ -882,7 +882,11 @@ form.  No transform feedback, no per-frame CPU simulation.
   emissive live, so effect-free scenes are pixel-identical.
 - **Texture units**: particles 6, bloom 7–8, smoke noise 9, half-res composite 10
   (sprites 0–2, shadow 3, model
-  composite 4–5).
+  composite 4–5).  ROM textures load `NEAREST` for the sprites; the particle
+  draw binds a LINEAR/clamp **sampler object** on unit 6 (and unbinds it
+  after), so a particle texture filters smoothly without changing how any
+  sprite samples it.  `frameUv` insets each flipbook frame by half a texel
+  so the filter never bleeds in a neighbour.
 - **Determinism**: spawning is `SplitMix64::keyed(instance id, frame,
   layer)`; instance ids hash the emitter's debug name, so a fixed timestep
   reproduces every record.  Trace: one `Particles` item per drawn layer

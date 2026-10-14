@@ -323,6 +323,10 @@ impl Gfx {
         match u.texture.as_deref().and_then(|t| self.textures.get(t)) {
             Some(t) => {
                 t.bind(gl, PARTICLE_TEX_UNIT);
+                // ROM textures load NEAREST for the pixel-art sprites; a
+                // sampler object overrides that on this unit only, so the same
+                // texture still samples NEAREST wherever a sprite draws it.
+                unsafe { gl.bind_sampler(PARTICLE_TEX_UNIT, Some(self.particle_sampler)) };
                 s.uniform_1i(gl, "u_tex", PARTICLE_TEX_UNIT as i32);
                 s.uniform_1f(gl, "u_use_tex", 1.0);
             }
@@ -341,6 +345,7 @@ impl Gfx {
             gl.depth_mask(false);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, gpu.capacity as i32);
+            gl.bind_sampler(PARTICLE_TEX_UNIT, None);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             gl.depth_mask(true);
             gl.disable(glow::DEPTH_TEST);
@@ -405,6 +410,23 @@ pub fn bake_noise() -> Vec<u8> {
         }
     }
     out
+}
+
+/// The sampler particle textures draw through: LINEAR (no mips: ROM textures
+/// have none) with clamped edges, whatever the texture's own filter.
+pub(crate) fn linear_sampler(gl: &glow::Context) -> glow::Sampler {
+    unsafe {
+        let s = gl.create_sampler().expect("create sampler");
+        for (name, value) in [
+            (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+            (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+        ] {
+            gl.sampler_parameter_i32(s, name, value as i32);
+        }
+        s
+    }
 }
 
 /// Upload [`bake_noise`] as a LINEAR, REPEAT texture.

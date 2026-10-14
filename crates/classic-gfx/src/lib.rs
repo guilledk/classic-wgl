@@ -161,6 +161,8 @@ pub struct Gfx {
     bloom: Option<bloom::BloomTargets>,
     /// Baked tileable billow noise for procedural smoke (see `particles`).
     particle_noise: GlTexture,
+    /// LINEAR + clamp sampler bound over particle textures (see `particles`).
+    particle_sampler: glow::Sampler,
     /// Half-res particle pass (see `particle_pass`).
     particle_pass: particle_pass::ParticlePassState,
     vao: glow::VertexArray,
@@ -172,6 +174,7 @@ impl Gfx {
         let vao = unsafe { gl.create_vertex_array() }.expect("create VAO");
         let lights = LightBuffer::new(&gl, MAX_LIGHTS);
         let particle_noise = particles::noise_texture(&gl);
+        let particle_sampler = particles::linear_sampler(&gl);
         Self {
             gl,
             shaders: HashMap::new(),
@@ -185,6 +188,7 @@ impl Gfx {
             model_target: None,
             bloom: None,
             particle_noise,
+            particle_sampler,
             particle_pass: Default::default(),
             vao,
         }

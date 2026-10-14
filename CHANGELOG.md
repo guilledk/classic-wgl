@@ -53,7 +53,9 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   light layers (flashes, flicker).  Glowing (additive or emissive) layers
   draw after every alpha layer, so a rocket jet stays visible through the
   dust it raises, and lit particles roll off their highlights instead of
-  clipping to white under strong nearby lights.
+  clipping to white under strong nearby lights.  Particle textures sample
+  LINEAR through their own sampler object (each flipbook frame inset half a
+  texel), while the same ROM texture stays NEAREST for sprites.
 - Bloom (M4): a soft-knee bright-pass, half- and quarter-resolution
   separable Gaussian blur and an additive composite on RGBA8 targets (no
   float render targets), run only on frames with something emissive on
