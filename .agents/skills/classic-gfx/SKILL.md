@@ -907,7 +907,8 @@ form.  No transform feedback, no per-frame CPU simulation.
   reference library (one effect per look); `tests/effects_library.rs` keeps
   every layer kind, spawn shape, ground/render mode, shape and blend in it.
 - **Review loop**: effects are authored as ROM data, so look at them in a
-  ROM (`rom:lunar` has the rocket landing and launch).  A
+  ROM (`rom:fxtest` lays every effect out; `rom:lunar` has the rocket
+  landing and launch).  A
   `CLASSIC_TEST_FILE` scenario frames the shot (a `camera` step follows an
   entity, `{"follow": "rocket", "zoom": 0.3}`, via
   `Engine::named_world_point`, or holds a tile) and

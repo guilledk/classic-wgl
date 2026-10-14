@@ -93,6 +93,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   direction; landing from an airborne arc fires the touchdown effect, scaled
   by the impact speed.  Vehicles without the keys spawn nothing and dump
   unchanged.
+- `rom:fxtest` names the particle test-bench ROM (desktop `rom_lookup`, web
+  `ROM_URLS`).  It is not in the `fetch-roms`/`check-roms` set until it is
+  published: until then a locally staged `roms/out/fxtest.rom` boots and
+  the CDN fallback 404s.
 
 ### Fixed
 
