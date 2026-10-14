@@ -16,7 +16,8 @@ const LIB: &str = r#"{"effects":[
      {"type":"light","name":"flash","duration":0.25,"peak":2}]},
   {"name":"rain","layers":[{"type":"particles","name":"drop","max":64,
      "spawn":{"burst":8},"velocity":{"up":[1,1]},"life":[10,10],
-     "ground":{"mode":"die","sub_effect":"pop","sub_chance":1}}]}
+     "ground":{"mode":"die","sub_effect":"pop","sub_chance":1}}]},
+  {"name":"zap","layers":[{"type":"ribbon","name":"a","mode":"arc","end":[2,0,0]}]}
 ]}"#;
 
 /// A test engine with a flat 32×32 tilemap at height 1 and the test library.
@@ -219,6 +220,25 @@ fn despawned_emitters_finish_and_retire() {
     assert_eq!(e.particle_stats().instances, 1, "live particles finish");
     run(&mut e, 60, 1.0 / 60.0);
     assert_eq!(e.particle_stats().instances, 0);
+}
+
+#[test]
+fn arcs_regenerate_deterministically() {
+    let mut e = engine();
+    spawn_emitter(&mut e, "z", Emitter::new("t::zap", Vec3::new(5.0, -5.0, 2.0)));
+    run(&mut e, 3, 1.0 / 60.0);
+    assert_eq!(e.particle_stats().ribbons, 1);
+    let shape = |e: &Engine| match &e.particles.instances[0].layers[0] {
+        LayerRt::Ribbon(r) => r.strands.clone(),
+        _ => unreachable!(),
+    };
+    let a = shape(&e);
+    assert_eq!(a[0].points[0], Vec3::new(5.0, -5.0, 2.0));
+    assert_eq!(*a[0].points.last().unwrap(), Vec3::new(7.0, -5.0, 2.0));
+    let mut e2 = engine();
+    spawn_emitter(&mut e2, "z", Emitter::new("t::zap", Vec3::new(5.0, -5.0, 2.0)));
+    run(&mut e2, 3, 1.0 / 60.0);
+    assert_eq!(a, shape(&e2));
 }
 
 #[test]

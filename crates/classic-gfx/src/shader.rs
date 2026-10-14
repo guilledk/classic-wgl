@@ -221,6 +221,7 @@ impl ShaderSourceRegistry {
         r.override_vertex("mesh.vert", shaders::MESH_VERT);
         r.override_vertex("model_composite.vert", shaders::MODEL_COMPOSITE_VERT);
         r.override_vertex("particle.vert", shaders::PARTICLE_VERT);
+        r.override_vertex("ribbon.vert", shaders::RIBBON_VERT);
         r.override_fragment("solid.frag", shaders::SOLID_FRAG);
         r.override_fragment("image.frag", shaders::IMAGE_FRAG);
         r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
@@ -232,6 +233,7 @@ impl ShaderSourceRegistry {
         r.override_fragment("mesh.frag", shaders::MESH_FRAG);
         r.override_fragment("model_composite.frag", shaders::MODEL_COMPOSITE_FRAG);
         r.override_fragment("particle.frag", shaders::PARTICLE_FRAG);
+        r.override_fragment("ribbon.frag", shaders::RIBBON_FRAG);
         r
     }
 
@@ -476,6 +478,13 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             attr: &["a_p0t", "a_v0l", "a_misc"],
             // The remaining uniforms resolve lazily (`Shader::unif`).
             unif: &["world_matrix", "camera_matrix", "projection_matrix", "depth_span", "ppm"],
+        },
+        BuiltinShader {
+            name: "ribbon",
+            vertex: "ribbon.vert",
+            fragment: "ribbon.frag",
+            attr: &["a_pos", "a_shape", "a_color"],
+            unif: &["camera_matrix", "projection_matrix"],
         },
     ]
 }

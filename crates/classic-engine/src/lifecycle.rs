@@ -1036,7 +1036,7 @@ impl Engine {
             gfx.composite_models(IsoSpritePass::Ghost, classic_gfx::MODEL_GHOST_GROUP);
         }
 
-        // Phase 3c: particles — depth-tested against the scene, no
+        // Phase 3c: particles + ribbons — depth-tested against the scene, no
         // depth write, premultiplied blend (see `particles`).
         let particle_settings = RenderSettings {
             ambient: self.light_ambient,

@@ -6,7 +6,8 @@
 //! The particle / VFX system: effect instances driven by `Emitter` components
 //! (or fired one-shot by [`Engine::fx_emit`] and sub-effects), spawning
 //! immutable records into per-(instance, layer) GPU rings that `particle.vert`
-//! evaluates analytically; and companion dynamic lights.
+//! evaluates analytically; procedural arc/lightning ribbons; and companion
+//! dynamic lights.
 //!
 //! Frame flow: [`Engine::update_particles`] (after the update closures and the
 //! vehicle sim, before the render list) advances the clock, resolves emitter
@@ -15,6 +16,7 @@
 //! before the UI).  A scene with no emitters never creates an instance, so
 //! its render trace is unchanged.
 
+mod ribbon;
 mod spawn;
 
 use std::collections::{BTreeMap, HashMap};
@@ -23,14 +25,17 @@ use std::rc::Rc;
 use classic_core::components::{Emitter, Light, LightKind, Model, Tilemap};
 use classic_core::effects::{
     Blend, EffectDef, EffectLibrary, GroundMode, LayerDef, LightLayerDef, ParticleLayerDef,
-    ParticleShape, RenderMode, LUNAR_G,
+    ParticleShape, RenderMode, RibbonLayerDef, RibbonMode, LUNAR_G,
 };
 use classic_core::math::{iso_camera_matrix, iso_view_depth};
 use classic_core::tilemap::{sample_height_mesh, TILE_M};
 use classic_core::{RoleKind, Transform};
-use classic_gfx::{Gfx, ParticleGpu, ParticleLayerUniforms, ParticleRing, RenderSettings};
+use classic_gfx::{
+    DynamicVb, Gfx, ParticleGpu, ParticleLayerUniforms, ParticleRing, RenderSettings,
+};
 use glam::{Mat3, Mat4, Vec3};
 
+pub use ribbon::{bolt, build_vertices, displace, Strand, RIBBON_VERTEX_FLOATS};
 pub use spawn::{cone_dir, hash_str, spawn_particle, Landing, SpawnFrame, SplitMix64};
 
 use crate::golden::{TraceCollector, TraceItemParams};
@@ -66,6 +71,20 @@ struct ParticleRt {
     started: bool,
 }
 
+struct RibbonRt {
+    def_index: usize,
+    strands: Vec<Strand>,
+    regen: i64,
+    /// Lightning: clock time of the next strike / end of the current one.
+    next_strike: f64,
+    strike_end: f64,
+    strike_target: Vec3,
+    strike_count: u64,
+    /// Strikes whose flash light has been fired.
+    flashed: u64,
+    flicker: f32,
+}
+
 struct LightRt {
     def_index: usize,
     handle: Option<LightHandle>,
@@ -73,6 +92,7 @@ struct LightRt {
 
 enum LayerRt {
     Particles(ParticleRt),
+    Ribbon(RibbonRt),
     Light(LightRt),
 }
 
@@ -126,6 +146,8 @@ pub struct ParticleSystem {
     pending: Vec<PendingSub>,
     next_seq: u64,
     graveyard: Vec<ParticleGpu>,
+    ribbon_vb: Option<DynamicVb>,
+    ribbon_verts: Vec<f32>,
 }
 
 /// Per-frame stats (tests, trace, HUD).
@@ -133,6 +155,7 @@ pub struct ParticleSystem {
 pub struct ParticleStats {
     pub instances: usize,
     pub live: usize,
+    pub ribbons: usize,
 }
 
 impl ParticleSystem {
@@ -174,6 +197,7 @@ impl ParticleSystem {
             for l in &inst.layers {
                 match l {
                     LayerRt::Particles(p) => s.live += p.ring.live_count(t),
+                    LayerRt::Ribbon(r) => s.ribbons += usize::from(!r.strands.is_empty()),
                     LayerRt::Light(_) => {}
                 }
             }
@@ -219,6 +243,17 @@ impl ParticleSystem {
                     gpu: None,
                     acc: 0.0,
                     started: false,
+                }),
+                LayerDef::Ribbon(_) => LayerRt::Ribbon(RibbonRt {
+                    def_index: i,
+                    strands: Vec::new(),
+                    regen: -1,
+                    next_strike: self.clock,
+                    strike_end: f64::NEG_INFINITY,
+                    strike_target: Vec3::ZERO,
+                    strike_count: 0,
+                    flashed: 0,
+                    flicker: 1.0,
                 }),
                 LayerDef::Light(_) => LayerRt::Light(LightRt { def_index: i, handle: None }),
             })
@@ -274,6 +309,7 @@ impl ParticleSystem {
         let t = self.local_time();
         let rings_dead = inst.layers.iter().all(|l| match l {
             LayerRt::Particles(p) => p.ring.last_death() < t,
+            LayerRt::Ribbon(r) => r.strands.is_empty(),
             LayerRt::Light(l) => l.handle.is_none(),
         });
         match inst.source {
@@ -500,6 +536,7 @@ impl Engine {
                                 self.light_handles.release(&mut self.world, h);
                             }
                         }
+                        LayerRt::Ribbon(_) => {}
                     }
                 }
             } else {
@@ -710,6 +747,22 @@ impl Engine {
                     }
                 }
             }
+            // Ribbons.
+            for (li, l) in inst.layers.iter_mut().enumerate() {
+                let LayerRt::Ribbon(r) = l else { continue };
+                let LayerDef::Ribbon(def) = &inst.effect.layers[r.def_index] else { continue };
+                update_ribbon(
+                    r,
+                    def,
+                    inst.id,
+                    li as u64,
+                    &inst.frame,
+                    inst.emitting,
+                    age,
+                    clock,
+                    &gfn,
+                );
+            }
         }
         for mut s in subs {
             if ps.pending.len() >= MAX_PENDING_SUBS {
@@ -726,6 +779,26 @@ impl Engine {
         let clock = ps.clock;
         for inst in &mut ps.instances {
             let age = (clock - inst.start) as f32;
+            // Lightning flashes: one transient light per new strike.
+            for l in &mut inst.layers {
+                let LayerRt::Ribbon(r) = l else { continue };
+                let LayerDef::Ribbon(def) = &inst.effect.layers[r.def_index] else { continue };
+                if r.strike_count > r.flashed {
+                    r.flashed = r.strike_count;
+                    if def.flash > 0.0 {
+                        let light = Light {
+                            kind: LightKind::Point,
+                            position: r.strike_target + Vec3::Z * 1.5,
+                            color: def.color,
+                            intensity: def.flash * inst.intensity,
+                            radius: def.flash_radius * inst.frame.scale,
+                            ..Default::default()
+                        };
+                        let ttl = Some(def.strike_time.max(0.05));
+                        self.light_handles.spawn(&mut self.world, light, ttl);
+                    }
+                }
+            }
             for l in &mut inst.layers {
                 let LayerRt::Light(lr) = l else { continue };
                 let LayerDef::Light(def) = &inst.effect.layers[lr.def_index] else { continue };
@@ -806,9 +879,72 @@ fn light_level(
     Some(base * flick)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn update_ribbon(
+    r: &mut RibbonRt,
+    def: &RibbonLayerDef,
+    id: u64,
+    layer: u64,
+    frame: &SpawnFrame,
+    emitting: bool,
+    age: f32,
+    clock: f64,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+) {
+    let active = emitting && age >= def.delay && def.duration.is_none_or(|d| age <= def.delay + d);
+    match def.mode {
+        RibbonMode::Arc => {
+            if !active {
+                r.strands.clear();
+                return;
+            }
+            let regen = ((age - def.delay) * def.regen_hz.max(1.0)) as i64;
+            if regen != r.regen {
+                r.regen = regen;
+                let mut rng = SplitMix64::keyed(id, regen as u64, 0x2000 + layer);
+                let a = frame.pos;
+                let b = a + frame.basis * Vec3::from_array(def.end) * frame.scale;
+                r.strands = bolt(&mut rng, a, b, def.depth, def.jitter, def.branches);
+                r.flicker = 0.65 + 0.35 * rng.f32();
+            }
+        }
+        RibbonMode::Lightning => {
+            if clock >= r.next_strike && active {
+                let mut rng = SplitMix64::keyed(id, r.strike_count, 0x3000 + layer);
+                r.strike_count += 1;
+                let ang = rng.f32() * std::f32::consts::TAU;
+                let rad = def.strike_radius * frame.scale * rng.f32().sqrt();
+                let x = frame.pos.x + ang.cos() * rad;
+                let y = frame.pos.y + ang.sin() * rad;
+                let z = ground(x, y).unwrap_or(frame.pos.z - 10.0);
+                r.strike_target = Vec3::new(x, y, z);
+                r.strike_end = clock + def.strike_time as f64;
+                r.next_strike = clock + rng.range(def.interval).max(0.05) as f64;
+                r.regen = -1;
+            }
+            if clock > r.strike_end {
+                r.strands.clear();
+                return;
+            }
+            // Re-jitter twice per strike (the classic double flash).
+            let phase = 1.0 - ((r.strike_end - clock) as f32 / def.strike_time.max(1e-3));
+            let regen = (phase * 2.0) as i64;
+            if regen != r.regen {
+                r.regen = regen;
+                let mut rng =
+                    SplitMix64::keyed(id, r.strike_count * 4 + regen as u64, 0x4000 + layer);
+                r.strands =
+                    bolt(&mut rng, frame.pos, r.strike_target, def.depth, def.jitter, def.branches);
+                r.flicker = if regen == 0 { 1.0 } else { 0.55 };
+            }
+        }
+    }
+}
+
 impl ParticleSystem {
-    /// Phase 3c: draw every live instance (back to front by origin depth).
-    /// Pushes one `Particles` trace item per drawn layer.
+    /// Phase 3c: draw every live instance (back to front by origin depth),
+    /// then every ribbon.  Pushes one `Particles` trace item per drawn layer
+    /// and one `Ribbons` item when any ribbon is live.
     pub fn draw(
         &mut self,
         gfx: &mut Gfx,
@@ -830,6 +966,7 @@ impl ParticleSystem {
             let db = iso_view_depth(self.instances[b].frame.pos);
             da.total_cmp(&db).then(self.instances[a].id.cmp(&self.instances[b].id))
         });
+        self.ribbon_verts.clear();
         // Two phases, each back to front by instance origin: every alpha
         // (absorbing) layer first, then every glowing layer (additive or
         // emissive).  Particles write no depth, so draw order decides who
@@ -874,10 +1011,53 @@ impl ParticleSystem {
                             }
                             gfx.draw_particles(gpu, camera, &world_matrix, settings, &u);
                         }
+                        LayerRt::Ribbon(r) => {
+                            let LayerDef::Ribbon(def) = &inst.effect.layers[r.def_index] else {
+                                continue;
+                            };
+                            if !glow_phase || r.strands.is_empty() {
+                                continue;
+                            }
+                            let tint = [
+                                def.color[0] * inst.tint[0],
+                                def.color[1] * inst.tint[1],
+                                def.color[2] * inst.tint[2],
+                            ];
+                            build_vertices(
+                                &r.strands,
+                                def.width * inst.frame.scale,
+                                def.glow * inst.frame.scale,
+                                def.intensity * inst.intensity * r.flicker,
+                                tint,
+                                1.0,
+                                &mut self.ribbon_verts,
+                            );
+                        }
                         LayerRt::Light(_) => {}
                     }
                 }
             }
+        }
+        if !self.ribbon_verts.is_empty() {
+            let count = (self.ribbon_verts.len() / RIBBON_VERTEX_FLOATS) as i32;
+            let vb = self.ribbon_vb.get_or_insert_with(|| DynamicVb::new(&gfx.gl, 1 << 16));
+            vb.upload(&gfx.gl, &self.ribbon_verts);
+            if let Some(tr) = trace.as_mut() {
+                tr.push(TraceItemParams {
+                    order: 0.0,
+                    kind: "Ribbons",
+                    name: "ribbons",
+                    model: &Mat4::IDENTITY,
+                    camera_ignored: false,
+                    texture: None,
+                    frame: Some(count as f32),
+                    color: None,
+                    depth: None,
+                    normal: None,
+                    screen: None,
+                });
+            }
+            gfx.draw_ribbons(vb, count, camera);
         }
     }
 }

@@ -198,6 +198,7 @@ impl EffectDef {
             .iter()
             .map(|l| match l {
                 LayerDef::Particles(p) => p.delay + p.duration.unwrap_or(0.0),
+                LayerDef::Ribbon(r) => r.delay + r.duration.unwrap_or(0.0),
                 LayerDef::Light(l) => l.delay + l.duration.unwrap_or(0.0),
             })
             .fold(0.0, f32::max)
@@ -207,6 +208,7 @@ impl EffectDef {
     pub fn is_emissive(&self) -> bool {
         self.layers.iter().any(|l| match l {
             LayerDef::Particles(p) => p.render.emissive > 0.0,
+            LayerDef::Ribbon(_) => true,
             LayerDef::Light(_) => false,
         })
     }
@@ -217,6 +219,7 @@ impl EffectDef {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LayerDef {
     Particles(Box<ParticleLayerDef>),
+    Ribbon(Box<RibbonLayerDef>),
     Light(Box<LightLayerDef>),
 }
 
@@ -224,6 +227,7 @@ impl LayerDef {
     pub fn name(&self) -> &str {
         match self {
             LayerDef::Particles(p) => &p.name,
+            LayerDef::Ribbon(r) => &r.name,
             LayerDef::Light(l) => &l.name,
         }
     }
@@ -549,6 +553,77 @@ impl Default for ParticleLayerDef {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RibbonMode {
+    /// A continuously crawling arc between the emitter and `end`.
+    #[default]
+    Arc,
+    /// Discrete strikes from the emitter down to a random ground point.
+    Lightning,
+}
+
+/// A procedural electrical arc / lightning bolt.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RibbonLayerDef {
+    pub name: String,
+    pub mode: RibbonMode,
+    pub delay: f32,
+    pub duration: Option<f32>,
+    /// Arc end point relative to the emitter (emitter frame, metres).
+    pub end: [f32; 3],
+    /// Lightning: horizontal radius of the random ground strike point.
+    pub strike_radius: f32,
+    /// Midpoint-displacement depth (`2^depth` segments).
+    pub depth: u32,
+    /// Displacement as a fraction of the segment length.
+    pub jitter: f32,
+    /// Branches per bolt.
+    pub branches: u32,
+    /// Core width (metres).
+    pub width: f32,
+    /// Glow halo width (metres).
+    pub glow: f32,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    /// Shape regenerations per second.
+    pub regen_hz: f32,
+    /// Lightning: seconds between strikes `[min, max]`.
+    pub interval: Range,
+    /// Lightning: strike visible duration (s).
+    pub strike_time: f32,
+    /// Lightning: peak intensity of the flash light at each strike (`0` = none).
+    pub flash: f32,
+    /// Lightning: flash light radius (metres).
+    pub flash_radius: f32,
+}
+
+impl Default for RibbonLayerDef {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            mode: RibbonMode::Arc,
+            delay: 0.0,
+            duration: None,
+            end: [2.0, 0.0, 0.0],
+            strike_radius: 3.0,
+            depth: 5,
+            jitter: 0.3,
+            branches: 1,
+            width: 0.06,
+            glow: 0.5,
+            color: [0.6, 0.8, 1.0],
+            intensity: 2.0,
+            regen_hz: 24.0,
+            interval: Range::new(0.4, 1.5),
+            strike_time: 0.18,
+            flash: 0.0,
+            flash_radius: 12.0,
+        }
+    }
+}
+
 /// A companion dynamic light (flash, flicker, burn glow).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -687,11 +762,12 @@ mod tests {
     fn library_parses_tagged_layers_with_defaults() {
         let json = br#"{"effects":[{"name":"puff","layers":[
             {"type":"particles","spawn":{"burst":10},"life":[1,2]},
-            {"type":"light","peak":3}]}]}"#;
+            {"type":"light","peak":3},
+            {"type":"ribbon","mode":"lightning"}]}]}"#;
         assert!(EffectLibrary::sniff(json));
         let lib = EffectLibrary::from_json(json).unwrap();
         let fx = &lib.effects[0];
-        assert_eq!(fx.layers.len(), 2);
+        assert_eq!(fx.layers.len(), 3);
         match &fx.layers[0] {
             LayerDef::Particles(p) => {
                 assert_eq!(p.spawn.burst, 10);
@@ -701,6 +777,7 @@ mod tests {
             }
             _ => panic!("particles first"),
         }
+        assert!(fx.is_emissive(), "a ribbon layer is emissive");
         assert!(!EffectLibrary::sniff(br#"{"anchors":[]}"#));
     }
 

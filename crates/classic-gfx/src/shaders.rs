@@ -24,6 +24,8 @@ pub const MODEL_COMPOSITE_VERT: &str = include_str!("shaders/model_composite.ver
 pub const MODEL_COMPOSITE_FRAG: &str = include_str!("shaders/model_composite.frag");
 pub const PARTICLE_VERT: &str = include_str!("shaders/particle.vert");
 pub const PARTICLE_FRAG: &str = include_str!("shaders/particle.frag");
+pub const RIBBON_VERT: &str = include_str!("shaders/ribbon.vert");
+pub const RIBBON_FRAG: &str = include_str!("shaders/ribbon.frag");
 
 #[cfg(test)]
 mod tests {

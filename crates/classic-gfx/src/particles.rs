@@ -415,6 +415,41 @@ pub(crate) fn noise_texture(gl: &glow::Context) -> GlTexture {
     t
 }
 
+/// Floats per ribbon vertex (see `ribbon.vert`).
+pub const RIBBON_VERTEX_FLOATS: usize = 9;
+
+impl Gfx {
+    /// Draw `vertex_count` CPU-expanded ribbon vertices (triangles) from `vb`:
+    /// additive, depth-tested `LEQUAL` without depth write.
+    pub fn draw_ribbons(&self, vb: &crate::DynamicVb, vertex_count: i32, camera: &Mat4) {
+        if vertex_count <= 0 {
+            return;
+        }
+        let gl = &self.gl;
+        let s = self.shader("ribbon");
+        s.bind(gl);
+        s.uniform_mat4(gl, "projection_matrix", &self.projection());
+        s.uniform_mat4(gl, "camera_matrix", camera);
+        let stride = (RIBBON_VERTEX_FLOATS * 4) as i32;
+        vb.bind(gl);
+        unsafe {
+            for (name, off) in [("a_pos", 0), ("a_shape", 12), ("a_color", 24)] {
+                let loc = s.attr(name);
+                gl.vertex_attrib_pointer_f32(loc, 3, glow::FLOAT, false, stride, off);
+                gl.enable_vertex_attrib_array(loc);
+            }
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(false);
+            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            gl.draw_arrays(glow::TRIANGLES, 0, vertex_count);
+            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            gl.depth_mask(true);
+            gl.disable(glow::DEPTH_TEST);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

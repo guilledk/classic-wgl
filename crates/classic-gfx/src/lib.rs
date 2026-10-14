@@ -44,6 +44,7 @@ pub use light::{
 pub use model_pass::{model_target_size, MODEL_GHOST_GROUP};
 pub use particles::{
     ParticleGpu, ParticleLayerUniforms, ParticleRecord, ParticleRing, PARTICLE_RECORD_BYTES,
+    RIBBON_VERTEX_FLOATS,
 };
 pub use shader::{builtin_shaders, BuiltinShader, Shader, ShaderSourceRegistry};
 pub use texture::GlTexture;
