@@ -1645,6 +1645,14 @@ impl Engine {
             o(self);
         }
         self.overlay_hooks = overlays;
+
+        // `CLASSIC_GOLDEN_PNG=<frames>`: dump this frame's pixels for review.
+        if config.golden_png_frames.contains(&self.debug_frame) {
+            if let Some(gfx) = self.gfx.as_ref() {
+                let path = format!("{}/frame_{:05}.png", config.golden_dir, self.debug_frame);
+                golden::capture_png(gfx, &path);
+            }
+        }
     }
 
     /// Helper: add or remove Disabled marker component to toggle entity visibility.

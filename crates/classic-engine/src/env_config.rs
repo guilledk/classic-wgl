@@ -27,8 +27,13 @@ pub struct EnvConfig {
     pub ui_debug: bool,
     /// CLASSIC_GOLDEN: `check` / `update` / `none`.
     pub golden_mode: String,
-    /// CLASSIC_GOLDEN_PNG: enable pixel capture on golden tests.
+    /// CLASSIC_GOLDEN_PNG=1: enable pixel capture on golden tests.
     pub golden_png: bool,
+    /// CLASSIC_GOLDEN_PNG=<frames>: a comma-separated frame list (`10,30,60`)
+    /// instead of `1`: write `frame_NNNNN.png` into `golden_dir` at each of
+    /// those frames, for visual review of motion (particles, clips).
+    /// Independent of `CLASSIC_GOLDEN`; never a baseline.
+    pub golden_png_frames: Vec<u64>,
     /// CLASSIC_GOLDEN_TOL: per-channel pixel difference tolerance (default 2).
     pub golden_tol: u8,
     /// CLASSIC_HEADLESS: use headless (surfaceless) EGL platform, no window.
@@ -94,6 +99,7 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         ui_debug: read_bool("CLASSIC_UI_DEBUG"),
         golden_mode,
         golden_png: read_bool("CLASSIC_GOLDEN_PNG"),
+        golden_png_frames: parse_frame_list(&read("CLASSIC_GOLDEN_PNG")),
         golden_tol: read("CLASSIC_GOLDEN_TOL").parse().ok().unwrap_or(2),
         headless: read_bool("CLASSIC_HEADLESS"),
         offscreen: read_bool("CLASSIC_OFFSCREEN"),
@@ -176,6 +182,16 @@ fn read_bool(key: &str) -> bool {
     matches!(std::env::var(key).as_deref(), Ok("1" | "true" | "yes"))
 }
 
+/// A `CLASSIC_GOLDEN_PNG` frame list.  The boolean spellings (`1`, `true`,
+/// `yes`) keep their golden meaning and yield no frames; anything else is a
+/// comma-separated list of frame numbers (unparsable entries are skipped).
+fn parse_frame_list(v: &str) -> Vec<u64> {
+    if matches!(v.trim(), "" | "1" | "true" | "yes") {
+        return Vec::new();
+    }
+    v.split(',').filter_map(|s| s.trim().parse().ok()).collect()
+}
+
 /// The default decode-thread count: the machine's available parallelism, or 1
 /// when it can't be determined (and on wasm, where there is no thread pool).
 fn default_loader_threads() -> usize {
@@ -186,5 +202,22 @@ fn default_loader_threads() -> usize {
     #[cfg(target_arch = "wasm32")]
     {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_frame_list;
+
+    #[test]
+    fn golden_png_frame_lists() {
+        // The boolean spellings keep the pixel-golden meaning: no frame list.
+        for v in ["", "1", "true", "yes", " 1 "] {
+            assert!(parse_frame_list(v).is_empty(), "{v:?}");
+        }
+        assert_eq!(parse_frame_list("10,30, 60"), vec![10, 30, 60]);
+        assert_eq!(parse_frame_list("240"), vec![240]);
+        assert_eq!(parse_frame_list("1,2"), vec![1, 2]);
+        assert_eq!(parse_frame_list("5,x,7"), vec![5, 7]);
     }
 }

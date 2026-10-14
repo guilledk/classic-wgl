@@ -398,6 +398,34 @@ output depends on the Mesa version.  It remains available for manual use
 and can detect large-scale rendering regressions (missing draw calls,
 wrong textures) even with the tolerance.
 
+### Review captures (CLASSIC_GOLDEN_PNG=<frames>)
+
+`CLASSIC_GOLDEN_PNG` also takes a comma-separated frame list instead of
+`1`: at each listed frame the offscreen target is written to
+`{CLASSIC_GOLDEN_DIR}/frame_NNNNN.png` (`golden::capture_png`), whether or
+not `CLASSIC_GOLDEN` is set.  `1`/`true`/`yes` keep the pixel-golden
+meaning above, so a single frame 1 is spelled `1,1`.  This is how motion
+(particles, model clips) is looked at: always point `CLASSIC_GOLDEN_DIR` at
+a scratch directory, look at the PNGs, never commit them.
+
+Frame the shot with a scenario (`CLASSIC_TEST_FILE`): a `setCameraIso` step
+pins the camera on a tile, and the run ends after the last step, so a final
+empty step at the last capture frame keeps it alive:
+
+```bash
+cat > /tmp/fx.test.json <<'JSON'
+[
+  { "frame": 2, "actions": [{ "setCameraIso": { "tx": 317.5, "ty": 277.5, "scale": 0.3 } }],
+    "assertions": [], "log": "frame the landing pad" },
+  { "frame": 200, "actions": [], "assertions": [], "log": "end" }
+]
+JSON
+CLASSIC_ROM=rom:lunar CLASSIC_TEST=review CLASSIC_TEST_FILE=/tmp/fx.test.json \
+CLASSIC_HEADLESS=1 CLASSIC_FIXED_DT=0.05 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
+CLASSIC_GOLDEN_PNG=60,120,200 CLASSIC_GOLDEN_DIR=/tmp/fx \
+LIBGL_ALWAYS_SOFTWARE=1 cargo run -p classic-desktop
+```
+
 ### Common golden mismatch causes
 
 - **Mesh rebuild timing**: tile/height edits need 2-3 frames for the
