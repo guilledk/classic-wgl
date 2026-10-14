@@ -11,6 +11,7 @@ mod shaders;
 
 mod compressed;
 
+mod bloom;
 mod buffer;
 mod draw;
 mod framebuffer;
@@ -154,6 +155,8 @@ pub struct Gfx {
     shadow_map: Option<DepthFramebuffer>,
     /// The 3D-model pixelation target (see `model_pass`), created lazily.
     model_target: Option<ModelTarget>,
+    /// Bloom post targets (see `bloom`), created lazily.
+    bloom: Option<bloom::BloomTargets>,
     /// Baked tileable billow noise for procedural smoke (see `particles`).
     particle_noise: GlTexture,
     vao: glow::VertexArray,
@@ -176,6 +179,7 @@ impl Gfx {
             lights,
             shadow_map: None,
             model_target: None,
+            bloom: None,
             particle_noise,
             vao,
         }

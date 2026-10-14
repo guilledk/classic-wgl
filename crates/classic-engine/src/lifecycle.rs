@@ -1048,6 +1048,27 @@ impl Engine {
         };
         self.particles.draw(gfx, &cam, &particle_settings, self.trace.as_mut());
 
+        // Bloom (before the UI): only on frames with something emissive on
+        // screen, so scenes without effects stay pixel-identical.
+        if self.particles.has_emissive() {
+            if let Some(ref mut t) = self.trace {
+                t.push(golden::TraceItemParams {
+                    order: 0.0,
+                    kind: "Bloom",
+                    name: "bloom",
+                    model: &Mat4::IDENTITY,
+                    camera_ignored: true,
+                    texture: None,
+                    frame: None,
+                    color: Some([particles::BLOOM_THRESHOLD, particles::BLOOM_INTENSITY, 0.0, 0.0]),
+                    depth: None,
+                    normal: None,
+                    screen: None,
+                });
+            }
+            gfx.apply_bloom(particles::BLOOM_THRESHOLD, particles::BLOOM_INTENSITY);
+        }
+
         // Phase 4: UI + sprites + text (no depth test — draw-order layering).
         for (order, entity, kind) in &items {
             if matches!(kind, DrawKind::Tilemap | DrawKind::IsoSprite | DrawKind::Model) {

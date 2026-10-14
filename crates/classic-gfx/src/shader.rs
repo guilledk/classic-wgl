@@ -222,6 +222,7 @@ impl ShaderSourceRegistry {
         r.override_vertex("model_composite.vert", shaders::MODEL_COMPOSITE_VERT);
         r.override_vertex("particle.vert", shaders::PARTICLE_VERT);
         r.override_vertex("ribbon.vert", shaders::RIBBON_VERT);
+        r.override_vertex("post.vert", shaders::POST_VERT);
         r.override_fragment("solid.frag", shaders::SOLID_FRAG);
         r.override_fragment("image.frag", shaders::IMAGE_FRAG);
         r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
@@ -234,6 +235,9 @@ impl ShaderSourceRegistry {
         r.override_fragment("model_composite.frag", shaders::MODEL_COMPOSITE_FRAG);
         r.override_fragment("particle.frag", shaders::PARTICLE_FRAG);
         r.override_fragment("ribbon.frag", shaders::RIBBON_FRAG);
+        r.override_fragment("bloom_threshold.frag", shaders::BLOOM_THRESHOLD_FRAG);
+        r.override_fragment("bloom_blur.frag", shaders::BLOOM_BLUR_FRAG);
+        r.override_fragment("bloom_composite.frag", shaders::BLOOM_COMPOSITE_FRAG);
         r
     }
 
@@ -485,6 +489,27 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             fragment: "ribbon.frag",
             attr: &["a_pos", "a_shape", "a_color"],
             unif: &["camera_matrix", "projection_matrix"],
+        },
+        BuiltinShader {
+            name: "bloomThreshold",
+            vertex: "post.vert",
+            fragment: "bloom_threshold.frag",
+            attr: &["vertex_pos"],
+            unif: &["src_tex", "src_texel", "threshold", "knee"],
+        },
+        BuiltinShader {
+            name: "bloomBlur",
+            vertex: "post.vert",
+            fragment: "bloom_blur.frag",
+            attr: &["vertex_pos"],
+            unif: &["src_tex", "blur_dir"],
+        },
+        BuiltinShader {
+            name: "bloomComposite",
+            vertex: "post.vert",
+            fragment: "bloom_composite.frag",
+            attr: &["vertex_pos"],
+            unif: &["near_tex", "far_tex", "intensity"],
         },
     ]
 }

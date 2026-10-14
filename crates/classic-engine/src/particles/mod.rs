@@ -46,6 +46,10 @@ use crate::Engine;
 /// is rebased (keeps `u_time - t_birth` precise in `f32`).
 const EPOCH_SPAN: f64 = 1024.0;
 
+/// Bloom bright-pass level (max channel) and composite gain.
+pub const BLOOM_THRESHOLD: f32 = 0.82;
+pub const BLOOM_INTENSITY: f32 = 0.9;
+
 /// Hard cap on one instance's ring (per layer).
 const MAX_RING: u32 = 65_536;
 
@@ -222,6 +226,23 @@ impl ParticleSystem {
                 (i.name.clone(), i.frame.pos, live)
             })
             .collect()
+    }
+
+    /// Whether anything emissive is on screen this frame (gates bloom).
+    pub fn has_emissive(&self) -> bool {
+        let t = self.local_time();
+        self.instances.iter().any(|inst| {
+            inst.layers.iter().any(|l| match l {
+                LayerRt::Particles(p) => {
+                    let LayerDef::Particles(d) = &inst.effect.layers[p.def_index] else {
+                        return false;
+                    };
+                    d.render.emissive > 0.0 && p.ring.last_death() >= t
+                }
+                LayerRt::Ribbon(r) => !r.strands.is_empty(),
+                LayerRt::Light(_) => false,
+            })
+        })
     }
 
     fn new_instance(
