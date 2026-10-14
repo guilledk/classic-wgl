@@ -166,9 +166,12 @@ Priority order (earlier wins): `LandingPad` → `Rocky` (slope) → `RimBright` 
 before provenance so impassable terrain stays visually legible — that matters
 more for an RTS than geological accuracy.
 
-The mare/highland contact is **dithered** (`0.5 + noise * 0.18`): a fixed cut
-traces a clean contour, and with a ~2:1 albedo gap that reads as a hard
-stair-stepped shoreline.
+The mare/highland contact gets a **low-frequency wobble**
+(`0.5 + noise(t / 7) * 0.1`).  It used to be a per-tile dither
+(`noise(t / 2.3) * 0.18`) against a stair-stepped shoreline, but the engine's
+material blend (`Tilemap.blend`) now draws contours smooth, and isolated
+dither tiles render as an ink-spatter of islands.  Rays likewise use a
+threshold jittered a few tiles across (ragged edges, holes), never per tile.
 
 Rim and floor masks carry a **strength scaled by crater radius**, so the
 countless small old craters on a saturated surface do not each paint a bright
@@ -195,7 +198,7 @@ rim.
 ## 8. Tileset
 
 `build_lunar_tileset(seed, tile_px, cols, rows)` paints an 8x8 grid of 32px
-cells (256x256) from `MATERIALS`, registered at runtime via
+cells (256x256, 39 of 63 usable cells) from `MATERIALS`, registered at runtime via
 `Gfx::add_texture_rgba8`.  No PNG, so no commit to the separate private
 `assets/` submodule, and the texture can never drift from the classifier.
 
@@ -207,6 +210,17 @@ trick over `noise_4d`) and microcraters use toroidal distance.
 `tiling_noise_2d` applies `rem_euclid(period)` first so the seam is
 *bit-exact*; without it the two ends differ by an ULP in the angle, which the
 noise gradient amplifies into a faint but real seam.
+
+**Alpha is per-texel height** (not opacity) for the engine's height-based
+material blend: `0.5` + speckle + craterlet pits/raised rims, scaled by each
+material's `relief`.  The scene's `Tilemap.blend.materials` (one class per
+`LunarMaterial`, in table order) is pinned to `MATERIALS` by
+`tests/blend_table.rs`; change the table and the scene together.  Seams are
+checked on the continuous field (`cell_texel`, exactly periodic) rather than
+on pixels: small craterlets are legitimately steep in height.  Keep
+per-cell structure weak: anything at one cycle per tile (mottle, a fixed
+craterlet layout) reads as a tile-periodic grid once the tile edges blend
+away.
 
 ---
 

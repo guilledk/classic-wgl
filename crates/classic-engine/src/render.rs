@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use classic_core::components::{IsoSprite, NavMesh, SdfTextRender, Tilemap, UiNode};
 use classic_core::math::{iso_view_depth, iso_world_pos, DEPTH_FAR, DEPTH_NEAR};
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
-use classic_core::tilemap::{build_mesh, build_tile_texture, sample_height_mesh, PPM_TARGET};
+use classic_core::tilemap::{
+    build_blend_lut, build_mesh, build_tile_texture, sample_height_mesh, BLEND_LUT_WIDTH,
+    PPM_TARGET,
+};
 use classic_core::types::FrameTable;
 use classic_core::{RoleKind, Transform};
 use classic_gfx::GlBuffer;
@@ -91,7 +94,7 @@ impl Engine {
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &nav_data);
         let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
 
-        self.nav_gpu = Some(TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
+        self.nav_gpu = Some(TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex, blend: None });
 
         // Add Transform to nav entity so render query (&Transform, &NavMesh) matches.
         // Borrow position + scale from parent tilemap.
@@ -207,6 +210,45 @@ impl Engine {
         tex
     }
 
+    /// Upload a tilemap's material-blend lookup table and bundle it with the
+    /// blend uniforms for `draw_tilemap`, giving the tileset its minification
+    /// mip chain (see [`Engine::blend_tileset_max_lod`]).
+    pub(crate) fn upload_tile_blend(
+        gfx: &classic_gfx::Gfx,
+        cfg: &classic_core::components::TileBlend,
+        tile_set: &str,
+        tile_px: u32,
+    ) -> classic_gfx::TileBlend {
+        let lut = build_blend_lut(cfg);
+        classic_gfx::TileBlend {
+            lut: Engine::upload_data_texture(&gfx.gl, &lut, BLEND_LUT_WIDTH, 1),
+            max_lod: Engine::blend_tileset_max_lod(gfx, tile_set, tile_px),
+            width: cfg.width.max(0.0),
+            noise_scale: cfg.noise_scale.max(0.0),
+            noise_strength: cfg.noise_strength.clamp(0.0, 2.0),
+            height_strength: cfg.height_strength.max(0.0),
+        }
+    }
+
+    /// Build the blended tileset's mip chain and return the highest level the
+    /// shader may sample.  Blended terrain is the one place a tile cell is
+    /// drawn below one texel per pixel for long (an RTS zoomed out), where
+    /// `NEAREST` minification aliases the cells' fine grain into moire.
+    /// Levels stop while a cell is still >= 4 px, so a level never merges
+    /// neighbouring atlas cells.  `0` (no mips) when the tileset is missing
+    /// or GPU-compressed.  Called again after a tileset re-upload.
+    pub(crate) fn blend_tileset_max_lod(
+        gfx: &classic_gfx::Gfx,
+        tile_set: &str,
+        tile_px: u32,
+    ) -> f32 {
+        let levels = (tile_px.max(1).ilog2() as i32 - 2).max(0);
+        match gfx.textures.get(tile_set) {
+            Some(t) if levels > 0 && t.enable_atlas_mipmaps(&gfx.gl, levels) => levels as f32,
+            _ => 0.0,
+        }
+    }
+
     /// Rebuild nav mesh GPU buffers from current NavMesh component data.
     pub fn rebuild_nav_gpu(&mut self) {
         let Some(nav_entity) = self.entity_by_role(RoleKind::NavMesh) else {
@@ -236,7 +278,7 @@ impl Engine {
             GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &mesh_data, glow::DYNAMIC_DRAW);
         let (tile_pixels, tw, th) = build_tile_texture(sx, sy, &data);
         let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
-        self.nav_gpu = Some(TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
+        self.nav_gpu = Some(TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex, blend: None });
     }
 
     /// Rebuild the tilemap mesh from current data + heights and re-upload to GPU.
@@ -248,7 +290,7 @@ impl Engine {
             );
             return;
         };
-        let (size_x, size_y, tiles, heights) = {
+        let (size_x, size_y, tiles, heights, tile_set, tile_px, blended) = {
             let tm = match self.world.get::<&Tilemap>(tm_entity) {
                 Ok(t) => t,
                 Err(_) => {
@@ -259,7 +301,15 @@ impl Engine {
                     return;
                 }
             };
-            (tm.size_x, tm.size_y, tm.data.clone(), tm.height_data.clone())
+            (
+                tm.size_x,
+                tm.size_y,
+                tm.data.clone(),
+                tm.height_data.clone(),
+                tm.tile_set.clone(),
+                tm.tile_pixel_size[0],
+                tm.blend.is_some(),
+            )
         };
 
         let gfx = match self.gfx.as_mut() {
@@ -279,12 +329,18 @@ impl Engine {
 
         let (tile_pixels, tw, th) = build_tile_texture(size_x, size_y, &tiles);
         let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
+        // A regenerated map re-uploads its tileset (`set_tileset_bulk`) before
+        // committing, which drops the mip chain the blend samples.
+        let max_lod = blended.then(|| Engine::blend_tileset_max_lod(gfx, &tile_set, tile_px));
 
         let entity_name = self.debug_name(tm_entity);
         if let Some(gpu) = self.tilemap_gpu.get_mut(&entity_name) {
             gpu.mesh_buf = mesh_buf;
             gpu.vertex_count = vcount;
             gpu.tile_tex = tile_tex;
+            if let (Some(b), Some(lod)) = (gpu.blend.as_mut(), max_lod) {
+                b.max_lod = lod;
+            }
             classic_core::cl_info!(
                 classic_core::instrument::Chan::Editor,
                 "rebuild_tilemap_mesh: {vcount} vertices uploaded for '{entity_name}'"

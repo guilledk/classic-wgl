@@ -5,8 +5,8 @@ use glow::HasContext;
 
 use crate::buffer::vertex_attrib_ptr_f32;
 use crate::{
-    Gfx, GlBuffer, IsoSpritePass, ModelMeshGpu, RenderSettings, Shader, SpriteRegion,
-    MODEL_VERTEX_STRIDE, SHADOW_MAP_UNIT,
+    Gfx, GlBuffer, IsoSpritePass, ModelMeshGpu, RenderSettings, Shader, SpriteRegion, TileBlend,
+    BLEND_LUT_UNIT, MODEL_VERTEX_STRIDE, SHADOW_MAP_UNIT,
 };
 
 impl Gfx {
@@ -530,6 +530,7 @@ impl Gfx {
         selection_mode: i32,
         selection_color: &[f32; 4],
         settings: &RenderSettings,
+        blend: Option<&TileBlend>,
         show_grid: bool,
         vertex_count: i32,
         vertex_buffer: &GlBuffer,
@@ -575,6 +576,25 @@ impl Gfx {
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         self.bind_shadow(s, settings);
+
+        // The sampler always points at its own unit so it never aliases the
+        // tile data/tileset units, whether or not a table is bound.
+        s.uniform_1i(gl, "blend_lut", BLEND_LUT_UNIT as i32);
+        match blend {
+            Some(b) => {
+                unsafe {
+                    gl.active_texture(glow::TEXTURE0 + BLEND_LUT_UNIT);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(b.lut));
+                }
+                s.uniform_1i(gl, "blend_enabled", 1);
+                s.uniform_1f(gl, "blend_width", b.width);
+                s.uniform_1f(gl, "blend_max_lod", b.max_lod);
+                s.uniform_1f(gl, "blend_noise_scale", b.noise_scale);
+                s.uniform_1f(gl, "blend_noise_strength", b.noise_strength);
+                s.uniform_1f(gl, "blend_height_strength", b.height_strength);
+            }
+            None => s.uniform_1i(gl, "blend_enabled", 0),
+        }
 
         unsafe {
             gl.enable(glow::DEPTH_TEST);

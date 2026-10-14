@@ -413,6 +413,13 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "use_shadow",
                 "shadow_debug",
                 "shadow_normal_offset",
+                "blend_enabled",
+                "blend_lut",
+                "blend_width",
+                "blend_max_lod",
+                "blend_noise_scale",
+                "blend_noise_strength",
+                "blend_height_strength",
             ],
         },
         BuiltinShader {

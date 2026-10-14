@@ -2,13 +2,27 @@
 
 precision mediump float;
 
-in mediump vec2 vMapCoord;
+// highp: a 400-tile map needs ~1/64-tile resolution at coordinates ~400,
+// past what an fp16 `mediump` carries (11-bit mantissa) on real mobile GPUs.
+in highp vec2 vMapCoord;
 in mediump float vTileId;
 in highp vec3 vNormal;
 in highp vec3 vLightPos;
 
-uniform sampler2D map_data;
-uniform vec2 map_size;
+// mediump: the ids are decoded from 8-bit channels as `r * 256`, which a
+// `lowp` (default sampler precision) fetch cannot represent exactly.
+uniform mediump sampler2D map_data;
+uniform highp vec2 map_size;
+
+// Material blending (`Tilemap.blend`).  `blend_enabled == 0` is the classic
+// one-id-per-tile path, untouched.  Lengths are in tiles.
+uniform int blend_enabled;
+uniform mediump sampler2D blend_lut;   // 256x1: r = class, g = priority, b = hard
+uniform float blend_width;
+uniform float blend_max_lod;
+uniform float blend_noise_scale;
+uniform float blend_noise_strength;
+uniform float blend_height_strength;
 
 uniform sampler2D tile_set;
 uniform vec2 tile_set_size;
@@ -136,23 +150,48 @@ float shadowFactor(vec3 lightPos, vec3 n) {
     return mix(shadow_strength, 1.0, shadow);
 }
 
-float getMapData(vec2 pos) {
-    vec4 rawData = texture(map_data, pos);
-    return floor(rawData.r * 256.0);
+// Tile id at integer tile coords, clamped to the map.  `texelFetch` on the
+// integer cell is exactly what the `NEAREST` lookup used to resolve, without
+// depending on the normalized coordinate landing inside the right texel.
+float tileIdAt(ivec2 cell) {
+    ivec2 last = ivec2(map_size) - 1;
+    return floor(texelFetch(map_data, clamp(cell, ivec2(0), last), 0).r * 256.0);
 }
 
-vec4 getTilePixel(float tile_id_flat, vec2 map_coord) {
+float getMapData(highp vec2 pos) {
+    return tileIdAt(ivec2(floor(pos * map_size)));
+}
+
+// Atlas UV of tile `tile_id_flat` at the fragment's position inside its tile.
+// Every atlas cell tiles seamlessly, so any id can be sampled at any
+// fragment's local coordinate.
+highp vec2 tileUv(float tile_id_flat, highp vec2 map_coord) {
     vec2 tile_id = vec2(floor(mod(tile_id_flat, tile_set_size.x)), floor(tile_id_flat / tile_set_size.x));
 
-    vec2 mapTileNormalSize = vec2(1, 1) / map_size;
+    highp vec2 mapTileNormalSize = vec2(1, 1) / map_size;
     vec2 setNormalSize = vec2(1, 1) / tile_set_size;
 
     vec2 tileCornerNorm = tile_id * setNormalSize;
 
-    vec2 localTileCoord = fract(map_coord / mapTileNormalSize) * setNormalSize;
+    highp vec2 localTileCoord = fract(map_coord / mapTileNormalSize) * setNormalSize;
 
-    vec4 texColor = texture(tile_set, tileCornerNorm + localTileCoord);
+    return tileCornerNorm + localTileCoord;
+}
 
+vec4 getTileTexel(float tile_id_flat, highp vec2 map_coord) {
+    return texture(tile_set, tileUv(tile_id_flat, map_coord));
+}
+
+// The blend path samples under per-corner conditions, i.e. in non-uniform
+// control flow, where implicit-LOD `texture()` derivatives are undefined, so
+// it passes the level computed up front in `main` (uniform control flow).
+vec4 tileTexelLod(float tile_id_flat, highp vec2 map_coord, float lod) {
+    return textureLod(tile_set, tileUv(tile_id_flat, map_coord), lod);
+}
+
+// Editor selection highlight (invert / colorize) over a terrain colour.
+vec4 applySelection(vec4 texColor, highp vec2 map_coord) {
+    highp vec2 mapTileNormalSize = vec2(1, 1) / map_size;
     if (selection_mode != -1) {
         vec2 selectedNormalStart = floor(min(selection_begin, selected_tile)) * mapTileNormalSize;
         vec2 selectedNormalEnd = ceil(max(selection_begin, selected_tile)) * mapTileNormalSize;
@@ -174,14 +213,205 @@ vec4 getTilePixel(float tile_id_flat, vec2 map_coord) {
     return texColor;
 }
 
+// ---- Material blending -----------------------------------------------------
+//
+// The tile ids are a NEAREST grid, so sampling only the fragment's own id
+// gives every material (and every variant of one material) a square edge.
+// Instead: warp the lookup position with low-frequency noise, fetch the 2x2
+// ids around the half-tile-shifted lattice point (tile centres), and mix
+// their atlas texels.
+//
+//   * Bilinear weights over the 2x2 corners, summed per material class,
+//     give each class a continuous membership field.  Its contours cut
+//     across the tile staircase (as marching squares would), so a boundary
+//     follows the material region rather than the grid.
+//   * Within a class (the variants of one material) the variants resolve
+//     the same way on smooth weights, which hides the tile grid on
+//     single-material ground without washing the texture out.
+//   * Across classes the memberships are sharpened, height-blend style:
+//     a class mixes in only within `blend_width` of the strongest one, so
+//     the transition is a narrow band on the contour.  With
+//     `blend_height_strength > 0` the tileset alpha is per-texel height and
+//     joins (with the class priority) that comparison: crater pits fill with
+//     dust first, rock crowns poke through.
+//   * A `hard` class collapses that band to a crisp edge (still following
+//     the warped contour) with no height mix.
+//   * Where all four corners share one id, a single atlas sample is taken.
+//   * Minified terrain samples the tileset's capped mip chain at an explicit
+//     LOD (`blend_max_lod`); magnified terrain stays NEAREST.
+//
+// The warp is a deterministic hash value noise (no texture, no clock), so the
+// result is stable frame to frame and identical on every backend.
+
+// Integer-lattice hash -> [0, 1).  Coordinates are offset positive first:
+// GLSL ES leaves negative int -> uint conversion undefined.
+highp float blendHash(ivec2 p) {
+    uvec2 q = uvec2(p + 8192) * uvec2(1597334677u, 3812015801u);
+    uint n = (q.x ^ q.y) * 1597334677u;
+    return float(n >> 8u) * (1.0 / 16777216.0);
+}
+
+highp float blendValueNoise(highp vec2 p) {
+    highp vec2 i = floor(p);
+    highp vec2 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    ivec2 c = ivec2(i);
+    highp float a = blendHash(c);
+    highp float b = blendHash(c + ivec2(1, 0));
+    highp float d = blendHash(c + ivec2(0, 1));
+    highp float e = blendHash(c + ivec2(1, 1));
+    return mix(mix(a, b, f.x), mix(d, e, f.x), f.y);
+}
+
+// Three-octave warp vector in [-1, 1]^2: the base octave meanders a
+// boundary across tiles, the finer ones roughen it.
+highp vec2 blendWarp(highp vec2 p) {
+    highp float x = blendValueNoise(p) + 0.5 * blendValueNoise(p * 2.03 + vec2(17.1, 3.7))
+        + 0.25 * blendValueNoise(p * 4.07 + vec2(-31.4, 11.2));
+    highp float y = blendValueNoise(p + vec2(41.3, 29.9))
+        + 0.5 * blendValueNoise(p * 2.03 + vec2(-7.9, 53.2))
+        + 0.25 * blendValueNoise(p * 4.07 + vec2(23.6, -19.8));
+    return (vec2(x, y) / 1.75 - 0.5) * 2.0;
+}
+
+vec4 blendedTerrain(highp vec2 map_coord, float lod) {
+    highp vec2 t = map_coord * map_size;
+    highp vec2 p = t;
+    if (blend_noise_strength > 0.0) {
+        p += blend_noise_strength * blendWarp(t * blend_noise_scale);
+    }
+    highp vec2 q = p - 0.5;
+    highp vec2 cell = floor(q);
+    highp vec2 f = q - cell;
+    ivec2 c0 = ivec2(cell);
+
+    float ids[4];
+    ids[0] = tileIdAt(c0);
+    ids[1] = tileIdAt(c0 + ivec2(1, 0));
+    ids[2] = tileIdAt(c0 + ivec2(0, 1));
+    ids[3] = tileIdAt(c0 + ivec2(1, 1));
+
+    // Single-id neighbourhood: one sample, nothing to blend.
+    if (ids[0] == ids[1] && ids[0] == ids[2] && ids[0] == ids[3]) {
+        return vec4(tileTexelLod(ids[0], map_coord, lod).rgb, 1.0);
+    }
+
+    // Linear bilinear corner weights.  Summed per class they form a membership
+    // field whose iso-contours cut straight across the tile staircase
+    // (marching-squares style) instead of following it; a smoothstep here
+    // would flatten the field around tile centres and round the staircase
+    // rather than remove it.  The variants of one class resolve on the
+    // smoothstep weights `ws`, which have no crease at the tile centres.
+    float w[4];
+    w[0] = (1.0 - f.x) * (1.0 - f.y);
+    w[1] = f.x * (1.0 - f.y);
+    w[2] = (1.0 - f.x) * f.y;
+    w[3] = f.x * f.y;
+    vec2 s = smoothstep(vec2(0.0), vec2(1.0), f);
+    float ws[4];
+    ws[0] = (1.0 - s.x) * (1.0 - s.y);
+    ws[1] = s.x * (1.0 - s.y);
+    ws[2] = (1.0 - s.x) * s.y;
+    ws[3] = s.x * s.y;
+
+    float cls[4];
+    float prio[4];
+    vec4 col[4];
+    bool anyHard = false;
+    for (int i = 0; i < 4; i++) {
+        vec4 lut = texelFetch(blend_lut, ivec2(int(ids[i]), 0), 0);
+        cls[i] = floor(lut.r * 255.0 + 0.5);
+        prio[i] = lut.g;
+        anyHard = anyHard || lut.b > 0.5;
+        col[i] = tileTexelLod(ids[i], map_coord, lod);
+    }
+
+    // Every corner carries its whole class: membership W (sum of the class's
+    // corner weights), the variants' resolved colour C and height H, and how
+    // many corners share the class (n), so a class counts once.  Variants are
+    // resolved like classes, height-blend style on their smooth weights: a
+    // linear cross-fade would average uncorrelated textures over most of the
+    // tile and wash the material out; this keeps full texture contrast and
+    // makes variant seams interlock along texel heights.
+    bool useHeight = blend_height_strength > 0.0 && !anyHard;
+    // How far below the best variant another variant still mixes in.  Wider
+    // than a class band: variants are the same material, so their seams
+    // should melt, but not so wide that they average back to a wash.
+    const float VARIANT_DEPTH = 0.6;
+    float depth = anyHard ? 0.0001 : max(blend_width, 0.0001);
+    float u[4];
+    for (int j = 0; j < 4; j++) {
+        u[j] = ws[j] + (useHeight ? blend_height_strength * col[j].a : 0.0);
+    }
+    float W[4];
+    vec3 C[4];
+    float H[4];
+    float n[4];
+    for (int i = 0; i < 4; i++) {
+        W[i] = 0.0;
+        C[i] = vec3(0.0);
+        H[i] = 0.0;
+        n[i] = 0.0;
+        float umax = -4.0;
+        for (int j = 0; j < 4; j++) {
+            bool same = cls[j] == cls[i];
+            W[i] += same ? w[j] : 0.0;
+            n[i] += same ? 1.0 : 0.0;
+            umax = same ? max(umax, u[j]) : umax;
+        }
+        float S = 0.0;
+        for (int j = 0; j < 4; j++) {
+            bool same = cls[j] == cls[i];
+            float b = same ? max(u[j] - umax + VARIANT_DEPTH, 0.0) : 0.0;
+            S += b;
+            C[i] += b * col[j].rgb;
+            H[i] += b * col[j].a;
+        }
+        float inv = 1.0 / max(S, 1e-6);
+        C[i] *= inv;
+        H[i] *= inv;
+    }
+
+    // Across classes: sharpen the membership contour to `blend_width` and,
+    // with heights on, let the higher texel (+ class priority) win near it.
+    // A class with (almost) no membership never competes.
+    float v[4];
+    float best = -4.0;
+    for (int i = 0; i < 4; i++) {
+        float hv = useHeight ? blend_height_strength * (H[i] + prio[i]) : 0.0;
+        v[i] = W[i] > 1e-3 ? W[i] + hv : -4.0;
+        best = max(best, v[i]);
+    }
+    vec3 rgb = vec3(0.0);
+    float total = 0.0;
+    for (int i = 0; i < 4; i++) {
+        float b = max(v[i] - best + depth, 0.0) / n[i];
+        rgb += b * C[i];
+        total += b;
+    }
+    return vec4(rgb / max(total, 1e-6), 1.0);
+}
+
 void main(void ) {
     vec4 color;
+
+    // Tileset level for the blend path: atlas texels per screen pixel, from
+    // derivatives taken here in uniform control flow.  Magnification stays at
+    // level 0 (`NEAREST`, the pixel look); minification walks the tileset's
+    // capped mip chain instead of aliasing.
+    highp vec2 tcoord = vMapCoord * map_size * tile_pixel_size;
+    highp float texelsPerPx = max(length(dFdx(tcoord)), length(dFdy(tcoord)));
+    float lod = clamp(log2(max(texelsPerPx, 1e-6)), 0.0, blend_max_lod);
 
     if (vTileId > 0.5) {
         color = wall_color;
     } else {
-        vec2 map_coord = vec2(vMapCoord.x, vMapCoord.y);
-        color = getTilePixel(getMapData(map_coord), map_coord);
+        highp vec2 map_coord = vMapCoord;
+        if (blend_enabled != 0) {
+            color = applySelection(blendedTerrain(map_coord, lod), map_coord);
+        } else {
+            color = applySelection(getTileTexel(getMapData(map_coord), map_coord), map_coord);
+        }
     }
 
     if (color.a < 0.01) discard;

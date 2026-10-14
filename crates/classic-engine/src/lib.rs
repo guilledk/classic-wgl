@@ -76,6 +76,9 @@ struct TilemapGpu {
     mesh_buf: GlBuffer,
     vertex_count: usize,
     tile_tex: glow::Texture,
+    /// Material-blend uniforms + uploaded lookup table, when the tilemap opts
+    /// in (`Tilemap.blend`).  Always `None` for the nav overlay.
+    blend: Option<classic_gfx::TileBlend>,
 }
 
 /// Per-texture depth-mask metadata, keyed by the color texture name.  When a

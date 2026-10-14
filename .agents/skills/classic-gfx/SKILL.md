@@ -137,14 +137,16 @@ fn draw_tilemap(
     selected_tile: &[f32; 2], selection_begin: &[f32; 2],
     selection_mode: i32, selection_color: &[f32; 4],
     settings: &RenderSettings,          // ambient/light_dir/light_color/depth_span/normal_matrix/light_matrix
+    blend: Option<&TileBlend>,          // material blending (None = classic one-id-per-tile)
     show_grid: bool,
     vertex_count: i32, vertex_buffer: &GlBuffer,
 );
 ```
 
-Uses the `isoTilemap` shader. Two texture units: unit 0 = tile data texture
+Uses the `isoTilemap` shader. Texture units: unit 0 = tile data texture
 (raw `glow::Texture` passed as handle, NOT a named `GlTexture`), unit 1 = tileset
-sprite sheet (named, from `Gfx.textures`).
+sprite sheet (named, from `Gfx.textures`), unit 2 = the blend LUT (when blending),
+unit 3 = the shadow map.  The tile id is a `texelFetch` of the integer cell.
 
 Interleaved vertex attribs (36 bytes/vertex): `vertexPos`(3f, offset 0),
 `mapCoord`(2f, offset 12), `tileId`(1f, offset 20, >0.5 = wall), `normal`(3f, offset 24).
@@ -169,6 +171,36 @@ no GLSL literals.  There is no `iso_matrix` and no `y -= vertex.z` shear — see
 `selectionBegin` and `selectedTile`.  Lighting is diffuse:
 `ambientColor + max(dot(normal, lightDirection), 0) * lightColor`.  Grid overlay
 uses edge-detection blended with `gridColor` when `show_grid` is true and not selecting.
+
+### Material blending (`Tilemap.blend`, opt-in)
+
+`blend: Some(&TileBlend)` (engine-built from the component's `TileBlend`
+config, stored on `TilemapGpu.blend`) switches `iso_tilemap.frag` from one
+NEAREST id per tile to `blendedTerrain`: a noise-warped (3-octave hash value
+noise, `blend_noise_scale`/`_strength`) lookup of the 2x2 ids around the
+half-tile-shifted lattice point; per-class **linear** bilinear membership
+(its contours cut the tile staircase, marching-squares style — smoothstep
+weights would only round it), sharpened height-blend style to `blend_width`;
+variants of one class resolve on smoothstep weights with a fixed
+`VARIANT_DEPTH`.  `blend_height_strength > 0` makes the tileset alpha
+per-texel height.  Classes/priority/hard live in a 256x1 RGBA8 LUT
+(`classic_core::tilemap::build_blend_lut`) on texture unit
+`BLEND_LUT_UNIT` = 2.  The engine gives a blended tileset a capped mip chain
+(`GlTexture::enable_atlas_mipmaps`, `NEAREST_MIPMAP_LINEAR`, max level keeps
+cells >= 4 px) and the shader samples it with `textureLod` at a LOD computed
+from `dFdx/dFdy` in `main` (uniform control flow); magnification stays
+level 0.  Gotchas learned the hard way:
+
+- Never sample with implicit-LOD `texture()` under the per-corner
+  conditions; always pass the LOD.
+- Every class that competes must carry a nonzero resolved weight sum, or its
+  colour divides out to black: llvmpipe showed stray black texels.  NaN
+  probes did not catch it, because llvmpipe's fast-math folds them; the fix
+  was structural (always include each class's best corner).
+- A wide `width` exposes the tile staircase as a blur; keep it narrow and
+  let the warp roughen the contour.
+- `vMapCoord`/`map_size` are `highp` in both stages (uniform precision must
+  match across stages): at `mediump` llvmpipe really runs fp16.
 
 ### Nav mesh variant
 
