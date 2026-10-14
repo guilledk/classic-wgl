@@ -238,6 +238,7 @@ impl ShaderSourceRegistry {
         r.override_fragment("bloom_threshold.frag", shaders::BLOOM_THRESHOLD_FRAG);
         r.override_fragment("bloom_blur.frag", shaders::BLOOM_BLUR_FRAG);
         r.override_fragment("bloom_composite.frag", shaders::BLOOM_COMPOSITE_FRAG);
+        r.override_fragment("particle_composite.frag", shaders::PARTICLE_COMPOSITE_FRAG);
         r
     }
 
@@ -510,6 +511,13 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             fragment: "bloom_composite.frag",
             attr: &["vertex_pos"],
             unif: &["near_tex", "far_tex", "intensity"],
+        },
+        BuiltinShader {
+            name: "particleComposite",
+            vertex: "post.vert",
+            fragment: "particle_composite.frag",
+            attr: &["vertex_pos"],
+            unif: &["color_tex"],
         },
     ]
 }

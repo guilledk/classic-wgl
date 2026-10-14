@@ -30,6 +30,7 @@ pub const POST_VERT: &str = include_str!("shaders/post.vert");
 pub const BLOOM_THRESHOLD_FRAG: &str = include_str!("shaders/bloom_threshold.frag");
 pub const BLOOM_BLUR_FRAG: &str = include_str!("shaders/bloom_blur.frag");
 pub const BLOOM_COMPOSITE_FRAG: &str = include_str!("shaders/bloom_composite.frag");
+pub const PARTICLE_COMPOSITE_FRAG: &str = include_str!("shaders/particle_composite.frag");
 
 #[cfg(test)]
 mod tests {

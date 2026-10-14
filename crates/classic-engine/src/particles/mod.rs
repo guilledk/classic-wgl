@@ -988,6 +988,15 @@ impl ParticleSystem {
             da.total_cmp(&db).then(self.instances[a].id.cmp(&self.instances[b].id))
         });
         self.ribbon_verts.clear();
+        // Half-res pass only when a particle layer will actually draw (it costs
+        // a depth blit + a composite).  Always on; `begin_particle_pass` falls
+        // back to full resolution only on its safety paths (logged).
+        let any_particles = self.instances.iter().any(|inst| {
+            inst.layers
+                .iter()
+                .any(|l| matches!(l, LayerRt::Particles(p) if p.ring.last_death() >= t))
+        });
+        let half_res = any_particles && gfx.begin_particle_pass();
         // Two phases, each back to front by instance origin: every alpha
         // (absorbing) layer first, then every glowing layer (additive or
         // emissive).  Particles write no depth, so draw order decides who
@@ -1058,6 +1067,9 @@ impl ParticleSystem {
                     }
                 }
             }
+        }
+        if half_res {
+            gfx.end_particle_pass();
         }
         if !self.ribbon_verts.is_empty() {
             let count = (self.ribbon_verts.len() / RIBBON_VERTEX_FLOATS) as i32;
