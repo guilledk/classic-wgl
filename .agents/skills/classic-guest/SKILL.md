@@ -240,7 +240,17 @@ name — so a guest may write `"rocket_blast"` or `"lunar-common::rocket_blast"`
   kept (as `light_set` keeps a light's kind and parent).  Negative handles
   are rejected (they never alias slot 0).
 - `emitter_release` despawns the emitter; particles it already spawned live
-  out their lifetimes.  A released handle is recycled by the next spawn.
+  out their lifetimes.
+- **Handles are generational and opaque** (lights and emitters alike, one
+  `classic_engine::handles::EntityHandles` table): a handle packs
+  `(generation << 16) | slot` into a non-negative `i32`.  A release bumps the
+  slot's generation, so the next spawn reuses the slot under a *new* handle
+  and a stale handle (kept past its release, or past a light's TTL) gets `0`
+  from `*_set`/`*_release` instead of driving whatever took the slot.  The
+  first handles minted are `0, 1, 2, …` (generation 0), but guests must only
+  store and compare handles and test `< 0` for failure — never index arrays
+  by them or do arithmetic on them.  The 15-bit generation wraps after
+  32 768 reuses of one slot.
 - All four are `[native web worker tier3_trap]`: a background (Tier 3)
   worker guest that calls them traps.
 

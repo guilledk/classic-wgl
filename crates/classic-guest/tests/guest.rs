@@ -835,6 +835,76 @@ fn guest_fx_emit_and_emitter_pool_spawn_set_release() {
     );
 }
 
+/// A guest that keeps a light/emitter handle past its release must get `0`
+/// from `*_set`/`*_release` once the slot is reused, never drive the reuser.
+#[test]
+fn guest_stale_handles_after_release_are_rejected() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "light_spawn" (func $lspawn (param i32 f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "light_set" (func $lset (param i32 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "light_release" (func $lrelease (param i32) (result i32)))
+            (import "env" "emitter_spawn" (func $espawn (param i32 i32 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "emitter_set" (func $eset (param i32 f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "emitter_release" (func $erelease (param i32) (result i32)))
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "t::stream")
+            (data (i32.const 32) "bad")
+            (func $flag_if (param $cond i32)
+                (if (local.get $cond) (then (drop (call $spawn (i32.const 32) (i32.const 3))))))
+            (func $light (param $i f64) (result i32)
+                (call $lspawn (i32.const 0)
+                    (f64.const 1) (f64.const 2) (f64.const 0)
+                    (f64.const 1) (f64.const 1) (f64.const 1)
+                    (local.get $i) (f64.const 10) (f64.const 0)))
+            (func $emitter (param $x f64) (result i32)
+                (call $espawn (i32.const 0) (i32.const 9)
+                    (local.get $x) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0) (f64.const 1) (f64.const 1)))
+            (func (export "update") (param f64)
+                (local $stale i32) (local $fresh i32)
+                ;; lights: release, respawn into the same slot, poke the stale handle
+                (local.set $stale (call $light (f64.const 1)))
+                (call $flag_if (i32.ne (call $lrelease (local.get $stale)) (i32.const 1)))
+                (local.set $fresh (call $light (f64.const 9)))
+                (call $flag_if (i32.lt_s (local.get $fresh) (i32.const 0)))
+                (call $flag_if (i32.eq (local.get $fresh) (local.get $stale)))
+                (call $flag_if (call $lset (local.get $stale)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0)))
+                (call $flag_if (call $lrelease (local.get $stale)))
+                ;; emitters: the same dance
+                (local.set $stale (call $emitter (f64.const 1)))
+                (call $flag_if (i32.ne (call $erelease (local.get $stale)) (i32.const 1)))
+                (local.set $fresh (call $emitter (f64.const 7)))
+                (call $flag_if (i32.lt_s (local.get $fresh) (i32.const 0)))
+                (call $flag_if (i32.eq (local.get $fresh) (local.get $stale)))
+                (call $flag_if (call $eset (local.get $stale)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 1) (f64.const 0) (f64.const 0)))
+                (call $flag_if (call $erelease (local.get $stale))))
+        )"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = engine_with_effects();
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(!engine.has_name("bad"), "every stale call was refused");
+            let lights: Vec<Light> =
+                engine.world.query::<&Light>().iter().map(|(_, l)| l.clone()).collect();
+            assert_eq!(lights.len(), 1);
+            assert_eq!(lights[0].intensity, 9.0, "the reusing light is untouched");
+            let emitters: Vec<Emitter> =
+                engine.world.query::<&Emitter>().iter().map(|(_, e)| e.clone()).collect();
+            assert_eq!(emitters.len(), 1);
+            assert_eq!(emitters[0].position, Vec3::new(7.0, 0.0, 0.0));
+            assert_eq!(emitters[0].rate, 1.0, "the reusing emitter is untouched");
+        },
+    );
+}
+
 #[test]
 fn guest_mouse_down_and_key_up_trigger_action() {
     with_each_runtime(

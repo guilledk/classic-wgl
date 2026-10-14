@@ -323,13 +323,26 @@ fn recycled_emitter_handles_get_fresh_instances() {
     run(&mut e, 30, 1.0 / 60.0);
     assert!(e.release_emitter(a));
     let b = e.spawn_emitter(Emitter::new("t::stream", Vec3::new(9.0, -9.0, 1.0))).unwrap();
-    assert_eq!(a, b, "the handle is recycled");
+    assert_ne!(a, b, "the slot is recycled under a new generation");
     run(&mut e, 1, 1.0 / 60.0);
     assert_eq!(e.particle_stats().instances, 2, "the dying instance and the new one");
     run(&mut e, 120, 1.0 / 60.0);
     let s = e.particle_stats();
     assert_eq!(s.instances, 1, "only the dead emitter's instance retires");
     assert!(s.live > 0, "the new emitter keeps spawning");
+}
+
+#[test]
+fn stale_emitter_handle_after_release_is_rejected() {
+    let mut e = engine();
+    let stale = e.spawn_emitter(Emitter::new("t::stream", Vec3::new(5.0, -5.0, 1.0))).unwrap();
+    assert!(e.release_emitter(stale));
+    let fresh = e.spawn_emitter(Emitter::new("t::stream", Vec3::new(9.0, -9.0, 1.0))).unwrap();
+
+    assert!(e.emitter_by_handle(stale).is_none());
+    assert!(!e.update_emitter(stale, Emitter::new("t::stream", Vec3::ZERO)), "stale set");
+    assert!(!e.release_emitter(stale), "stale release");
+    assert_eq!(e.emitter_by_handle(fresh).unwrap().position, Vec3::new(9.0, -9.0, 1.0));
 }
 
 #[test]

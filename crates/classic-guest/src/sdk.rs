@@ -616,8 +616,8 @@ impl GuestHost {
     ) -> i32 {
         // `light_set` only updates the transform/radiance fields; it must not
         // demote a spot light or detach a parented light.  A negative handle is
-        // invalid (the host treats handles as unsigned slot indices, so `-1`
-        // must not silently alias slot 0).
+        // invalid: handles are non-negative generational slot handles, and a
+        // `-1` cast to `u32` must not reach the table.
         if handle < 0 {
             return 0;
         }
@@ -710,7 +710,8 @@ impl GuestHost {
         rate: f64,
         intensity: f64,
     ) -> i32 {
-        // Handles are unsigned slot indices: `-1` must not alias slot 0.
+        // Handles are non-negative generational slot handles: a `-1` cast to
+        // `u32` must not reach the table.
         if handle < 0 {
             return 0;
         }

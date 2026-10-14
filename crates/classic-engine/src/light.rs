@@ -1,6 +1,7 @@
 //! Dynamic light handles + TTL: pooled lights are first-class ECS entities.
 //!
-//! A stable [`LightHandle`] (a slot index) maps to a spawned `Light` entity so
+//! A stable [`LightHandle`] (a generational slot handle, see
+//! [`crate::handles`]) maps to a spawned `Light` entity so
 //! the guest ABI (`light_spawn`/`light_set`/`light_release`) stays stable while
 //! lights become attachable world objects — declared in `state.json`, parented
 //! to sprites, and driven by animation channels like any other component.
@@ -9,7 +10,7 @@ use classic_core::components::Light;
 
 use crate::handles::EntityHandles;
 
-/// Handle to a dynamic light (a slot index into the handle table).
+/// Handle to a dynamic light (an opaque generational slot handle).
 pub type LightHandle = crate::handles::Handle;
 
 /// Transient-light lifetime marker.  Present on guest-spawned lights with a
@@ -148,7 +149,7 @@ mod tests {
         assert!(!table.release(&mut world, h0));
 
         let h2 = table.spawn(&mut world, light(), None).unwrap();
-        assert_eq!(h2, h0);
+        assert_ne!(h2, h0, "the slot is reused under a new generation");
 
         assert!(table.release(&mut world, h1));
         assert!(table.release(&mut world, h2));
@@ -168,9 +169,34 @@ mod tests {
         assert_eq!(active(&world), 1);
 
         let reused = table.spawn(&mut world, light(), None).unwrap();
-        assert_eq!(reused, transient);
+        assert_ne!(reused, transient, "the expired slot comes back re-generationed");
+        // The expired transient's handle must not reach the light reusing
+        // its slot.
+        assert!(table.get(&world, transient).is_none());
+        assert!(!table.set(&mut world, transient, light()));
+        assert!(!table.release(&mut world, transient));
+        assert!(table.get(&world, reused).is_some());
         assert!(table.release(&mut world, persistent));
         assert!(table.release(&mut world, reused));
+    }
+
+    #[test]
+    fn stale_handle_after_release_is_rejected() {
+        let mut world = hecs::World::new();
+        let mut table = LightHandles::new();
+        let stale = table.spawn(&mut world, light(), None).unwrap();
+        assert!(table.release(&mut world, stale));
+        let mut other = light();
+        other.intensity = 9.0;
+        let fresh = table.spawn(&mut world, other, None).unwrap();
+
+        assert!(table.get(&world, stale).is_none());
+        let mut hijack = light();
+        hijack.intensity = 0.0;
+        assert!(!table.set(&mut world, stale, hijack), "a stale set is refused");
+        assert!(!table.release(&mut world, stale), "a stale release is refused");
+        assert_eq!(table.get(&world, fresh).unwrap().intensity, 9.0, "the reuser is untouched");
+        assert_eq!(active(&world), 1);
     }
 
     #[test]

@@ -79,6 +79,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Guest light and emitter handles are generational: a handle packs
+  `(generation << 16) | slot` into a non-negative `i32`, and a release bumps
+  the slot's generation.  A guest holding a handle past its release (or past
+  a light's TTL) now gets `0` from `light_set`/`light_release`/`emitter_set`/
+  `emitter_release` instead of driving whatever reused the slot.  The first
+  handles minted are unchanged (`0, 1, 2, …`); `-1` stays the failure value.
 - Tilemap map coordinates are `highp` end to end (varying, `map_size`) and
   the tile id is a `texelFetch` of the integer cell.  At `mediump` (fp16 on
   real mobile GPUs, and in Mesa's llvmpipe) the normalized map coordinate of a
