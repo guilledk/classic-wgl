@@ -362,6 +362,7 @@ mod tests {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: Some("rocket".into()),
+            node: None,
         },));
         assert!(e.start_model_clip("rocket", "landing", false));
         e.update_models(0.5);

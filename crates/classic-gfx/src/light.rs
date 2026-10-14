@@ -98,6 +98,7 @@ mod tests {
             dir: glam::Vec3::new(5.0, 6.0, 7.0),
             cone_angle: 0.5,
             parent: None,
+            node: None,
         }];
         let buf = pack_lights(&lights, MAX_LIGHTS);
         assert_eq!(buf.len(), (1 + MAX_LIGHTS * 3) * 4);

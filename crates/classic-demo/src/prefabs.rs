@@ -485,6 +485,7 @@ mod tests {
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
             parent: None,
+            node: None,
         };
         apply_light_channels(&data, 216.0, &mut light);
 

@@ -789,6 +789,7 @@ mod tests {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: Some("rocket".into()),
+            node: None,
         };
         engine.world.spawn((light.clone(),));
 
@@ -864,6 +865,7 @@ mod tests {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: Some("rocket".into()),
+            node: None,
         };
         engine.world.spawn((light.clone(),));
         let free = engine.world.spawn((Light { parent: None, ..light },));
@@ -947,6 +949,7 @@ mod tests {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: Some("rocket".into()),
+            node: None,
         };
         engine.world.spawn((light.clone(),));
 

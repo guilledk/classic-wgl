@@ -973,6 +973,11 @@ pub struct Light {
     /// absolute world-metre position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// Optional glTF node of a `Model` parent: `position` is then an offset in
+    /// that node's frame (full TRS), so the light follows the node's lean and
+    /// rotation, not just the rig origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
 }
 
 fn default_light_intensity() -> f32 {
@@ -995,6 +1000,96 @@ impl Default for Light {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: None,
+            node: None,
+        }
+    }
+}
+
+/// A particle/VFX emitter: an instance of a named effect from the ROM's effect
+/// library (see `classic_core::effects`), placed in the world like a [`Light`]
+/// and driven by `emitter.*` animation channels through an
+/// `Animator { target: "<entity>.Emitter" }`.
+///
+/// The drive fields (`rate`, `speed`, `scale`, `color`, `intensity`, `burst`)
+/// are multipliers over the effect definition, so a Blender clip keys only the
+/// time-varying envelope.  `burst` is a cumulative counter: every integer step
+/// it crosses fires one burst of each layer (frame-drop and loop-wrap safe).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Emitter {
+    /// Effect name (resolved against the loaded effect libraries).
+    pub effect: String,
+    /// World-metre position: absolute, or an offset from the parent's ground
+    /// point (plus its animated `frame_offset`) when `parent` is set — the
+    /// same convention as [`Light::position`].
+    #[serde(default)]
+    pub position: Vec3,
+    /// Emission direction (emitter frame); `+Z` = up.
+    #[serde(default = "default_emitter_dir")]
+    pub dir: Vec3,
+    /// Optional parent entity name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Optional glTF node of a `Model` parent: `position`/`dir` are then in
+    /// that node's frame (full TRS), so the emitter follows lean and rotation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// Spatial scale (spawn volume, speeds and sizes).
+    #[serde(default = "default_one")]
+    pub scale: f32,
+    /// Spawn-rate multiplier (`emitter.rate`).
+    #[serde(default = "default_one")]
+    pub rate: f32,
+    /// Speed multiplier (`emitter.speed`).
+    #[serde(default = "default_one")]
+    pub speed: f32,
+    /// Colour tint (`emitter.color`).
+    #[serde(default = "default_emitter_color")]
+    pub color: [f32; 3],
+    /// Brightness multiplier for emissive layers and light layers
+    /// (`emitter.intensity`).
+    #[serde(default = "default_one")]
+    pub intensity: f32,
+    /// Cumulative burst counter (`emitter.burst`).
+    #[serde(default)]
+    pub burst: f32,
+    /// Master switch; a disabled emitter stops spawning but lets its live
+    /// particles finish.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_emitter_dir() -> Vec3 {
+    Vec3::Z
+}
+
+fn default_one() -> f32 {
+    1.0
+}
+
+fn default_emitter_color() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Emitter {
+    /// An enabled emitter of `effect` at an absolute world position.
+    pub fn new(effect: impl Into<String>, position: Vec3) -> Self {
+        Self {
+            effect: effect.into(),
+            position,
+            dir: Vec3::Z,
+            parent: None,
+            node: None,
+            scale: 1.0,
+            rate: 1.0,
+            speed: 1.0,
+            color: [1.0; 3],
+            intensity: 1.0,
+            burst: 0.0,
+            enabled: true,
         }
     }
 }

@@ -583,6 +583,7 @@ impl GuestHost {
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
             parent: None,
+            node: None,
         };
         let ttl = if ttl <= 0.0 { None } else { Some(ttl as f32) };
         self.engine_mut().spawn_light(light, ttl).map(|h| h as i32).unwrap_or(-1)
@@ -620,6 +621,7 @@ impl GuestHost {
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
             parent: None,
+            node: None,
         });
         light.position = glam::Vec3::new(x as f32, y as f32, z as f32);
         light.color = [r as f32, g as f32, b as f32];

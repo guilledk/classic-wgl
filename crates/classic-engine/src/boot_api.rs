@@ -794,6 +794,24 @@ impl Engine {
                 }
             }
 
+            // Emitters follow the same parent rule as lights.
+            if let Some(parent) = self
+                .world
+                .get::<&classic_core::components::Emitter>(entity)
+                .ok()
+                .and_then(|em| em.parent.clone())
+            {
+                if !parent.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &parent) {
+                        if let Ok(mut em) =
+                            self.world.get::<&mut classic_core::components::Emitter>(entity)
+                        {
+                            em.parent = Some(resolved);
+                        }
+                    }
+                }
+            }
+
             if let Some(target) = self.world.get::<&Animator>(entity).ok().map(|a| a.target.clone())
             {
                 let parts: Vec<&str> = target.splitn(2, '.').collect();
