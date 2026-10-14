@@ -572,6 +572,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let entity = engine.world.spawn((
             tilemap,
@@ -619,6 +620,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let tilemap_tf = Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0));
 
@@ -761,6 +763,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let tm = engine.world.spawn((
             tilemap,
@@ -839,6 +842,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::splat(-1.0),
             selection_iso_end: Vec3::splat(-1.0),
+            blend: None,
         };
         let tm = engine.world.spawn((
             tilemap,
@@ -899,6 +903,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let tm = engine.world.spawn((
             tilemap,

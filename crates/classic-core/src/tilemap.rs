@@ -328,6 +328,51 @@ pub fn build_tile_texture(size_x: i32, size_y: i32, tiles: &[u32]) -> (Vec<u8>, 
     (pixels, w, h)
 }
 
+/// Width of the material-blend lookup table: one texel per possible tile id
+/// (the tile data texture clamps ids to a byte).
+pub const BLEND_LUT_WIDTH: u32 = 256;
+
+/// Build the `256x1` RGBA8 material-blend lookup table the tilemap shader
+/// reads with `texelFetch(blend_lut, ivec2(id, 0))`:
+///
+/// | channel | meaning |
+/// |---|---|
+/// | `r` | blend class (variants of one material share it; default: the id) |
+/// | `g` | priority, `[0, 1]` quantised to a byte |
+/// | `b` | hard-edge flag (`255` = hard) |
+/// | `a` | `255` |
+///
+/// A class is named by the smallest id its entry lists, so it can never
+/// collide with an unlisted id's own class.  An id listed twice keeps its
+/// first entry; ids outside `1..=255` are ignored.
+pub fn build_blend_lut(blend: &crate::components::TileBlend) -> Vec<u8> {
+    let w = BLEND_LUT_WIDTH as usize;
+    let mut lut = vec![0u8; w * 4];
+    for id in 0..w {
+        lut[id * 4] = id as u8;
+        lut[id * 4 + 3] = 255;
+    }
+    let mut claimed = vec![false; w];
+    for m in &blend.materials {
+        let valid = || m.ids.iter().copied().filter(|&id| (1..w as u32).contains(&id));
+        let Some(class) = valid().filter(|&id| !claimed[id as usize]).min() else {
+            continue;
+        };
+        let priority = (m.priority.clamp(0.0, 1.0) * 255.0).round() as u8;
+        for id in valid() {
+            let id = id as usize;
+            if claimed[id] {
+                continue;
+            }
+            claimed[id] = true;
+            lut[id * 4] = class as u8;
+            lut[id * 4 + 1] = priority;
+            lut[id * 4 + 2] = if m.hard { 255 } else { 0 };
+        }
+    }
+    lut
+}
+
 /// Cast a world-space [`Ray`] against the terrain height field and return the
 /// first hit point (nearest the ray origin), or `None` if the ray never crosses
 /// the surface within `max_dist` metres.
@@ -403,6 +448,38 @@ mod tests {
 
     fn heights(size_x: i32, size_y: i32, h: fn(f32, f32) -> f32) -> Vec<f32> {
         (0..=size_y).flat_map(|ty| (0..=size_x).map(move |tx| h(tx as f32, ty as f32))).collect()
+    }
+
+    #[test]
+    fn blend_lut_classes_default_to_the_id_and_groups_share_their_min() {
+        use crate::components::{TileBlend, TileBlendMaterial};
+        let mat = |ids: &[u32], priority: f32, hard: bool| TileBlendMaterial {
+            name: String::new(),
+            ids: ids.to_vec(),
+            priority,
+            hard,
+        };
+        let blend = TileBlend {
+            materials: vec![
+                mat(&[7, 5, 6], 0.5, false),
+                // 6 is already claimed by the first entry; 0 and 300 are out of range.
+                mat(&[6, 9, 0, 300], 1.5, true),
+            ],
+            ..TileBlend::default()
+        };
+        let lut = build_blend_lut(&blend);
+        assert_eq!(lut.len(), BLEND_LUT_WIDTH as usize * 4);
+        let px = |id: usize| [lut[id * 4], lut[id * 4 + 1], lut[id * 4 + 2], lut[id * 4 + 3]];
+        // Unlisted ids are their own class, priority 0, soft.
+        assert_eq!(px(0), [0, 0, 0, 255]);
+        assert_eq!(px(3), [3, 0, 0, 255]);
+        assert_eq!(px(255), [255, 0, 0, 255]);
+        // A group is named by its smallest id; priority quantised to a byte.
+        for id in [5, 6, 7] {
+            assert_eq!(px(id), [5, 128, 0, 255], "id {id}");
+        }
+        // First entry wins the shared id; priority clamps to 1; hard flag set.
+        assert_eq!(px(9), [9, 255, 255, 255]);
     }
 
     #[test]
