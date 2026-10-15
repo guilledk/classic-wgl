@@ -32,7 +32,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `u_time`.  Rendered as phase 3c (after the model ghost, before the UI),
   depth-tested against the scene with premultiplied blending; one
   `Particles` trace item per drawn layer.  Spawning is SplitMix64-keyed per
-  instance/frame/layer, so a fixed timestep reproduces every particle.
+  instance/frame/layer, so a fixed timestep reproduces every particle (#126).
 - Effect libraries and emitters (M2): `classic_core::effects` (a JSON
   `{"effects": [...]}` library shipped as a ROM `data[]` artifact and
   registered under the ROM namespace), a registered `Emitter` component
@@ -43,8 +43,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   sharing the byte-identical lighting block (`particle.vert` joins
   `lit_shaders_share_the_lighting_block`).  `Light` gains the same
   optional `node`: a light or emitter attached to a `Model` parent's glTF
-  node follows its full transform.
-- Particle looks (M3): velocity streaks, flipbook textures, procedural
+  node follows its full transform (#126).
+- Particle looks (M3, #126): velocity streaks, flipbook textures, procedural
   soft/smoke/glow shapes, the closed-form ground-vortex swirl (a radial
   ground blast captured into rising counter-rotating spirals), ground
   bounce and die with deterministic sub-effects on landing, procedural
@@ -57,17 +57,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - Bloom (M4): a soft-knee bright-pass, half- and quarter-resolution
   separable Gaussian blur and an additive composite on RGBA8 targets (no
   float render targets), run only on frames with something emissive on
-  screen.
+  screen (#126).
 - Particle fill cost (M4): particles draw into a half-resolution target
   (scene depth blitted in, premultiplied "over" composite back; full-res
   fallback only on multisampled or mismatched framebuffers), the smoke
   shape samples one baked tileable noise texture instead of per-pixel
-  value noise, and procedural shapes skip their transparent quad corners.
+  value noise, and procedural shapes skip their transparent quad corners
+  (#126).
 - `CLASSIC_GOLDEN_PNG` also takes a frame list (`10,30,60`): PNG captures
   of the offscreen target at those frames into `CLASSIC_GOLDEN_DIR`, for
   visual review of motion; `1` keeps the pixel golden.  A reference effect
   library test fixture (`classic-core` `tests/fixtures/effects.json`)
-  covers every layer kind, spawn shape, ground and render mode.
+  covers every layer kind, spawn shape, ground and render mode (#126).
 
 ### Fixed
 
