@@ -353,3 +353,198 @@ fn guest_emitter_pool_is_bounded() {
     }
     assert_eq!(e.spawn_emitter(Emitter::new("t::stream", Vec3::ZERO)), None);
 }
+
+/// A flat (mesh-less) glb asset: a `rig` root plus `nodes` (name, glTF-space
+/// translation) as its children, registered as `name`.
+fn insert_model(e: &mut Engine, name: &str, nodes: &[(&str, Vec3)]) {
+    use classic_core::model::{ModelAsset, ModelNode};
+    let node = |name: &str, parent: Option<usize>, t: Vec3| ModelNode {
+        name: name.into(),
+        parent,
+        children: Vec::new(),
+        translation: t,
+        rotation: glam::Quat::IDENTITY,
+        scale: Vec3::ONE,
+        mesh: None,
+    };
+    let mut all = vec![node("rig", None, Vec3::ZERO)];
+    for (n, t) in nodes {
+        all.push(node(n, Some(0), *t));
+    }
+    all[0].children = (1..all.len()).collect();
+    e.models.insert(name.into(), ModelAsset { nodes: all, root: Some(0), ..Default::default() });
+}
+
+/// A `rocket` Model entity on `landing` (three `fx_nozzle_*` nodes 3 m
+/// apart, an `fx_pad` and an unrelated `fin`) plus a `launch` asset with
+/// two nozzles, posed for frame 0.
+fn rocket(e: &mut Engine) -> hecs::Entity {
+    insert_model(
+        e,
+        "landing",
+        &[
+            ("fx_nozzle_0", Vec3::new(0.0, 0.0, 0.0)),
+            ("fin", Vec3::new(0.0, 4.0, 0.0)),
+            ("fx_nozzle_1", Vec3::new(3.0, 0.0, 0.0)),
+            ("fx_nozzle_2", Vec3::new(-3.0, 0.0, 0.0)),
+            ("fx_pad", Vec3::ZERO),
+        ],
+    );
+    insert_model(
+        e,
+        "launch",
+        &[("fx_nozzle_0", Vec3::new(0.0, 0.0, 3.0)), ("fx_nozzle_1", Vec3::new(0.0, 0.0, -3.0))],
+    );
+    let r = e.world.spawn((
+        Transform::new(Vec3::new(8.0, 8.0, 0.0), Vec3::ONE),
+        classic_core::components::Model::new("landing", "tilemap"),
+        DebugName("rocket".into()),
+    ));
+    e.names.insert("rocket".into(), r);
+    e.update_models(0.0);
+    r
+}
+
+fn plume(node: &str) -> Emitter {
+    let mut em = Emitter::new("t::stream", Vec3::ZERO);
+    em.parent = Some("rocket".into());
+    em.node = Some(node.into());
+    em
+}
+
+/// World position of a rocket node (the engine's own exact-name resolve).
+fn node_pos(e: &Engine, node: &str) -> Vec3 {
+    e.attachment_frame(Some("rocket"), Some(node), Vec3::ZERO, Vec3::Z).unwrap().0
+}
+
+/// Live records whose spawn point is within 1 cm of `p` (horizontally: a
+/// `stream` particle spawns on its site with an upward velocity).
+fn born_at(recs: &[classic_gfx::ParticleRecord], p: Vec3) -> usize {
+    recs.iter().filter(|r| Vec3::from_array(r.p0).truncate().distance(p.truncate()) < 0.01).count()
+}
+
+#[test]
+fn node_pattern_spawns_from_every_matching_node() {
+    let mut e = engine();
+    rocket(&mut e);
+    spawn_emitter(&mut e, "plume", plume("fx_nozzle_*"));
+    run(&mut e, 60, 1.0 / 60.0);
+    let inst = &e.particles.instances[0];
+    let want: Vec<Vec3> =
+        ["fx_nozzle_0", "fx_nozzle_1", "fx_nozzle_2"].iter().map(|n| node_pos(&e, n)).collect();
+    let got: Vec<Vec3> = inst.sites.iter().map(|s| s.pos).collect();
+    assert_eq!(got.len(), 3, "matched {got:?}");
+    for (g, w) in got.iter().zip(&want) {
+        assert!(g.distance(*w) < 1e-4, "{g} vs {w}");
+    }
+    // The instance frame is their centroid (what lights / review framing use).
+    let c = want.iter().sum::<Vec3>() / 3.0;
+    assert!(inst.frame.pos.distance(c) < 1e-4);
+    assert!(e.named_world_point("plume").unwrap().distance(c) < 1e-4);
+    // Every particle is born on one of the nozzles, split evenly, and each
+    // nozzle runs the layer's full rate (100/s, life 1 s: ~100 live each).
+    let recs = records(&e);
+    assert!((285..=315).contains(&recs.len()), "live {}", recs.len());
+    let counts: Vec<usize> = want.iter().map(|w| born_at(&recs, *w)).collect();
+    assert_eq!(counts.iter().sum::<usize>(), recs.len(), "{counts:?} of {}", recs.len());
+    let (lo, hi) = (counts.iter().min().unwrap(), counts.iter().max().unwrap());
+    assert!(hi - lo <= 1 && *lo > 90, "uneven split {counts:?}");
+}
+
+#[test]
+fn node_pattern_bursts_fire_on_every_node() {
+    let mut e = engine();
+    rocket(&mut e);
+    let mut em = plume("fx_nozzle_*");
+    em.effect = "t::pop".into();
+    let pe = spawn_emitter(&mut e, "pops", em);
+    run(&mut e, 2, 1.0 / 60.0);
+    e.world.get::<&mut Emitter>(pe).unwrap().burst += 1.0;
+    run(&mut e, 1, 1.0 / 60.0);
+    // `pop` bursts 12: one burst per node.
+    let recs = records(&e);
+    let want = ["fx_nozzle_0", "fx_nozzle_1", "fx_nozzle_2"].map(|n| node_pos(&e, n));
+    assert_eq!(want.map(|w| born_at(&recs, w)), [12, 12, 12]);
+}
+
+#[test]
+fn exact_node_names_still_attach_to_one_node() {
+    let mut e = engine();
+    rocket(&mut e);
+    spawn_emitter(&mut e, "plume", plume("fx_nozzle_1"));
+    run(&mut e, 30, 1.0 / 60.0);
+    let inst = &e.particles.instances[0];
+    assert!(inst.sites.is_empty());
+    let p = node_pos(&e, "fx_nozzle_1");
+    assert!(inst.frame.pos.distance(p) < 1e-4);
+    let recs = records(&e);
+    assert_eq!(born_at(&recs, p), recs.len());
+    // A one-node pattern is the same single frame.
+    let mut e2 = engine();
+    rocket(&mut e2);
+    spawn_emitter(&mut e2, "plume", plume("fx_pad*"));
+    run(&mut e2, 30, 1.0 / 60.0);
+    assert!(e2.particles.instances[0].sites.is_empty());
+    assert!(e2.particles.instances[0].frame.pos.distance(node_pos(&e2, "fx_pad")) < 1e-4);
+}
+
+#[test]
+fn node_pattern_spawning_is_deterministic() {
+    let mk = || {
+        let mut e = engine();
+        rocket(&mut e);
+        spawn_emitter(&mut e, "plume", plume("fx_nozzle_*"));
+        let mut b = plume("fx_nozzle_*");
+        b.effect = "t::pop".into();
+        spawn_emitter(&mut e, "pops", b);
+        for i in 0..45 {
+            if i % 10 == 0 {
+                let pe = e.names["pops"];
+                e.world.get::<&mut Emitter>(pe).unwrap().burst += 1.0;
+            }
+            e.update_particles(1.0 / 60.0);
+        }
+        records(&e)
+    };
+    let a = mk();
+    assert!(!a.is_empty());
+    assert_eq!(a, mk());
+}
+
+#[test]
+fn node_pattern_re_resolves_when_the_glb_changes() {
+    let mut e = engine();
+    let r = rocket(&mut e);
+    spawn_emitter(&mut e, "plume", plume("fx_nozzle_*"));
+    run(&mut e, 30, 1.0 / 60.0);
+    assert_eq!(e.particles.instances[0].sites.len(), 3);
+    // Swap the model to the two-nozzle launch glb (what `start_model_clip`
+    // does), pose it, and keep emitting.
+    e.world.get::<&mut classic_core::components::Model>(r).unwrap().model = "launch".into();
+    e.update_models(0.0);
+    let t_swap = e.particles.local_time();
+    run(&mut e, 30, 1.0 / 60.0);
+    let inst = &e.particles.instances[0];
+    assert_eq!(inst.sites.len(), 2);
+    let want = [node_pos(&e, "fx_nozzle_0"), node_pos(&e, "fx_nozzle_1")];
+    for (s, w) in inst.sites.iter().zip(&want) {
+        assert!(s.pos.distance(*w) < 1e-4, "{} vs {w}", s.pos);
+    }
+    // Births after the swap come from the new nodes only (no lerp from the
+    // old set's positions).
+    let recs: Vec<_> = records(&e).into_iter().filter(|r| r.t_birth > t_swap).collect();
+    assert!(!recs.is_empty());
+    assert_eq!(born_at(&recs, want[0]) + born_at(&recs, want[1]), recs.len());
+}
+
+#[test]
+fn unmatched_node_pattern_falls_back_to_the_parent_ground_point() {
+    let mut e = engine();
+    rocket(&mut e);
+    spawn_emitter(&mut e, "plume", plume("no_such_*"));
+    run(&mut e, 10, 1.0 / 60.0);
+    let inst = &e.particles.instances[0];
+    assert!(inst.sites.is_empty() && inst.emitting);
+    let base = e.attachment_frame(Some("rocket"), None, Vec3::ZERO, Vec3::Z).unwrap().0;
+    assert!(inst.frame.pos.distance(base) < 1e-4);
+}

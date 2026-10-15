@@ -1046,6 +1046,12 @@ pub struct Emitter {
     pub parent: Option<String>,
     /// Optional glTF node of a `Model` parent: `position`/`dir` are then in
     /// that node's frame (full TRS), so the emitter follows lean and rotation.
+    ///
+    /// A trailing `*` makes it a prefix pattern (`"fx_nozzle_*"`): the one
+    /// effect instance then spawns from **every** matching node of the
+    /// parent's current glb: each node runs the effect's layers at their full
+    /// rate (one plume per node), births dealt round-robin into one shared
+    /// ring per layer (see [`Emitter::node_prefix`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
     /// Spatial scale (spawn volume, speeds and sizes).
@@ -1107,4 +1113,16 @@ impl Emitter {
             enabled: true,
         }
     }
+
+    /// The prefix of a multi-node `node` pattern (`"fx_nozzle_*"` →
+    /// `"fx_nozzle_"`), or `None` for an exact node name / no node.
+    pub fn node_prefix(&self) -> Option<&str> {
+        self.node.as_deref().and_then(node_pattern_prefix)
+    }
+}
+
+/// The prefix of a glTF node pattern with a trailing `*` (`"fx_nozzle_*"` →
+/// `Some("fx_nozzle_")`); `None` for an exact node name.
+pub fn node_pattern_prefix(node: &str) -> Option<&str> {
+    node.strip_suffix('*')
 }

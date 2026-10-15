@@ -132,6 +132,31 @@ impl Engine {
         Some(self.model_placement(tf, &m.tilemap)? * *pose)
     }
 
+    /// World transforms of every node of `m`'s **current** glb whose name
+    /// starts with `prefix`, in glb node order (the multi-node `Emitter.node`
+    /// pattern).  Resolved from the live asset each call, so a clip swap to a
+    /// glb with a different node set re-resolves on the next frame.  Empty
+    /// when nothing matches or the pose is not (yet) sized to this glb.
+    pub(crate) fn model_nodes_world_with_prefix(
+        &self,
+        tf: &Transform,
+        m: &Model,
+        prefix: &str,
+    ) -> Vec<Mat4> {
+        let Some(asset) = self.models.get(&m.model) else { return Vec::new() };
+        if m.node_world.len() != asset.nodes.len() {
+            return Vec::new();
+        }
+        let Some(placement) = self.model_placement(tf, &m.tilemap) else { return Vec::new() };
+        asset
+            .nodes
+            .iter()
+            .zip(&m.node_world)
+            .filter(|(n, _)| n.name.starts_with(prefix))
+            .map(|(_, pose)| placement * *pose)
+            .collect()
+    }
+
     /// Build the per-entity model draws for the `DrawKind::Model` render items.
     pub(crate) fn model_draws(
         &self,
