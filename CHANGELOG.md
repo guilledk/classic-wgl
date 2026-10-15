@@ -102,12 +102,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   current glb whose name has that prefix, each node a spawn site with its
   own full TRS.  An effect describes one plume, so each node runs a
   layer's full `rate` and `burst`; births are dealt to the nodes
-  round-robin (an even, deterministic split) into one shared ring per layer
-  (`max` caps the whole cluster), and one `Animator` drives it all.
-  Lights, ribbons and review framing use the nodes' centroid.  The set re-resolves every frame, following a clip swap to a
-  glb with a different node set.  Exact names attach as before; a pattern
-  matching nothing falls back to the parent's ground point, like a missed
-  exact name.  `Light.node` stays single-node (#130).
+  round-robin (an even, deterministic split) into one shared ring per
+  layer (`max` caps the whole cluster), and one `Animator` drives it all.
+  Lights, ribbons and review framing use the nodes' centroid.  The set
+  re-resolves every frame, following a clip swap to a glb with a
+  different node set.  Exact names attach as before; a pattern matching
+  nothing falls back to the parent's ground point, like a missed exact
+  name.  `Light.node` stays single-node (#130).
 
 ### Fixed
 
