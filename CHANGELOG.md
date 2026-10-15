@@ -55,7 +55,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   dust it raises, and lit particles roll off their highlights instead of
   clipping to white under strong nearby lights.  Particle textures sample
   LINEAR through their own sampler object (each flipbook frame inset half a
-  texel), while the same ROM texture stays NEAREST for sprites.
+  texel), while the same ROM texture stays NEAREST for sprites (#129).
 - Bloom (M4): a soft-knee bright-pass, half- and quarter-resolution
   separable Gaussian blur and an additive composite on RGBA8 targets (no
   float render targets), run only on frames with something emissive on
@@ -77,7 +77,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   and lights frame their resolved attachment via
   `Engine::named_world_point`), `{"tile": [x, y]}` holds an iso tile and
   `{}` releases the pin.  With `CLASSIC_GOLDEN_PNG=<frames>` it frames
-  headless review captures of ROM-authored effects.
+  headless review captures of ROM-authored effects (#129).
 - Guest particle ABI (M5): `fx_emit(effect, x, y, z, dx, dy, dz, scale)`
   one-shots and the handle-based `emitter_spawn`/`emitter_set`/
   `emitter_release` (#127), mirroring the light pool (world metres, `+Z` up;
@@ -96,7 +96,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - `rom:fxtest` names the particle test-bench ROM (desktop `rom_lookup`, web
   `ROM_URLS`).  It is not in the `fetch-roms`/`check-roms` set until it is
   published: until then a locally staged `roms/out/fxtest.rom` boots and
-  the CDN fallback 404s.
+  the CDN fallback 404s (#129).
 
 ### Fixed
 
