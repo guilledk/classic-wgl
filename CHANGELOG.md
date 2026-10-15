@@ -107,7 +107,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   Lights, ribbons and review framing use the nodes' centroid.  The set re-resolves every frame, following a clip swap to a
   glb with a different node set.  Exact names attach as before; a pattern
   matching nothing falls back to the parent's ground point, like a missed
-  exact name.  `Light.node` stays single-node.
+  exact name.  `Light.node` stays single-node (#130).
 
 ### Fixed
 
