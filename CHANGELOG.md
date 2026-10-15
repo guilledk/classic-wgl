@@ -71,7 +71,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   covers every layer kind, spawn shape, ground and render mode (#126).
 - Guest particle ABI (M5): `fx_emit(effect, x, y, z, dx, dy, dz, scale)`
   one-shots and the handle-based `emitter_spawn`/`emitter_set`/
-  `emitter_release`, mirroring the light pool (world metres, `+Z` up;
+  `emitter_release` (#127), mirroring the light pool (world metres, `+Z` up;
   `[native web worker]`, trapping in the Tier-3 worker).  A guest emitter is
   an ordinary `Emitter` entity in a 256-slot pool, so it attaches, traces and
   finishes its particles on release like a scene emitter.  The light pool's
@@ -79,7 +79,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
-- Guest light and emitter handles are generational: a handle packs
+- Guest light and emitter handles are generational (#127): a handle packs
   `(generation << 16) | slot` into a non-negative `i32`, and a release bumps
   the slot's generation.  A guest holding a handle past its release (or past
   a light's TTL) now gets `0` from `light_set`/`light_release`/`emitter_set`/
