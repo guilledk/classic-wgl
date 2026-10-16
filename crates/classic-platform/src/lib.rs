@@ -166,6 +166,24 @@ pub trait Platform {
 pub use classic_rom::FsAssetLoader;
 pub use classic_rom::{AssetBytes, AssetLoader, EmbeddedAssetLoader};
 
+/// Longest real frame delta (seconds) a backend hands the frame callback.
+/// A slower frame (a stall, a backgrounded tab resuming, a software
+/// rasteriser) slows the game down instead of taking one huge step: the
+/// engine's explicit integrators (vehicle springs, animation, particles)
+/// are tuned for ~60 Hz steps.  Every backend clamps through
+/// [`frame_delta`], so native, headless and web agree.
+pub const MAX_FRAME_DT: f32 = 0.1;
+
+/// Clamp a measured frame delta to `[0, MAX_FRAME_DT]` (a non-finite delta
+/// counts as zero).
+pub fn frame_delta(seconds: f32) -> f32 {
+    if seconds.is_finite() {
+        seconds.clamp(0.0, MAX_FRAME_DT)
+    } else {
+        0.0
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ROM source resolution (named registry / file path / URL)
 // ---------------------------------------------------------------------------

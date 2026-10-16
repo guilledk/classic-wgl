@@ -136,23 +136,56 @@ pub(super) fn pitch_index(angle: f32, pitch_max: f32, pitch_levels: u32) -> u32 
     idx.min(levels - 1)
 }
 
-/// Advance a body pitch/roll spring one step (semi-implicit Euler), returning
-/// the new `(angle, vel)`.  Underdamped, so the body bobs with momentum.
-pub(super) fn step_spring(angle: f32, vel: f32, target: f32, dt: f32) -> (f32, f32) {
-    let accel = SPRING_STIFFNESS * (target - angle) - SPRING_DAMPING * vel;
-    let new_vel = vel + accel * dt;
-    (angle + new_vel * dt, new_vel)
+/// Longest single semi-implicit Euler step (seconds) the vehicle springs take.
+/// The scheme is only stable below `2 / damping` (0.133 s for the
+/// suspension); past it every step amplifies the error, so a run of long
+/// frames grew the state to `inf` and then `NaN`.  A longer `dt` is split
+/// into equal sub-steps; at or below this (every fixed-dt golden: 1/60, 0.05)
+/// it is one step, bit-identical to before.
+pub(super) const MAX_SPRING_STEP: f32 = 0.05;
+
+/// Cap on the sub-steps one call takes (bounds the cost of an absurd `dt`):
+/// past `MAX_SPRING_SUBSTEPS × MAX_SPRING_STEP` (3.2 s, long after either
+/// spring settles) the rest of `dt` is dropped rather than taken unstably.
+const MAX_SPRING_SUBSTEPS: u32 = 64;
+
+/// Integrate a damped spring `x'' = k·(target − x) − c·x'` over `dt`, in
+/// sub-steps no longer than [`MAX_SPRING_STEP`].
+fn integrate_spring(x: f32, vel: f32, target: f32, dt: f32, k: f32, c: f32) -> (f32, f32) {
+    let (n, h) = if dt > MAX_SPRING_STEP {
+        let n = (dt / MAX_SPRING_STEP).ceil() as u32;
+        if n > MAX_SPRING_SUBSTEPS {
+            (MAX_SPRING_SUBSTEPS, MAX_SPRING_STEP)
+        } else {
+            (n, dt / n as f32)
+        }
+    } else {
+        (1, dt)
+    };
+    let (mut x, mut vel) = (x, vel);
+    for _ in 0..n {
+        let accel = k * (target - x) - c * vel;
+        vel += accel * h;
+        x += vel * h;
+    }
+    (x, vel)
 }
 
-/// Advance a per-wheel suspension spring one step (semi-implicit Euler),
+/// Advance a body pitch/roll spring by `dt` (semi-implicit Euler, sub-stepped
+/// above [`MAX_SPRING_STEP`]), returning the new `(angle, vel)`.
+/// Underdamped, so the body bobs with momentum.
+pub(super) fn step_spring(angle: f32, vel: f32, target: f32, dt: f32) -> (f32, f32) {
+    integrate_spring(angle, vel, target, dt, SPRING_STIFFNESS, SPRING_DAMPING)
+}
+
+/// Advance a per-wheel suspension spring by `dt` (semi-implicit Euler,
+/// sub-stepped like [`step_spring`]),
 /// returning the new `(height, vel)`.  Kept behind this seam so the spring can
 /// be swapped for a cheaper critically-damped/exponential smoothing (a single
 /// multiply with no velocity state) without touching the chassis-plane logic —
 /// the scale knob for many-vehicle scenes.
 pub(super) fn advance_suspension(height: f32, vel: f32, target: f32, dt: f32) -> (f32, f32) {
-    let accel = SUSP_STIFFNESS * (target - height) - SUSP_DAMPING * vel;
-    let new_vel = vel + accel * dt;
-    (height + new_vel * dt, new_vel)
+    integrate_spring(height, vel, target, dt, SUSP_STIFFNESS, SUSP_DAMPING)
 }
 
 /// Soft dead-zone on a signed slope angle (radians).  Slopes below `dz` are

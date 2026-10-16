@@ -314,7 +314,7 @@ impl Platform for HeadlessPlatform {
 
         while !should_close {
             let now = Instant::now();
-            let delta = (now - prev_time).as_secs_f32().min(0.1);
+            let delta = crate::frame_delta((now - prev_time).as_secs_f32());
             prev_time = now;
 
             on_frame(gl.clone(), &mut input, w, h, delta, &mut should_close);

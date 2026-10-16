@@ -124,6 +124,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   400-tile map resolves only ~0.2 tile near its far edge.  The demo frame
   moves on ~0.3% of pixels, along texel and tile edges, where the old
   lookup rounded.
+- Vehicle springs no longer blow up on long frames.  Their
+  semi-implicit Euler steps are stable only below ~0.13 s; the web loop
+  passed raw frame gaps (no 0.1 s cap, unlike native/headless), so a
+  slow page took 0.7 s steps and the fx gallery's rover went `NaN` and
+  panicked in the wheel travel clamp.  The springs now sub-step at
+  0.05 s (one step, bit-identical, at or below it), every backend caps
+  the frame delta through `classic_platform::frame_delta` (0.1 s), and
+  the wheel clamp cannot panic (#130).
 
 ## [0.3.2] - 2026-10-07
 

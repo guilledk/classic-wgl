@@ -186,6 +186,10 @@ categories:
   `Engine::update_vehicles`), `wheelbase_px`/`track_px` (front-rear / left-right
   axle distances in px), `wheel_tile_offsets` (`[[[f32; 2]; 8]; 4]`), per-wheel
   suspension state (`wheel_h`/`wheel_v`), and the `path`/`path_idx` A* waypoints.
+  Both springs are semi-implicit Euler, stable only below ~0.13 s per step
+  (`2 / damping`), so `kinematics::integrate_spring` sub-steps any `dt` above
+  `MAX_SPRING_STEP` (0.05 s; a single, bit-identical step at or below it).
+  A long frame used to diverge them to `NaN` (`long_frames_through_hops_stay_finite`).
   The body sprite's `frame` indexes a pitch×roll×direction sheet — see
   `classic-iso`.
 

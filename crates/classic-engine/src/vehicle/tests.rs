@@ -8,7 +8,7 @@ use crate::Engine;
 use super::kinematics::{
     advance_suspension, derive_wheel_offsets, dir_to_heading, heading_to_dir, lerp_dir2, lookahead,
     pitch_index, should_reverse, soft_deadzone, steer_index, step_spring, step_steer,
-    straight_steer, wrap_pi,
+    straight_steer, wrap_pi, MAX_SPRING_STEP,
 };
 use super::*;
 
@@ -165,6 +165,35 @@ fn advance_suspension_settles_to_target() {
         v = nv;
     }
     assert!((h - 10.0).abs() < 0.01, "suspension did not settle: {h}");
+}
+
+#[test]
+fn springs_stay_stable_on_long_steps() {
+    // Semi-implicit Euler diverges past `2 / damping` (0.133 s for the
+    // suspension): a slow web frame stream (dt 0.6-0.8 s) grew the state to
+    // `inf`, then `NaN`.  Sub-stepped, any frame length settles.
+    for dt in [0.2f32, 0.7, 2.0, 100.0] {
+        let (mut p, mut pv) = (0.0f32, 0.0f32);
+        let (mut h, mut hv) = (0.0f32, 0.0f32);
+        for _ in 0..200 {
+            (p, pv) = step_spring(p, pv, AIRBORNE_PITCH, dt);
+            (h, hv) = advance_suspension(h, hv, 1.0, dt);
+            assert!(p.is_finite() && pv.is_finite() && h.is_finite() && hv.is_finite());
+        }
+        assert!((p - AIRBORNE_PITCH).abs() < 0.01, "dt {dt}: pitch {p}");
+        assert!((h - 1.0).abs() < 0.01, "dt {dt}: suspension {h}");
+    }
+    // At or below the sub-step length it is the original single step, bit
+    // for bit (the fixed-dt goldens run at 1/60 and 0.05).
+    for dt in [1.0f32 / 60.0, MAX_SPRING_STEP] {
+        let (x, v, target) = (0.3f32, -0.7f32, 0.05f32);
+        let old = |k: f32, c: f32| {
+            let nv = v + (k * (target - x) - c * v) * dt;
+            (x + nv * dt, nv)
+        };
+        assert_eq!(step_spring(x, v, target, dt), old(SPRING_STIFFNESS, SPRING_DAMPING));
+        assert_eq!(advance_suspension(x, v, target, dt), old(SUSP_STIFFNESS, SUSP_DAMPING));
+    }
 }
 
 #[test]
@@ -1461,4 +1490,42 @@ fn touchdown_puff_fires_once_on_landing() {
     }
     assert!(landed_at.is_some_and(|f| f > 10), "the puff waits for the landing");
     assert_eq!(engine.particle_stats().instances, 0, "the one-shot retired, none re-fired");
+}
+
+#[test]
+fn long_frames_through_hops_stay_finite() {
+    // The fx gallery's rover on a ~1 fps software-GL page: it drives over
+    // sloped ground, hops and lands, at dt 0.7 s.  It used to reach `NaN`
+    // within a few frames and panic in the wheel travel clamp.
+    let dt = 0.7;
+    let mut engine = engine_with_lrvtest_like_map(Some(lrvtest_heights()));
+    insert_lrv(&mut engine, lrv_def_real());
+    assert!(engine.spawn_vehicle("lrv", "lrv", 5.0, 5.0));
+    // Start on the east ramp face and drive back across the hill.
+    assert!(engine.vehicle_teleport("lrv", 37.0, 25.0));
+    let body = engine.names["lrv"];
+    {
+        let mut v = engine.world.get::<&mut IsoVehicle>(body).unwrap();
+        v.path = vec![[37, 25], [12, 25]];
+        v.path_idx = 1;
+    }
+    let mut hops = 0;
+    for frame in 0..120 {
+        if frame % 9 == 4 {
+            let mut v = engine.world.get::<&mut IsoVehicle>(body).unwrap();
+            if !v.airborne {
+                v.altitude += 0.5;
+                v.vel_z = 0.4;
+                hops += 1;
+            }
+        }
+        engine.time.delta = dt;
+        engine.update_vehicles();
+        let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+        let state = [v.altitude, v.vel_z, v.pitch, v.pitch_vel, v.roll, v.roll_vel, v.heading];
+        assert!(state.iter().all(|s| s.is_finite()), "frame {frame}: {state:?}");
+        assert!(v.wheel_h.iter().chain(&v.wheel_v).all(|s| s.is_finite()), "frame {frame}");
+        assert!(v.pitch.abs() < 1.0 && v.roll.abs() < 1.0, "frame {frame}: tipped over");
+    }
+    assert!(hops >= 3, "the rover hopped and landed repeatedly ({hops})");
 }

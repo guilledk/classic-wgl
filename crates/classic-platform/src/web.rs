@@ -242,8 +242,13 @@ impl Platform for WebPlatform {
                 let vw = platform.canvas.width() as f32;
                 let vh = platform.canvas.height() as f32;
                 let mut prev = pt.borrow_mut();
-                let real_delta =
-                    if *prev > 0.0 { ((timestamp - *prev) / 1000.0) as f32 } else { 0.016 };
+                // Clamped like native/headless: an unclamped rAF gap (a
+                // slow software-GL frame, a tab resuming) was one huge step.
+                let real_delta = if *prev > 0.0 {
+                    crate::frame_delta(((timestamp - *prev) / 1000.0) as f32)
+                } else {
+                    0.016
+                };
                 *prev = timestamp;
                 (f2.borrow_mut())(gl, &mut inp, vw, vh, real_delta, &mut should_close);
                 inp.end_frame();
