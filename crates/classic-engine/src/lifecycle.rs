@@ -1047,7 +1047,8 @@ impl Engine {
             ppm: PPM_TARGET,
             shadow: None,
         };
-        self.particles.draw(gfx, &cam, &particle_settings, self.trace.as_mut());
+        let zoom = self.camera.scale.x;
+        self.particles.draw(gfx, &cam, zoom, &particle_settings, self.trace.as_mut());
 
         // Bloom (before the UI): only on frames with something emissive on
         // screen, so scenes without effects stay pixel-identical.

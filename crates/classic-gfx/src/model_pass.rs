@@ -27,11 +27,21 @@ pub const MODEL_GHOST_GROUP: u32 = 255;
 const COMPOSITE_COLOR_UNIT: u32 = 4;
 const COMPOSITE_DEPTH_UNIT: u32 = 5;
 
+/// Whether camera `zoom` stretches a sprite texel over more than one screen
+/// pixel, so the offscreen passes render sprite-sized blocks: the model
+/// target (a pass-through otherwise) and the particle pass
+/// ([`crate::particle_pass_target`]), both on the [`model_target_size`]
+/// grid.  A non-positive or non-finite zoom never pixelates.
+pub fn pixelates(zoom: f32) -> bool {
+    zoom.is_finite() && zoom > 1.0
+}
+
 /// The model target size for a main target of `width` x `height` at camera
 /// `zoom`: `ceil(size × min(1, 1/zoom))`, at least 1 px.  A non-positive or
-/// non-finite zoom renders at full resolution.
+/// non-finite zoom renders at full resolution.  The particle pass reuses it
+/// when zoomed in, so particle blocks land on the model blocks' grid.
 pub fn model_target_size(width: u32, height: u32, zoom: f32) -> (u32, u32) {
-    let scale = if zoom.is_finite() && zoom > 1.0 { 1.0 / zoom } else { 1.0 };
+    let scale = if pixelates(zoom) { 1.0 / zoom } else { 1.0 };
     let dim = |d: u32| ((d as f32 * scale).ceil() as u32).max(1);
     (dim(width), dim(height))
 }
@@ -160,6 +170,16 @@ impl Gfx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pixelates_only_past_one_screen_px_per_texel() {
+        for zoom in [1.0001, 1.5, 2.0, 4.0] {
+            assert!(pixelates(zoom), "zoom {zoom}");
+        }
+        for zoom in [-1.0, 0.0, 0.32, 1.0, f32::NAN, f32::INFINITY] {
+            assert!(!pixelates(zoom), "zoom {zoom}");
+        }
+    }
 
     #[test]
     fn model_target_tracks_zoom_only_when_zoomed_in() {

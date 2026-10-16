@@ -816,6 +816,10 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   group — the exact sprite pass states, so a model ghosts behind sprites and
   terrain.  `MODEL_GHOST_GROUP` = 255 is reserved (vehicle groups cycle 1..254).
   No MSAA anywhere (the look depends on hard edges).
+  **Shared grid**: `pixelates(zoom)` and `model_target_size` are also the
+  particle pass's zoomed-in rule (§19), so particles render on this exact
+  target size and screen mapping; change them together, never fork a copy.
+  The grid is fixed to the screen origin (no sub-pixel pan snap).
 - GPU keys: meshes `"{model}::{mesh_index}"` (`Engine.model_gpu`), textures
   `"{model}::image::{i}"` (`Gfx.textures`); the embedded image's CPU pixels are
   dropped after upload.
@@ -862,10 +866,30 @@ form.  No transform feedback, no per-frame CPU simulation.
 - **Lit layers** evaluate the **shared lighting block per vertex** (a
   camera-facing pseudo-normal tilted up); `particle.vert` is pinned by
   `lit_shaders_share_the_lighting_block`.  Emissive layers skip lighting.
-- **Half-res pass** (`particle_pass.rs`): particle layers draw into a half-size
-  target whose `DEPTH24_STENCIL8` is a NEAREST scaled blit of the scene depth,
-  then composite back with the same premultiplied blend (exact "over",
-  LINEAR upscale); a quarter of the shaded pixels.  Ribbons stay full-res.
+- **Particle pass** (`particle_pass.rs`): particle layers draw into an
+  offscreen target whose `DEPTH24_STENCIL8` is a NEAREST scaled blit of the
+  scene depth, then composite back with the same premultiplied blend (exact
+  "over").  Its size and filter follow the zoom
+  (`particle_pass_target(w, h, zoom)`, one rule with the model pass via
+  `pixelates(zoom)` = `zoom > 1`):
+  - **zoomed in** (`ParticlePass::Pixelated`): exactly the model target
+    (`model_target_size`, `ceil(viewport / zoom)`), composited `NEAREST`
+    through the same fullscreen quad mapping as `model_composite`, so a
+    particle texel = sprite texel = model texel and plume blocks share
+    the rocket mesh's grid (the blitted depth is per target cell, so a
+    plume's depth edge against the mesh follows the mesh's own blocks).
+    Ribbons draw into it (last, over every particle) so arcs/lightning
+    pixelate too.  It shades `1/zoom²` of the screen: the zoom-1 full-res
+    cost per world area, ≤ the half-res target from zoom 2 up.
+  - **zoomed out** (`ParticlePass::Soft`, zoom ≤ 1, where a sprite texel is
+    ≤ 1 px and blocks cannot read): half size (`PARTICLE_PASS_DIVISOR`),
+    `LINEAR` upscale; a quarter of the shaded pixels.  Ribbons stay
+    full-res over the composite (half res would only blur a thin bolt).
+  Neither the model nor the particle grid is snapped to the camera's
+  sub-pixel pan (both are fixed to the screen origin), and sprites are not
+  either — each sprite's texel phase follows its own position — so blocks
+  of separate objects line up only between models and particles.
+  Bloom stays a soft full-scene glow on top (it is light, not geometry).
   Always on (no toggle): only a multisampled main framebuffer or a
   depth-blit GL error turns it off for good (full-res fallback, logged).
   The web canvas is therefore created with `antialias: false` (the browser
@@ -883,7 +907,7 @@ form.  No transform feedback, no per-frame CPU simulation.
   quarter res, additive composite.  RGBA8 only (no float RT on WebGL2).
   Always on (no toggle); the engine skips it only on frames with nothing
   emissive live, so effect-free scenes are pixel-identical.
-- **Texture units**: particles 6, bloom 7–8, smoke noise 9, half-res composite 10
+- **Texture units**: particles 6, bloom 7–8, smoke noise 9, particle composite 10
   (sprites 0–2, shadow 3, model
   composite 4–5).  ROM textures load `NEAREST` for the sprites; the particle
   draw binds a LINEAR/clamp **sampler object** on unit 6 (and unbinds it

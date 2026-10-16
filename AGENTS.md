@@ -153,7 +153,8 @@ create a `plans/` dir here (`.gitignore` keeps `/plans/` as a guard).
   depth), between the terrain and the sprite passes.  Models keep the sprite
   pixel look: they render into a `NEAREST` pixelation target at the sprite
   texel size (`viewport × min(1, 1/zoom)`) that is composited back with its
-  depth, and ghost at 40% behind sprites/terrain like sprites do.  `classic_core::model`
+  depth, and ghost at 40% behind sprites/terrain like sprites do.  Zoomed in,
+  particles render on that same pixel grid (`classic-gfx` §19).  `classic_core::model`
   parses + samples clips; `Engine::update_models` advances them and caches the
   pose (`Model.node_world`) and the rig-origin translation (`Model.frame_offset`,
   which a parented `Light` tracks); guests restart clips with

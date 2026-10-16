@@ -109,6 +109,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   different node set.  Exact names attach as before; a pattern matching
   nothing falls back to the parent's ground point, like a missed exact
   name.  `Light.node` stays single-node (#130).
+- Particles pixelate like models when zoomed in.  At zoom > 1 the
+  particle pass renders into a target the size of the model pixelation
+  target (`model_target_size`, `viewport × 1/zoom`) and composites it
+  `NEAREST`, so a particle texel is a sprite texel and a plume's blocks
+  sit on the rocket mesh's pixel grid; arc and lightning ribbons draw
+  into it too.  At zoom ≤ 1 nothing changes: soft half-res, `LINEAR`,
+  ribbons full-res.  Zoomed in, the target shades `1/zoom²` of the
+  screen, never more than the half-res target from zoom 2 up.
 
 ### Fixed
 

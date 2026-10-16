@@ -32,7 +32,7 @@ use classic_core::math::{iso_camera_matrix, iso_view_depth};
 use classic_core::tilemap::{sample_height_mesh, TILE_M};
 use classic_core::{RoleKind, Transform};
 use classic_gfx::{
-    DynamicVb, Gfx, ParticleGpu, ParticleLayerUniforms, ParticleRing, RenderSettings,
+    DynamicVb, Gfx, ParticleGpu, ParticleLayerUniforms, ParticlePass, ParticleRing, RenderSettings,
 };
 use glam::{Mat3, Mat4, Vec3};
 
@@ -1124,12 +1124,14 @@ fn update_ribbon(
 
 impl ParticleSystem {
     /// Phase 3c: draw every live instance (back to front by origin depth),
-    /// then every ribbon.  Pushes one `Particles` trace item per drawn layer
-    /// and one `Ribbons` item when any ribbon is live.
+    /// then every ribbon, through the particle pass for camera `zoom`
+    /// (`classic_gfx::particle_pass_target`).  Pushes one `Particles` trace
+    /// item per drawn layer and one `Ribbons` item when any ribbon is live.
     pub fn draw(
         &mut self,
         gfx: &mut Gfx,
         camera: &Mat4,
+        zoom: f32,
         settings: &RenderSettings,
         mut trace: Option<&mut TraceCollector>,
     ) {
@@ -1148,15 +1150,20 @@ impl ParticleSystem {
             da.total_cmp(&db).then(self.instances[a].id.cmp(&self.instances[b].id))
         });
         self.ribbon_verts.clear();
-        // Half-res pass only when a particle layer will actually draw (it costs
-        // a depth blit + a composite).  Always on; `begin_particle_pass` falls
-        // back to full resolution only on its safety paths (logged).
-        let any_particles = self.instances.iter().any(|inst| {
-            inst.layers
-                .iter()
-                .any(|l| matches!(l, LayerRt::Particles(p) if p.ring.last_death() >= t))
+        // The offscreen pass only when something will draw into it (it costs a
+        // depth blit + a composite): a live particle layer, or — zoomed in,
+        // where ribbons pixelate with the particles — a live ribbon.  Always
+        // on; `begin_particle_pass` falls back to full resolution only on its
+        // safety paths (logged).
+        let pixelated = classic_gfx::pixelates(zoom);
+        let wants_pass = self.instances.iter().any(|inst| {
+            inst.layers.iter().any(|l| match l {
+                LayerRt::Particles(p) => p.ring.last_death() >= t,
+                LayerRt::Ribbon(r) => pixelated && !r.strands.is_empty(),
+                LayerRt::Light(_) => false,
+            })
         });
-        let half_res = any_particles && gfx.begin_particle_pass();
+        let pass = if wants_pass { gfx.begin_particle_pass(zoom) } else { ParticlePass::Off };
         // Two phases, each back to front by instance origin: every alpha
         // (absorbing) layer first, then every glowing layer (additive or
         // emissive).  Particles write no depth, so draw order decides who
@@ -1228,9 +1235,30 @@ impl ParticleSystem {
                 }
             }
         }
-        if half_res {
+        // Ribbons draw last (over every particle): inside the pass when it
+        // pixelates, so arcs and lightning share the sprite/model blocks;
+        // otherwise full-res over the composite (a soft half-res target would
+        // only blur a thin bolt).
+        let ribbons_in_pass = pass == ParticlePass::Pixelated;
+        if ribbons_in_pass {
+            self.draw_ribbons(gfx, camera, trace.as_deref_mut());
+        }
+        if pass != ParticlePass::Off {
             gfx.end_particle_pass();
         }
+        if !ribbons_in_pass {
+            self.draw_ribbons(gfx, camera, trace);
+        }
+    }
+
+    /// Upload and draw the ribbon vertices built by [`ParticleSystem::draw`]
+    /// into whatever target is bound (one `Ribbons` trace item).
+    fn draw_ribbons(
+        &mut self,
+        gfx: &mut Gfx,
+        camera: &Mat4,
+        mut trace: Option<&mut TraceCollector>,
+    ) {
         if !self.ribbon_verts.is_empty() {
             let count = (self.ribbon_verts.len() / RIBBON_VERTEX_FLOATS) as i32;
             let vb = self.ribbon_vb.get_or_insert_with(|| DynamicVb::new(&gfx.gl, 1 << 16));
