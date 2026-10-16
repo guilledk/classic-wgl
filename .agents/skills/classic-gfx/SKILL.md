@@ -868,6 +868,9 @@ form.  No transform feedback, no per-frame CPU simulation.
   LINEAR upscale); a quarter of the shaded pixels.  Ribbons stay full-res.
   Always on (no toggle): only a multisampled main framebuffer or a
   depth-blit GL error turns it off for good (full-res fallback, logged).
+  The web canvas is therefore created with `antialias: false` (the browser
+  default `true` is multisampled and silently disabled the pass on the web
+  only); its `depth` + `stencil` default framebuffer is `DEPTH24_STENCIL8`.
 - **Fill cost**: the smoke shape reads one baked tileable noise texel
   (`bake_noise`: value + slope) instead of evaluating value noise per pixel,
   and every procedural shape discards outside the unit disc first.

@@ -101,7 +101,9 @@ and `trunk` for the build pipeline.
 
 ### Initialization (`WebPlatform::new(canvas_id)`)
 1. Gets the `<canvas>` element by ID
-2. Obtains a `WebGL2RenderingContext`
+2. Obtains a `WebGL2RenderingContext` with `stencil: true` and
+   `antialias: false` (single-sampled like native; a multisampled canvas
+   disables the half-res particle pass — `classic-gfx` §19)
 3. Wraps it in `glow::Context::from_webgl2_context()`
 4. Creates `Rc<RefCell<InputState>>` shared across all event closures
 5. Sets canvas pixel dimensions to `window.innerWidth/innerHeight`

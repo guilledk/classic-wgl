@@ -124,6 +124,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   400-tile map resolves only ~0.2 tile near its far edge.  The demo frame
   moves on ~0.3% of pixels, along texel and tile edges, where the old
   lookup rounded.
+- The web canvas is created with `antialias: false`, like the native
+  window.  The browser default made it multisampled, which the half-res
+  particle pass cannot blit depth from, so web particles always drew at
+  full resolution: a zoomed-in rocket landing halved the frame rate.
+  Terrain edges are now aliased exactly as on native (#130).
 - Vehicle springs no longer blow up on long frames.  Their
   semi-implicit Euler steps are stable only below ~0.13 s; the web loop
   passed raw frame gaps (no 0.1 s cap, unlike native/headless), so a
