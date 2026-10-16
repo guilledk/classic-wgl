@@ -116,7 +116,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   sit on the rocket mesh's pixel grid; arc and lightning ribbons draw
   into it too.  At zoom ≤ 1 nothing changes: soft half-res, `LINEAR`,
   ribbons full-res.  Zoomed in, the target shades `1/zoom²` of the
-  screen, never more than the half-res target from zoom 2 up.
+  screen, never more than the half-res target from zoom 2 up (#131).
 
 ### Fixed
 
