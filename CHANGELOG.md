@@ -94,9 +94,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   by the impact speed.  Vehicles without the keys spawn nothing and dump
   unchanged.
 - `rom:fxtest` names the particle test-bench ROM (desktop `rom_lookup`, web
-  `ROM_URLS`).  It is not in the `fetch-roms`/`check-roms` set until it is
-  published: until then a locally staged `roms/out/fxtest.rom` boots and
-  the CDN fallback 404s (#129).
+  `ROM_URLS`), fetched by `fetch-roms` and pinned in `roms.lock.json` with
+  the other published ROMs (#129, #130).
 - Multi-node emitters: an `Emitter.node` ending in `*` (`"fx_nozzle_*"`)
   attaches the one effect instance to every node of the parent `Model`'s
   current glb whose name has that prefix, each node a spawn site with its

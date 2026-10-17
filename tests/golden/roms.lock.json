@@ -1,15 +1,15 @@
 {
   "common": {
-    "size": 275873,
-    "sha256": "c72ada92933c3ee5a94750ba96b732519ef31b72dc314a24621404fa94c9670f",
-    "version": "0.1.0",
-    "assets_hash": "7ff765037d79d8a245889a8c383c6c36a5d2121a549d46083fe45b9cccaff97a"
+    "size": 275864,
+    "sha256": "41340804ad513238d29008ef98f8dda9b2b245b1a77f7a22a2fe36246d03ec91",
+    "version": "0.1.1",
+    "assets_hash": "a96067139453ce366f33f677ec9fa66057902c3de3314600eef9437c66884b9d"
   },
   "lunar-common": {
-    "size": 5484144,
-    "sha256": "8e416f197308c10b8b40824ec1dd5d9d2d41fd498cc117460daff1a9ef018d5f",
-    "version": "0.1.1",
-    "assets_hash": "b8fcf013a82beeb0e24dc20753c4499ef36391d62b47a87089f80c68b8113d5a"
+    "size": 6068262,
+    "sha256": "e1c150146fc2170bee9eee65fa61413ddc7b474003b9a9b836616537e9f57205",
+    "version": "0.1.2",
+    "assets_hash": "5edb80a93f2940cc83c4c4f3d86c60feb56f03d9b2633ee6bdb162d0ea51ceb0"
   },
   "demo": {
     "size": 879077,
@@ -18,10 +18,10 @@
     "assets_hash": "af490fb850722720c655fc06f9b61ed1485603f4112201afae2371c434f03850"
   },
   "lunar": {
-    "size": 595260,
-    "sha256": "8b7d460da4c0dc18c6f779e6cbb2fac00ac95abe3243feb0299e578f83df67a0",
-    "version": "0.4.0",
-    "assets_hash": "6f08834354b527458530bbca82d3cfce403122d360826454aa276e64010764fc"
+    "size": 595950,
+    "sha256": "8cca8b0aa762a82ce72379d8f12041fa234d396601b16330aea0a0dad62cad9f",
+    "version": "0.5.0",
+    "assets_hash": "d80c0887a47f30a5c764db16d43abdbd83e862067f622c95f8ed3235f974035f"
   },
   "lrvtest": {
     "size": 1874,
@@ -34,5 +34,11 @@
     "sha256": "52a240d6bcf659df64c62b38cf22d86991a5854ebe9d0dd1d7fdf583d7222324",
     "version": "0.1.0",
     "assets_hash": "dd4221394174cc2f8f0ccff2ef90a322c03c83b9738dbd716f8b3a76b02ab28b"
+  },
+  "fxtest": {
+    "size": 2094,
+    "sha256": "472c4016c905be2a09bc149dcb825506ec56254787c2c7013cd02d6877751d78",
+    "version": "0.1.1",
+    "assets_hash": "dd257101e176a186257c2f8f895978f0fbe2d946f13fc67a4c5eb0902ed4c7a6"
   }
 }
