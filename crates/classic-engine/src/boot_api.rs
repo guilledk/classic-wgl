@@ -1484,9 +1484,9 @@ impl Engine {
         heights: Vec<f32>,
         height_scale: Option<f32>,
     ) {
-        let (tile_set_name, size_x, size_y, tile_pixel_size) = {
+        let (tile_set_name, size_x, size_y, tile_pixel_size, blend_cfg) = {
             let tm = self.world.get::<&Tilemap>(entity).expect("Tilemap component");
-            (tm.tile_set.clone(), tm.size_x, tm.size_y, tm.tile_pixel_size)
+            (tm.tile_set.clone(), tm.size_x, tm.size_y, tm.tile_pixel_size, tm.blend.clone())
         };
 
         let height_scale = height_scale.unwrap_or(tile_pixel_size[0] as f32);
@@ -1503,6 +1503,9 @@ impl Engine {
 
         // Upload tile data texture.
         let tile_tex = Engine::upload_data_texture(&gfx.gl, &tile_pixels, tw, th);
+        let blend = blend_cfg
+            .as_ref()
+            .map(|cfg| Engine::upload_tile_blend(gfx, cfg, &tile_set_name, tile_pixel_size[0]));
 
         // Store tile data on the component.
         if let Ok(mut tm) = self.world.get::<&mut Tilemap>(entity) {
@@ -1519,7 +1522,8 @@ impl Engine {
         }
 
         let name = self.debug_name(entity);
-        self.tilemap_gpu.insert(name, TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex });
+        self.tilemap_gpu
+            .insert(name, TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex, blend });
 
         // Register updateMousePos: convert screen coords → iso tile coords by
         // casting the cursor through the world-metre ground plane and

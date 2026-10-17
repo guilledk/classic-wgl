@@ -8,6 +8,32 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in terrain material blending, `Tilemap.blend` (serde default off, so
+  every scene without it renders as before).  The tilemap shader warps the
+  tile-id lookup with a deterministic low-frequency noise, fetches the 2x2
+  ids around the half-tile-shifted lattice point and resolves their atlas
+  cells: per-class bilinear membership gives material boundaries a smooth,
+  marching-squares contour instead of the tile staircase, sharpened to a
+  narrow `width` band; variants of one material resolve on smooth weights,
+  hiding the tile grid.  With `height_strength > 0` the tileset alpha is
+  per-texel height and decides transitions with a per-class `priority`; a
+  class may be `hard`.  Classes come from the scene (`materials[]`), uploaded
+  as a 256x1 lookup table.  Blended tilesets get a capped mip chain sampled
+  at an explicit LOD, so zoomed-out terrain stops aliasing into moire;
+  magnification stays `NEAREST`.  Flat single-id areas cost one atlas
+  sample.  The nav overlay never blends.
+
+### Fixed
+
+- Tilemap map coordinates are `highp` end to end (varying, `map_size`) and
+  the tile id is a `texelFetch` of the integer cell.  At `mediump` (fp16 on
+  real mobile GPUs, and in Mesa's llvmpipe) the normalized map coordinate of a
+  400-tile map resolves only ~0.2 tile near its far edge.  The demo frame
+  moves on ~0.3% of pixels, along texel and tile edges, where the old
+  lookup rounded.
+
 ## [0.3.2] - 2026-10-07
 
 ### Added

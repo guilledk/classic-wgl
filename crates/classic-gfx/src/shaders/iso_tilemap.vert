@@ -13,7 +13,7 @@ uniform mat4 model_matrix;
 uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
 
-uniform mediump vec2 map_size;
+uniform highp vec2 map_size;
 uniform mediump vec2 tile_pixel_size;
 // Camera view-depth bounds `[near, far]` (metres).  `near` is the closest view
 // depth (most positive `dot(back, world)`), `far` the farthest; `near > far`
@@ -22,7 +22,7 @@ uniform vec2 depth_span;
 // Pixels per metre (`PPM_TARGET`) — the raster scale of the camera view.
 uniform float ppm;
 
-out mediump vec2 vMapCoord;
+out highp vec2 vMapCoord;
 out mediump float vTileId;
 out highp vec3 vNormal;
 out highp vec3 vLightPos;

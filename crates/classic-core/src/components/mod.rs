@@ -175,10 +175,106 @@ pub struct Tilemap {
     pub selection_iso_begin: Vec3,
     #[serde(skip, default = "default_iso_sel")]
     pub selection_iso_end: Vec3,
+    /// Opt-in material blending between neighbouring tiles (see
+    /// [`TileBlend`]).  `None` (the default, and what an absent `blend` key
+    /// deserializes to) keeps the classic one-id-per-tile, hard-edged look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend: Option<TileBlend>,
 }
 
 fn default_iso_sel() -> Vec3 {
     Vec3::new(-1.0, -1.0, -1.0)
+}
+
+/// Terrain material blending for a [`Tilemap`].
+///
+/// With blending on, the tilemap fragment shader stops sampling only the
+/// tile it falls in: it fetches the 2x2 tile ids around a noise-warped,
+/// half-tile-shifted lattice point and resolves their atlas cells, so a
+/// material boundary follows a smooth, organic contour (cutting across the
+/// tile staircase, marching-squares style) instead of square tile edges.
+/// All lengths are in **tiles**.
+///
+/// Tile ids are grouped into material *classes* by [`TileBlend::materials`]
+/// (the variants of one material share a class; an id no entry lists is its
+/// own class).  Across classes the transition is a band about `width` wide
+/// and, when `height_strength > 0`, resolved by height: the tileset's alpha is
+/// then per-texel height (not opacity) and, with the class priority, decides
+/// which material shows near the contour.  The variants of one class resolve
+/// the same way on smooth whole-tile weights, which hides the tile grid on
+/// single-material ground.  Minified terrain samples a capped mip chain of
+/// the tileset (built by the engine) instead of aliasing.
+///
+/// Opt-in: a tilemap without `blend` renders exactly as before.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TileBlend {
+    /// Width of the cross-class transition band, in tiles (`0` = crisp edge;
+    /// a wide band exposes the tile staircase as a blur, so keep it narrow).
+    #[serde(default = "TileBlend::default_width")]
+    pub width: f32,
+    /// Edge-warp noise frequency, in cycles per tile.
+    #[serde(default = "TileBlend::default_noise_scale")]
+    pub noise_scale: f32,
+    /// Edge-warp noise amplitude, in tiles (`0` = straight transitions).
+    #[serde(default = "TileBlend::default_noise_strength")]
+    pub noise_strength: f32,
+    /// How strongly the per-texel height (tileset alpha) and the material
+    /// priority decide a transition.  `0` disables height-based blending and
+    /// leaves the tileset alpha meaning opacity.
+    #[serde(default)]
+    pub height_strength: f32,
+    /// Material classes; see [`TileBlendMaterial`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<TileBlendMaterial>,
+}
+
+impl TileBlend {
+    // Defaults are the values tuned on the lunar map: a narrow band, and a
+    // warp that meanders a contour over a few tiles (warping only moves the
+    // id lookup; the textures themselves are never distorted).
+    fn default_width() -> f32 {
+        0.3
+    }
+    fn default_noise_scale() -> f32 {
+        0.35
+    }
+    fn default_noise_strength() -> f32 {
+        1.2
+    }
+}
+
+impl Default for TileBlend {
+    fn default() -> Self {
+        Self {
+            width: Self::default_width(),
+            noise_scale: Self::default_noise_scale(),
+            noise_strength: Self::default_noise_strength(),
+            height_strength: 0.0,
+            materials: Vec::new(),
+        }
+    }
+}
+
+/// One material class of a [`TileBlend`]: the tile ids that are variants of
+/// the same material, plus how that material behaves at a boundary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TileBlendMaterial {
+    /// Free-form label (documentation only; a scene can name its classes).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Tile ids in this class (`1..=255`).  An id listed by more than one
+    /// entry belongs to the first.
+    pub ids: Vec<u32>,
+    /// Height bias in `[0, 1]` added to the per-texel height before the
+    /// height blend: a higher-priority material wins its transitions (rock
+    /// pokes through dust rather than dust through rock).
+    #[serde(default)]
+    pub priority: f32,
+    /// Keep this material's edges crisp: wherever it meets another class the
+    /// transition band collapses to a hard (still noise-warped) edge with no
+    /// height mix.  Its variants still cross-fade among themselves.
+    #[serde(default)]
+    pub hard: bool,
 }
 
 impl Tilemap {

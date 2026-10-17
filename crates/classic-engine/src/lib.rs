@@ -76,6 +76,9 @@ struct TilemapGpu {
     mesh_buf: GlBuffer,
     vertex_count: usize,
     tile_tex: glow::Texture,
+    /// Material-blend uniforms + uploaded lookup table, when the tilemap opts
+    /// in (`Tilemap.blend`).  Always `None` for the nav overlay.
+    blend: Option<classic_gfx::TileBlend>,
 }
 
 /// Per-texture depth-mask metadata, keyed by the color texture name.  When a
@@ -572,6 +575,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let entity = engine.world.spawn((
             tilemap,
@@ -619,6 +623,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let tilemap_tf = Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0));
 
@@ -761,6 +766,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let tm = engine.world.spawn((
             tilemap,
@@ -839,6 +845,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::splat(-1.0),
             selection_iso_end: Vec3::splat(-1.0),
+            blend: None,
         };
         let tm = engine.world.spawn((
             tilemap,
@@ -899,6 +906,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
             selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
         };
         let tm = engine.world.spawn((
             tilemap,

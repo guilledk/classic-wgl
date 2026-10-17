@@ -255,6 +255,7 @@ fn install_test_tilemap(engine: &mut Engine) {
         mouse_iso_pos: Vec3::ZERO,
         selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
         selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        blend: None,
     };
     let entity = engine.world.spawn((tilemap, Role::new(RoleKind::Tilemap)));
     engine.names.insert("tilemap".into(), entity);
@@ -1190,6 +1191,7 @@ fn bulk_terrain_upload_populates_empty_grids() {
         mouse_iso_pos: Vec3::ZERO,
         selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
         selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+        blend: None,
     };
     let tm_entity = engine.world.spawn((tilemap, Role::new(RoleKind::Tilemap)));
     engine.names.insert("tilemap".into(), tm_entity);

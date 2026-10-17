@@ -11,6 +11,9 @@ pub struct GlTexture {
     texture: glow::Texture,
     /// Image pixel dimensions.
     pub size: (u32, u32),
+    /// Uploaded as GPU-compressed blocks: `glGenerateMipmap` cannot build a
+    /// chain for it.
+    compressed: bool,
 }
 
 impl GlTexture {
@@ -55,7 +58,7 @@ impl GlTexture {
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
-        Self { texture, size: (width, height) }
+        Self { texture, size: (width, height), compressed: false }
     }
 
     /// Upload RGBA8 pixel data to a new 2D texture.
@@ -112,7 +115,7 @@ impl GlTexture {
             );
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
-        Self { texture, size: (width, height) }
+        Self { texture, size: (width, height), compressed: true }
     }
 
     /// Set LINEAR filtering (used for SDF atlas).
@@ -123,6 +126,33 @@ impl GlTexture {
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
+    }
+
+    /// Give a tile atlas a mip chain for minification, capped at
+    /// `max_level`, keeping `NEAREST` magnification (the pixel look up close).
+    /// Within a level the lookup stays `NEAREST`, so a texel never mixes with
+    /// its neighbouring atlas cell; the cap keeps a level from merging cells
+    /// (a power-of-two cell of `2^k` px survives up to level `k`).  Used by the
+    /// blended terrain, which samples with an explicit LOD.
+    /// Returns `false` (and changes nothing) for a compressed texture, which
+    /// cannot generate one.
+    pub fn enable_atlas_mipmaps(&self, gl: &glow::Context, max_level: i32) -> bool {
+        if self.compressed {
+            return false;
+        }
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, max_level);
+            gl.generate_mipmap(glow::TEXTURE_2D);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST_MIPMAP_LINEAR as i32,
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+        true
     }
 
     /// Bind to a texture unit (0 = TEXTURE0, etc.).

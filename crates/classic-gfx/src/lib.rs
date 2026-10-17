@@ -91,6 +91,27 @@ pub struct RenderSettings {
     pub shadow: Option<ShadowSettings>,
 }
 
+/// Texture unit the tilemap's material-blend lookup table binds to (units 0/1
+/// are the tile data + tileset, 3 the shadow map).
+pub const BLEND_LUT_UNIT: u32 = 2;
+
+/// Material-blend uniforms for [`Gfx::draw_tilemap`] (the engine-side mirror
+/// of `classic_core::components::TileBlend`).  `None` keeps the classic
+/// one-id-per-tile path.  Lengths are in tiles.
+#[derive(Clone, Copy)]
+pub struct TileBlend {
+    /// `256x1` RGBA8 class/priority/hard table
+    /// (`classic_core::tilemap::build_blend_lut`), `NEAREST`.
+    pub lut: glow::Texture,
+    pub width: f32,
+    /// Highest tileset mip level the explicit-LOD lookup may use (`0` when the
+    /// tileset has no mip chain).
+    pub max_lod: f32,
+    pub noise_scale: f32,
+    pub noise_strength: f32,
+    pub height_strength: f32,
+}
+
 /// The directional shadow map consumed by the lit shaders.
 #[derive(Clone, Copy)]
 pub struct ShadowSettings {

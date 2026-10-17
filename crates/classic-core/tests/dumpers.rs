@@ -51,6 +51,7 @@ fn tilemap_dumper_round_trip_keys() {
         mouse_iso_pos: [0.0, 0.0, 0.0].into(),
         selection_iso_begin: [-1.0, -1.0, -1.0].into(),
         selection_iso_end: [-1.0, -1.0, -1.0].into(),
+        blend: None,
     };
 
     let mut world = hecs::World::new();
@@ -406,4 +407,85 @@ fn light_dumper_round_trips() {
     assert_eq!(round_tripped.position.x, 10.0);
     assert_eq!(round_tripped.radius, 150.0);
     assert_eq!(round_tripped.cone_angle, 0.8);
+}
+
+/// A scene-authored `Tilemap.blend` spawns through the registry and dumps back
+/// unchanged, and a tilemap without one stays blend-free (and emits no key) —
+/// the opt-in that keeps every other scene on the classic hard-edged path.
+#[test]
+fn tilemap_blend_spawn_dump_round_trip() {
+    use classic_core::components::{TileBlend, TileBlendMaterial};
+    register_all_components();
+    let regs = classic_core::registry::ordered_regs();
+    let reg = regs.iter().find(|r| r.name == "Tilemap").unwrap();
+
+    let authored = serde_json::json!({
+        "position": [0, 0, 0],
+        "scale": [45, 45, 1],
+        "size_x": 4,
+        "size_y": 4,
+        "tile_set": "lunarTileset",
+        "tile_pixel_size": [32, 32],
+        "max_tile": 24,
+        "blend": {
+            "width": 0.4,
+            "noise_scale": 1.25,
+            "noise_strength": 0.25,
+            "height_strength": 0.6,
+            "materials": [
+                { "name": "mare", "ids": [1, 2, 3] },
+                { "name": "rock", "ids": [14, 15, 16], "priority": 0.5 },
+                { "ids": [23, 24], "hard": true }
+            ]
+        }
+    });
+    let mut world = hecs::World::new();
+    let mut builder = hecs::EntityBuilder::new();
+    (reg.spawn)(&mut builder, authored.clone()).unwrap();
+    let e = world.spawn(builder.build());
+    let expected = TileBlend {
+        width: 0.4,
+        noise_scale: 1.25,
+        noise_strength: 0.25,
+        height_strength: 0.6,
+        materials: vec![
+            TileBlendMaterial {
+                name: "mare".into(),
+                ids: vec![1, 2, 3],
+                priority: 0.0,
+                hard: false,
+            },
+            TileBlendMaterial {
+                name: "rock".into(),
+                ids: vec![14, 15, 16],
+                priority: 0.5,
+                hard: false,
+            },
+            TileBlendMaterial { name: String::new(), ids: vec![23, 24], priority: 0.0, hard: true },
+        ],
+    };
+    assert_eq!(world.get::<&Tilemap>(e).unwrap().blend.as_ref(), Some(&expected));
+
+    let dumped = reg.dump_value(&world, e).unwrap();
+    assert_eq!(dumped["blend"]["materials"][1]["priority"], 0.5);
+    assert!(dumped["blend"]["materials"][2].get("name").is_none(), "empty name not emitted");
+    let mut fields = dumped.as_object().unwrap().clone();
+    fields.remove("type");
+    let mut builder = hecs::EntityBuilder::new();
+    (reg.spawn)(&mut builder, serde_json::Value::Object(fields)).unwrap();
+    let back = world.spawn(builder.build());
+    assert_eq!(world.get::<&Tilemap>(back).unwrap().blend.as_ref(), Some(&expected));
+
+    // Opt-in: no `blend` key -> no blending, and none is dumped.
+    let mut plain = authored;
+    plain.as_object_mut().unwrap().remove("blend");
+    let mut builder = hecs::EntityBuilder::new();
+    (reg.spawn)(&mut builder, plain).unwrap();
+    let p = world.spawn(builder.build());
+    assert!(world.get::<&Tilemap>(p).unwrap().blend.is_none());
+    assert!(reg.dump_value(&world, p).unwrap().get("blend").is_none());
+
+    // Omitted knobs take the documented defaults.
+    let partial: TileBlend = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(partial, TileBlend::default());
 }

@@ -249,6 +249,7 @@ mod tests {
             mouse_iso_pos: Vec3::ZERO,
             selection_iso_begin: Vec3::splat(-1.0),
             selection_iso_end: Vec3::splat(-1.0),
+            blend: None,
         };
         let tm = e.world.spawn((
             tilemap,
