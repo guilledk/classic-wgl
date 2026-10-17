@@ -490,3 +490,33 @@ fn tilemap_blend_spawn_dump_round_trip() {
     let partial: TileBlend = serde_json::from_value(serde_json::json!({})).unwrap();
     assert_eq!(partial, TileBlend::default());
 }
+
+/// `IsoVehicle.dust_effect`/`touchdown_effect` spawn from scene JSON and dump
+/// back, and a vehicle without them emits no keys — so every existing scene
+/// dumps byte-identically.
+#[test]
+fn iso_vehicle_dust_effects_spawn_and_dump_only_when_set() {
+    register_all_components();
+    let regs = classic_core::registry::ordered_regs();
+    let reg = regs.iter().find(|r| r.name == "IsoVehicle").unwrap();
+    let mut world = hecs::World::new();
+
+    let plain = world.spawn((classic_core::components::IsoVehicle::default(),));
+    let val = reg.dump_value(&world, plain).unwrap();
+    assert!(val.get("dust_effect").is_none() && val.get("touchdown_effect").is_none());
+
+    let mut fields = val.as_object().unwrap().clone();
+    fields.remove("type");
+    fields.insert("dust_effect".into(), "fx::lrv_dust".into());
+    fields.insert("touchdown_effect".into(), "fx::touchdown_puff".into());
+    let mut builder = hecs::EntityBuilder::new();
+    (reg.spawn)(&mut builder, serde_json::Value::Object(fields)).unwrap();
+    let dusty = world.spawn(builder.build());
+    let v = world.get::<&classic_core::components::IsoVehicle>(dusty).unwrap();
+    assert_eq!(v.dust_effect.as_deref(), Some("fx::lrv_dust"));
+    assert_eq!(v.touchdown_effect.as_deref(), Some("fx::touchdown_puff"));
+    drop(v);
+    let back = reg.dump_value(&world, dusty).unwrap();
+    assert_eq!(back["dust_effect"], "fx::lrv_dust");
+    assert_eq!(back["touchdown_effect"], "fx::touchdown_puff");
+}

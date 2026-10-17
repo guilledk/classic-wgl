@@ -897,6 +897,8 @@ form.  No transform feedback, no per-frame CPU simulation.
   §3c); a guest emitter is an ordinary `Emitter` entity named
   `guest_emitter#<serial>` — a never-reused name, because instance ids hash
   the debug name and an unnamed entity falls back to its recycled index.
+  Vehicles drive their own per-wheel dust emitters and touchdown one-shots
+  (`IsoVehicle.dust_effect`/`touchdown_effect`, `classic-ecs` "Vehicles").
 - **Coverage**: `classic-core` `tests/fixtures/effects.json` is the
   reference library (one effect per look); `tests/effects_library.rs` keeps
   every layer kind, spawn shape, ground/render mode, shape and blend in it.

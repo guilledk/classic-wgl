@@ -12,6 +12,7 @@
 //! positions/frames/anchors/offsets into the five sprites.
 
 mod control;
+mod dust;
 mod kinematics;
 mod sim;
 #[cfg(test)]
@@ -34,6 +35,26 @@ const SUSP_DAMPING: f32 = 15.0;
 /// frames provide at a wheel, and the compression is this fraction of it, so a
 /// single-wheel bump compresses the wheel more than it lifts the body.
 const COMPRESS_RATIO: f32 = 0.5;
+
+/// A wheel within this height (metres) of its terrain counts as touching it
+/// for dust.
+const DUST_CONTACT_M: f32 = 0.05;
+/// Ground speed (metres/second) at which a dust effect plays as authored:
+/// each wheel emitter's `rate` and `speed` multipliers are `speed / REF`.
+const DUST_REF_SPEED: f32 = 2.0;
+/// Floor of the dust `speed` multiplier, so bursts from a standing start
+/// still leave the ground.
+const DUST_MIN_SPEED_MUL: f32 = 0.35;
+/// Bursts each wheel fires per metre/second of speed change (starting,
+/// stopping and speed steps kick up a puff on top of the rate).
+const DUST_BURSTS_PER_MPS: f32 = 1.5;
+/// How far the dust leans back against the direction of travel (the
+/// emission direction is `up − travel · LEAN`, normalized).
+const DUST_BACK_LEAN: f32 = 0.6;
+/// Landing impact (metres/second) below which no touchdown puff fires.
+const TOUCHDOWN_MIN_IMPACT: f32 = 0.3;
+/// Impact speed (metres/second) at which the touchdown puff plays at scale 1.
+const TOUCHDOWN_REF_IMPACT: f32 = 1.0;
 
 /// Wheel entity-name suffixes, in `[fl, fr, rl, rr]` order (matches the
 /// vehicle-definition part order emitted by the exporter).
@@ -136,4 +157,16 @@ struct VehicleWrite {
     wheel_z: [f32; 4],
     wheel_anchors: [[f32; 2]; 4],
     steer_index: u32,
+    /// Body heading (tile-space radians).
+    heading: f32,
+    /// `+1` driving forward, `-1` reversing, `0` stopped.
+    motion_sign: f32,
+    /// Ground speed this frame (metres/second).
+    speed_mps: f32,
+    /// `|Δ ground speed|` since last frame (metres/second).
+    dspeed_mps: f32,
+    /// Per-wheel ground contact (within [`DUST_CONTACT_M`] of the terrain).
+    grounded: [bool; 4],
+    /// Impact speed (metres/second) on the frame the body lands, if it did.
+    touchdown: Option<f32>,
 }

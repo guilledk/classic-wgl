@@ -95,7 +95,7 @@ ROM fields:
 | `trusted` | `false` | `guest_limits` (`classic-demo/src/lib.rs:165`): fuel + memory sandbox off when `true`; also gates the native compiled-module cache (`module_cache.rs`).  Note that classic-roms writes `true` when `scene.json` omits it |
 | `version` | `None` | nothing in the engine.  It is content versioning for classic-roms and `roms.json` |
 | `items`, `inventory_types` | `[]` | `ItemRegistry::build` in `finish_hydrate_roms`, **root ROM only** (per-ROM merge deferred) |
-| `vehicle_overrides` | `{}` | `apply_vehicle_overrides` (`boot_api.rs:656`), root ROM only, after the whole closure hydrates (§5).  Keys are already qualified (`lunar-common::lrv`); an unknown key is skipped silently |
+| `vehicle_overrides` | `{}` | `apply_vehicle_overrides` (`boot_api.rs:656`), root ROM only, after the whole closure hydrates (§5).  Keys are already qualified (`lunar-common::lrv`); an unknown key is skipped silently.  Fields: `turn_rate_deg_per_sec`, `safe_fall_m`, `steer_rate_deg_per_sec`, `reverse_speed`, `turn_cost`, and the effect opt-ins `dust_effect` / `touchdown_effect` |
 
 Unknown keys are ignored (no `deny_unknown_fields`).  classic-roms also writes
 `assets_hash`, which `RomManifest` does not model.

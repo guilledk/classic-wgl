@@ -279,6 +279,8 @@ fn spawn_vehicle_creates_body_and_wheels() {
             VehiclePartDef { name: "wheel_rl".into(), texture: "lrvWheelRl".into() },
             VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
         ],
+        dust_effect: None,
+        touchdown_effect: None,
     };
     let anchors = vehicle_anchors(
         vec![
@@ -453,6 +455,8 @@ fn spawn_vehicle_sizes_body_sheet_by_pitch_levels() {
             VehiclePartDef { name: "wheel_rl".into(), texture: "lrvWheelRl".into() },
             VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
         ],
+        dust_effect: None,
+        touchdown_effect: None,
     };
     let anchors = vehicle_anchors(
         vec![
@@ -529,6 +533,8 @@ fn goto_rejected_while_airborne() {
             VehiclePartDef { name: "wheel_rl".into(), texture: "lrvWheelRl".into() },
             VehiclePartDef { name: "wheel_rr".into(), texture: "lrvWheelRr".into() },
         ],
+        dust_effect: None,
+        touchdown_effect: None,
     };
     let anchors = vehicle_anchors(
         vec![
@@ -711,6 +717,8 @@ fn lrv_def(turn_rate_deg: f32) -> (VehicleDef, VehicleAnchors) {
             .iter()
             .map(|(n, t, _)| VehiclePartDef { name: (*n).into(), texture: (*t).into() })
             .collect(),
+        dust_effect: None,
+        touchdown_effect: None,
     };
     let anchors = vehicle_anchors(spec.iter().map(|(n, _t, a)| (*n, vec![*a])).collect(), vec![]);
     (def, anchors)
@@ -918,6 +926,8 @@ fn lrv_def_real() -> (VehicleDef, VehicleAnchors) {
         turn_cost: 0.0,
         tires: vec![],
         parts,
+        dust_effect: None,
+        touchdown_effect: None,
     };
     let anchors = vehicle_anchors(anchors_parts, vec![]);
     (def, anchors)
@@ -1306,4 +1316,149 @@ fn vehicle_goto_paths_on_full_lrvtest_map() {
         matches!(goto_sync(&mut engine, "lrv", 7, 29), VehicleGotoPoll::NoPath),
         "ramp cliff edge should not path"
     );
+}
+
+// -- wheel dust + touchdown puffs ------------------------------------------
+
+const DUST_LIB: &str = r#"{"effects":[
+  {"name":"dust","layers":[{"type":"particles","name":"p","max":2048,
+     "spawn":{"rate":40,"burst":4},"velocity":{"speed":[1,2]},"life":[1,1]}]},
+  {"name":"puff","layers":[{"type":"particles","name":"p","max":64,
+     "spawn":{"burst":16},"life":[0.5,0.5]}]}
+]}"#;
+
+/// A flat 20×20 map (with the tilemap transform `iso_to_world` needs), the
+/// dust library under `t`, and an LRV def carrying `dust`/`touchdown`.
+fn dusty_engine(dust: Option<&str>, touchdown: Option<&str>) -> Engine {
+    let mut engine = Engine::new_for_test();
+    let tm_e = engine.world.spawn((
+        flat_tilemap(20, 20),
+        Role::new(RoleKind::Tilemap),
+        classic_core::Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0)),
+    ));
+    engine.names.insert("tilemap".into(), tm_e);
+    engine.register_effects(
+        "t",
+        classic_core::effects::EffectLibrary::from_json(DUST_LIB.as_bytes()).unwrap(),
+    );
+    let (mut def, anchors) = lrv_def(90.0);
+    def.dust_effect = dust.map(Into::into);
+    def.touchdown_effect = touchdown.map(Into::into);
+    insert_lrv(&mut engine, (def, anchors));
+    assert!(engine.spawn_vehicle("lrv", "lrv", 2.0, 2.0));
+    engine
+}
+
+fn step(engine: &mut Engine, frames: usize) {
+    for _ in 0..frames {
+        engine.time.delta = 1.0 / 60.0;
+        engine.update_vehicles();
+        engine.update_particles(1.0 / 60.0);
+    }
+}
+
+fn dust_emitters(engine: &Engine) -> Vec<classic_core::components::Emitter> {
+    ["Fl", "Fr", "Rl", "Rr"]
+        .iter()
+        .map(|s| {
+            let e = engine.names[&format!("lrvDust{s}")];
+            engine
+                .world
+                .get::<&classic_core::components::Emitter>(e)
+                .map(|em| (*em).clone())
+                .unwrap()
+        })
+        .collect()
+}
+
+fn drive_to(engine: &mut Engine, tx: i32, ty: i32) {
+    let body = engine.names["lrv"];
+    let mut v = engine.world.get::<&mut IsoVehicle>(body).unwrap();
+    v.path = vec![[2, 2], [tx, ty]];
+    v.path_idx = 1;
+}
+
+#[test]
+fn vehicles_without_dust_spawn_no_emitters() {
+    let mut engine = dusty_engine(None, None);
+    drive_to(&mut engine, 15, 2);
+    step(&mut engine, 60);
+    assert_eq!(engine.world.query::<&classic_core::components::Emitter>().iter().count(), 0);
+    assert_eq!(engine.particle_stats().instances, 0);
+}
+
+#[test]
+fn wheel_dust_follows_speed_and_bursts_on_speed_changes() {
+    let mut engine = dusty_engine(Some("t::dust"), None);
+    step(&mut engine, 1);
+    let parked = dust_emitters(&engine);
+    assert!(parked.iter().all(|e| e.rate == 0.0 && e.burst == 0.0), "parked: no dust");
+    assert!(parked.iter().all(|e| e.parent.as_deref() == Some("lrv")));
+
+    drive_to(&mut engine, 15, 2);
+    step(&mut engine, 30);
+    let body = engine.names["lrv"];
+    let speed_mps =
+        engine.world.get::<&IsoVehicle>(body).unwrap().speed * classic_core::tilemap::TILE_M;
+    let driving = dust_emitters(&engine);
+    for em in &driving {
+        assert!((em.rate - speed_mps / DUST_REF_SPEED).abs() < 1e-4, "rate ∝ speed");
+        assert!(em.burst > 0.0, "pulling away bursts");
+        assert!(em.dir.z > 0.5, "dust leaves the ground upward");
+    }
+    // Driving +x in tile space: the dust leans back against the travel
+    // direction in world space.
+    let travel =
+        engine.iso_to_world(3.0, 2.0, 0.0).unwrap() - engine.iso_to_world(2.0, 2.0, 0.0).unwrap();
+    assert!(driving[0].dir.x * travel.x + driving[0].dir.y * travel.y < 0.0, "leans back");
+    // Each emitter sits on its wheel's ground contact.
+    let wheel = engine.names["lrvWheelFl"];
+    let wp = engine.world.get::<&classic_core::Transform>(wheel).unwrap().position;
+    let contact = engine.iso_to_world(wp.x, wp.y, 0.0).unwrap();
+    let frame =
+        engine.attachment_frame(Some("lrv"), None, driving[0].position, driving[0].dir).unwrap();
+    assert!((frame.0 - contact).length() < 1e-3, "{:?} vs {contact:?}", frame.0);
+    assert!(engine.particle_stats().live > 0);
+
+    // Stopping is a speed change too.
+    let before = driving[0].burst;
+    engine.world.get::<&mut IsoVehicle>(body).unwrap().path.clear();
+    step(&mut engine, 2);
+    let stopped = dust_emitters(&engine);
+    assert!(stopped.iter().all(|e| e.rate == 0.0));
+    assert!(stopped[0].burst > before, "braking bursts");
+}
+
+#[test]
+fn wheel_dust_is_deterministic() {
+    let run = || {
+        let mut engine = dusty_engine(Some("t::dust"), None);
+        drive_to(&mut engine, 15, 9);
+        step(&mut engine, 90);
+        (format!("{:?}", dust_emitters(&engine)), engine.particle_stats())
+    };
+    assert_eq!(run(), run());
+}
+
+#[test]
+fn touchdown_puff_fires_once_on_landing() {
+    let mut engine = dusty_engine(None, Some("t::puff"));
+    step(&mut engine, 1);
+    let body = engine.names["lrv"];
+    {
+        let mut v = engine.world.get::<&mut IsoVehicle>(body).unwrap();
+        v.altitude += 2.0; // drop from 2 m
+    }
+    let mut landed_at = None;
+    for f in 0..240 {
+        step(&mut engine, 1);
+        let stats = engine.particle_stats();
+        if stats.instances > 0 && landed_at.is_none() {
+            landed_at = Some(f);
+            assert_eq!(stats.live, 16, "one puff");
+            assert!(!engine.world.get::<&IsoVehicle>(body).unwrap().airborne);
+        }
+    }
+    assert!(landed_at.is_some_and(|f| f > 10), "the puff waits for the landing");
+    assert_eq!(engine.particle_stats().instances, 0, "the one-shot retired, none re-fired");
 }
