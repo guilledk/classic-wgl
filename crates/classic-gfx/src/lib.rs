@@ -11,11 +11,14 @@ mod shaders;
 
 mod compressed;
 
+mod bloom;
 mod buffer;
 mod draw;
 mod framebuffer;
 mod light;
 mod model_pass;
+mod particle_pass;
+mod particles;
 mod shader;
 mod shadow;
 mod texture;
@@ -41,6 +44,11 @@ pub use light::{
     SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET,
 };
 pub use model_pass::{model_target_size, MODEL_GHOST_GROUP};
+pub use particle_pass::{particle_pass_size, ParticleTarget, PARTICLE_PASS_DIVISOR};
+pub use particles::{
+    ParticleGpu, ParticleLayerUniforms, ParticleRecord, ParticleRing, PARTICLE_RECORD_BYTES,
+    RIBBON_VERTEX_FLOATS,
+};
 pub use shader::{builtin_shaders, BuiltinShader, Shader, ShaderSourceRegistry};
 pub use texture::GlTexture;
 
@@ -149,6 +157,12 @@ pub struct Gfx {
     shadow_map: Option<DepthFramebuffer>,
     /// The 3D-model pixelation target (see `model_pass`), created lazily.
     model_target: Option<ModelTarget>,
+    /// Bloom post targets (see `bloom`), created lazily.
+    bloom: Option<bloom::BloomTargets>,
+    /// Baked tileable billow noise for procedural smoke (see `particles`).
+    particle_noise: GlTexture,
+    /// Half-res particle pass (see `particle_pass`).
+    particle_pass: particle_pass::ParticlePassState,
     vao: glow::VertexArray,
 }
 
@@ -157,6 +171,7 @@ impl Gfx {
         let quad = build_quad(&gl);
         let vao = unsafe { gl.create_vertex_array() }.expect("create VAO");
         let lights = LightBuffer::new(&gl, MAX_LIGHTS);
+        let particle_noise = particles::noise_texture(&gl);
         Self {
             gl,
             shaders: HashMap::new(),
@@ -168,6 +183,9 @@ impl Gfx {
             lights,
             shadow_map: None,
             model_target: None,
+            bloom: None,
+            particle_noise,
+            particle_pass: Default::default(),
             vao,
         }
     }

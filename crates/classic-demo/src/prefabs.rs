@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use classic_core::collision::polygon_from_verts;
 use classic_core::components::{
-    Animator, ColliderData, IsoAgent, IsoSprite, Light, Tilemap, Transform,
+    Animator, ColliderData, Emitter, IsoAgent, IsoSprite, Light, Tilemap, Transform,
 };
 use classic_core::math::{iso_camera_px, iso_world_pos};
 use classic_core::tilemap::bilinear_height;
@@ -120,6 +120,45 @@ fn apply_light_channels(data: &AnimationData, counter: f32, l: &mut Light) {
         if let Some(&v) = k.first() {
             l.cone_angle = v;
         }
+    }
+}
+
+/// Apply the `emitter.*` animation channels to an `Emitter` (the particle
+/// counterpart of [`apply_light_channels`]).  `emitter.burst` is a cumulative
+/// step channel: the particle system fires one burst per integer it crosses.
+pub fn apply_emitter_channels(data: &AnimationData, counter: f32, em: &mut Emitter) {
+    let scalar = |name: &str| data.channel_sample(name, counter).and_then(|v| v.first().copied());
+    let vec3 = |name: &str| {
+        data.channel_sample(name, counter)
+            .filter(|v| v.len() >= 3)
+            .map(|v| glam::Vec3::new(v[0], v[1], v[2]))
+    };
+    if let Some(v) = scalar("emitter.rate") {
+        em.rate = v;
+    }
+    if let Some(v) = scalar("emitter.speed") {
+        em.speed = v;
+    }
+    if let Some(v) = scalar("emitter.scale") {
+        em.scale = v;
+    }
+    if let Some(v) = scalar("emitter.intensity") {
+        em.intensity = v;
+    }
+    if let Some(v) = scalar("emitter.burst") {
+        em.burst = v;
+    }
+    if let Some(v) = scalar("emitter.enabled") {
+        em.enabled = v > 0.5;
+    }
+    if let Some(c) = vec3("emitter.color") {
+        em.color = c.to_array();
+    }
+    if let Some(p) = vec3("emitter.position") {
+        em.position = p;
+    }
+    if let Some(d) = vec3("emitter.dir") {
+        em.dir = d;
     }
 }
 
@@ -271,6 +310,16 @@ pub fn init_animator_system(engine: &mut Engine) {
                             continue;
                         };
                         apply_light_channels(data, w.counter, &mut l);
+                    }
+                }
+                "Emitter" => {
+                    if let Ok(mut em) = engine.world.get::<&mut Emitter>(w.entity) {
+                        let Some(data) =
+                            w.anim_name.as_deref().and_then(|n| engine.animations.get(n))
+                        else {
+                            continue;
+                        };
+                        apply_emitter_channels(data, w.counter, &mut em);
                     }
                 }
                 _ => {}
@@ -485,6 +534,7 @@ mod tests {
             dir: glam::Vec3::ZERO,
             cone_angle: 0.0,
             parent: None,
+            node: None,
         };
         apply_light_channels(&data, 216.0, &mut light);
 

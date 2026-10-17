@@ -25,6 +25,7 @@ pub mod golden;
 pub mod inventory;
 pub mod inventory_ui;
 pub mod light;
+pub mod particles;
 pub mod selection;
 pub mod shadow;
 pub mod ui;
@@ -236,6 +237,8 @@ pub struct Engine {
     /// gathered (resolving parent attachments) and uploaded to the `LightBlock`
     /// UBO once per frame.
     pub light_handles: light::LightHandles,
+    /// The particle / VFX system (effect library, live instances, GPU rings).
+    pub particles: particles::ParticleSystem,
     pub animations: HashMap<String, AnimationData>,
     /// Packed-atlas frame tables keyed by texture name, loaded from the ROM's
     /// `frames` resources at boot (issue #45).  A sprite with `frame_name` set
@@ -789,6 +792,7 @@ mod tests {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: Some("rocket".into()),
+            node: None,
         };
         engine.world.spawn((light.clone(),));
 
@@ -864,6 +868,7 @@ mod tests {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: Some("rocket".into()),
+            node: None,
         };
         engine.world.spawn((light.clone(),));
         let free = engine.world.spawn((Light { parent: None, ..light },));
@@ -947,6 +952,7 @@ mod tests {
             dir: Vec3::ZERO,
             cone_angle: 0.0,
             parent: Some("rocket".into()),
+            node: None,
         };
         engine.world.spawn((light.clone(),));
 

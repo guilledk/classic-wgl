@@ -383,7 +383,7 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
 | `CLASSIC_HEADLESS` | Surfaceless EGL, no window | off |
 | `CLASSIC_OFFSCREEN` | Render to FBO | off |
 | `CLASSIC_GOLDEN` | `check` or `update` golden trace | off |
-| `CLASSIC_GOLDEN_PNG` | Enable pixel PNG capture | off |
+| `CLASSIC_GOLDEN_PNG` | `1`: pixel golden; `10,30,60`: write `frame_NNNNN.png` review captures into `CLASSIC_GOLDEN_DIR` | off |
 | `CLASSIC_GOLDEN_TOL` | Pixel channel tolerance | 2 |
 | `CLASSIC_GOLDEN_DIR` | Golden baseline directory (per-scene) | `tests/golden/baseline` |
 | `CLASSIC_GOLDEN_LAYOUT` | Emit the text layout map (`baseline.layout.txt`); `0` disables | on with `CLASSIC_GOLDEN` |

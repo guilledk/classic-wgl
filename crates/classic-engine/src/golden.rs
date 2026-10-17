@@ -289,6 +289,30 @@ pub fn project_rect(cam: &glam::Mat4, model: &glam::Mat4, camera_ignored: bool) 
     [min_x, min_y, max_x - min_x, max_y - min_y]
 }
 
+/// Read the offscreen render target (top row first) and write it as a PNG
+/// (the `CLASSIC_GOLDEN_PNG=<frames>` review captures).
+/// A no-op without an offscreen target (`CLASSIC_OFFSCREEN` / headless).
+pub fn capture_png(gfx: &classic_gfx::Gfx, path: &str) {
+    use glow::HasContext;
+    let Some(rt) = gfx.render_target.as_ref() else { return };
+    unsafe { gfx.gl.finish() };
+    let pixels = rt.read_pixels_rgba(&gfx.gl);
+    let row = (rt.width * 4) as usize;
+    let mut flipped = vec![0u8; pixels.len()];
+    for y in 0..rt.height as usize {
+        let src = y * row;
+        let dst = (rt.height as usize - 1 - y) * row;
+        flipped[dst..dst + row].copy_from_slice(&pixels[src..src + row]);
+    }
+    if let Some(dir) = std::path::Path::new(path).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match image::save_buffer(path, &flipped, rt.width, rt.height, image::ColorType::Rgba8) {
+        Ok(()) => log::info!("capture: wrote {path}"),
+        Err(e) => log::warn!("capture: failed to write {path}: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

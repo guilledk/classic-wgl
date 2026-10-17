@@ -819,3 +819,85 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
 - GPU keys: meshes `"{model}::{mesh_index}"` (`Engine.model_gpu`), textures
   `"{model}::image::{i}"` (`Gfx.textures`); the embedded image's CPU pixels are
   dropped after upload.
+
+---
+
+## 19. Particles / VFX (`particles.rs`, `bloom.rs`, engine `particles/`)
+
+Analytic **stateless** GPU particles: the CPU writes each particle once, at
+spawn, as an immutable 48-byte `ParticleRecord` (`p0, t_birth | v0, life |
+seed, size, rot, ground_z`) into a per-(effect instance, layer)
+`ParticleRing`; `particle.vert` evaluates the state at `u_time` in closed
+form.  No transform feedback, no per-frame CPU simulation.
+
+- **Upload**: `ParticleGpu::upload` sends only the slots written since the
+  last frame — at most two `buffer_sub_data` ranges (before/after the wrap).
+- **Draw**: one `drawArraysInstanced(TRIANGLE_STRIP, 0, 4, capacity)` per
+  layer; corner from `gl_VertexID`, record from 3 per-instance `vec4`s bound
+  in the ring's **own VAO** (divisors never leak into the shared VAO;
+  `draw_particles` rebinds it).  Dead slots collapse to a degenerate vertex.
+- **Motion** (`particle.vert`, mirrored on the CPU by
+  `classic_core::effects::{ballistic, land_time}`): ballistic + linear drag
+  (`dv/dt = g − k v`; drag-free below `k = 1e-3` to dodge f32 cancellation),
+  a smooth turbulence wobble, ground `clamp`/`bounce`/`die` against the
+  spawn-time ground height, and the **swirl** ground vortex: a particle
+  running outward along the ground is captured at `kick_radius` by one of
+  `slots` vortices (alternately counter-rotating) and spirals up it
+  (`lift`, `growth` funnel, decaying `omega`), blended in over `pinch_time`
+  so the path stays continuous.
+- **Render state**: phase 3c (after the model ghost, before the UI), depth
+  test `LEQUAL` against the scene, **no depth write**, one blend state
+  `ONE, ONE_MINUS_SRC_ALPHA`: the fragment outputs premultiplied colour with
+  `alpha × (1 − additive)`, so alpha, additive and hybrid layers share it.
+  `depth_bias` pulls a quad toward the camera by a fraction of its size so
+  ground-hugging dust is not half-buried.
+- **Draw order**: particles write no depth, so order decides coverage.  Two
+  phases, each back to front by instance origin: every alpha layer, then
+  every glowing (additive or emissive) layer, so a flame adds over the smoke
+  and dust around it instead of being composited under them.
+- **Highlight shoulder** (`particle.frag`, outside the shared block): lit
+  particles roll their brightest light channel off above 0.9 toward 1.3,
+  scaling the others with it, so a strong nearby light tints a cloud warm
+  instead of clipping it white and feeding bloom.
+- **Lit layers** evaluate the **shared lighting block per vertex** (a
+  camera-facing pseudo-normal tilted up); `particle.vert` is pinned by
+  `lit_shaders_share_the_lighting_block`.  Emissive layers skip lighting.
+- **Half-res pass** (`particle_pass.rs`): particle layers draw into a half-size
+  target whose `DEPTH24_STENCIL8` is a NEAREST scaled blit of the scene depth,
+  then composite back with the same premultiplied blend (exact "over",
+  LINEAR upscale); a quarter of the shaded pixels.  Ribbons stay full-res.
+  Always on (no toggle): only a multisampled main framebuffer or a
+  depth-blit GL error turns it off for good (full-res fallback, logged).
+- **Fill cost**: the smoke shape reads one baked tileable noise texel
+  (`bake_noise`: value + slope) instead of evaluating value noise per pixel,
+  and every procedural shape discards outside the unit disc first.
+- **Ribbons** (`ribbon.vert/frag`): arcs/lightning are CPU midpoint-
+  displacement polylines expanded to camera-facing strips in pre-camera
+  pixels with a window depth (same projection as `mesh.vert`), drawn
+  additively in one call.
+- **Bloom** (`bloom.rs`): blit the main colour to a texture, soft-knee
+  bright-pass into half res, separable 5-tap-bilinear Gaussian at half and
+  quarter res, additive composite.  RGBA8 only (no float RT on WebGL2).
+  Always on (no toggle); the engine skips it only on frames with nothing
+  emissive live, so effect-free scenes are pixel-identical.
+- **Texture units**: particles 6, bloom 7–8, smoke noise 9, half-res composite 10
+  (sprites 0–2, shadow 3, model
+  composite 4–5).
+- **Determinism**: spawning is `SplitMix64::keyed(instance id, frame,
+  layer)`; instance ids hash the emitter's debug name, so a fixed timestep
+  reproduces every record.  Trace: one `Particles` item per drawn layer
+  (`frame` = live count), one `Ribbons` item, one `Bloom` item.
+- **Data**: effect libraries are `{"effects": [...]}` `data[]` artifacts
+  (`classic_core::effects`), registered under the ROM namespace; an
+  `Emitter` component (or `Engine::fx_emit`) instantiates one, driven by
+  `emitter.*` animation channels (`rate`, `speed`, `scale`, `color`,
+  `intensity`, cumulative `burst`, `enabled`, `position`, `dir`).
+- **Coverage**: `classic-core` `tests/fixtures/effects.json` is the
+  reference library (one effect per look); `tests/effects_library.rs` keeps
+  every layer kind, spawn shape, ground/render mode, shape and blend in it.
+- **Review loop**: effects are authored as ROM data, so look at them in a
+  ROM (`rom:lunar` has the rocket landing and launch).  A
+  `CLASSIC_TEST_FILE` scenario frames the shot (`setCameraIso`) and
+  `CLASSIC_GOLDEN_PNG=10,30,60` + a scratch `CLASSIC_GOLDEN_DIR` write PNGs
+  at those frames (`classic-testing` "Review captures").  Look at them —
+  never commit them.

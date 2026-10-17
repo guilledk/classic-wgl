@@ -24,6 +24,51 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   at an explicit LOD, so zoomed-out terrain stops aliasing into moire;
   magnification stays `NEAREST`.  Flat single-id areas cost one atlas
   sample.  The nav overlay never blends.
+- Analytic GPU particles (M1): CPU-spawned immutable 48-byte records in
+  per-(effect instance, layer) ring buffers, uploaded as at most two
+  `buffer_sub_data` ranges per frame and drawn with one instanced
+  `particle.vert` call that evaluates ballistic + linear-drag motion, a
+  turbulence wobble and a ground clamp/bounce/die in closed form at
+  `u_time`.  Rendered as phase 3c (after the model ghost, before the UI),
+  depth-tested against the scene with premultiplied blending; one
+  `Particles` trace item per drawn layer.  Spawning is SplitMix64-keyed per
+  instance/frame/layer, so a fixed timestep reproduces every particle (#126).
+- Effect libraries and emitters (M2): `classic_core::effects` (a JSON
+  `{"effects": [...]}` library shipped as a ROM `data[]` artifact and
+  registered under the ROM namespace), a registered `Emitter` component
+  (`effect`, `position`/`parent`/`node`, drive multipliers `rate`, `speed`,
+  `scale`, `color`, `intensity`, a cumulative `burst` counter and
+  `enabled`), an `Animator { target: "x.Emitter" }` arm sampling
+  `emitter.*` channels, `Engine::fx_emit` one-shots, and lit particles
+  sharing the byte-identical lighting block (`particle.vert` joins
+  `lit_shaders_share_the_lighting_block`).  `Light` gains the same
+  optional `node`: a light or emitter attached to a `Model` parent's glTF
+  node follows its full transform (#126).
+- Particle looks (M3, #126): velocity streaks, flipbook textures, procedural
+  soft/smoke/glow shapes, the closed-form ground-vortex swirl (a radial
+  ground blast captured into rising counter-rotating spirals), ground
+  bounce and die with deterministic sub-effects on landing, procedural
+  arc and lightning ribbons (midpoint displacement with branches,
+  `ribbon.vert`/`ribbon.frag`) with strike flash lights, and companion
+  light layers (flashes, flicker).  Glowing (additive or emissive) layers
+  draw after every alpha layer, so a rocket jet stays visible through the
+  dust it raises, and lit particles roll off their highlights instead of
+  clipping to white under strong nearby lights.
+- Bloom (M4): a soft-knee bright-pass, half- and quarter-resolution
+  separable Gaussian blur and an additive composite on RGBA8 targets (no
+  float render targets), run only on frames with something emissive on
+  screen (#126).
+- Particle fill cost (M4): particles draw into a half-resolution target
+  (scene depth blitted in, premultiplied "over" composite back; full-res
+  fallback only on multisampled or mismatched framebuffers), the smoke
+  shape samples one baked tileable noise texture instead of per-pixel
+  value noise, and procedural shapes skip their transparent quad corners
+  (#126).
+- `CLASSIC_GOLDEN_PNG` also takes a frame list (`10,30,60`): PNG captures
+  of the offscreen target at those frames into `CLASSIC_GOLDEN_DIR`, for
+  visual review of motion; `1` keeps the pixel golden.  A reference effect
+  library test fixture (`classic-core` `tests/fixtures/effects.json`)
+  covers every layer kind, spawn shape, ground and render mode (#126).
 
 ### Fixed
 

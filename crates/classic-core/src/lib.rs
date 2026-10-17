@@ -3,6 +3,7 @@ pub mod abi_manifest;
 pub mod camera;
 pub mod collision;
 pub mod components;
+pub mod effects;
 pub mod fields;
 pub mod instrument;
 pub mod inventory;
@@ -25,7 +26,7 @@ use components::{
 use inventory::Inventory;
 
 pub use camera::Camera;
-pub use components::{Light, LightKind, RoleKind, SpriteRender, Transform};
+pub use components::{Emitter, Light, LightKind, RoleKind, SpriteRender, Transform};
 pub use types::Rect;
 
 /// Pathfinding lives in the standalone `classic-pathfinder` crate (shared by
@@ -234,6 +235,17 @@ pub fn register_all_components() {
             },
             dump: Some(dump_as::<Light>),
             order: 59,
+            subsumes: &[],
+        },
+        ComponentReg {
+            name: "Emitter",
+            spawn: |b, v| {
+                let e: Emitter = serde_json::from_value(v)?;
+                b.add(e);
+                Ok(())
+            },
+            dump: Some(dump_as::<Emitter>),
+            order: 58,
             subsumes: &[],
         },
     ]);

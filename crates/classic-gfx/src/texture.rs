@@ -155,6 +155,16 @@ impl GlTexture {
         true
     }
 
+    /// Set REPEAT wrapping on both axes (tileable textures).
+    pub fn set_repeat(&self, gl: &glow::Context) {
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::REPEAT as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::REPEAT as i32);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+    }
+
     /// Bind to a texture unit (0 = TEXTURE0, etc.).
     pub fn bind(&self, gl: &glow::Context, unit: u32) {
         unsafe {

@@ -20,8 +20,8 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
 use crate::{
-    env_config, fields, golden, inventory_ui, light, selection, shadow, DrawKind, Engine,
-    GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, OUTLINE_RADIUS_PX, RTS_DRAG_THRESHOLD_PX,
+    env_config, fields, golden, inventory_ui, light, particles, selection, shadow, DrawKind,
+    Engine, GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, OUTLINE_RADIUS_PX, RTS_DRAG_THRESHOLD_PX,
     SELECTION_COLOR,
 };
 
@@ -62,6 +62,7 @@ impl Engine {
             light_dir: [0.566_422, -0.070_803, 0.821_068],
             light_color: [1.0, 0.95, 0.85],
             light_handles: light::LightHandles::new(),
+            particles: particles::ParticleSystem::default(),
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
             frame_tables: HashMap::new(),
@@ -289,6 +290,11 @@ impl Engine {
         // (so a `vehicle_goto` issued this frame is honoured) and before the
         // render list is built.
         self.update_vehicles();
+
+        // Particles after every mover (models posed, vehicles stepped) so
+        // attached emitters spawn from this frame's positions.  A scene
+        // without emitters never creates an instance (a no-op).
+        self.update_particles(delta);
 
         // ---- CLASSIC_TEST automated test runner (registered by the demo) ----
         if env_config::EnvConfig::get().test_active() {
@@ -1030,6 +1036,39 @@ impl Engine {
             gfx.composite_models(IsoSpritePass::Ghost, classic_gfx::MODEL_GHOST_GROUP);
         }
 
+        // Phase 3c: particles + ribbons — depth-tested against the scene, no
+        // depth write, premultiplied blend (see `particles`).
+        let particle_settings = RenderSettings {
+            ambient: self.light_ambient,
+            light_dir: self.light_dir,
+            light_color: self.light_color,
+            depth_span: [DEPTH_NEAR, DEPTH_FAR],
+            ppm: PPM_TARGET,
+            shadow: None,
+        };
+        self.particles.draw(gfx, &cam, &particle_settings, self.trace.as_mut());
+
+        // Bloom (before the UI): only on frames with something emissive on
+        // screen, so scenes without effects stay pixel-identical.
+        if self.particles.has_emissive() {
+            if let Some(ref mut t) = self.trace {
+                t.push(golden::TraceItemParams {
+                    order: 0.0,
+                    kind: "Bloom",
+                    name: "bloom",
+                    model: &Mat4::IDENTITY,
+                    camera_ignored: true,
+                    texture: None,
+                    frame: None,
+                    color: Some([particles::BLOOM_THRESHOLD, particles::BLOOM_INTENSITY, 0.0, 0.0]),
+                    depth: None,
+                    normal: None,
+                    screen: None,
+                });
+            }
+            gfx.apply_bloom(particles::BLOOM_THRESHOLD, particles::BLOOM_INTENSITY);
+        }
+
         // Phase 4: UI + sprites + text (no depth test — draw-order layering).
         for (order, entity, kind) in &items {
             if matches!(kind, DrawKind::Tilemap | DrawKind::IsoSprite | DrawKind::Model) {
@@ -1606,6 +1645,14 @@ impl Engine {
             o(self);
         }
         self.overlay_hooks = overlays;
+
+        // `CLASSIC_GOLDEN_PNG=<frames>`: dump this frame's pixels for review.
+        if config.golden_png_frames.contains(&self.debug_frame) {
+            if let Some(gfx) = self.gfx.as_ref() {
+                let path = format!("{}/frame_{:05}.png", config.golden_dir, self.debug_frame);
+                golden::capture_png(gfx, &path);
+            }
+        }
     }
 
     /// Helper: add or remove Disabled marker component to toggle entity visibility.

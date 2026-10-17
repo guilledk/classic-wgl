@@ -22,6 +22,15 @@ pub const MESH_VERT: &str = include_str!("shaders/mesh.vert");
 pub const MESH_FRAG: &str = include_str!("shaders/mesh.frag");
 pub const MODEL_COMPOSITE_VERT: &str = include_str!("shaders/model_composite.vert");
 pub const MODEL_COMPOSITE_FRAG: &str = include_str!("shaders/model_composite.frag");
+pub const PARTICLE_VERT: &str = include_str!("shaders/particle.vert");
+pub const PARTICLE_FRAG: &str = include_str!("shaders/particle.frag");
+pub const RIBBON_VERT: &str = include_str!("shaders/ribbon.vert");
+pub const RIBBON_FRAG: &str = include_str!("shaders/ribbon.frag");
+pub const POST_VERT: &str = include_str!("shaders/post.vert");
+pub const BLOOM_THRESHOLD_FRAG: &str = include_str!("shaders/bloom_threshold.frag");
+pub const BLOOM_BLUR_FRAG: &str = include_str!("shaders/bloom_blur.frag");
+pub const BLOOM_COMPOSITE_FRAG: &str = include_str!("shaders/bloom_composite.frag");
+pub const PARTICLE_COMPOSITE_FRAG: &str = include_str!("shaders/particle_composite.frag");
 
 #[cfg(test)]
 mod tests {
@@ -41,6 +50,8 @@ mod tests {
         let sheet = lighting_block(SHEET_FRAG);
         assert_eq!(sheet, lighting_block(ISO_TILEMAP_FRAG), "iso_tilemap.frag drifted");
         assert_eq!(sheet, lighting_block(MESH_FRAG), "mesh.frag drifted");
+        // Lit particles evaluate the same block per vertex.
+        assert_eq!(sheet, lighting_block(PARTICLE_VERT), "particle.vert drifted");
     }
 
     /// Spot lights shipped with an inverted cone (`dot(L, dir)`, so a spot

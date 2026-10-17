@@ -39,7 +39,7 @@ pub fn model_target_size(width: u32, height: u32, zoom: f32) -> (u32, u32) {
 impl Gfx {
     /// The main render target's size (the offscreen FBO when set, else the
     /// default framebuffer's viewport).
-    fn main_target_size(&self) -> (u32, u32) {
+    pub(crate) fn main_target_size(&self) -> (u32, u32) {
         match &self.render_target {
             Some(rt) => (rt.width, rt.height),
             None => (self.viewport_w as u32, self.viewport_h as u32),
@@ -47,7 +47,7 @@ impl Gfx {
     }
 
     /// Rebind the main render target with its full viewport.
-    fn bind_main_target(&self) {
+    pub(crate) fn bind_main_target(&self) {
         let gl = &self.gl;
         unsafe {
             match &self.render_target {

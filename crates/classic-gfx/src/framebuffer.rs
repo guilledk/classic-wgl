@@ -146,6 +146,11 @@ impl GlFrameBuffer {
         Self { fbo, depth_rb, texture: tex, width, height }
     }
 
+    /// The raw framebuffer handle (blit source/target).
+    pub fn fbo(&self) -> glow::Framebuffer {
+        self.fbo
+    }
+
     pub fn bind(&self, gl: &glow::Context) {
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));

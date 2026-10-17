@@ -398,6 +398,21 @@ impl Engine {
         // Blender-exported data artifacts (vehicle anchors, …) from the `data`
         // resources, keyed by name and referenced by authored defs' `anchors`.
         for (name, bytes) in resources.data() {
+            // A particle effect library (`{"effects": [...]}`), registered
+            // under the ROM namespace so `Emitter.effect` resolves `ns::name`.
+            if classic_core::effects::EffectLibrary::sniff(bytes) {
+                match classic_core::effects::EffectLibrary::from_json(bytes) {
+                    Ok(lib) => {
+                        let ns = self.namespace.clone();
+                        self.register_effects(&ns, lib);
+                    }
+                    Err(e) => classic_core::cl_error!(
+                        Chan::Guest,
+                        "effect library '{name}' parse failed: {e}"
+                    ),
+                }
+                continue;
+            }
             match serde_json::from_slice::<classic_core::types::VehicleAnchors>(bytes) {
                 Ok(anchors) => {
                     self.vehicle_anchors.insert(self.entity_key(name), anchors);
@@ -789,6 +804,24 @@ impl Engine {
                     if let Some(resolved) = self.resolve_entity_name(ns, &parent) {
                         if let Ok(mut l) = self.world.get::<&mut Light>(entity) {
                             l.parent = Some(resolved);
+                        }
+                    }
+                }
+            }
+
+            // Emitters follow the same parent rule as lights.
+            if let Some(parent) = self
+                .world
+                .get::<&classic_core::components::Emitter>(entity)
+                .ok()
+                .and_then(|em| em.parent.clone())
+            {
+                if !parent.is_empty() {
+                    if let Some(resolved) = self.resolve_entity_name(ns, &parent) {
+                        if let Ok(mut em) =
+                            self.world.get::<&mut classic_core::components::Emitter>(entity)
+                        {
+                            em.parent = Some(resolved);
                         }
                     }
                 }

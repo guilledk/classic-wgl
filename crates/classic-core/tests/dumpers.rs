@@ -379,6 +379,7 @@ fn light_dumper_round_trips() {
         dir: [0.0, 0.0, 1.0].into(),
         cone_angle: 0.8,
         parent: None,
+        node: None,
     };
 
     let mut world = hecs::World::new();
