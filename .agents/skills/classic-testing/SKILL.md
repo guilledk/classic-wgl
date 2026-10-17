@@ -67,6 +67,7 @@ Each `TestStep` carries a `Vec<TestAction>`.  All actions are mapped in
 | `SetMouseIso` | `setMouseIso` | Sets `input.mouse_pos` to the screen position of iso tile `(tx, ty)` via `render_order::iso_to_screen_px`. Note: in a native (winit) window the OS cursor overwrites `input.mouse_pos` every `CursorMoved`, so this action is only reliable headless — prefer `setEntityPos` for deterministic native placement. |
 | `SetEntityPos` | `setEntityPos` | Sets a named entity's `Transform.position` to `(x, y, z)` **and arms a persistent per-frame override** (`runner.pos_override`), so a mouse-following guest (which re-writes the position every frame) can't steal the placement. `z` is in px (metres × `PPM_TARGET`). |
 | `SetSpriteFrame` | `setSpriteFrame` | Calls `Engine::set_sprite_frame(name, frame)` **and arms a persistent per-frame override** (`runner.frame_override`), keeping a packed-atlas sprite on a chosen pitch/roll frame even though the guest recomputes it from the terrain each frame. |
+| `Camera` | `camera` | `{"follow": "<name>", "zoom": 0.3}` or `{"tile": [x, y]}` (zoom defaults to 1): **arms a persistent per-frame camera pin** (`runner.camera`), re-applied after the guest's own framing.  `follow` is an exact entity name, else the bare part of an `ns::name` (`rocket` finds `lunar::rocket`); emitters and lights frame their resolved attachment point (`Engine::named_world_point`), anything else its ground point plus animated rig offset.  The camera centres 1.5 m above the point.  `{}` releases the pin.  Pair with `CLASSIC_GOLDEN_PNG=<frames>` for review captures (§ "Review captures"). |
 
 Drag simulation detail: the drag is processed by `run_test_frame`'s drag state
 machine.  On frame `start+0` it sets `selection_iso_begin=mouse_iso_pos=from`
@@ -408,21 +409,23 @@ meaning above, so a single frame 1 is spelled `1,1`.  This is how motion
 (particles, model clips) is looked at: always point `CLASSIC_GOLDEN_DIR` at
 a scratch directory, look at the PNGs, never commit them.
 
-Frame the shot with a scenario (`CLASSIC_TEST_FILE`): a `setCameraIso` step
-pins the camera on a tile, and the run ends after the last step, so a final
-empty step at the last capture frame keeps it alive:
+Frame the shot with a scenario (`CLASSIC_TEST_FILE`): a `camera` step pins
+the camera every frame on a named entity (`follow`) or an iso tile (`tile`),
+and the run ends after the last step, so a final empty step at the last
+capture frame keeps it alive.  The lunar rocket lands over ~12 s of game
+time (touchdown ~10 s), so a coarse `CLASSIC_FIXED_DT` reaches it quickly:
 
 ```bash
 cat > /tmp/fx.test.json <<'JSON'
 [
-  { "frame": 2, "actions": [{ "setCameraIso": { "tx": 317.5, "ty": 277.5, "scale": 0.3 } }],
-    "assertions": [], "log": "frame the landing pad" },
-  { "frame": 200, "actions": [], "assertions": [], "log": "end" }
+  { "frame": 0, "actions": [{ "camera": { "follow": "rocket", "zoom": 0.3 } }],
+    "assertions": [], "log": "follow the rocket" },
+  { "frame": 220, "actions": [], "assertions": [], "log": "end" }
 ]
 JSON
 CLASSIC_ROM=rom:lunar CLASSIC_TEST=review CLASSIC_TEST_FILE=/tmp/fx.test.json \
 CLASSIC_HEADLESS=1 CLASSIC_FIXED_DT=0.05 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
-CLASSIC_GOLDEN_PNG=60,120,200 CLASSIC_GOLDEN_DIR=/tmp/fx \
+CLASSIC_GOLDEN_PNG=120,180,200,220 CLASSIC_GOLDEN_DIR=/tmp/fx \
 LIBGL_ALWAYS_SOFTWARE=1 cargo run -p classic-desktop
 ```
 

@@ -59,7 +59,35 @@ pub enum TestAction {
     SetEntityPos { name: String, x: f32, y: f32, z: f32 },
     #[serde(rename = "setSpriteFrame")]
     SetSpriteFrame { name: String, frame: f32 },
+    /// Pin the camera from this frame on, re-applied every frame (the scene
+    /// guest frames its own view, and a followed entity moves).
+    #[serde(rename = "camera")]
+    Camera(CameraPin),
 }
+
+/// A `camera` step: follow a named entity (`follow`) or hold an iso tile
+/// (`tile`), centred [`CAMERA_LIFT_M`] above the point at `zoom`.  Neither
+/// releases the pin.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CameraPin {
+    /// An exact entity name, else the bare part of an `ns::name` (`rocket`
+    /// finds `lunar::rocket`); emitters and lights frame their resolved
+    /// attachment point (`Engine::named_world_point`).
+    #[serde(default)]
+    pub follow: Option<String>,
+    /// Iso tile `(x, y)` to hold.
+    #[serde(default)]
+    pub tile: Option<(f32, f32)>,
+    #[serde(default = "unit_zoom")]
+    pub zoom: f32,
+}
+
+fn unit_zoom() -> f32 {
+    1.0
+}
+
+/// Metres above the pinned point the camera centres on.
+pub const CAMERA_LIFT_M: f32 = 1.5;
 
 /// Kinds of assertions the test runner supports.
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -116,6 +144,8 @@ struct TestRunner {
     complete_reported: bool,
     pos_override: Option<(String, glam::Vec3)>,
     frame_override: Option<(String, f32)>,
+    /// The active `camera` pin and whether its target has resolved yet.
+    camera: Option<(CameraPin, bool)>,
 }
 
 /// Register the CLASSIC_TEST runner on the engine's test hook (no-op unless
@@ -182,6 +212,24 @@ fn build_test_scenario(name: &str) -> Vec<TestStep> {
     serde_json::from_str(json).unwrap_or_else(|e| panic!("scenario {key}: {e}"))
 }
 
+/// Centre the camera on a `camera` pin's point, if it resolves this frame (a
+/// followed entity may only appear once the scene's terrain is committed).
+fn apply_camera_pin(engine: &mut Engine, pin: &CameraPin, found: &mut bool) {
+    let point = match (&pin.follow, pin.tile) {
+        (Some(name), _) => engine.named_world_point(name),
+        (None, Some((x, y))) => engine.iso_to_world(x, y, 0.0),
+        (None, None) => None,
+    };
+    let Some(p) = point else { return };
+    if !*found {
+        *found = true;
+        classic_core::cl_info!(Chan::Test, "  [camera] framing {p:?} at zoom {}", pin.zoom);
+    }
+    // `Camera::fix` puts `position` (pre-zoom px) at the viewport centre.
+    let px = classic_core::math::iso_camera_px(p + glam::Vec3::Z * CAMERA_LIFT_M);
+    engine.set_camera(px.x, px.y, pin.zoom);
+}
+
 fn run_frame(
     engine: &mut Engine,
     state: &DemoStateRef,
@@ -203,6 +251,10 @@ fn run_frame(
     }
     if let Some((ref name, frame)) = runner.frame_override {
         engine.set_sprite_frame(name, frame);
+    }
+    // Re-apply the `camera` pin over the guest's own framing.
+    if let Some((pin, found)) = runner.camera.as_mut() {
+        apply_camera_pin(engine, pin, found);
     }
 
     // Re-apply editor state before step processing so assertions
@@ -323,6 +375,13 @@ fn run_frame(
                 TestAction::SetSpriteFrame { name, frame } => {
                     runner.frame_override = Some((name.clone(), *frame));
                     engine.set_sprite_frame(name, *frame);
+                }
+                TestAction::Camera(pin) => {
+                    let active = pin.follow.is_some() || pin.tile.is_some();
+                    runner.camera = active.then(|| (pin.clone(), false));
+                    if let Some((pin, found)) = runner.camera.as_mut() {
+                        apply_camera_pin(engine, pin, found);
+                    }
                 }
             }
         }
@@ -627,7 +686,7 @@ fn assert_ui_text_centered(engine: &Engine, state: &DemoStateRef, tolerance: f32
 
 #[cfg(test)]
 mod tests {
-    use super::{TestStep, DEFAULT_ALIASES, SCENARIOS};
+    use super::{CameraPin, TestAction, TestStep, DEFAULT_ALIASES, SCENARIOS};
 
     fn scenarios_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/scenarios")
@@ -672,6 +731,32 @@ mod tests {
                  drains every step scheduled for the current frame)"
             );
         }
+    }
+
+    /// The `camera` step's two targets and its release.
+    #[test]
+    fn camera_steps_parse() {
+        let steps: Vec<TestStep> = serde_json::from_str(
+            r#"[{ "frame": 2, "assertions": [], "log": "pin", "actions": [
+                { "camera": { "follow": "rocket", "zoom": 0.3 } },
+                { "camera": { "tile": [317.5, 277.5] } },
+                { "camera": {} }
+            ] }]"#,
+        )
+        .expect("camera steps parse");
+        let pins: Vec<&CameraPin> = steps[0]
+            .actions
+            .iter()
+            .map(|a| match a {
+                TestAction::Camera(pin) => pin,
+                _ => panic!("not a camera step"),
+            })
+            .collect();
+        assert_eq!(pins[0].follow.as_deref(), Some("rocket"));
+        assert_eq!(pins[0].zoom, 0.3);
+        assert_eq!(pins[1].tile, Some((317.5, 277.5)));
+        assert_eq!(pins[1].zoom, 1.0, "zoom defaults to 1");
+        assert!(pins[2].follow.is_none() && pins[2].tile.is_none(), "empty releases");
     }
 
     #[test]

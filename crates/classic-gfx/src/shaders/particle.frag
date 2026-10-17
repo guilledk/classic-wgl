@@ -9,6 +9,10 @@
 // (a hemisphere facing the camera), perturbed by the smoke noise gradient,
 // against the sun direction in view space — so overlapping puffs build up a
 // billowing, self-shaded cloud instead of a flat fog.
+//
+// Particle textures sample LINEAR (a sampler object on the particle unit),
+// each flipbook frame inset by half a texel so the filter never bleeds in a
+// neighbouring frame.
 
 precision highp float;
 
@@ -47,7 +51,9 @@ vec2 frameUv(float frame, vec2 uv) {
     float frames = u_flip.z > 0.5 ? u_flip.z : cols * rows;
     float f = mod(floor(frame), frames);
     vec2 cell = vec2(mod(f, cols), floor(f / cols));
-    return (cell + uv) / vec2(cols, rows);
+    // Half a texel in from the frame edge, in frame-uv units.
+    vec2 inset = 0.5 * vec2(cols, rows) / vec2(textureSize(u_tex, 0));
+    return (cell + clamp(uv, inset, 1.0 - inset)) / vec2(cols, rows);
 }
 
 void main(void ) {

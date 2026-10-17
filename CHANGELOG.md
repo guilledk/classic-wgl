@@ -53,7 +53,9 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   light layers (flashes, flicker).  Glowing (additive or emissive) layers
   draw after every alpha layer, so a rocket jet stays visible through the
   dust it raises, and lit particles roll off their highlights instead of
-  clipping to white under strong nearby lights.
+  clipping to white under strong nearby lights.  Particle textures sample
+  LINEAR through their own sampler object (each flipbook frame inset half a
+  texel), while the same ROM texture stays NEAREST for sprites (#129).
 - Bloom (M4): a soft-knee bright-pass, half- and quarter-resolution
   separable Gaussian blur and an additive composite on RGBA8 targets (no
   float render targets), run only on frames with something emissive on
@@ -69,6 +71,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   visual review of motion; `1` keeps the pixel golden.  A reference effect
   library test fixture (`classic-core` `tests/fixtures/effects.json`)
   covers every layer kind, spawn shape, ground and render mode (#126).
+- A `camera` step for `CLASSIC_TEST` scenarios:
+  `{"camera": {"follow": "rocket", "zoom": 0.3}}` follows a named entity
+  every frame (an exact name, else the bare part of `ns::name`; emitters
+  and lights frame their resolved attachment via
+  `Engine::named_world_point`), `{"tile": [x, y]}` holds an iso tile and
+  `{}` releases the pin.  With `CLASSIC_GOLDEN_PNG=<frames>` it frames
+  headless review captures of ROM-authored effects (#129).
 - Guest particle ABI (M5): `fx_emit(effect, x, y, z, dx, dy, dz, scale)`
   one-shots and the handle-based `emitter_spawn`/`emitter_set`/
   `emitter_release` (#127), mirroring the light pool (world metres, `+Z` up;
@@ -84,6 +93,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   direction; landing from an airborne arc fires the touchdown effect, scaled
   by the impact speed.  Vehicles without the keys spawn nothing and dump
   unchanged.
+- `rom:fxtest` names the particle test-bench ROM (desktop `rom_lookup`, web
+  `ROM_URLS`).  It is not in the `fetch-roms`/`check-roms` set until it is
+  published: until then a locally staged `roms/out/fxtest.rom` boots and
+  the CDN fallback 404s (#129).
 
 ### Fixed
 

@@ -533,6 +533,32 @@ impl Engine {
         Some((base + self.parent_frame_offset(pe) + position, Mat3::IDENTITY, dir))
     }
 
+    /// The world-metre point (light space, `+Z` up) a named entity sits at,
+    /// for framing a review camera on it: an `Emitter`'s or `Light`'s resolved
+    /// attachment origin, else the ground point under its `Transform` plus its
+    /// animated frame offset (a `Model`'s rig origin).  `name` is an exact
+    /// entity name, else the first `ns::name` whose bare part matches.
+    pub fn named_world_point(&self, name: &str) -> Option<Vec3> {
+        let e = match self.names.get(name) {
+            Some(&e) => e,
+            None => {
+                let suffix = format!("::{name}");
+                let full = self.name_order.iter().find(|n| n.ends_with(&suffix))?;
+                *self.names.get(full)?
+            }
+        };
+        if let Ok(em) = self.world.get::<&Emitter>(e) {
+            let (parent, node) = (em.parent.as_deref(), em.node.as_deref());
+            return self.attachment_frame(parent, node, em.position, em.dir).map(|f| f.0);
+        }
+        if let Ok(l) = self.world.get::<&Light>(e) {
+            let (parent, node) = (l.parent.as_deref(), l.node.as_deref());
+            return self.attachment_frame(parent, node, l.position, l.dir).map(|f| f.0);
+        }
+        let tf = self.world.get::<&Transform>(e).ok()?;
+        Some(self.iso_to_world(tf.position.x, tf.position.y, 0.0)? + self.parent_frame_offset(e))
+    }
+
     /// Advance the particle system by `dt` (see the module docs).
     pub fn update_particles(&mut self, dt: f32) {
         let mut ps = std::mem::take(&mut self.particles);
