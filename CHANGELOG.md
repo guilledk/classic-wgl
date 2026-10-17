@@ -8,6 +8,8 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-17
+
 ### Added
 
 - Opt-in terrain material blending, `Tilemap.blend` (serde default off, so
