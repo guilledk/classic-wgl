@@ -29,9 +29,18 @@ impl WebPlatform {
         let canvas: HtmlCanvasElement =
             canvas.dyn_into().map_err(|_| JsValue::from_str("element is not a canvas"))?;
 
+        // `stencil` for the sprite ghost groups.  `antialias: false` keeps
+        // the default framebuffer single-sampled like native (whose GL
+        // config requests no MSAA): the browser default (`true`) makes it
+        // multisampled, which the half-res particle pass cannot blit depth
+        // from, so particles fell back to full resolution on the web only.
+        // `depth` stays at its default (`true`); with `stencil` that is a
+        // `DEPTH24_STENCIL8` buffer, the format the particle pass blits into.
         let gl_opts = js_sys::Object::new();
-        js_sys::Reflect::set(&gl_opts, &JsValue::from_str("stencil"), &JsValue::from_bool(true))
-            .map_err(|_| JsValue::from_str("failed to set stencil context option"))?;
+        for (key, on) in [("stencil", true), ("antialias", false)] {
+            js_sys::Reflect::set(&gl_opts, &JsValue::from_str(key), &JsValue::from_bool(on))
+                .map_err(|_| JsValue::from_str("failed to set a context option"))?;
+        }
         let gl_ctx = canvas
             .get_context_with_context_options("webgl2", &gl_opts)
             .map_err(|_| JsValue::from_str("getContext failed"))?
@@ -242,8 +251,13 @@ impl Platform for WebPlatform {
                 let vw = platform.canvas.width() as f32;
                 let vh = platform.canvas.height() as f32;
                 let mut prev = pt.borrow_mut();
-                let real_delta =
-                    if *prev > 0.0 { ((timestamp - *prev) / 1000.0) as f32 } else { 0.016 };
+                // Clamped like native/headless: an unclamped rAF gap (a
+                // slow software-GL frame, a tab resuming) was one huge step.
+                let real_delta = if *prev > 0.0 {
+                    crate::frame_delta(((timestamp - *prev) / 1000.0) as f32)
+                } else {
+                    0.016
+                };
                 *prev = timestamp;
                 (f2.borrow_mut())(gl, &mut inp, vw, vh, real_delta, &mut should_close);
                 inp.end_frame();

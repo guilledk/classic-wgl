@@ -65,7 +65,7 @@ The native backend uses `winit::event_loop::EventLoop::run_app()` with an
 `ApplicationHandler` impl. Key event handling:
 
 - **RedrawRequested**: Computes `real_delta = (now - prev_time).as_secs_f32()`
-  clamped to 0.1s max. Calls `on_frame`. Then `input.end_frame()`,
+  clamped to 0.1s max (`frame_delta`). Calls `on_frame`. Then `input.end_frame()`,
   `request_redraw()`, `swap_buffers()` (continuous rendering).
 
 - **CursorMoved**: Clamps `mouse_pos` to viewport bounds, computes
@@ -101,7 +101,9 @@ and `trunk` for the build pipeline.
 
 ### Initialization (`WebPlatform::new(canvas_id)`)
 1. Gets the `<canvas>` element by ID
-2. Obtains a `WebGL2RenderingContext`
+2. Obtains a `WebGL2RenderingContext` with `stencil: true` and
+   `antialias: false` (single-sampled like native; a multisampled canvas
+   disables the half-res particle pass — `classic-gfx` §19)
 3. Wraps it in `glow::Context::from_webgl2_context()`
 4. Creates `Rc<RefCell<InputState>>` shared across all event closures
 5. Sets canvas pixel dimensions to `window.innerWidth/innerHeight`
@@ -140,7 +142,10 @@ closure is created with `Closure::wrap`, registered with
 ### Animation frame loop
 The `run_loop` implementation uses `request_animation_frame` recursively. It
 stores `prev_time` to compute `real_delta` in seconds. On the first frame
-(`prev_time = 0`), delta defaults to 0.016 (16ms, ~60fps). The web backend
+(`prev_time = 0`), delta defaults to 0.016 (16ms, ~60fps); after that it is
+clamped through `classic_platform::frame_delta` (`[0, MAX_FRAME_DT = 0.1]`),
+exactly like native and headless.  It used to be unclamped, so a slow page
+(software GL, a resumed tab) fed the engine 0.7 s steps.  The web backend
 does NOT respect `CLASSIC_FRAMES`.
 
 ## 4. Headless Backend (HeadlessPlatform)
@@ -163,7 +168,7 @@ Gated behind `#[cfg(feature = "native")]` (not `wasm32`). Activated by
 Does NOT use window events. Runs a `while !should_close` loop with
 `instant.now()` timing. The loop:
 
-1. Computes `delta = (now - prev_time).as_secs_f32().min(0.1)`
+1. Computes `delta = frame_delta((now - prev_time).as_secs_f32())` (≤ 0.1 s)
 2. Calls `on_frame()` with a shared `InputState` (no real input)
 3. Calls `input.end_frame()`
 

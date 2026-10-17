@@ -868,6 +868,9 @@ form.  No transform feedback, no per-frame CPU simulation.
   LINEAR upscale); a quarter of the shaded pixels.  Ribbons stay full-res.
   Always on (no toggle): only a multisampled main framebuffer or a
   depth-blit GL error turns it off for good (full-res fallback, logged).
+  The web canvas is therefore created with `antialias: false` (the browser
+  default `true` is multisampled and silently disabled the pass on the web
+  only); its `depth` + `stencil` default framebuffer is `DEPTH24_STENCIL8`.
 - **Fill cost**: the smoke shape reads one baked tileable noise texel
   (`bake_noise`: value + slope) instead of evaluating value noise per pixel,
   and every procedural shape discards outside the unit disc first.
@@ -898,9 +901,20 @@ form.  No transform feedback, no per-frame CPU simulation.
   `intensity`, cumulative `burst`, `enabled`, `position`, `dir`).  Guests
   reach the same system through `fx_emit` and the handle-based
   `emitter_spawn`/`emitter_set`/`emitter_release` imports (`classic-guest`
-  §3c); a guest emitter is an ordinary `Emitter` entity named
-  `guest_emitter#<serial>` — a never-reused name, because instance ids hash
-  the debug name and an unnamed entity falls back to its recycled index.
+  §3c); an `Emitter.node` ending in `*` (`"fx_nozzle_*"`) is a **multi-node**
+  emitter: one instance whose spawn sites are every node of the parent
+  `Model`'s current glb with that prefix (glb node order, re-resolved each
+  frame, so a landing → launch glb swap with a different nozzle set
+  follows).  A layer's `rate`/`burst` are **per node** (an effect is one
+  plume; N nozzles make N plumes), the births dealt round-robin across the
+  sites (`ParticleRt::next_site`) into the one shared ring per layer (`max`
+  caps the whole cluster), each spawned in its node's full TRS; ribbons,
+  light layers, ground falloff and `named_world_point` use the sites'
+  centroid (`Instance::frame`).  No match falls back to the parent's ground
+  point; `Light.node` stays exact-name only.  A guest emitter is an
+  ordinary `Emitter` entity named `guest_emitter#<serial>` — a never-reused
+  name, because instance ids hash the debug name and an unnamed entity
+  falls back to its recycled index.
   Vehicles drive their own per-wheel dust emitters and touchdown one-shots
   (`IsoVehicle.dust_effect`/`touchdown_effect`, `classic-ecs` "Vehicles").
 - **Coverage**: `classic-core` `tests/fixtures/effects.json` is the

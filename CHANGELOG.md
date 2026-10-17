@@ -94,9 +94,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   by the impact speed.  Vehicles without the keys spawn nothing and dump
   unchanged.
 - `rom:fxtest` names the particle test-bench ROM (desktop `rom_lookup`, web
-  `ROM_URLS`).  It is not in the `fetch-roms`/`check-roms` set until it is
-  published: until then a locally staged `roms/out/fxtest.rom` boots and
-  the CDN fallback 404s (#129).
+  `ROM_URLS`), fetched by `fetch-roms` and pinned in `roms.lock.json` with
+  the other published ROMs (#129, #130).
+- Multi-node emitters: an `Emitter.node` ending in `*` (`"fx_nozzle_*"`)
+  attaches the one effect instance to every node of the parent `Model`'s
+  current glb whose name has that prefix, each node a spawn site with its
+  own full TRS.  An effect describes one plume, so each node runs a
+  layer's full `rate` and `burst`; births are dealt to the nodes
+  round-robin (an even, deterministic split) into one shared ring per
+  layer (`max` caps the whole cluster), and one `Animator` drives it all.
+  Lights, ribbons and review framing use the nodes' centroid.  The set
+  re-resolves every frame, following a clip swap to a glb with a
+  different node set.  Exact names attach as before; a pattern matching
+  nothing falls back to the parent's ground point, like a missed exact
+  name.  `Light.node` stays single-node (#130).
 
 ### Fixed
 
@@ -112,6 +123,19 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   400-tile map resolves only ~0.2 tile near its far edge.  The demo frame
   moves on ~0.3% of pixels, along texel and tile edges, where the old
   lookup rounded.
+- The web canvas is created with `antialias: false`, like the native
+  window.  The browser default made it multisampled, which the half-res
+  particle pass cannot blit depth from, so web particles always drew at
+  full resolution: a zoomed-in rocket landing halved the frame rate.
+  Terrain edges are now aliased exactly as on native (#130).
+- Vehicle springs no longer blow up on long frames.  Their
+  semi-implicit Euler steps are stable only below ~0.13 s; the web loop
+  passed raw frame gaps (no 0.1 s cap, unlike native/headless), so a
+  slow page took 0.7 s steps and the fx gallery's rover went `NaN` and
+  panicked in the wheel travel clamp.  The springs now sub-step at
+  0.05 s (one step, bit-identical, at or below it), every backend caps
+  the frame delta through `classic_platform::frame_delta` (0.1 s), and
+  the wheel clamp cannot panic (#130).
 
 ## [0.3.2] - 2026-10-07
 

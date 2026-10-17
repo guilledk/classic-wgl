@@ -75,6 +75,8 @@ struct ParticleRt {
     acc: f32,
     /// Whether the one-shot start burst has fired.
     started: bool,
+    /// Round-robin cursor over a multi-node emitter's spawn sites.
+    next_site: u32,
 }
 
 struct RibbonRt {
@@ -112,8 +114,15 @@ struct Instance {
     source: Source,
     /// Clock time the instance started.
     start: f64,
+    /// The instance frame; for a multi-node emitter the centroid of its
+    /// sites (lights, ribbons, ground falloff and review framing use it).
     frame: SpawnFrame,
     prev_frame: Option<SpawnFrame>,
+    /// A multi-node emitter's per-node spawn frames (`Emitter.node` pattern
+    /// `"prefix*"`), in glb node order; empty for a single-frame instance,
+    /// which spawns from `frame`.
+    sites: Vec<SpawnFrame>,
+    prev_sites: Vec<SpawnFrame>,
     tint: [f32; 3],
     intensity: f32,
     rate: f32,
@@ -266,6 +275,7 @@ impl ParticleSystem {
                     gpu: None,
                     acc: 0.0,
                     started: false,
+                    next_site: 0,
                 }),
                 LayerDef::Ribbon(_) => LayerRt::Ribbon(RibbonRt {
                     def_index: i,
@@ -289,6 +299,8 @@ impl ParticleSystem {
             start: self.clock,
             frame,
             prev_frame: None,
+            sites: Vec::new(),
+            prev_sites: Vec::new(),
             tint: [1.0; 3],
             intensity: 1.0,
             rate: 1.0,
@@ -447,6 +459,48 @@ pub fn layer_uniforms(
     }
 }
 
+/// An attachment frame in a glTF node's world transform: `position`/`dir` in
+/// the node's frame, the basis its normalised axes (full TRS follow).
+fn node_frame(world: Mat4, position: Vec3, dir: Vec3) -> (Vec3, Mat3, Vec3) {
+    let basis = Mat3::from_mat4(world);
+    let nb = Mat3::from_cols(
+        basis.x_axis.normalize_or_zero(),
+        basis.y_axis.normalize_or_zero(),
+        basis.z_axis.normalize_or_zero(),
+    );
+    (world.transform_point3(position), nb, (nb * dir).try_normalize().unwrap_or(Vec3::Z))
+}
+
+/// The instance frame of a set of spawn sites: the one site itself, else the
+/// mean position, the first site's basis and the mean direction.
+fn sites_centroid(sites: &[(Vec3, Mat3, Vec3)]) -> (Vec3, Mat3, Vec3) {
+    match sites {
+        [] => (Vec3::ZERO, Mat3::IDENTITY, Vec3::Z),
+        [one] => *one,
+        [first, ..] => {
+            let n = sites.len() as f32;
+            let pos = sites.iter().map(|s| s.0).sum::<Vec3>() / n;
+            let dir = sites.iter().map(|s| s.2).sum::<Vec3>().try_normalize().unwrap_or(first.2);
+            (pos, first.1, dir)
+        }
+    }
+}
+
+/// Spawn sites of an instance: its multi-node sites, else its one frame.  A
+/// layer's `rate` and `burst` are per site (an effect describes one plume,
+/// so N nozzles make N plumes); the ring (`max`) is shared by all of them.
+fn site_count(sites: &[SpawnFrame]) -> usize {
+    sites.len().max(1)
+}
+
+/// Advance a round-robin site cursor over `n` sites, returning the site to
+/// spawn from.
+fn next_site(cursor: &mut u32, n: usize) -> usize {
+    let k = *cursor as usize % n;
+    *cursor = cursor.wrapping_add(1);
+    k
+}
+
 /// Terrain height sampler over the primary tilemap (world metres in, world z
 /// out; `None` off the map).
 struct Ground<'a> {
@@ -515,22 +569,51 @@ impl Engine {
         if let Some(node) = node {
             if let Ok(m) = self.world.get::<&Model>(pe) {
                 if let Some(world) = self.model_node_world(&tf, &m, node) {
-                    let basis = Mat3::from_mat4(world);
-                    let nb = Mat3::from_cols(
-                        basis.x_axis.normalize_or_zero(),
-                        basis.y_axis.normalize_or_zero(),
-                        basis.z_axis.normalize_or_zero(),
-                    );
-                    return Some((
-                        world.transform_point3(position),
-                        nb,
-                        (nb * dir).try_normalize().unwrap_or(Vec3::Z),
-                    ));
+                    return Some(node_frame(world, position, dir));
                 }
             }
         }
         let base = self.iso_to_world(tf.position.x, tf.position.y, 0.0)?;
         Some((base + self.parent_frame_offset(pe) + position, Mat3::IDENTITY, dir))
+    }
+
+    /// Every world frame an emitter spawns from.  A `node` pattern ending in
+    /// `*` (`"fx_nozzle_*"`) on a `Model` parent yields one frame per matching
+    /// node of the parent's current glb (glb node order), each with
+    /// `position`/`dir` in that node's frame; anything else — and a pattern
+    /// that matches nothing, like an exact name that misses — is the single
+    /// [`Engine::attachment_frame`].  `None` when the attachment is hidden or
+    /// unresolvable.
+    pub(crate) fn attachment_sites(
+        &self,
+        parent: Option<&str>,
+        node: Option<&str>,
+        position: Vec3,
+        dir: Vec3,
+    ) -> Option<Vec<(Vec3, Mat3, Vec3)>> {
+        let prefix = node.and_then(classic_core::components::node_pattern_prefix);
+        let (Some(prefix), Some(parent_name)) = (prefix, parent) else {
+            return self.attachment_frame(parent, node, position, dir).map(|f| vec![f]);
+        };
+        let &pe = self.names.get(parent_name)?;
+        if self.is_disabled(pe) {
+            return None;
+        }
+        let sites: Vec<_> = {
+            let tf = self.world.get::<&Transform>(pe).ok()?;
+            match self.world.get::<&Model>(pe) {
+                Ok(m) => self
+                    .model_nodes_world_with_prefix(&tf, &m, prefix)
+                    .into_iter()
+                    .map(|world| node_frame(world, position, dir))
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
+        if sites.is_empty() {
+            return self.attachment_frame(parent, None, position, dir).map(|f| vec![f]);
+        }
+        Some(sites)
     }
 
     /// The world-metre point (light space, `+Z` up) a named entity sits at,
@@ -549,7 +632,8 @@ impl Engine {
         };
         if let Ok(em) = self.world.get::<&Emitter>(e) {
             let (parent, node) = (em.parent.as_deref(), em.node.as_deref());
-            return self.attachment_frame(parent, node, em.position, em.dir).map(|f| f.0);
+            let sites = self.attachment_sites(parent, node, em.position, em.dir)?;
+            return Some(sites_centroid(&sites).0);
         }
         if let Ok(l) = self.world.get::<&Light>(e) {
             let (parent, node) = (l.parent.as_deref(), l.node.as_deref());
@@ -615,12 +699,13 @@ impl Engine {
             }
         }
         for (name, entity, em) in emitters {
-            let resolved = self.attachment_frame(
+            let sites = self.attachment_sites(
                 em.parent.as_deref(),
                 em.node.as_deref(),
                 em.position,
                 em.dir,
             );
+            let resolved = sites.as_deref().map(sites_centroid);
             let active = em.enabled && !self.is_disabled(entity) && resolved.is_some();
             let id = match ps.by_entity.get(&entity) {
                 Some(&id) => id,
@@ -653,9 +738,37 @@ impl Engine {
             inst.intensity = em.intensity;
             inst.rate = em.rate;
             inst.prev_frame = Some(inst.frame);
-            if let Some((pos, basis, dir)) = resolved {
-                let vel = if dt > 0.0 { (pos - inst.frame.pos) / dt } else { Vec3::ZERO };
-                inst.frame = SpawnFrame { pos, basis, dir, vel, scale: em.scale, speed: em.speed };
+            let (scale, speed) = (em.scale, em.speed);
+            let follow = |prev: Option<&SpawnFrame>, (pos, basis, dir): (Vec3, Mat3, Vec3)| {
+                let vel = match prev {
+                    Some(p) if dt > 0.0 => (pos - p.pos) / dt,
+                    _ => Vec3::ZERO,
+                };
+                SpawnFrame { pos, basis, dir, vel, scale, speed }
+            };
+            if let Some(c) = resolved {
+                inst.frame = follow(Some(&inst.frame), c);
+            }
+            // A multi-node emitter keeps one frame per node.  The previous
+            // set only lines up (velocity, birth lerp) when the node count is
+            // unchanged; a glb swap to a different node set starts afresh.
+            match sites {
+                Some(sites) if sites.len() > 1 => {
+                    let same = inst.sites.len() == sites.len();
+                    let next: Vec<SpawnFrame> = sites
+                        .into_iter()
+                        .enumerate()
+                        .map(|(k, s)| follow(inst.sites.get(k).filter(|_| same), s))
+                        .collect();
+                    inst.prev_sites =
+                        if same { std::mem::take(&mut inst.sites) } else { Vec::new() };
+                    inst.sites = next;
+                }
+                Some(_) => {
+                    inst.sites.clear();
+                    inst.prev_sites.clear();
+                }
+                None => inst.prev_sites = inst.sites.clone(),
             }
             // Burst counter: every integer step fires one burst per layer.
             let fired = if em.burst < inst.last_burst {
@@ -681,10 +794,16 @@ impl Engine {
         for (li, l) in inst.layers.iter_mut().enumerate() {
             let LayerRt::Particles(p) = l else { continue };
             let LayerDef::Particles(def) = &inst.effect.layers[p.def_index] else { continue };
-            let count = def.spawn.burst * n;
+            // A multi-node emitter bursts on every node (see `site_count`).
+            let count = def.spawn.burst * n * site_count(&inst.sites) as u32;
             let mut rng = SplitMix64::keyed(inst.id, frame_no, 0x1000 + li as u64);
             for _ in 0..count {
-                let (rec, _) = spawn_particle(&mut rng, def, &inst.frame, t, &gfn);
+                let frame = if inst.sites.is_empty() {
+                    &inst.frame
+                } else {
+                    &inst.sites[next_site(&mut p.next_site, inst.sites.len())]
+                };
+                let (rec, _) = spawn_particle(&mut rng, def, frame, t, &gfn);
                 p.ring.push(rec);
             }
         }
@@ -755,7 +874,9 @@ impl Engine {
                     inst.emitting && age >= def.delay
                 };
                 if emitting_now && def.spawn.rate > 0.0 && dt > 0.0 {
-                    let mut rate = def.spawn.rate * inst.rate;
+                    // The layer describes one plume: a multi-node emitter
+                    // runs it on every node, so its rate scales with them.
+                    let mut rate = def.spawn.rate * inst.rate * site_count(&inst.sites) as f32;
                     if let (true, Some([h0, h1])) = (def.spawn.on_ground, def.spawn.ground_falloff)
                     {
                         let h = gfn(inst.frame.pos.x, inst.frame.pos.y)
@@ -776,11 +897,22 @@ impl Engine {
                     }
                 }
                 for (tb, u) in births {
-                    let frame = match inst.prev_frame {
-                        Some(prev) if !one_shot => {
-                            SpawnFrame { pos: prev.pos.lerp(inst.frame.pos, u), ..inst.frame }
+                    let frame = if inst.sites.is_empty() {
+                        match inst.prev_frame {
+                            Some(prev) if !one_shot => {
+                                SpawnFrame { pos: prev.pos.lerp(inst.frame.pos, u), ..inst.frame }
+                            }
+                            _ => inst.frame,
                         }
-                        _ => inst.frame,
+                    } else {
+                        // Multi-node: deal births to the nodes round-robin
+                        // (deterministic, an even split at any rate).
+                        let k = next_site(&mut p.next_site, inst.sites.len());
+                        let site = inst.sites[k];
+                        match inst.prev_sites.get(k) {
+                            Some(prev) => SpawnFrame { pos: prev.pos.lerp(site.pos, u), ..site },
+                            None => site,
+                        }
                     };
                     let (rec, landing) = spawn_particle(&mut rng, def, &frame, tb, &gfn);
                     p.ring.push(rec);

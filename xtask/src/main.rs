@@ -49,6 +49,7 @@ const ROMS: &[(&str, &str)] = &[
     ("lighttest", "lighttest.rom"),
     ("common", "common.rom"),
     ("lunar-common", "lunar-common.rom"),
+    ("fxtest", "fxtest.rom"),
 ];
 
 fn main() -> anyhow::Result<()> {

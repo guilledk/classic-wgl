@@ -492,8 +492,11 @@ impl Engine {
             let mut wheel_altitude = [0.0f32; 4];
             let mut wheel_z = [0.0f32; 4];
             for i in 0..4 {
+                // `max`/`min`, not `clamp`: a non-finite plane must not
+                // panic the frame (`clamp` asserts its bounds).
                 let target = wheel_ground[i]
-                    .clamp(plane[i] - v.wheel_travel_down, plane[i] + v.wheel_travel_up);
+                    .max(plane[i] - v.wheel_travel_down)
+                    .min(plane[i] + v.wheel_travel_up);
                 let (h, hv) = advance_suspension(v.wheel_h[i], v.wheel_v[i], target, delta);
                 v.wheel_h[i] = h;
                 v.wheel_v[i] = hv;

@@ -134,7 +134,7 @@ where
                 let vw = size.width as f32;
                 let vh = size.height as f32;
                 let now = Instant::now();
-                let real_delta = (now - self.prev_time).as_secs_f32().min(0.1);
+                let real_delta = crate::frame_delta((now - self.prev_time).as_secs_f32());
                 self.prev_time = now;
                 (self.on_frame)(glw.gl.clone(), input, vw, vh, real_delta, &mut should_close);
                 if should_close {
