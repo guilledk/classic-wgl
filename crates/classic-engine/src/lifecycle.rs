@@ -63,6 +63,7 @@ impl Engine {
             light_color: [1.0, 0.95, 0.85],
             light_handles: light::LightHandles::new(),
             particles: particles::ParticleSystem::default(),
+            emitter_handles: particles::EmitterHandles::new(),
             animations: HashMap::new(),
             sdf_fonts: HashMap::new(),
             frame_tables: HashMap::new(),

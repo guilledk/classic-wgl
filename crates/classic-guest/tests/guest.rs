@@ -2,7 +2,8 @@
 //! always; wasmtime on native) with small hand-written WAT guest modules.
 
 use classic_core::components::{
-    Animator, ColliderData, Disabled, IsoSprite, Light, Model, NavMesh, Role, Shape, Tilemap,
+    Animator, ColliderData, Disabled, Emitter, IsoSprite, Light, Model, NavMesh, Role, Shape,
+    Tilemap,
 };
 use classic_core::types::{AnimationData, SdfFontMetrics};
 use classic_core::RoleKind;
@@ -734,6 +735,172 @@ fn guest_light_pool_spawn_set_release() {
 
             rt.update(&mut engine, 0.016).unwrap();
             assert_eq!(lights(&engine).len(), 0);
+        },
+    );
+}
+
+/// A test engine with a tiny effect library registered under `t`.
+fn engine_with_effects() -> Engine {
+    let mut engine = Engine::new_for_test();
+    let lib = r#"{"effects":[
+      {"name":"pop","layers":[{"type":"particles","name":"p","max":64,"spawn":{"burst":8},"life":[0.5,0.5]}]},
+      {"name":"stream","layers":[{"type":"particles","name":"p","max":256,"spawn":{"rate":60},"life":[1,1]}]}
+    ]}"#;
+    engine.register_effects(
+        "t",
+        classic_core::effects::EffectLibrary::from_json(lib.as_bytes()).unwrap(),
+    );
+    engine
+}
+
+#[test]
+fn guest_fx_emit_and_emitter_pool_spawn_set_release() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "fx_emit" (func $fx (param i32 i32 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "emitter_spawn" (func $espawn (param i32 i32 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "emitter_set" (func $eset (param i32 f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "emitter_release" (func $erelease (param i32) (result i32)))
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "pop")
+            (data (i32.const 8) "nope")
+            (data (i32.const 16) "t::stream")
+            (data (i32.const 32) "bad")
+            (global $handle (mut i32) (i32.const -1))
+            (global $frame (mut i32) (i32.const 0))
+            (func $flag_if (param $cond i32)
+                (if (local.get $cond) (then (drop (call $spawn (i32.const 32) (i32.const 3))))))
+            (func (export "update") (param f64)
+                (local $f i32)
+                (local.set $f (global.get $frame))
+                (if (i32.eqz (local.get $f))
+                    (then
+                        ;; a bare name resolves; an unknown one returns 0
+                        (call $flag_if (i32.ne (call $fx (i32.const 0) (i32.const 3)
+                            (f64.const 5) (f64.const -5) (f64.const 1)
+                            (f64.const 0) (f64.const 0) (f64.const 0) (f64.const 1)) (i32.const 1)))
+                        (call $flag_if (call $fx (i32.const 8) (i32.const 4)
+                            (f64.const 0) (f64.const 0) (f64.const 0)
+                            (f64.const 0) (f64.const 0) (f64.const 1) (f64.const 1)))
+                        (call $flag_if (i32.ne (call $espawn (i32.const 8) (i32.const 4)
+                            (f64.const 0) (f64.const 0) (f64.const 0)
+                            (f64.const 0) (f64.const 0) (f64.const 1) (f64.const 1)) (i32.const -1)))
+                        (global.set $handle (call $espawn (i32.const 16) (i32.const 9)
+                            (f64.const 10) (f64.const 20) (f64.const 0)
+                            (f64.const 1) (f64.const 0) (f64.const 0) (f64.const 2)))))
+                (if (i32.eq (local.get $f) (i32.const 1))
+                    (then
+                        (call $flag_if (i32.ne (call $eset (global.get $handle)
+                            (f64.const 30) (f64.const 40) (f64.const 5)
+                            (f64.const 0) (f64.const 0) (f64.const 0)
+                            (f64.const 3) (f64.const 0.5) (f64.const 4)) (i32.const 1)))
+                        (call $flag_if (call $eset (i32.const -1)
+                            (f64.const 0) (f64.const 0) (f64.const 0)
+                            (f64.const 0) (f64.const 0) (f64.const 0)
+                            (f64.const 1) (f64.const 1) (f64.const 1)))))
+                (if (i32.eq (local.get $f) (i32.const 2))
+                    (then
+                        (call $flag_if (i32.ne (call $erelease (global.get $handle)) (i32.const 1)))
+                        (call $flag_if (call $erelease (global.get $handle)))))
+                (global.set $frame (i32.add (local.get $f) (i32.const 1))))
+        )"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = engine_with_effects();
+            let emitters = |engine: &Engine| {
+                engine.world.query::<&Emitter>().iter().map(|(_, e)| e.clone()).collect::<Vec<_>>()
+            };
+            rt.update(&mut engine, 0.016).unwrap();
+            engine.update_particles(0.016);
+            assert_eq!(engine.particle_stats().live, 8, "the one-shot burst");
+            let spawned = emitters(&engine);
+            assert_eq!(spawned.len(), 1);
+            assert_eq!(spawned[0].effect, "t::stream");
+            assert_eq!(spawned[0].position, Vec3::new(10.0, 20.0, 0.0));
+            assert_eq!(spawned[0].dir, Vec3::X);
+            assert_eq!(spawned[0].scale, 2.0);
+
+            rt.update(&mut engine, 0.016).unwrap();
+            let set = emitters(&engine);
+            assert_eq!(set[0].position, Vec3::new(30.0, 40.0, 5.0));
+            assert_eq!(set[0].dir, Vec3::Z, "a zero direction means up");
+            assert_eq!((set[0].scale, set[0].rate, set[0].intensity), (3.0, 0.5, 4.0));
+            assert_eq!(set[0].effect, "t::stream", "the effect is kept");
+
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(emitters(&engine).is_empty());
+            assert!(!engine.has_name("bad"), "every return code matched");
+        },
+    );
+}
+
+/// A guest that keeps a light/emitter handle past its release must get `0`
+/// from `*_set`/`*_release` once the slot is reused, never drive the reuser.
+#[test]
+fn guest_stale_handles_after_release_are_rejected() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "light_spawn" (func $lspawn (param i32 f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "light_set" (func $lset (param i32 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "light_release" (func $lrelease (param i32) (result i32)))
+            (import "env" "emitter_spawn" (func $espawn (param i32 i32 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "emitter_set" (func $eset (param i32 f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "emitter_release" (func $erelease (param i32) (result i32)))
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "t::stream")
+            (data (i32.const 32) "bad")
+            (func $flag_if (param $cond i32)
+                (if (local.get $cond) (then (drop (call $spawn (i32.const 32) (i32.const 3))))))
+            (func $light (param $i f64) (result i32)
+                (call $lspawn (i32.const 0)
+                    (f64.const 1) (f64.const 2) (f64.const 0)
+                    (f64.const 1) (f64.const 1) (f64.const 1)
+                    (local.get $i) (f64.const 10) (f64.const 0)))
+            (func $emitter (param $x f64) (result i32)
+                (call $espawn (i32.const 0) (i32.const 9)
+                    (local.get $x) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0) (f64.const 1) (f64.const 1)))
+            (func (export "update") (param f64)
+                (local $stale i32) (local $fresh i32)
+                ;; lights: release, respawn into the same slot, poke the stale handle
+                (local.set $stale (call $light (f64.const 1)))
+                (call $flag_if (i32.ne (call $lrelease (local.get $stale)) (i32.const 1)))
+                (local.set $fresh (call $light (f64.const 9)))
+                (call $flag_if (i32.lt_s (local.get $fresh) (i32.const 0)))
+                (call $flag_if (i32.eq (local.get $fresh) (local.get $stale)))
+                (call $flag_if (call $lset (local.get $stale)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0)))
+                (call $flag_if (call $lrelease (local.get $stale)))
+                ;; emitters: the same dance
+                (local.set $stale (call $emitter (f64.const 1)))
+                (call $flag_if (i32.ne (call $erelease (local.get $stale)) (i32.const 1)))
+                (local.set $fresh (call $emitter (f64.const 7)))
+                (call $flag_if (i32.lt_s (local.get $fresh) (i32.const 0)))
+                (call $flag_if (i32.eq (local.get $fresh) (local.get $stale)))
+                (call $flag_if (call $eset (local.get $stale)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 0) (f64.const 0) (f64.const 0)
+                    (f64.const 1) (f64.const 0) (f64.const 0)))
+                (call $flag_if (call $erelease (local.get $stale))))
+        )"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = engine_with_effects();
+            rt.update(&mut engine, 0.016).unwrap();
+            assert!(!engine.has_name("bad"), "every stale call was refused");
+            let lights: Vec<Light> =
+                engine.world.query::<&Light>().iter().map(|(_, l)| l.clone()).collect();
+            assert_eq!(lights.len(), 1);
+            assert_eq!(lights[0].intensity, 9.0, "the reusing light is untouched");
+            let emitters: Vec<Emitter> =
+                engine.world.query::<&Emitter>().iter().map(|(_, e)| e.clone()).collect();
+            assert_eq!(emitters.len(), 1);
+            assert_eq!(emitters[0].position, Vec3::new(7.0, 0.0, 0.0));
+            assert_eq!(emitters[0].rate, 1.0, "the reusing emitter is untouched");
         },
     );
 }

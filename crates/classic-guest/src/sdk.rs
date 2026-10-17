@@ -6,7 +6,7 @@
 //! heavy lifting lives in safe `Engine` methods; only the pointer deref is
 //! `unsafe`.
 
-use classic_core::components::{Light, LightKind, TextJustify, UiAlign, UiAnchor};
+use classic_core::components::{Emitter, Light, LightKind, TextJustify, UiAlign, UiAnchor};
 use classic_core::fields::FieldDtype;
 use classic_core::instrument::Chan;
 use classic_core::pathfinder::PathPoll;
@@ -75,6 +75,16 @@ pub struct GuestHost {
     /// The owning ROM's namespace (empty = global).  Guest-supplied names are
     /// qualified/resolved against this so several ROMs' guests can coexist.
     namespace: String,
+}
+
+/// A guest `f64` triple as a world-space vector.
+fn vec3(x: f64, y: f64, z: f64) -> glam::Vec3 {
+    glam::Vec3::new(x as f32, y as f32, z as f32)
+}
+
+/// A guest emission direction, normalized; a zero vector means straight up.
+fn emit_dir(dx: f64, dy: f64, dz: f64) -> glam::Vec3 {
+    vec3(dx, dy, dz).try_normalize().unwrap_or(glam::Vec3::Z)
 }
 
 impl GuestHost {
@@ -606,8 +616,8 @@ impl GuestHost {
     ) -> i32 {
         // `light_set` only updates the transform/radiance fields; it must not
         // demote a spot light or detach a parented light.  A negative handle is
-        // invalid (the host treats handles as unsigned slot indices, so `-1`
-        // must not silently alias slot 0).
+        // invalid: handles are non-negative generational slot handles, and a
+        // `-1` cast to `u32` must not reach the table.
         if handle < 0 {
             return 0;
         }
@@ -637,6 +647,93 @@ impl GuestHost {
             return 0;
         }
         self.engine_mut().release_light(handle as u32) as i32
+    }
+
+    /// Fire a one-shot effect at world-metre `(x, y, z)` (the light-space
+    /// convention of `light_spawn`, `+Z` up), emitting along `(dx, dy, dz)`
+    /// (a zero vector means straight up) at spatial `scale`.  Returns `1`, or
+    /// `0` for an unknown effect.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fx_emit(
+        &mut self,
+        effect: &str,
+        x: f64,
+        y: f64,
+        z: f64,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        scale: f64,
+    ) -> i32 {
+        // Effect names resolve against every loaded library (exact `ns::name`,
+        // else by bare name), so the guest's string passes through verbatim.
+        self.engine_mut().fx_emit(effect, vec3(x, y, z), emit_dir(dx, dy, dz), scale as f32) as i32
+    }
+
+    /// Spawn a continuous emitter of `effect` (same frame as [`fx_emit`]).
+    /// Returns its handle, or `-1` for an unknown effect or a full pool.
+    ///
+    /// [`fx_emit`]: Self::fx_emit
+    #[allow(clippy::too_many_arguments)]
+    pub fn emitter_spawn(
+        &mut self,
+        effect: &str,
+        x: f64,
+        y: f64,
+        z: f64,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        scale: f64,
+    ) -> i32 {
+        let mut emitter = Emitter::new(effect, vec3(x, y, z));
+        emitter.dir = emit_dir(dx, dy, dz);
+        emitter.scale = scale as f32;
+        self.engine_mut().spawn_emitter(emitter).map(|h| h as i32).unwrap_or(-1)
+    }
+
+    /// Move/steer/drive an active emitter by handle: position, direction,
+    /// `scale`, spawn-`rate` multiplier (`0` pauses spawning) and `intensity`.
+    /// Its effect, tint, speed and burst counter are kept.  Returns `1`, or
+    /// `0` for an unknown/released handle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn emitter_set(
+        &mut self,
+        handle: i32,
+        x: f64,
+        y: f64,
+        z: f64,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        scale: f64,
+        rate: f64,
+        intensity: f64,
+    ) -> i32 {
+        // Handles are non-negative generational slot handles: a `-1` cast to
+        // `u32` must not reach the table.
+        if handle < 0 {
+            return 0;
+        }
+        let handle = handle as u32;
+        let Some(mut emitter) = self.engine().emitter_by_handle(handle) else {
+            return 0;
+        };
+        emitter.position = vec3(x, y, z);
+        emitter.dir = emit_dir(dx, dy, dz);
+        emitter.scale = scale as f32;
+        emitter.rate = rate.max(0.0) as f32;
+        emitter.intensity = intensity.max(0.0) as f32;
+        self.engine_mut().update_emitter(handle, emitter) as i32
+    }
+
+    /// Release an emitter (its live particles finish).  Returns `1`, or `0`
+    /// for an unknown/released handle.
+    pub fn emitter_release(&mut self, handle: i32) -> i32 {
+        if handle < 0 {
+            return 0;
+        }
+        self.engine_mut().release_emitter(handle as u32) as i32
     }
 
     /// Spawn a named screen-space solid-color rectangle.

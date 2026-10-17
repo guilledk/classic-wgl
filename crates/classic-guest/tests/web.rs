@@ -176,6 +176,48 @@ async fn worker_and_web_pass_wide_imports() {
 }
 
 #[wasm_bindgen_test]
+async fn worker_and_web_drive_guest_emitters() {
+    // `emitter_spawn` takes a `str` plus 7 `f64`, `emitter_set` 11 wasm params:
+    // a string and a wide import through both browser backends.
+    let wat = r#"(module
+        (import "env" "emitter_spawn" (func $spawn
+            (param i32 i32 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+        (import "env" "emitter_set" (func $set
+            (param i32 f64 f64 f64 f64 f64 f64 f64 f64 f64) (result i32)))
+        (memory (export "memory") 1)
+        (data (i32.const 0) "stream")
+        (func (export "update") (param f64)
+            (drop (call $set
+                (call $spawn (i32.const 0) (i32.const 6)
+                    (f64.const 1) (f64.const 2) (f64.const 3)
+                    (f64.const 0) (f64.const 0) (f64.const 1) (f64.const 1))
+                (f64.const 4) (f64.const 5) (f64.const 6)
+                (f64.const 0) (f64.const 1) (f64.const 0)
+                (f64.const 2) (f64.const 0.5) (f64.const 3)))))"#;
+    let engine_with_effects = || {
+        let mut engine = Engine::new_for_test();
+        let lib = br#"{"effects":[{"name":"stream","layers":[{"type":"particles","name":"p",
+            "max":64,"spawn":{"rate":60},"life":[1,1]}]}]}"#;
+        engine.register_effects("t", classic_core::effects::EffectLibrary::from_json(lib).unwrap());
+        engine
+    };
+    let driven = |engine: &Engine| {
+        let em = engine.emitter_by_handle(0).expect("emitter spawned");
+        assert_eq!(em.position.to_array(), [4.0, 5.0, 6.0]);
+        assert_eq!(em.dir.to_array(), [0.0, 1.0, 0.0]);
+        assert_eq!((em.scale, em.rate, em.intensity), (2.0, 0.5, 3.0));
+    };
+    let mut engine = engine_with_effects();
+    worker(wat).await.update(&mut engine, 0.016).unwrap();
+    driven(&engine);
+
+    let mut engine = engine_with_effects();
+    let mut web = WebWasmRuntime::new(&wat::parse_str(wat).unwrap(), &limits()).unwrap();
+    web.update(&mut engine, 0.016).unwrap();
+    driven(&engine);
+}
+
+#[wasm_bindgen_test]
 fn web_links_every_web_table_import() {
     let wasm = wat::parse_str(wat_importing_all(Backend::Web)).unwrap();
     WebWasmRuntime::new(&wasm, &limits()).expect("every web table import links");

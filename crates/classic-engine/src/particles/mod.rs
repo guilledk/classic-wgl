@@ -16,6 +16,7 @@
 //! before the UI).  A scene with no emitters never creates an instance, so
 //! its render trace is unchanged.
 
+mod handles;
 mod ribbon;
 mod spawn;
 
@@ -35,6 +36,7 @@ use classic_gfx::{
 };
 use glam::{Mat3, Mat4, Vec3};
 
+pub use handles::{EmitterHandles, MAX_EMITTER_HANDLES};
 pub use ribbon::{bolt, build_vertices, displace, Strand, RIBBON_VERTEX_FLOATS};
 pub use spawn::{cone_dir, hash_str, spawn_particle, Landing, SpawnFrame, SplitMix64};
 

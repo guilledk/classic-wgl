@@ -164,7 +164,8 @@ create a `plans/` dir here (`.gitignore` keeps `/plans/` as a guard).
   `Light` component (registered + dumpable, declarable in `state.json`) gathered
   from the world each frame and uploaded to a `std140` `LightBlock` UBO consumed
   by `sheet.frag`/`iso_tilemap.frag` (shared `evaluateLight`).  The guest
-  `light_spawn`/`light_set`/`light_release` API returns a stable handle backed by
+  `light_spawn`/`light_set`/`light_release` API returns a stable, generational
+  handle (a stale one is rejected after release) backed by
   a `LightHandles` entity table (`classic-engine/src/light.rs`) with optional TTL
   decay.  A `Light` may set `parent` (an entity name): its `position` is then a
   **world-metre offset from the parent's ground point** (`iso_to_world` of the

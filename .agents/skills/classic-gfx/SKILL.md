@@ -891,7 +891,12 @@ form.  No transform feedback, no per-frame CPU simulation.
   (`classic_core::effects`), registered under the ROM namespace; an
   `Emitter` component (or `Engine::fx_emit`) instantiates one, driven by
   `emitter.*` animation channels (`rate`, `speed`, `scale`, `color`,
-  `intensity`, cumulative `burst`, `enabled`, `position`, `dir`).
+  `intensity`, cumulative `burst`, `enabled`, `position`, `dir`).  Guests
+  reach the same system through `fx_emit` and the handle-based
+  `emitter_spawn`/`emitter_set`/`emitter_release` imports (`classic-guest`
+  §3c); a guest emitter is an ordinary `Emitter` entity named
+  `guest_emitter#<serial>` — a never-reused name, because instance ids hash
+  the debug name and an unnamed entity falls back to its recycled index.
 - **Coverage**: `classic-core` `tests/fixtures/effects.json` is the
   reference library (one effect per look); `tests/effects_library.rs` keeps
   every layer kind, spawn shape, ground/render mode, shape and blend in it.
