@@ -22,10 +22,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   fragments inside the rect by it in `mesh.frag`, before lighting.  The
   tint is in the same space as the texture's stored values (sRGB-encoded
   colours for sRGB textures, 0..1), not linear, like `IsoSprite.color`;
-  the tint shows as the `Model` trace item's `color`.  Models without the extra or without a tint render and
-  trace exactly as before.
+  the tint shows as the `Model` trace item's `color`.  Models without the
+  extra or without a tint render and trace exactly as before (#132).
 - `classic_core::model::parse_model_glb_with`: skips decoding images the
-  caller already holds (by encoded-byte SHA-256, `ModelImage.content_hash`).
+  caller already holds (by encoded-byte SHA-256,
+  `ModelImage.content_hash`) (#132).
 
 ### Changed
 
@@ -34,7 +35,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   uploaded again: its `"{model}::image::{i}"` name aliases the existing
   GL texture, so traces keep their per-model names.  A kit building
   (one glb per clip around one 2048² atlas) now holds one 16 MiB texture
-  instead of one per clip (8 clips: 128 MiB -> 16 MiB).
+  instead of one per clip (8 clips: 128 MiB -> 16 MiB) (#132).
 
 ## [0.3.3] - 2026-10-17
 
