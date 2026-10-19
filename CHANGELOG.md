@@ -46,7 +46,7 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   falloff is exactly 0.  The image is unchanged (lists keep light order,
   culled lights contribute 0).  On a Radeon 680M at 4K, the 93-light
   `buildtest` scene goes from 104 ms to 17 ms a frame at zoom 1 and from
-  19 ms to 8 ms at the default zoom.
+  19 ms to 8 ms at the default zoom (#133).
 
 ## [0.3.3] - 2026-10-17
 
