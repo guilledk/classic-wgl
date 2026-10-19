@@ -14,6 +14,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use glam::{Mat4, Quat, Vec3, Vec4};
+use sha2::{Digest, Sha256};
 
 /// The +90°-about-X axis fix: maps glTF (+Y up, +Z forward) to the engine's
 /// Blender-canonical world space (+Z up, +X forward, +ty → −Y).  Inverts the
@@ -55,17 +56,54 @@ pub struct ModelMesh {
     /// Index into [`ModelAsset::images`] for the mesh's albedo texture, or
     /// `None` for an untextured (solid colour) mesh.
     pub image: Option<usize>,
+    /// The team-colour region of the albedo texture, from the textured
+    /// material's [`TEAM_RECT_EXTRA`] extra: `[u0, v0, u1, v1]` in TEXCOORD_0
+    /// space.  `None` when the material carries no team region (the mesh is
+    /// never team-tinted).
+    pub team_rect: Option<[f32; 4]>,
     /// Mesh-local position bounds (for shadow-box fitting).
     pub min: Vec3,
     pub max: Vec3,
 }
+
+/// The glTF material `extras` key carrying a model's team-colour region.
+///
+/// **Contract (written by the kit exporter, read by [`parse_model_glb`]):** a
+/// material's `extras` object may carry
+/// `"classic_team_rect": [u0, v0, u1, v1]`, four numbers in glTF
+/// texture-coordinate space — the space of `TEXCOORD_0`, origin at the
+/// **top-left** of the image, `u` right, `v` down, `0..1` over the image — with
+/// `0 <= u0 < u1 <= 1` and `0 <= v0 < v1 <= 1`.  The rect names a region of
+/// that material's `baseColorTexture`: every texel inside it belongs to a
+/// team-coloured face and is baked **neutral** (light grey / white, times any
+/// AO or wear), so the engine can multiply it by a team colour.  A fragment is
+/// inside when `u0 <= u < u1 && v0 <= v < v1` (half-open, so a rect laid on
+/// texel edges selects exactly its texels under `NEAREST` sampling).
+///
+/// The rect is read from the material that supplies the mesh's albedo
+/// texture (the first textured primitive's), like [`ModelMesh::image`]; an
+/// untextured material's rect is ignored.  A present but malformed value fails
+/// the parse.  Applied when a `Model` sets `tint` (see
+/// `classic_core::components::Model::tint`), a multiplier in the same space
+/// as the texture's stored values (sRGB-encoded colours for sRGB textures,
+/// `0..1`), applied to the sampled texel before lighting.
+pub const TEAM_RECT_EXTRA: &str = "classic_team_rect";
+
+/// SHA-256 of a GLB-embedded image's **encoded** bytes (the PNG/JPEG
+/// buffer-view slice): the key the engine de-duplicates model textures by.
+pub type ImageHash = [u8; 32];
 
 /// A decoded GLB-embedded texture image, converted to RGBA8 (top-down rows).
 #[derive(Clone, Debug)]
 pub struct ModelImage {
     pub width: u32,
     pub height: u32,
+    /// Decoded pixels.  Empty when the caller of [`parse_model_glb_with`]
+    /// already held an image with this [`Self::content_hash`] (decode skipped),
+    /// or once the engine has uploaded them to GL.
     pub rgba8: Vec<u8>,
+    /// SHA-256 of the encoded image bytes (see [`ImageHash`]).
+    pub content_hash: ImageHash,
 }
 
 /// A sampler's interpolation mode (glTF `animation.sampler.interpolation`).
@@ -256,10 +294,25 @@ impl ModelAsset {
     }
 }
 
-/// Parse a self-contained glTF binary (`.glb`) into an [`ModelAsset`].
+/// Parse a self-contained glTF binary (`.glb`) into an [`ModelAsset`],
+/// decoding every embedded image.
 pub fn parse_model_glb(bytes: &[u8]) -> Result<ModelAsset> {
-    let (document, buffers, images) =
-        gltf::import_slice(bytes).map_err(|e| anyhow!("failed to parse glb: {e}"))?;
+    parse_model_glb_with(bytes, |_| None)
+}
+
+/// [`parse_model_glb`], skipping the decode of images the caller already
+/// holds: `known(hash)` returns the `(width, height)` of a previously decoded
+/// image whose encoded bytes hash to `hash`, and that image comes back with
+/// empty [`ModelImage::rgba8`] and those dimensions.  A kit building ships one
+/// glb per clip, each embedding the same atlas, so only the first is decoded.
+pub fn parse_model_glb_with(
+    bytes: &[u8],
+    known: impl Fn(&ImageHash) -> Option<(u32, u32)>,
+) -> Result<ModelAsset> {
+    let gltf::Gltf { document, blob } =
+        gltf::Gltf::from_slice(bytes).map_err(|e| anyhow!("failed to parse glb: {e}"))?;
+    let buffers = gltf::import_buffers(&document, None, blob)
+        .map_err(|e| anyhow!("failed to parse glb: {e}"))?;
 
     // --- nodes (hierarchy + rest TRS) ---
     let gltf_nodes: Vec<_> = document.nodes().collect();
@@ -299,14 +352,18 @@ pub fn parse_model_glb(bytes: &[u8]) -> Result<ModelAsset> {
                 .ok_or_else(|| anyhow!("mesh {:?}: no positions", mesh.name()))?;
             let normals = reader.read_normals();
             let uvs = reader.read_tex_coords(0).map(|r| r.into_f32());
-            // First primitive's material supplies the mesh's albedo texture
-            // image index (the rocket is a single shared material across meshes).
+            // First textured primitive's material supplies the mesh's albedo
+            // texture image index (the rocket is a single shared material
+            // across meshes) and the team region inside that texture.
             if merged.image.is_none() {
-                merged.image = prim
-                    .material()
+                let material = prim.material();
+                merged.image = material
                     .pbr_metallic_roughness()
                     .base_color_texture()
                     .map(|t| t.texture().source().index());
+                if merged.image.is_some() {
+                    merged.team_rect = material_team_rect(&material)?;
+                }
             }
             for p in positions {
                 merged.positions.push(p);
@@ -342,14 +399,31 @@ pub fn parse_model_glb(bytes: &[u8]) -> Result<ModelAsset> {
         meshes.push(merged);
     }
 
-    // --- images (decode to RGBA8, top-down) ---
-    let model_images = images
-        .into_iter()
-        .map(|img| {
-            let rgba8 = image_to_rgba8(&img.pixels, img.format, img.width, img.height)?;
-            Ok(ModelImage { width: img.width, height: img.height, rgba8 })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // --- images (hash the encoded bytes; decode unknown ones to RGBA8) ---
+    let mut model_images = Vec::new();
+    for image in document.images() {
+        let source = image.source();
+        // A slice import resolves no URIs (external or data), exactly as
+        // `gltf::import_slice` refused them: every image is a buffer view.
+        let gltf::image::Source::View { ref view, .. } = source else {
+            bail!("failed to parse glb: image {} is not embedded in the binary", image.index());
+        };
+        let start = view.offset();
+        let encoded = buffers[view.buffer().index()]
+            .get(start..start + view.length())
+            .ok_or_else(|| anyhow!("image {}: buffer view out of range", image.index()))?;
+        let content_hash: ImageHash = Sha256::digest(encoded).into();
+        let img = match known(&content_hash) {
+            Some((width, height)) => ModelImage { width, height, rgba8: Vec::new(), content_hash },
+            None => {
+                let data = gltf::image::Data::from_source(source, None, &buffers)
+                    .map_err(|e| anyhow!("failed to parse glb: {e}"))?;
+                let rgba8 = image_to_rgba8(&data.pixels, data.format, data.width, data.height)?;
+                ModelImage { width: data.width, height: data.height, rgba8, content_hash }
+            }
+        };
+        model_images.push(img);
+    }
 
     // --- clips (node TRS channels) ---
     let mut clips: Vec<ModelClip> = Vec::new();
@@ -419,7 +493,34 @@ pub fn parse_model_glb(bytes: &[u8]) -> Result<ModelAsset> {
     Ok(ModelAsset { nodes, meshes, clips, images: model_images, root })
 }
 
-/// Convert glTF image pixel data (as decoded by [`gltf::import_slice`]) to
+/// The [`TEAM_RECT_EXTRA`] of a material, validated against the contract:
+/// `None` without `extras` or without the key; an error when the key is
+/// present but not four finite, ordered numbers inside `0..=1`.
+fn material_team_rect(material: &gltf::Material<'_>) -> Result<Option<[f32; 4]>> {
+    let Some(raw) = material.extras() else { return Ok(None) };
+    let extras: serde_json::Value = serde_json::from_str(raw.get())
+        .map_err(|e| anyhow!("material {:?}: bad extras: {e}", material.name()))?;
+    let Some(value) = extras.get(TEAM_RECT_EXTRA) else { return Ok(None) };
+    let invalid = |why: &str| {
+        anyhow!(
+            "material {:?}: `{TEAM_RECT_EXTRA}` must be [u0, v0, u1, v1] with \
+             0 <= u0 < u1 <= 1 and 0 <= v0 < v1 <= 1 ({why}): {value}",
+            material.name()
+        )
+    };
+    let rect: [f32; 4] =
+        serde_json::from_value(value.clone()).map_err(|e| invalid(&e.to_string()))?;
+    let [u0, v0, u1, v1] = rect;
+    if !rect.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)) {
+        return Err(invalid("out of 0..=1"));
+    }
+    if u0 >= u1 || v0 >= v1 {
+        return Err(invalid("empty or inverted"));
+    }
+    Ok(Some(rect))
+}
+
+/// Convert glTF image pixel data (as decoded by [`gltf::image::Data`]) to
 /// tightly-packed RGBA8.  Handles the 8-bit formats the Blender exporter emits;
 /// anything else is rejected (no 16-bit/float textures in this path).
 fn image_to_rgba8(
@@ -537,5 +638,124 @@ mod tests {
         let world = asset.node_world_transforms(usize::MAX, 0.0);
         // child world translation = root(5) + child(10) = 15 in glTF +Y.
         assert!((world[1].w_axis.truncate() - Vec3::new(0.0, 15.0, 0.0)).length() < 1e-5);
+    }
+
+    /// A 2x1 RGBA PNG: left texel `left`, right texel `right`.
+    fn png_2x1(left: [u8; 4], right: [u8; 4]) -> Vec<u8> {
+        let mut px = left.to_vec();
+        px.extend_from_slice(&right);
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_raw(2, 1, px)
+            .unwrap()
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// A one-triangle textured `.glb` embedding `png`, whose material carries
+    /// `material_extras` (a JSON object literal) and, if `textured`, a
+    /// `baseColorTexture`.
+    fn textured_glb(png: &[u8], material_extras: Option<&str>, textured: bool) -> Vec<u8> {
+        let mut bin: Vec<u8> = Vec::new();
+        for f in [0f32, 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 1.] {
+            bin.extend_from_slice(&f.to_le_bytes());
+        }
+        bin.extend_from_slice(png);
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let extras = material_extras.map(|e| format!(r#","extras":{e}"#)).unwrap_or_default();
+        let tex = if textured { r#""baseColorTexture":{"index":0}"# } else { "" };
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
+            "nodes":[{{"name":"body","mesh":0}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"TEXCOORD_0":1}},
+                "material":0}}]}}],
+            "materials":[{{"name":"kit","pbrMetallicRoughness":{{{tex}}}{extras}}}],
+            "textures":[{{"source":0}}],
+            "images":[{{"bufferView":2,"mimeType":"image/png"}}],
+            "buffers":[{{"byteLength":{len}}}],
+            "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},
+                {{"buffer":0,"byteOffset":36,"byteLength":24}},
+                {{"buffer":0,"byteOffset":60,"byteLength":{png_len}}}],
+            "accessors":[
+                {{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3",
+                  "min":[0,0,0],"max":[1,1,0]}},
+                {{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}}]}}"#,
+            len = bin.len(),
+            png_len = png.len()
+        );
+        let mut json = json.into_bytes();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let mut glb = Vec::new();
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&((12 + 8 + json.len() + 8 + bin.len()) as u32).to_le_bytes());
+        glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
+    #[test]
+    fn team_rect_extra_parses_from_the_textured_material() {
+        let png = png_2x1([200, 200, 200, 255], [10, 20, 30, 255]);
+        let extras = r#"{"classic_team_rect":[0.5,0,1,0.25],"other":"kept"}"#;
+        let asset = parse_model_glb(&textured_glb(&png, Some(extras), true)).unwrap();
+        let mesh = &asset.meshes[0];
+        assert_eq!(mesh.image, Some(0));
+        assert_eq!(mesh.team_rect, Some([0.5, 0.0, 1.0, 0.25]));
+        assert_eq!(mesh.uvs.len(), 3);
+        let img = &asset.images[0];
+        assert_eq!((img.width, img.height), (2, 1));
+        assert_eq!(img.rgba8, [200, 200, 200, 255, 10, 20, 30, 255]);
+        // The content key is the SHA-256 of the *encoded* image bytes.
+        let expected: ImageHash = Sha256::digest(&png).into();
+        assert_eq!(img.content_hash, expected);
+    }
+
+    #[test]
+    fn team_rect_is_absent_without_the_extra_or_a_texture() {
+        let png = png_2x1([255; 4], [0, 0, 0, 255]);
+        for extras in [None, Some(r#"{"unrelated":1}"#)] {
+            let asset = parse_model_glb(&textured_glb(&png, extras, true)).unwrap();
+            assert_eq!(asset.meshes[0].team_rect, None, "{extras:?}");
+        }
+        // A rect on an untextured material names no texture region: ignored.
+        let rect = Some(r#"{"classic_team_rect":[0,0,1,1]}"#);
+        let asset = parse_model_glb(&textured_glb(&png, rect, false)).unwrap();
+        assert_eq!((asset.meshes[0].image, asset.meshes[0].team_rect), (None, None));
+    }
+
+    #[test]
+    fn malformed_team_rect_fails_the_parse_loudly() {
+        let png = png_2x1([255; 4], [0, 0, 0, 255]);
+        for bad in
+            ["[0,0,1]", "[0.5,0,0.25,1]", "[0,0.5,1,0.5]", "[0,0,1.5,1]", "[-0.1,0,1,1]", "\"x\""]
+        {
+            let extras = format!(r#"{{"classic_team_rect":{bad}}}"#);
+            let err = parse_model_glb(&textured_glb(&png, Some(&extras), true)).unwrap_err();
+            assert!(err.to_string().contains(TEAM_RECT_EXTRA), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn known_images_skip_the_decode() {
+        let png = png_2x1([1, 2, 3, 4], [5, 6, 7, 8]);
+        let glb = textured_glb(&png, None, true);
+        let hash = parse_model_glb(&glb).unwrap().images[0].content_hash;
+        let asset = parse_model_glb_with(&glb, |h| (*h == hash).then_some((2048, 2048))).unwrap();
+        let img = &asset.images[0];
+        assert!(img.rgba8.is_empty(), "a known image is not decoded");
+        assert_eq!((img.width, img.height, img.content_hash), (2048, 2048, hash));
+        // Different bytes are not "known".
+        let other = textured_glb(&png_2x1([9; 4], [9; 4]), None, true);
+        let asset = parse_model_glb_with(&other, |h| (*h == hash).then_some((1, 1))).unwrap();
+        assert_eq!(asset.images[0].rgba8.len(), 8);
     }
 }

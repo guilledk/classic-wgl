@@ -11,6 +11,14 @@ uniform sampler2D tex_sampler;
 uniform float use_texture;
 uniform vec4 base_color;
 
+// Team tint (`classic_gfx::TeamTint`): when `use_team` is 1, albedo texels
+// whose TEXCOORD_0 lies in `team_rect` = [u0, v0, u1, v1] (top-left origin,
+// half-open on the far edges) are multiplied by `team_tint`.  The rect is
+// highp: mediump cannot resolve texel edges of a 2048-wide atlas.
+uniform float use_team;
+uniform highp vec4 team_rect;
+uniform vec3 team_tint;
+
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
@@ -113,8 +121,19 @@ float shadowFactor(vec3 lightPos, vec3 n) {
     return mix(shadow_strength, 1.0, shadow);
 }
 
+// The CPU reference is `TeamTint::apply`; keep the two in step.
+vec4 teamTint(vec4 color, highp vec2 uv) {
+    if (all(greaterThanEqual(uv, team_rect.xy)) && all(lessThan(uv, team_rect.zw))) {
+        color.rgb *= team_tint;
+    }
+    return color;
+}
+
 void main(void ) {
     vec4 color = use_texture > 0.5 ? texture(tex_sampler, vTexCoord) : base_color;
+    if (use_team > 0.5 && use_texture > 0.5) {
+        color = teamTint(color, vTexCoord);
+    }
     if (color.a < 0.01) {
         discard;
     }

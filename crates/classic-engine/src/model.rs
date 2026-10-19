@@ -26,8 +26,22 @@ pub(crate) struct ModelInstance {
     pub(crate) model: Mat4,
     /// Key into `Engine::model_gpu` (`"{model}::{mesh}"`).
     pub(crate) mesh_key: String,
-    /// The albedo texture name (`"{model}::image::{i}"`), if textured.
+    /// The albedo texture name (`"{model}::image::{i}"`), if textured.  The
+    /// name is per model even when the GL texture is shared (see
+    /// [`Engine::load_model_glb`]), so traces keep naming the model's image.
     pub(crate) texture: Option<String>,
+    /// The team tint: `Model.tint` over the mesh's `team_rect`, set only when
+    /// the model is tinted and the mesh is textured with a team region.
+    pub(crate) team: Option<classic_gfx::TeamTint>,
+}
+
+/// The first upload of a model image's content (see `Engine::model_textures`).
+pub(crate) struct SharedModelTexture {
+    /// The `Gfx.textures` name it was uploaded under (`"{model}::image::{i}"`
+    /// of the first model that carried it).
+    pub(crate) name: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 /// Precomputed per-entity model draw (all node instances), shared by the
@@ -193,10 +207,15 @@ impl Engine {
                         }
                     }
                 }
+                let team = match (model.tint, mesh.team_rect, mesh.image) {
+                    (Some(tint), Some(rect), Some(_)) => Some(classic_gfx::TeamTint { rect, tint }),
+                    _ => None,
+                };
                 instances.push(ModelInstance {
                     model: world,
                     mesh_key: format!("{}::{mi}", model.model),
                     texture: mesh.image.map(|ii| format!("{}::image::{ii}", model.model)),
+                    team,
                 });
             }
             if instances.is_empty() {
@@ -247,8 +266,13 @@ mod tests {
                 "samplers":[{{"input":1,"output":2,"interpolation":"LINEAR"}}]}}]}}"#,
             len = bin.len()
         );
+        pack_glb(json, &bin)
+    }
+
+    /// Assemble a `.glb` from its JSON chunk and (4-byte padded) BIN chunk.
+    fn pack_glb(json: String, bin: &[u8]) -> Vec<u8> {
         let mut json = json.into_bytes();
-        while json.len() % 4 != 0 {
+        while !json.len().is_multiple_of(4) {
             json.push(b' ');
         }
         let mut glb = Vec::new();
@@ -260,8 +284,53 @@ mod tests {
         glb.extend_from_slice(&json);
         glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
         glb.extend_from_slice(b"BIN\0");
-        glb.extend_from_slice(&bin);
+        glb.extend_from_slice(bin);
         glb
+    }
+
+    /// A 2x2 RGBA PNG filled with `rgba`.
+    fn png_2x2(rgba: [u8; 4]) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(2, 2, image::Rgba(rgba))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// A one-triangle `.glb` textured with `png` (embedded), its material
+    /// carrying `team_rect` as the `classic_team_rect` extra when given.
+    fn textured_glb(png: &[u8], team_rect: Option<[f32; 4]>) -> Vec<u8> {
+        let mut bin: Vec<u8> = Vec::new();
+        for f in [0f32, 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 1.] {
+            bin.extend_from_slice(&f.to_le_bytes());
+        }
+        bin.extend_from_slice(png);
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let extras = team_rect
+            .map(|r| format!(r#","extras":{{"classic_team_rect":{r:?}}}"#))
+            .unwrap_or_default();
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
+            "nodes":[{{"name":"rig","children":[1]}},{{"name":"body","mesh":0}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"TEXCOORD_0":1}},
+                "material":0}}]}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}{extras}}}],
+            "textures":[{{"source":0}}],
+            "images":[{{"bufferView":2,"mimeType":"image/png"}}],
+            "buffers":[{{"byteLength":{len}}}],
+            "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},
+                {{"buffer":0,"byteOffset":36,"byteLength":24}},
+                {{"buffer":0,"byteOffset":60,"byteLength":{png_len}}}],
+            "accessors":[
+                {{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3",
+                  "min":[0,0,0],"max":[1,1,0]}},
+                {{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}}]}}"#,
+            len = bin.len(),
+            png_len = png.len()
+        );
+        pack_glb(json, &bin)
     }
 
     fn flat_tilemap(e: &mut Engine) {
@@ -421,5 +490,76 @@ mod tests {
         assert_eq!(inst.mesh_key, "landing::0");
         let origin = inst.model.w_axis.truncate();
         assert!(origin.cmpge(draws[0].min - 1e-4).all() && origin.cmple(draws[0].max + 1e-4).all());
+    }
+
+    #[test]
+    fn identical_model_images_share_one_texture() {
+        // A kit building: one glb per clip, each embedding the same atlas.
+        let atlas = png_2x2([200, 200, 200, 255]);
+        let mut e = Engine::new_for_test();
+        for clip in ["idle", "build", "work"] {
+            let dims = e.load_model_glb(&format!("hab::{clip}"), &textured_glb(&atlas, None));
+            assert_eq!(dims, Some((2, 2)), "every clip reports the atlas size");
+        }
+        // One content entry: one upload, the rest alias it.
+        assert_eq!(e.model_textures.len(), 1, "one texture for three clips");
+        assert_eq!(e.model_textures.values().next().unwrap().name, "hab::idle::image::0");
+        // Only the first glb decoded the atlas.
+        assert_eq!(e.models["hab::idle"].images[0].rgba8.len(), 16);
+        for clip in ["hab::build", "hab::work"] {
+            let img = &e.models[clip].images[0];
+            assert!(img.rgba8.is_empty(), "{clip}: a shared image is not decoded");
+            assert_eq!((img.width, img.height), (2, 2));
+        }
+        // Different bytes get their own texture.
+        e.load_model_glb("depot::idle", &textured_glb(&png_2x2([9, 9, 9, 255]), None)).unwrap();
+        assert_eq!(e.model_textures.len(), 2);
+    }
+
+    #[test]
+    fn team_tint_reaches_only_meshes_with_a_team_rect() {
+        let mut e = Engine::new_for_test();
+        flat_tilemap(&mut e);
+        let atlas = png_2x2([230, 230, 230, 255]);
+        let rect = [0.5, 0.0, 1.0, 0.25];
+        e.load_model_glb("kit", &textured_glb(&atlas, Some(rect))).unwrap();
+        e.load_model_glb("rocket", &textured_glb(&atlas, None)).unwrap();
+        let red = [1.0, 0.1, 0.1];
+        let mut spawn = |name: &str, model: &str, tint: Option<[f32; 3]>| {
+            let mut m = Model::new(model, "tilemap");
+            m.tint = tint;
+            let ent = e.world.spawn((Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE), m));
+            e.names.insert(name.into(), ent);
+            ent
+        };
+        let tinted = spawn("tinted", "kit", Some(red));
+        let plain = spawn("plain", "kit", None);
+        let no_rect = spawn("no_rect", "rocket", Some(red));
+        e.update_models(0.0);
+        let items: Vec<_> = [tinted, plain, no_rect].map(|x| (0.0, x, DrawKind::Model)).into();
+        let draws = e.model_draws(&items, &HashMap::new());
+        let team: Vec<_> = draws.iter().map(|d| d.instances[0].team).collect();
+        assert_eq!(team, [Some(classic_gfx::TeamTint { rect, tint: red }), None, None]);
+        // The texture name stays per model even though the GL texture is shared.
+        assert_eq!(draws[2].instances[0].texture.as_deref(), Some("rocket::image::0"));
+    }
+
+    #[test]
+    fn model_tint_spawns_and_dumps_through_the_registry() {
+        classic_core::register_all_components();
+        let mut b = hecs::EntityBuilder::new();
+        let reg =
+            classic_core::registry::ordered_regs().into_iter().find(|r| r.name == "Model").unwrap();
+        let v = serde_json::json!({"position": [1, 2, 0], "model": "kit", "tilemap": "t",
+            "tint": [0.2, 0.4, 1.0]});
+        (reg.spawn)(&mut b, v).unwrap();
+        let mut world = hecs::World::new();
+        let ent = world.spawn(b.build());
+        assert_eq!(world.get::<&Model>(ent).unwrap().tint, Some([0.2, 0.4, 1.0]));
+        let dumped = reg.dump_value(&world, ent).unwrap();
+        assert_eq!(dumped["tint"], serde_json::json!([0.2f32, 0.4f32, 1.0f32]));
+        // Untinted: the field is omitted, so existing dumps are unchanged.
+        world.get::<&mut Model>(ent).unwrap().tint = None;
+        assert!(reg.dump_value(&world, ent).unwrap().get("tint").is_none());
     }
 }

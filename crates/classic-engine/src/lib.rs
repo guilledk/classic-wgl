@@ -273,6 +273,12 @@ pub struct Engine {
     /// GPU model meshes keyed by `"{model}::{mesh_index}"`, uploaded from
     /// [`Self::models`] when a `Gfx` context is present.
     model_gpu: HashMap<String, classic_gfx::ModelMeshGpu>,
+    /// Model albedo textures de-duplicated by content: the SHA-256 of an
+    /// embedded image's encoded bytes -> the first texture uploaded with it.
+    /// Every later model image with the same bytes aliases that GL texture
+    /// under its own `"{model}::image::{i}"` name (engine lifetime, like every
+    /// GL texture).  See [`Engine::load_model_glb`].
+    model_textures: HashMap<classic_core::model::ImageHash, model::SharedModelTexture>,
     /// The ROM-namespaced item catalog, interned once at `load_rom`.  Read-only
     /// after load; the inventory mechanics look items up by [`ItemId`].
     pub items: classic_core::inventory::ItemRegistry,

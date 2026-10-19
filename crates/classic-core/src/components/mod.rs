@@ -457,6 +457,17 @@ pub struct Model {
     /// Whether the clip is advancing.
     #[serde(default)]
     pub playing: bool,
+    /// Team colour (RGB), multiplied onto the albedo of the model's
+    /// team-coloured texels only: those inside a mesh material's
+    /// `classic_team_rect` (see [`crate::model::TEAM_RECT_EXTRA`]), which the
+    /// exporter bakes neutral.  The tint is in the **same space as the
+    /// texture's stored values** (sRGB-encoded colours for sRGB textures,
+    /// `0..1`), not linear: like `IsoSprite.color` it multiplies the sampled
+    /// texel as-is (no colour-space conversion), before lighting.
+    /// `None` (the default, omitted from dumps) leaves every texel untouched,
+    /// as does a model whose materials carry no team rect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<[f32; 3]>,
     /// Clip time in seconds (transient).
     #[serde(skip)]
     pub time: f32,
@@ -483,6 +494,7 @@ impl Model {
             speed: 1.0,
             repeat: false,
             playing: false,
+            tint: None,
             time: 0.0,
             frame_offset: Vec3::ZERO,
             node_world: Vec::new(),

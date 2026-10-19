@@ -36,6 +36,37 @@ pub fn model_target_size(width: u32, height: u32, zoom: f32) -> (u32, u32) {
     (dim(width), dim(height))
 }
 
+/// A mesh's team tint for [`Gfx::draw_model`]: multiply the sampled albedo by
+/// `tint` where the fragment's `TEXCOORD_0` lies inside `rect`.
+///
+/// `rect` is `[u0, v0, u1, v1]` in glTF texture space (top-left origin, the
+/// space `mesh.vert` passes through unflipped), half-open on the far edges:
+/// see `classic_core::model::TEAM_RECT_EXTRA` for the asset contract.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeamTint {
+    pub rect: [f32; 4],
+    pub tint: [f32; 3],
+}
+
+impl TeamTint {
+    /// Whether `uv` is inside [`Self::rect`] (`u0 <= u < u1 && v0 <= v < v1`).
+    pub fn contains(&self, uv: [f32; 2]) -> bool {
+        let [u0, v0, u1, v1] = self.rect;
+        u0 <= uv[0] && uv[0] < u1 && v0 <= uv[1] && uv[1] < v1
+    }
+
+    /// The CPU reference of `mesh.frag`'s `teamTint`: the albedo `rgba`
+    /// sampled at `uv`, tinted inside the rect and returned unchanged
+    /// (bit-for-bit) outside it.
+    pub fn apply(&self, uv: [f32; 2], rgba: [f32; 4]) -> [f32; 4] {
+        if !self.contains(uv) {
+            return rgba;
+        }
+        let [r, g, b, a] = rgba;
+        [r * self.tint[0], g * self.tint[1], b * self.tint[2], a]
+    }
+}
+
 impl Gfx {
     /// The main render target's size (the offscreen FBO when set, else the
     /// default framebuffer's viewport).
@@ -175,5 +206,39 @@ mod tests {
         assert_eq!(model_target_size(1280, 720, 0.0), (1280, 720));
         assert_eq!(model_target_size(1280, 720, f32::NAN), (1280, 720));
         assert_eq!(model_target_size(1, 1, 1000.0), (1, 1));
+    }
+
+    #[test]
+    fn team_tint_only_touches_texels_inside_the_rect() {
+        let t = TeamTint { rect: [0.5, 0.25, 0.75, 0.5], tint: [1.0, 0.25, 0.5] };
+        let albedo = [0.8, 0.8, 0.8, 1.0];
+        // Inside: rgb multiplied, alpha kept.
+        assert_eq!(t.apply([0.6, 0.3], albedo), [0.8, 0.2, 0.4, 1.0]);
+        // The near edges are inside, the far edges outside (half-open), so a
+        // rect on texel edges selects exactly its texels.
+        assert!(t.contains([0.5, 0.25]));
+        assert!(!t.contains([0.75, 0.3]) && !t.contains([0.6, 0.5]));
+        // Outside on every side: bit-identical.
+        for uv in [[0.49, 0.3], [0.8, 0.3], [0.6, 0.2], [0.6, 0.6], [0.0, 0.0], [1.0, 1.0]] {
+            assert_eq!(t.apply(uv, albedo), albedo, "{uv:?}");
+        }
+    }
+
+    /// `mesh.frag` must implement exactly [`TeamTint::apply`]: the same
+    /// half-open predicate, gated on a textured mesh with a team tint, and
+    /// applied to the albedo before lighting.
+    #[test]
+    fn mesh_frag_team_tint_matches_the_cpu_reference() {
+        let src = crate::shaders::MESH_FRAG;
+        assert!(src.contains("uniform highp vec4 team_rect;"), "rect needs highp at 2048 texels");
+        assert!(src.contains(
+            "all(greaterThanEqual(uv, team_rect.xy)) && all(lessThan(uv, team_rect.zw))"
+        ));
+        assert!(src.contains("color.rgb *= team_tint;"));
+        let main = &src[src.find("void main").unwrap()..];
+        let tint = main.find("teamTint(").expect("main applies the tint");
+        let lit = main.find("color.rgb *= ambient_color").expect("lighting");
+        assert!(tint < lit, "the team tint multiplies the albedo, before lighting");
+        assert!(main.contains("use_team > 0.5 && use_texture > 0.5"));
     }
 }

@@ -163,7 +163,10 @@ categories:
   Fields: `position` (iso tile; the glb origin sits on the terrain ground point,
   no ground offset), `scale`, `model` (a `models[]` resource), `tilemap`,
   `clip` (named inside the glb; `None` = bind pose), `speed`, `repeat`,
-  `playing`; transient (`#[serde(skip)]`) `time`, `node_world` (per-node glTF
+  `playing`, `tint` (optional team colour RGB, applied only to texels in a
+  material's `classic_team_rect`; `None` = untouched; same space as the
+  texture's stored values — sRGB-encoded colours for sRGB textures, 0..1 —
+  multiplied onto the sampled texel before lighting, never linear); transient (`#[serde(skip)]`) `time`, `node_world` (per-node glTF
   pose) and `frame_offset` (the animated rig-origin/root-node translation in
   world metres).  `Engine::update_models(delta)` (registered by the demo's
   `init_model_system`, right after the animator) advances the clip and

@@ -43,7 +43,7 @@ pub use light::{
     pack_lights, LightBuffer, LIGHT_UBO_BINDING, MAX_LIGHTS, SHADOW_MAP_SIZE, SHADOW_MAP_UNIT,
     SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET,
 };
-pub use model_pass::{model_target_size, MODEL_GHOST_GROUP};
+pub use model_pass::{model_target_size, TeamTint, MODEL_GHOST_GROUP};
 pub use particle_pass::{particle_pass_size, ParticleTarget, PARTICLE_PASS_DIVISOR};
 pub use particles::{
     ParticleGpu, ParticleLayerUniforms, ParticleRecord, ParticleRing, PARTICLE_RECORD_BYTES,

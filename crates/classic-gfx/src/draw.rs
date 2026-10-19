@@ -5,8 +5,8 @@ use glow::HasContext;
 
 use crate::buffer::vertex_attrib_ptr_f32;
 use crate::{
-    Gfx, GlBuffer, IsoSpritePass, ModelMeshGpu, RenderSettings, Shader, SpriteRegion, TileBlend,
-    BLEND_LUT_UNIT, MODEL_VERTEX_STRIDE, SHADOW_MAP_UNIT,
+    Gfx, GlBuffer, IsoSpritePass, ModelMeshGpu, RenderSettings, Shader, SpriteRegion, TeamTint,
+    TileBlend, BLEND_LUT_UNIT, MODEL_VERTEX_STRIDE, SHADOW_MAP_UNIT,
 };
 
 impl Gfx {
@@ -613,6 +613,9 @@ impl Gfx {
     /// occludes against terrain and sprites through the shared depth buffer.
     /// Lighting is the shared world-space block (sun + shadow + point lights).
     /// Scoped depth test like `draw_tilemap`: enabled, drawn, disabled.
+    ///
+    /// `team` tints the texels of the mesh's team region (only when it is
+    /// textured); `None` draws exactly as an untinted mesh.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_model(
         &self,
@@ -622,6 +625,7 @@ impl Gfx {
         mesh: &ModelMeshGpu,
         texture_name: Option<&str>,
         base_color: &[f32; 4],
+        team: Option<&TeamTint>,
         settings: &RenderSettings,
     ) {
         let gl = &self.gl;
@@ -642,6 +646,14 @@ impl Gfx {
             None => s.uniform_1f(gl, "use_texture", 0.0),
         }
         s.uniform_vec4(gl, "base_color", base_color);
+        match team {
+            Some(t) => {
+                s.uniform_1f(gl, "use_team", 1.0);
+                s.uniform_vec4(gl, "team_rect", &t.rect);
+                s.uniform_vec3(gl, "team_tint", Vec3::from_array(t.tint));
+            }
+            None => s.uniform_1f(gl, "use_team", 0.0),
+        }
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));

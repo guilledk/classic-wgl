@@ -377,9 +377,11 @@ dependencies = [
  "glam",
  "gltf",
  "hecs",
+ "image",
  "log",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
