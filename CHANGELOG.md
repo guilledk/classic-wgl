@@ -36,6 +36,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   GL texture, so traces keep their per-model names.  A kit building
   (one glb per clip around one 2048² atlas) now holds one 16 MiB texture
   instead of one per clip (8 clips: 128 MiB -> 16 MiB) (#132).
+- Dynamic lights are culled per screen tile.  Each frame the CPU bins
+  every light's projected sphere into 32 px tiles of the main target
+  (`classic_gfx::light_grid`, uploaded as one `R32UI` texture), and the
+  lit fragment shaders (terrain, models, iso sprites) loop over their
+  tile's list instead of every light; a tile with more than 64 lights,
+  or a draw through another camera, runs the full loop.  The shared
+  lighting block also skips a light outright beyond its radius, where its
+  falloff is exactly 0.  The image is unchanged (lists keep light order,
+  culled lights contribute 0).  On a Radeon 680M at 4K, the 93-light
+  `buildtest` scene goes from 104 ms to 17 ms a frame at zoom 1 and from
+  19 ms to 8 ms at the default zoom.
 
 ## [0.3.3] - 2026-10-17
 

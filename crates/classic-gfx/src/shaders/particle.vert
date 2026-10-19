@@ -69,7 +69,7 @@ out vec3 vSunColor;
 out vec3 vSunView;
 
 // --- BEGIN SHARED LIGHTING (byte-identical in sheet.frag / iso_tilemap.frag /
-// --- mesh.frag; pinned by `lit_shaders_share_the_lighting_block`) ---
+// --- mesh.frag / particle.vert; pinned by `lit_shaders_share_the_lighting_block`) ---
 //
 // `p` and `l.pos_radius.xyz` are both **metric world space** (+Z up, metres),
 // so `length` is a true distance and `dot(n, L)` a true cosine.  They previously
@@ -78,7 +78,6 @@ out vec3 vSunView;
 vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     vec3 toLight = l.pos_radius.xyz - p;
     float dist = length(toLight);
-    vec3 L = toLight / max(dist, 0.0001);
     float radius = l.pos_radius.w;
     // Smooth windowed falloff: `w(d)^2 / (1 + d^2)`, `w = saturate(1 - d^2)`,
     // `d = dist / radius`.  Softer than the previous `w = saturate(1 - d^4)` /
@@ -92,9 +91,18 @@ vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     if (radius > 0.0) {
         float d = dist / radius;
         float d2 = d * d;
+        // Radius early-out: at `d2 >= 1` the window is exactly 0, so the
+        // light contributes exactly 0 and skipping the cone/Lambert work
+        // changes no pixel.  The test reuses the falloff's own `d2` (not a
+        // separate `dot(toLight, toLight) >= radius * radius`, which rounds
+        // differently at the edge), so it is bit-exact.
+        if (d2 >= 1.0) {
+            return vec3(0.0);
+        }
         float window = clamp(1.0 - d2, 0.0, 1.0);
         attenuation = window * window / (1.0 + d2);
     }
+    vec3 L = toLight / max(dist, 0.0001);
     float cone = 1.0;
     if (l.dir_cone.w > 0.0) {
         // `dir_cone.xyz` is the beam direction (light -> target) and `w` the
@@ -106,6 +114,9 @@ vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;
 }
 
+// Every active light, in UBO order.  The screen-tile culled variant is
+// `evaluateLightsTiled` (the LIGHT GRID block of the lit fragment shaders);
+// it falls back to this loop wherever it has no list.
 vec3 evaluateLights(vec3 n, vec3 p) {
     vec3 acc = vec3(0.0);
     int cnt = int(u_lights.count.x + 0.5);

@@ -676,6 +676,10 @@ impl Engine {
         // tilemap + sprite shaders).
         gfx.upload_lights(&lights);
         let cam = self.camera.matrix();
+        // Bin them into screen tiles for this camera, so a lit fragment loops
+        // over the lights near it only (terrain, models and iso sprites all
+        // rasterise through `cam` · `iso_camera_matrix` at `PPM_TARGET`).
+        gfx.upload_light_grid(&lights, &cam, &iso_camera_matrix(), PPM_TARGET);
 
         // Directional shadow pass (terrain casters) — before Phase 1.  Renders
         // every non-nav tilemap into the depth texture from the sun's view.

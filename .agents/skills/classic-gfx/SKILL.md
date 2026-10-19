@@ -588,12 +588,53 @@ pair; both emit a `highp vec3 vLightPos` varying (light space, +Z up — see §1
   `cone_angle <= 0` (Point) vs `> 0` (Spot) — no separate `kind` vec4.
 - `LightBuffer` wraps a `GlBuffer` bound to `UNIFORM_BUFFER`;
   `LightBuffer::upload` does `buffer_data` + `bind_buffer_base(LIGHT_UBO_BINDING)`.
-- `Gfx::upload_lights(&self, lights: &[Light])` is called once per frame by
-  `Engine::frame` (after `begin_frame`).  The `LightBuffer` is created in
-  `Gfx::new`.
+- `Gfx::upload_lights(&mut self, lights: &[Light])` is called once per frame by
+  `Engine::frame` (after `begin_frame`), followed by `upload_light_grid` (below).
+  The `LightBuffer` is created in `Gfx::new`.
 - `Shader::bind_uniform_block(gl, "LightBlock", LIGHT_UBO_BINDING)` is called in
   `Gfx::add_shader` for every program (no-op when the block is absent), via
   `gl.get_uniform_block_index` (returns `Option<u32>`) + `uniform_block_binding`.
+
+### Light culling: screen-tile grid (`classic-gfx/src/light_grid.rs`)
+
+The lit fragment shaders (`sheet.frag`, `iso_tilemap.frag`, `mesh.frag`) do
+not loop over every light: they call `evaluateLightsTiled` (the
+`LIGHT GRID` block, byte-identical in the three, pinned by
+`lit_fragment_shaders_share_the_light_grid`), which loops over the lights
+binned into their screen tile.  Lit particles (`particle.vert`, per vertex)
+keep the full `evaluateLights` loop.
+
+- **Binning (CPU)**: `Gfx::upload_light_grid(lights, camera, world_matrix,
+  ppm)` runs right after `upload_lights` (`Engine::frame`).  The iso camera is
+  orthographic, so `clip_from_world` (the vertex shaders' raster formula,
+  pinned by `clip_from_world_mirrors_the_vertex_shaders`) is affine and a
+  light sphere's screen bound is exactly `centre ± r · |row|` (+1 px margin).
+  `LightGrid::build` bins each light into `LIGHT_TILE_PX` = 32 px tiles of
+  the **main** target, in UBO order (ascending lists).  `radius <= 0` reaches
+  every tile; an off-screen light none.
+- **Layout (declared once, in `light_grid.rs`)**: one `R32UI` texture on unit
+  `LIGHT_GRID_UNIT` = 11, `LIGHT_GRID_ROW` = 1024 words per row.  Words
+  `0..tiles` are tile headers `offset << 9 | count`; each list is the light
+  indices as bytes, four per word, low byte first.  The GLSL `#define`s are
+  pinned by `shader_constants_match_the_layout`; `MAX_LIGHTS <= 256` is a
+  const assert (indices are bytes).
+- **Overflow**: a tile with more than `LIGHT_TILE_CAP` = 64 lights, or whose
+  list no longer fits the texture, gets the count `LIGHT_GRID_OVERFLOW` (511)
+  and runs the full loop.  Lights are never dropped.
+- **Per draw**: `bind_light_grid` sets `light_grid_on` / `light_grid_map`
+  (`gl_FragCoord` scale to tiles + grid size).  The grid is used only when the
+  draw's own `clip_from_world` equals the binned one (another camera falls
+  back to the full loop), and `draw_sprite` (screen space) turns it off.  The
+  model pass renders at `model_target_size`, so its map scales
+  `gl_FragCoord` by `main / target` first (`grid_map`).  `upload_lights`
+  invalidates the grid, so a stale grid never indexes a new UBO.
+- **WebGL**: `add_shader` points the `light_grid` usampler at unit 11 and an
+  `R32UI` texture is always bound there; left on unit 0 it would alias a
+  float sampler, which WebGL rejects at draw time.
+- **Exactness**: lists are conservative and ascending, and a light a list
+  leaves out contributes exactly 0 (the radius early-out below), so the sum is
+  the full loop's.  Verified on a Radeon 680M: identical to the early-out-only
+  build outside the HUD's live cursor readout.
 
 ### Shader (`sheet.frag`, `iso_tilemap.frag`)
 
@@ -622,6 +663,12 @@ vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;
 }
 ```
+
+The block shown is abridged: the real one (byte-identical in all four lit
+shaders) uses the `w(d)² / (1 + d²)` falloff and has a **radius early-out**:
+when `radius > 0` and `d² >= 1` it returns `vec3(0)` before the cone and
+Lambert work.  The test reuses the falloff's own `d²` (the window is then
+exactly 0), so skipping changes no pixel.
 
 The point-light term is **added** after the sun multiply
 (`color.rgb += evaluateLights(n, vLightPos)`), so it illuminates sun-shadowed
@@ -898,7 +945,8 @@ form.  No transform feedback, no per-frame CPU simulation.
   quarter res, additive composite.  RGBA8 only (no float RT on WebGL2).
   Always on (no toggle); the engine skips it only on frames with nothing
   emissive live, so effect-free scenes are pixel-identical.
-- **Texture units**: particles 6, bloom 7–8, smoke noise 9, half-res composite 10
+- **Texture units**: particles 6, bloom 7–8, smoke noise 9, half-res composite 10,
+  light grid 11
   (sprites 0–2, shadow 3, model
   composite 4–5).  ROM textures load `NEAREST` for the sprites; the particle
   draw binds a LINEAR/clamp **sampler object** on unit 6 (and unbinds it

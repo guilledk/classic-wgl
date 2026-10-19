@@ -163,7 +163,9 @@ create a `plans/` dir here (`.gitignore` keeps `/plans/` as a guard).
   `light_color`), dynamic point/spot lights are **first-class ECS entities** — a
   `Light` component (registered + dumpable, declarable in `state.json`) gathered
   from the world each frame and uploaded to a `std140` `LightBlock` UBO consumed
-  by `sheet.frag`/`iso_tilemap.frag` (shared `evaluateLight`).  The guest
+  by `sheet.frag`/`iso_tilemap.frag` (shared `evaluateLight`); the lit fragment
+  shaders loop only over the lights binned into their 32 px screen tile
+  (`classic-gfx/src/light_grid.rs`, rebuilt each frame).  The guest
   `light_spawn`/`light_set`/`light_release` API returns a stable, generational
   handle (a stale one is rejected after release) backed by
   a `LightHandles` entity table (`classic-engine/src/light.rs`) with optional TTL

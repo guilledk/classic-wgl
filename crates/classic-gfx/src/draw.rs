@@ -62,6 +62,27 @@ impl Gfx {
         s.uniform_mat4(gl, "model_matrix", model);
     }
 
+    /// Set the screen-tile light grid uniforms on a lit fragment shader
+    /// (`light_grid_on`, `light_grid_map`).  `view` is the draw's `(camera,
+    /// world_matrix, ppm)`; the grid is used only when it rasterises with the
+    /// transform the grid was binned for, else (and for `None`: screen-space
+    /// draws) the shader runs the full light loop.
+    fn bind_light_grid(&self, s: &Shader, view: Option<(&Mat4, &Mat4, f32)>) {
+        let gl = &self.gl;
+        let map = view.and_then(|(camera, world_matrix, ppm)| {
+            let clip = crate::clip_from_world(&self.projection(), camera, world_matrix, ppm);
+            self.light_grid.map_for(&clip, self.pass_target.get())
+        });
+        match map {
+            Some(map) => {
+                self.light_grid.bind(gl);
+                s.uniform_vec4(gl, "light_grid_map", &map);
+                s.uniform_1f(gl, "light_grid_on", 1.0);
+            }
+            None => s.uniform_1f(gl, "light_grid_on", 0.0),
+        }
+    }
+
     /// Bind the directional shadow map and set the sampling uniforms on a lit
     /// shader (`isoTilemap` / `imageSheet`).  When `settings.shadow` is `None`,
     /// `use_shadow` is cleared to 0 (the shaders skip the term).
@@ -170,6 +191,7 @@ impl Gfx {
         s.uniform_vec3(gl, "tint", Vec3::from_array([1.0, 1.0, 1.0]));
         s.uniform_1f(gl, "use_shadow", 0.0);
         s.uniform_1f(gl, "shadow_debug", 0.0);
+        self.bind_light_grid(s, None);
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -338,6 +360,7 @@ impl Gfx {
         s.uniform_vec3(gl, "tint", Vec3::from_array(*tint));
         s.uniform_1f(gl, "use_lighting", 1.0);
         self.bind_shadow(s, settings);
+        self.bind_light_grid(s, Some((camera, world_matrix, settings.ppm)));
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);
         vertex_attrib_ptr_f32(gl, &self.quad.uv, s.attr("tex_coord"), 2, 0, 0);
@@ -576,6 +599,7 @@ impl Gfx {
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         self.bind_shadow(s, settings);
+        self.bind_light_grid(s, Some((camera, world_matrix, settings.ppm)));
 
         // The sampler always points at its own unit so it never aliases the
         // tile data/tileset units, whether or not a table is bound.
@@ -658,6 +682,7 @@ impl Gfx {
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         self.bind_shadow(s, settings);
+        self.bind_light_grid(s, Some((camera, world_matrix, settings.ppm)));
 
         vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("vertex_pos"), 3, MODEL_VERTEX_STRIDE, 0);
         vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("normal"), 3, MODEL_VERTEX_STRIDE, 12);
