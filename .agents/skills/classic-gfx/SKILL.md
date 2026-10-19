@@ -779,7 +779,7 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
 - `ModelMeshGpu::new(gl, positions, normals, uvs, indices)` — interleaved VBO
   `pos(3) normal(3) uv(2)` (`MODEL_VERTEX_STRIDE = 32`) + `u32` index buffer
   (`UNSIGNED_INT` elements are core in WebGL2).
-- `draw_model(model, camera, world_matrix, mesh, texture, base_color, settings)`
+- `draw_model(model, camera, world_matrix, mesh, texture, base_color, team, settings)`
   — `model` is the instance's full world matrix
   (`placement · gltf_to_world() · node_world[node]`); `world_matrix` is
   `iso_camera_matrix`.  `mesh.vert` runs the tilemap's canonical view-depth
@@ -788,6 +788,17 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   sun shadow + the **shared lighting block** (byte-identical to `sheet.frag` /
   `iso_tilemap.frag`, pinned by `lit_shaders_share_the_lighting_block`).
   `use_texture = 0` falls back to `base_color`.
+- **Team tint**: `team: Option<&TeamTint>` (`rect` `[u0, v0, u1, v1]` +
+  `tint` RGB) sets `use_team`/`team_rect`/`team_tint`; `mesh.frag`'s
+  `teamTint` multiplies the albedo of textured fragments whose UV is in the
+  half-open rect, before lighting, with no colour-space conversion: `tint`
+  is in the same space as the texture's stored values (sRGB-encoded colours
+  for sRGB textures, 0..1), not linear (CPU reference `TeamTint::apply`,
+  pinned by `mesh_frag_team_tint_matches_the_cpu_reference`).  The rect comes from the
+  glb material extra `classic_team_rect` (`classic_core::model::TEAM_RECT_EXTRA`
+  documents the asset contract); the engine passes it only when the `Model`
+  sets `tint`.  `team_rect` is `highp` (mediump cannot resolve 2048-texel
+  edges).
 - **No V-flip** in `mesh.vert`: textures upload top-to-bottom and every sampler
   uses a top-left origin (same as `direct_tex.vert`); a flip inverts the albedo.
 - The normal is `normalize(mat3(model) · normal)` — valid for the rigid
@@ -818,7 +829,11 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   No MSAA anywhere (the look depends on hard edges).
 - GPU keys: meshes `"{model}::{mesh_index}"` (`Engine.model_gpu`), textures
   `"{model}::image::{i}"` (`Gfx.textures`); the embedded image's CPU pixels are
-  dropped after upload.
+  dropped after upload.  Textures are shared by content
+  (`Engine.model_textures`, keyed by the SHA-256 of the encoded image bytes):
+  a repeat image is not decoded and its name aliases the first upload's
+  `GlTexture` handle (like `BootStep::AliasTexture`), so kit clip glbs that
+  embed one atlas cost one texture.
 
 ---
 

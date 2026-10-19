@@ -18,6 +18,7 @@ use classic_core::{RoleKind, SpriteRender, Transform};
 use classic_gfx::{Gfx, GlBuffer};
 use glam::Vec3;
 
+use crate::model::SharedModelTexture;
 use crate::{boot, BasisTextureJob, Engine, ResourceKind, TextureDepth, TilemapGpu};
 
 impl Engine {
@@ -1450,8 +1451,19 @@ impl Engine {
     /// `"{name}::image::{i}"`.  Safe without a `Gfx` (the model still registers
     /// for resolution and animation).  Returns the first image's dimensions
     /// (`(0, 0)` when untextured), or `None` when the file fails to parse.
+    ///
+    /// Images are shared by content: an image whose encoded bytes (SHA-256)
+    /// match one already loaded is neither decoded nor uploaded again — its
+    /// `"{name}::image::{i}"` entry aliases the existing GL texture (the
+    /// per-model name keeps traces unchanged).  A kit building ships one glb
+    /// per clip around one 2048² atlas, so its 8–9 clips cost one 16 MiB
+    /// texture instead of one each.
     pub fn load_model_glb(&mut self, name: &str, bytes: &[u8]) -> Option<(u32, u32)> {
-        let mut asset = match classic_core::model::parse_model_glb(bytes) {
+        let shared = &self.model_textures;
+        let parsed = classic_core::model::parse_model_glb_with(bytes, |hash| {
+            shared.get(hash).map(|t| (t.width, t.height))
+        });
+        let mut asset = match parsed {
             Ok(asset) => asset,
             Err(e) => {
                 classic_core::cl_error!(Chan::Render, "model '{name}' parse failed: {e}");
@@ -1470,16 +1482,34 @@ impl Engine {
                 );
                 self.model_gpu.insert(format!("{name}::{mi}"), gpu);
             }
-            for (ii, img) in asset.images.iter_mut().enumerate() {
-                gfx.add_texture_rgba8(
-                    &format!("{name}::image::{ii}"),
-                    &img.rgba8,
-                    img.width,
-                    img.height,
-                );
+        }
+        for (ii, img) in asset.images.iter_mut().enumerate() {
+            let tex_name = format!("{name}::image::{ii}");
+            if let Some(first) = self.model_textures.get(&img.content_hash) {
+                // Same bytes as an earlier image: alias its GL texture.
+                if let Some(gfx) = self.gfx.as_mut() {
+                    match gfx.textures.get(&first.name).cloned() {
+                        Some(tex) => {
+                            gfx.textures.insert(tex_name, tex);
+                        }
+                        None => classic_core::cl_warn!(
+                            Chan::Render,
+                            "model '{name}': shared texture '{}' was never uploaded",
+                            first.name
+                        ),
+                    }
+                }
+                continue;
+            }
+            if let Some(gfx) = self.gfx.as_mut() {
+                gfx.add_texture_rgba8(&tex_name, &img.rgba8, img.width, img.height);
                 // The pixels live on the GPU now; drop the CPU copy.
                 img.rgba8 = Vec::new();
             }
+            self.model_textures.insert(
+                img.content_hash,
+                SharedModelTexture { name: tex_name, width: img.width, height: img.height },
+            );
         }
         self.models.insert(name.to_string(), asset);
         Some(dims)

@@ -74,6 +74,7 @@ impl Engine {
             vehicle_anchors: HashMap::new(),
             models: HashMap::new(),
             model_gpu: HashMap::new(),
+            model_textures: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),
             next_ghost_group: 1,
             rom_manifest_json: None,
@@ -939,7 +940,9 @@ impl Engine {
                         camera_ignored: false,
                         texture: inst.texture.as_deref(),
                         frame: None,
-                        color: None,
+                        // The team tint, only when it applies (untinted
+                        // models trace exactly as before).
+                        color: inst.team.map(|t| [t.tint[0], t.tint[1], t.tint[2], 1.0]),
                         depth: None,
                         normal: None,
                         screen: Some(golden::project_rect(&cam, &inst.model, false)),
@@ -952,6 +955,7 @@ impl Engine {
                     mesh,
                     inst.texture.as_deref(),
                     &[0.8, 0.8, 0.8, 1.0],
+                    inst.team.as_ref(),
                     &model_settings,
                 );
             }

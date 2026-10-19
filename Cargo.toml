@@ -35,7 +35,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
 # glTF 3D-model parsing (`classic-core::model`; GL upload lives in classic-gfx)
-gltf = { version = "1", default-features = false, features = ["import", "names", "utils"] }
+gltf = { version = "1", default-features = false, features = ["extras", "import", "names", "utils"] }
 
 # Graphics
 glow = "0.16"
@@ -67,6 +67,9 @@ ruzstd = "0.9"
 
 # Guest code runtime (WASM interpreter for ROM guest modules)
 wasmi = "0.41"
+
+# Content hashing (model image de-duplication)
+sha2 = "0.10"
 
 # Safe GPU data casting
 bytemuck = { version = "1", features = ["derive"] }

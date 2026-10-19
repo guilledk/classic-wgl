@@ -8,6 +8,34 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ## [Unreleased]
 
+### Added
+
+- Model team tint.  A glb material's `extras` may carry
+  `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
+  `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
+  `0 <= u0 < u1 <= 1`, `0 <= v0 < v1 <= 1`, half-open on the far edges)
+  whose texels are team-coloured faces baked neutral (light grey/white
+  times AO/wear).  `parse_model_glb` reads it into `ModelMesh.team_rect`
+  (a malformed value fails the parse; the `gltf` crate now builds with its
+  `extras` feature).  A `Model` with the new optional `tint: [r, g, b]`
+  (serde default `None`, omitted from dumps) multiplies the albedo of
+  fragments inside the rect by it in `mesh.frag`, before lighting.  The
+  tint is in the same space as the texture's stored values (sRGB-encoded
+  colours for sRGB textures, 0..1), not linear, like `IsoSprite.color`;
+  the tint shows as the `Model` trace item's `color`.  Models without the extra or without a tint render and
+  trace exactly as before.
+- `classic_core::model::parse_model_glb_with`: skips decoding images the
+  caller already holds (by encoded-byte SHA-256, `ModelImage.content_hash`).
+
+### Changed
+
+- Model textures are shared by content.  An embedded glb image whose
+  encoded bytes match an already loaded one is neither decoded nor
+  uploaded again: its `"{model}::image::{i}"` name aliases the existing
+  GL texture, so traces keep their per-model names.  A kit building
+  (one glb per clip around one 2048² atlas) now holds one 16 MiB texture
+  instead of one per clip (8 clips: 128 MiB -> 16 MiB).
+
 ## [0.3.3] - 2026-10-17
 
 ### Added
