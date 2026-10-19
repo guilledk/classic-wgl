@@ -67,7 +67,7 @@ layout(std140) uniform LightBlock {
 out vec4 fragColor;
 
 // --- BEGIN SHARED LIGHTING (byte-identical in sheet.frag / iso_tilemap.frag /
-// --- mesh.frag; pinned by `lit_shaders_share_the_lighting_block`) ---
+// --- mesh.frag / particle.vert; pinned by `lit_shaders_share_the_lighting_block`) ---
 //
 // `p` and `l.pos_radius.xyz` are both **metric world space** (+Z up, metres),
 // so `length` is a true distance and `dot(n, L)` a true cosine.  They previously
@@ -76,7 +76,6 @@ out vec4 fragColor;
 vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     vec3 toLight = l.pos_radius.xyz - p;
     float dist = length(toLight);
-    vec3 L = toLight / max(dist, 0.0001);
     float radius = l.pos_radius.w;
     // Smooth windowed falloff: `w(d)^2 / (1 + d^2)`, `w = saturate(1 - d^2)`,
     // `d = dist / radius`.  Softer than the previous `w = saturate(1 - d^4)` /
@@ -90,9 +89,18 @@ vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     if (radius > 0.0) {
         float d = dist / radius;
         float d2 = d * d;
+        // Radius early-out: at `d2 >= 1` the window is exactly 0, so the
+        // light contributes exactly 0 and skipping the cone/Lambert work
+        // changes no pixel.  The test reuses the falloff's own `d2` (not a
+        // separate `dot(toLight, toLight) >= radius * radius`, which rounds
+        // differently at the edge), so it is bit-exact.
+        if (d2 >= 1.0) {
+            return vec3(0.0);
+        }
         float window = clamp(1.0 - d2, 0.0, 1.0);
         attenuation = window * window / (1.0 + d2);
     }
+    vec3 L = toLight / max(dist, 0.0001);
     float cone = 1.0;
     if (l.dir_cone.w > 0.0) {
         // `dir_cone.xyz` is the beam direction (light -> target) and `w` the
@@ -104,6 +112,9 @@ vec3 evaluateLight(Light l, vec3 n, vec3 p) {
     return attenuation * cone * diff * l.color_intensity.rgb * l.color_intensity.a;
 }
 
+// Every active light, in UBO order.  The screen-tile culled variant is
+// `evaluateLightsTiled` (the LIGHT GRID block of the lit fragment shaders);
+// it falls back to this loop wherever it has no list.
 vec3 evaluateLights(vec3 n, vec3 p) {
     vec3 acc = vec3(0.0);
     int cnt = int(u_lights.count.x + 0.5);
@@ -116,6 +127,58 @@ vec3 evaluateLights(vec3 n, vec3 p) {
     return acc;
 }
 // --- END SHARED LIGHTING ---
+
+// --- BEGIN LIGHT GRID (byte-identical in sheet.frag / iso_tilemap.frag /
+// --- mesh.frag; pinned by `lit_fragment_shaders_share_the_light_grid`) ---
+//
+// Screen-tile light culling.  The layout is declared once, in
+// `classic_gfx::light_grid` (`LightGrid`); the constants below mirror it and are
+// pinned by `shader_constants_match_the_layout`.  `light_grid` is one R32UI
+// texture read as a flat word array, `LIGHT_GRID_ROW` words per row: word `t`
+// (tile `t = ty * tiles_x + tx`) is the tile header `offset << 9 | count`, and
+// its light indices (bytes, ascending, low byte first) start at word `offset`.
+// `count == LIGHT_GRID_OVERFLOW` marks a tile with no list: it runs the full
+// `evaluateLights` loop, as does every fragment while `light_grid_on` is 0.
+// The lists are conservative and ascending, so the sum is bit-identical to
+// the full loop (the lights a list leaves out contribute exactly 0).
+#define LIGHT_GRID_ROW 1024
+#define LIGHT_GRID_ROW_SHIFT 10
+#define LIGHT_GRID_COUNT_BITS 9u
+#define LIGHT_GRID_OVERFLOW 511u
+
+uniform highp usampler2D light_grid;
+// xy: `gl_FragCoord` -> tile scale of the bound target; zw: tiles_x, tiles_y.
+uniform highp vec4 light_grid_map;
+uniform float light_grid_on;
+
+highp uint lightGridWord(highp int k) {
+    return texelFetch(light_grid, ivec2(k & (LIGHT_GRID_ROW - 1), k >> LIGHT_GRID_ROW_SHIFT), 0).r;
+}
+
+vec3 evaluateLightsTiled(vec3 n, vec3 p) {
+    if (light_grid_on < 0.5) {
+        return evaluateLights(n, p);
+    }
+    highp ivec2 dims = ivec2(light_grid_map.zw);
+    highp ivec2 tile = clamp(ivec2(gl_FragCoord.xy * light_grid_map.xy), ivec2(0), dims - 1);
+    highp uint header = lightGridWord(tile.y * dims.x + tile.x);
+    highp uint count = header & LIGHT_GRID_OVERFLOW;
+    if (count == LIGHT_GRID_OVERFLOW) {
+        return evaluateLights(n, p);
+    }
+    highp int base = int(header >> LIGHT_GRID_COUNT_BITS);
+    vec3 acc = vec3(0.0);
+    for (highp uint j = 0u; j < count; j += 4u) {
+        highp uint word = lightGridWord(base + int(j >> 2u));
+        highp uint m = min(count - j, 4u);
+        for (highp uint b = 0u; b < m; b++) {
+            highp int index = int((word >> (b * 8u)) & 255u);
+            acc += evaluateLight(u_lights.lights[index], n, p);
+        }
+    }
+    return acc;
+}
+// --- END LIGHT GRID ---
 
 // Manual directional-shadow compare.  `worldPos` is projected into light clip
 // space, remapped to `[0,1]` UVs, and compared against the stored depth.  A
@@ -435,7 +498,7 @@ void main(void ) {
     // be added *after* the albedo multiply, so a point light washed the terrain
     // toward its own colour regardless of the tile texture — which is what made
     // it read as a glowing decal rather than as light.
-    color.rgb *= ambient_color + diff * light_color + evaluateLights(n, vLightPos);
+    color.rgb *= ambient_color + diff * light_color + evaluateLightsTiled(n, vLightPos);
 
     if (show_grid > 0 && selection_mode == -1 && vTileId <= 0.5) {
         vec2 tileCoord = vMapCoord * map_size;

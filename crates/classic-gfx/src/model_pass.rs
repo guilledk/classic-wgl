@@ -100,6 +100,7 @@ impl Gfx {
     pub fn begin_model_pass(&mut self, zoom: f32) {
         let (w, h) = self.main_target_size();
         let (tw, th) = model_target_size(w, h, zoom);
+        self.pass_target.set((tw, th));
         match self.model_target.as_mut() {
             Some(t) => t.resize(&self.gl, tw, th),
             None => self.model_target = Some(ModelTarget::new(&self.gl, tw, th)),
@@ -118,6 +119,7 @@ impl Gfx {
 
     /// End the model pass: rebind the main render target and viewport.
     pub fn end_model_pass(&self) {
+        self.pass_target.set(self.main_target_size());
         self.bind_main_target();
     }
 

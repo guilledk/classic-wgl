@@ -16,6 +16,7 @@ mod buffer;
 mod draw;
 mod framebuffer;
 mod light;
+mod light_grid;
 mod model_pass;
 mod particle_pass;
 mod particles;
@@ -32,6 +33,7 @@ mod basis_web;
 use classic_core::components::Light;
 use glam::Mat4;
 use glow::HasContext;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -42,6 +44,10 @@ pub use framebuffer::{DepthFramebuffer, GlFrameBuffer, ModelTarget};
 pub use light::{
     pack_lights, LightBuffer, LIGHT_UBO_BINDING, MAX_LIGHTS, SHADOW_MAP_SIZE, SHADOW_MAP_UNIT,
     SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET,
+};
+pub use light_grid::{
+    clip_from_world, grid_map, LightGrid, LightGridView, LIGHT_GRID_UNIT, LIGHT_TILE_CAP,
+    LIGHT_TILE_PX,
 };
 pub use model_pass::{model_target_size, TeamTint, MODEL_GHOST_GROUP};
 pub use particle_pass::{particle_pass_size, ParticleTarget, PARTICLE_PASS_DIVISOR};
@@ -154,6 +160,11 @@ pub struct Gfx {
     pub viewport_h: f32,
     pub render_target: Option<GlFrameBuffer>,
     lights: LightBuffer,
+    /// Screen-tile light lists for the lit fragment shaders (see `light_grid`).
+    light_grid: light_grid::LightGridGpu,
+    /// Size of the framebuffer the lit draws currently render into (the main
+    /// target, or the model pass target), for the grid lookup.
+    pass_target: Cell<(u32, u32)>,
     shadow_map: Option<DepthFramebuffer>,
     /// The 3D-model pixelation target (see `model_pass`), created lazily.
     model_target: Option<ModelTarget>,
@@ -173,6 +184,7 @@ impl Gfx {
         let quad = build_quad(&gl);
         let vao = unsafe { gl.create_vertex_array() }.expect("create VAO");
         let lights = LightBuffer::new(&gl, MAX_LIGHTS);
+        let light_grid = light_grid::LightGridGpu::new(&gl);
         let particle_noise = particles::noise_texture(&gl);
         let particle_sampler = particles::linear_sampler(&gl);
         Self {
@@ -184,6 +196,8 @@ impl Gfx {
             viewport_h: 1080.0,
             render_target: None,
             lights,
+            light_grid,
+            pass_target: Cell::new((1, 1)),
             shadow_map: None,
             model_target: None,
             bloom: None,
@@ -195,9 +209,31 @@ impl Gfx {
     }
 
     /// Upload the active dynamic lights into the `LightBlock` UBO and bind it to
-    /// [`LIGHT_UBO_BINDING`] (consumed by `sheet.frag` + `iso_tilemap.frag`).
-    pub fn upload_lights(&self, lights: &[Light]) {
+    /// [`LIGHT_UBO_BINDING`] (consumed by the lit shaders).  Turns the light
+    /// grid off until [`Gfx::upload_light_grid`] bins these lights, so a stale
+    /// grid never indexes the new block.
+    pub fn upload_lights(&mut self, lights: &[Light]) {
         self.lights.upload(&self.gl, lights);
+        self.light_grid.invalidate();
+    }
+
+    /// Bin `lights` (the slice just passed to [`Gfx::upload_lights`]) into the
+    /// screen-tile light grid for this frame's camera, so the lit fragment
+    /// shaders loop over the lights near their tile only.  `camera`,
+    /// `world_matrix` and `ppm` are the values the lit draws receive.  The grid
+    /// stays off (full loop) without lights or for a non-orthographic camera.
+    pub fn upload_light_grid(
+        &mut self,
+        lights: &[Light],
+        camera: &Mat4,
+        world_matrix: &Mat4,
+        ppm: f32,
+    ) {
+        let main = self.main_target_size();
+        let clip = clip_from_world(&self.projection(), camera, world_matrix, ppm);
+        let view = if lights.is_empty() { None } else { LightGridView::new(&clip, main.0, main.1) };
+        let grid = view.map(|v| LightGrid::build(lights, &v, self.light_grid.max_words()));
+        self.light_grid.upload(&self.gl, grid.as_ref().map(|g| (g, main, clip)));
     }
 
     /// Create and set an offscreen render target of the given size.
@@ -237,6 +273,11 @@ impl Gfx {
         // Bind the light UBO for any shader that declares `LightBlock` (the two
         // lit shaders); a no-op for every other program.
         s.bind_uniform_block(&self.gl, "LightBlock", LIGHT_UBO_BINDING);
+        // Point the light-grid `usampler2D` (lit fragment shaders) at its own
+        // unit once: left on unit 0 it would alias a float sampler, which WebGL
+        // rejects at draw time.  A no-op for programs without it.
+        s.bind(&self.gl);
+        s.uniform_1i(&self.gl, "light_grid", LIGHT_GRID_UNIT as i32);
         self.shaders.insert(name.to_string(), s);
         Ok(())
     }
@@ -369,6 +410,7 @@ impl Gfx {
     /// Clear the framebuffer and set up state for the current frame.
     pub fn begin_frame(&self) {
         let gl = &self.gl;
+        self.pass_target.set(self.main_target_size());
         unsafe {
             // Flush any accumulated GL errors before starting a new frame.
             while gl.get_error() != 0 {}
