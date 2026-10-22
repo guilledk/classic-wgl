@@ -55,6 +55,22 @@ pub const BLOOM_INTENSITY: f32 = 0.9;
 /// Hard cap on one instance's ring (per layer).
 const MAX_RING: u32 = 65_536;
 
+/// Global soft budget on resident particles (every ring's live window).
+/// Above it, continuous spawning is scaled by `budget / resident`
+/// ([`budget_scale`]); bursts are never throttled, and nothing depends on
+/// the camera, so a fixed timestep still reproduces every record.
+pub const PARTICLE_BUDGET: usize = 65_536;
+
+/// The continuous-spawn multiplier for `resident` particles against
+/// [`PARTICLE_BUDGET`]: `1` at or under it, `budget / resident` above.
+pub fn budget_scale(resident: usize) -> f32 {
+    if resident > PARTICLE_BUDGET {
+        PARTICLE_BUDGET as f32 / resident as f32
+    } else {
+        1.0
+    }
+}
+
 /// Hard cap on queued sub-effect firings (a runaway cascade guard).
 const MAX_PENDING_SUBS: usize = 512;
 
@@ -177,6 +193,9 @@ pub struct ParticleSystem {
     frame: u64,
     effects: BTreeMap<String, Rc<EffectDef>>,
     instances: Vec<Instance>,
+    /// Instance id → index into `instances` (the first instance with that
+    /// id), rebuilt whenever instances are retired.
+    index: HashMap<u64, usize>,
     by_entity: HashMap<hecs::Entity, u64>,
     pending: Vec<PendingSub>,
     next_seq: u64,
@@ -223,6 +242,20 @@ impl ParticleSystem {
     /// Clock time on the records' epoch (what `u_time` is set to).
     fn local_time(&self) -> f32 {
         (self.clock - self.epoch) as f32
+    }
+
+    /// Resident particles across every ring at clock time `t` (each ring's
+    /// live window, trimmed to `t`): the count the spawn budget reads.
+    fn resident(&mut self, t: f32) -> usize {
+        let mut n = 0;
+        for inst in &mut self.instances {
+            for l in &mut inst.layers {
+                if let LayerRt::Particles(p) = l {
+                    n += p.ring.trim(t);
+                }
+            }
+        }
+        n
     }
 
     pub fn stats(&self) -> ParticleStats {
@@ -356,8 +389,28 @@ impl ParticleSystem {
         let id = hash_str(&name) ^ seq;
         let mut inst = self.new_instance(id, name, fx, Source::OneShot, frame);
         inst.tint = tint;
-        self.instances.push(inst);
+        self.push_instance(inst);
         true
+    }
+
+    /// Append an instance and index it.
+    fn push_instance(&mut self, inst: Instance) {
+        self.index.entry(inst.id).or_insert(self.instances.len());
+        self.instances.push(inst);
+    }
+
+    /// The instance with id `id` (O(1) through `index`).
+    fn instance_mut(&mut self, id: u64) -> Option<&mut Instance> {
+        let &i = self.index.get(&id)?;
+        self.instances.get_mut(i)
+    }
+
+    /// Rebuild `index` after instances were removed.
+    fn reindex(&mut self) {
+        self.index.clear();
+        for (i, inst) in self.instances.iter().enumerate() {
+            self.index.entry(inst.id).or_insert(i);
+        }
     }
 
     /// Whether a finished instance can be dropped.
@@ -701,6 +754,7 @@ impl Engine {
         self.drive_light_layers(&mut ps);
         ps.finish_hidden_fades();
         // Retire finished instances (their GPU rings are freed at draw time).
+        let before = ps.instances.len();
         let mut i = 0;
         while i < ps.instances.len() {
             if ps.instance_done(&ps.instances[i]) {
@@ -722,6 +776,9 @@ impl Engine {
             } else {
                 i += 1;
             }
+        }
+        if ps.instances.len() != before {
+            ps.reindex();
         }
         self.particles = ps;
     }
@@ -775,15 +832,16 @@ impl Engine {
                     let mut inst =
                         ps.new_instance(id, name.clone(), fx, Source::Emitter(entity), frame);
                     inst.last_burst = em.burst;
-                    ps.instances.push(inst);
+                    ps.push_instance(inst);
                     ps.by_entity.insert(entity, id);
                     id
                 }
             };
-            let Some(inst) = ps.instances.iter_mut().find(|i| i.id == id) else { continue };
+            let clock = ps.clock;
+            let Some(inst) = ps.instance_mut(id) else { continue };
             inst.emitting = active;
             inst.hidden_at = match (hidden, inst.hidden_at) {
-                (true, None) => Some(ps.clock),
+                (true, None) => Some(clock),
                 (true, at) => at,
                 (false, _) => None,
             };
@@ -839,9 +897,9 @@ impl Engine {
     /// Fire `n` bursts of every particle layer of instance `id` now.
     fn burst_instance(&self, ps: &mut ParticleSystem, id: u64, n: u32) {
         let t = ps.local_time();
-        let frame_no = ps.frame;
-        let Some(inst) = ps.instances.iter_mut().find(|i| i.id == id) else { return };
-        inst.last_burst_at = Some(ps.clock);
+        let (frame_no, clock) = (ps.frame, ps.clock);
+        let Some(inst) = ps.instance_mut(id) else { return };
+        inst.last_burst_at = Some(clock);
         let ground = self.ground_sampler();
         let gfn = |x: f32, y: f32| ground.as_ref().and_then(|g| g.at(x, y));
         for (li, l) in inst.layers.iter_mut().enumerate() {
@@ -906,6 +964,7 @@ impl Engine {
         let gfn = |x: f32, y: f32| ground.as_ref().and_then(|g| g.at(x, y));
         let mut subs: Vec<PendingSub> = Vec::new();
         let epoch = ps.epoch;
+        let budget = budget_scale(ps.resident(t_now));
         for inst in &mut ps.instances {
             let age = (clock - inst.start) as f32;
             let one_shot = inst.source == Source::OneShot;
@@ -929,7 +988,8 @@ impl Engine {
                 if emitting_now && def.spawn.rate > 0.0 && dt > 0.0 {
                     // The layer describes one plume: a multi-node emitter
                     // runs it on every node, so its rate scales with them.
-                    let mut rate = def.spawn.rate * inst.rate * site_count(&inst.sites) as f32;
+                    let mut rate =
+                        def.spawn.rate * inst.rate * site_count(&inst.sites) as f32 * budget;
                     if let (true, Some([h0, h1])) = (def.spawn.on_ground, def.spawn.ground_falloff)
                     {
                         let h = gfn(inst.frame.pos.x, inst.frame.pos.y)
@@ -1239,6 +1299,10 @@ impl ParticleSystem {
                             if p.ring.last_death() < t {
                                 continue;
                             }
+                            let ranges = p.ring.live_range(t);
+                            if ranges.is_empty() {
+                                continue;
+                            }
                             let fade = hidden_fade(inst.hidden_at, self.clock);
                             if fade <= 0.0 {
                                 continue;
@@ -1266,7 +1330,7 @@ impl ParticleSystem {
                                     screen: None,
                                 });
                             }
-                            gfx.draw_particles(gpu, camera, &world_matrix, settings, &u);
+                            gfx.draw_particles(gpu, &ranges, camera, &world_matrix, settings, &u);
                         }
                         LayerRt::Ribbon(r) => {
                             let LayerDef::Ribbon(def) = &inst.effect.layers[r.def_index] else {
