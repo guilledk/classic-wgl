@@ -90,6 +90,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   Showing it again resets the fade.  `Emitter.enabled = false` is
   unchanged: spawning stops and live particles die naturally.  New
   `ParticleRing::clear` (#136).
+- Small particles no longer vanish when zoomed out.  A quad narrower
+  than about a texel of the (half-res) particle target covered no pixel
+  centre and dropped out of the image: ice crystals (0.04-0.07 m, ~0.2
+  half-res texels at zoom 0.15) kept ~1/12 of their area-expected light.
+  `particle.vert` now floors the quad width at `PARTICLE_MIN_TEXELS` (1.5
+  target texels, from the new `u_target_px`) and scales its alpha by the
+  area ratio, so a particle keeps its average light at any zoom
+  (`particle_size_floor` is the CPU mirror) (#139).
 
 ## [0.3.3] - 2026-10-17
 

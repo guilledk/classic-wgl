@@ -903,6 +903,12 @@ form.  No transform feedback, no per-frame CPU simulation.
   per-instance `vec4`s bound in the ring's **own VAO** (divisors never leak
   into the shared VAO; `draw_particles` rebinds it).  Dead slots inside the
   window collapse to a degenerate vertex.
+- **Size floor**: a quad under ~a texel wide hits no pixel centre and
+  vanishes, so `particle.vert` widens it to `PARTICLE_MIN_TEXELS` (1.5) texels
+  of the target it draws into (`u_target_px`, the half-res target inside
+  the particle pass) and multiplies its alpha by the area ratio (`cover`);
+  a streak only widens.  `particle_size_floor` is the CPU mirror, pinned
+  to the shader source by a test.
 - **Budget**: `PARTICLE_BUDGET` (65,536) is a global *soft* cap on resident
   particles; above it every layer's continuous `rate` is scaled by
   `budget / resident` (`budget_scale`).  Bursts are never throttled and

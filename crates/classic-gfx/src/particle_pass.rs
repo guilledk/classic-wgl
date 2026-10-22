@@ -118,6 +118,8 @@ pub fn particle_pass_size(width: u32, height: u32) -> (u32, u32) {
 pub(crate) struct ParticlePassState {
     target: Option<ParticleTarget>,
     unsupported: Cell<bool>,
+    /// Between a successful `begin_particle_pass` and its end.
+    active: Cell<bool>,
 }
 
 impl Gfx {
@@ -179,12 +181,23 @@ impl Gfx {
             gl.clear(glow::COLOR_BUFFER_BIT);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
         }
+        self.particle_pass.active.set(true);
         true
+    }
+
+    /// The size (texels) of the target particles currently draw into: the
+    /// half-res target inside the pass, else the main target.
+    pub(crate) fn particle_draw_size(&self) -> (u32, u32) {
+        match self.particle_pass.target.as_ref() {
+            Some(t) if self.particle_pass.active.get() => (t.width, t.height),
+            _ => self.main_target_size(),
+        }
     }
 
     /// End the half-res pass: rebind the main target and composite the
     /// particle colour over it (premultiplied "over", LINEAR upscale).
     pub fn end_particle_pass(&self) {
+        self.particle_pass.active.set(false);
         self.bind_main_target();
         let Some(t) = self.particle_pass.target.as_ref() else { return };
         let gl = &self.gl;
