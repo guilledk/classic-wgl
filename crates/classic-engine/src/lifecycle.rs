@@ -925,6 +925,8 @@ impl Engine {
         // a model depth-fails its normal pass and shows through the ghost pass.
         // Skipped entirely without models (model-less frames are unchanged).
         let has_models = model_draws.iter().any(|d| !d.instances.is_empty());
+        // A glowing model also needs the bloom pass (below).
+        let models_emissive = model_draws.iter().any(|d| d.has_emissive());
         if has_models {
             gfx.begin_model_pass(self.camera.scale.x);
         }
@@ -964,6 +966,7 @@ impl Engine {
                     inst.texture.as_deref(),
                     &[0.8, 0.8, 0.8, 1.0],
                     inst.team.as_ref(),
+                    &inst.emissive,
                     &model_settings,
                 );
             }
@@ -1063,7 +1066,7 @@ impl Engine {
 
         // Bloom (before the UI): only on frames with something emissive on
         // screen, so scenes without effects stay pixel-identical.
-        if self.particles.has_emissive() {
+        if self.particles.has_emissive() || models_emissive {
             if let Some(ref mut t) = self.trace {
                 t.push(golden::TraceItemParams {
                     order: 0.0,

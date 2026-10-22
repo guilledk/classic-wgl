@@ -5,8 +5,8 @@ use glow::HasContext;
 
 use crate::buffer::vertex_attrib_ptr_f32;
 use crate::{
-    Gfx, GlBuffer, IsoSpritePass, ModelMeshGpu, RenderSettings, Shader, SpriteRegion, TeamTint,
-    TileBlend, BLEND_LUT_UNIT, MODEL_VERTEX_STRIDE, SHADOW_MAP_UNIT,
+    EmissiveRect, Gfx, GlBuffer, IsoSpritePass, ModelMeshGpu, RenderSettings, Shader, SpriteRegion,
+    TeamTint, TileBlend, BLEND_LUT_UNIT, MODEL_VERTEX_STRIDE, SHADOW_MAP_UNIT,
 };
 
 impl Gfx {
@@ -639,7 +639,9 @@ impl Gfx {
     /// Scoped depth test like `draw_tilemap`: enabled, drawn, disabled.
     ///
     /// `team` tints the texels of the mesh's team region (only when it is
-    /// textured); `None` draws exactly as an untinted mesh.
+    /// textured); `None` draws exactly as an untinted mesh.  `emissive` are
+    /// the mesh's self-lit rects (strengths already scaled by the model's
+    /// multiplier, at most [`crate::MAX_EMISSIVE`] used); empty = no glow.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_model(
         &self,
@@ -650,6 +652,7 @@ impl Gfx {
         texture_name: Option<&str>,
         base_color: &[f32; 4],
         team: Option<&TeamTint>,
+        emissive: &[EmissiveRect],
         settings: &RenderSettings,
     ) {
         let gl = &self.gl;
@@ -677,6 +680,14 @@ impl Gfx {
                 s.uniform_vec3(gl, "team_tint", Vec3::from_array(t.tint));
             }
             None => s.uniform_1f(gl, "use_team", 0.0),
+        }
+        let emissive = &emissive[..emissive.len().min(crate::MAX_EMISSIVE)];
+        s.uniform_1f(gl, "emissive_count", emissive.len() as f32);
+        if !emissive.is_empty() {
+            let rects: Vec<[f32; 4]> = emissive.iter().map(|e| e.rect).collect();
+            let strengths: Vec<f32> = emissive.iter().map(|e| e.strength).collect();
+            s.uniform_vec4_array(gl, "emissive_rect", &rects);
+            s.uniform_1f_array(gl, "emissive_strength", &strengths);
         }
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
