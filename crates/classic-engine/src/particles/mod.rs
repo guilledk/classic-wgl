@@ -202,6 +202,9 @@ pub struct ParticleSystem {
     graveyard: Vec<ParticleGpu>,
     ribbon_vb: Option<DynamicVb>,
     ribbon_verts: Vec<f32>,
+    /// The primary tilemap's world-xy bounds for the shader's edge fade
+    /// (`None` = no tilemap, no fade); refreshed every update.
+    map: Option<[f32; 4]>,
 }
 
 /// Per-frame stats (tests, trace, HUD).
@@ -548,6 +551,7 @@ pub fn layer_uniforms(
             None => [0.0; 4],
         },
         texture: r.texture.clone(),
+        map: classic_gfx::NO_MAP,
     }
 }
 
@@ -593,6 +597,13 @@ fn next_site(cursor: &mut u32, n: usize) -> usize {
     k
 }
 
+/// World-xy bounds of a `size_x` x `size_y` tilemap whose tile origin sits
+/// at world `origin` (tile x along world +x, tile y along world -y).
+pub fn map_bounds(origin: Vec3, size_x: i32, size_y: i32) -> [f32; 4] {
+    let (w, h) = (size_x as f32 * TILE_M, size_y as f32 * TILE_M);
+    [origin.x, origin.y - h, origin.x + w, origin.y]
+}
+
 /// Terrain height sampler over the primary tilemap (world metres in, world z
 /// out; `None` off the map).
 struct Ground<'a> {
@@ -601,6 +612,13 @@ struct Ground<'a> {
 }
 
 impl Ground<'_> {
+    /// The map's world-xy bounds `min_x, min_y, max_x, max_y`: exactly the
+    /// region [`Ground::at`] samples (tile x grows with world x, tile y
+    /// with world -y).
+    fn bounds(&self) -> [f32; 4] {
+        map_bounds(self.origin, self.tm.size_x, self.tm.size_y)
+    }
+
     fn at(&self, x: f32, y: f32) -> Option<f32> {
         let tx = (x - self.origin.x) / TILE_M;
         let ty = -(y - self.origin.y) / TILE_M;
@@ -748,6 +766,7 @@ impl Engine {
         ps.clock += dt.max(0.0) as f64;
         ps.frame += 1;
         ps.maybe_rebase();
+        ps.map = self.ground_sampler().map(|g| g.bounds());
         self.sync_emitter_instances(&mut ps, dt);
         self.fire_pending_subs(&mut ps);
         self.spawn_all(&mut ps, dt);
@@ -1314,6 +1333,7 @@ impl ParticleSystem {
                             let mut u =
                                 layer_uniforms(def, inst.frame.scale, inst.tint, inst.intensity, t);
                             u.shape[3] *= fade;
+                            u.map = self.map.unwrap_or(classic_gfx::NO_MAP);
                             if let Some(tr) = trace.as_mut() {
                                 let name = format!("{}/{}", inst.name, def.name);
                                 tr.push(TraceItemParams {

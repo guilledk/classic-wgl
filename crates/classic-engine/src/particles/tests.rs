@@ -743,3 +743,32 @@ fn over_budget_scales_continuous_spawning_deterministically() {
     let (a, b) = (mk().0, mk().0);
     assert!(records(&a) == records(&b), "budgeted spawning is deterministic");
 }
+
+#[test]
+fn map_bounds_match_the_ground_sampler() {
+    let mut e = engine();
+    run(&mut e, 1, 1.0 / 60.0);
+    let b = e.particles.map.expect("a tilemap gives bounds");
+    // 32 tiles of TILE_M from the origin, tile y running along world -y.
+    let span = 32.0 * TILE_M;
+    assert_eq!(b, [0.0, -span, span, 0.0]);
+    let g = e.ground_sampler().unwrap();
+    let eps = 1e-3;
+    for (x, y) in [(b[0], b[1]), (b[2], b[3]), (b[0], b[3]), (b[2], b[1])] {
+        assert!(g.at(x, y).is_some(), "corner ({x}, {y}) is on the map");
+    }
+    assert!(g.at(b[0] - eps, -1.0).is_none() && g.at(b[2] + eps, -1.0).is_none());
+    assert!(g.at(1.0, b[1] - eps).is_none() && g.at(1.0, b[3] + eps).is_none());
+    // An offset tilemap shifts the bounds with it.
+    assert_eq!(
+        map_bounds(Vec3::new(3.0, 4.0, 9.0), 2, 1),
+        [3.0, 4.0 - TILE_M, 3.0 + 2.0 * TILE_M, 4.0]
+    );
+}
+
+#[test]
+fn no_tilemap_no_map_fade() {
+    let mut e = Engine::new_for_test();
+    e.update_particles(1.0 / 60.0);
+    assert!(e.particles.map.is_none());
+}

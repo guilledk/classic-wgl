@@ -52,8 +52,9 @@ pub use light_grid::{
 pub use model_pass::{model_target_size, TeamTint, MODEL_GHOST_GROUP};
 pub use particle_pass::{particle_pass_size, ParticleTarget, PARTICLE_PASS_DIVISOR};
 pub use particles::{
-    particle_size_floor, ParticleGpu, ParticleLayerUniforms, ParticleRecord, ParticleRing,
-    PARTICLE_MIN_TEXELS, PARTICLE_RECORD_BYTES, RIBBON_VERTEX_FLOATS,
+    map_fade, particle_size_floor, ParticleGpu, ParticleLayerUniforms, ParticleRecord,
+    ParticleRing, MAP_FADE_M, NO_MAP, PARTICLE_MIN_TEXELS, PARTICLE_RECORD_BYTES,
+    RIBBON_VERTEX_FLOATS,
 };
 pub use shader::{builtin_shaders, BuiltinShader, Shader, ShaderSourceRegistry};
 pub use texture::GlTexture;

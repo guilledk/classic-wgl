@@ -30,6 +30,12 @@ uniform vec2 u_target_px;
 // `particles.rs`, mirrored by `particle_size_floor`).
 #define PARTICLE_MIN_TEXELS 1.5
 
+// The primary tilemap's world-xy bounds (min x, min y, max x, max y; metres):
+// a particle fades out over MAP_FADE_M past them instead of drawing over the
+// void around the terrain (`map_fade` in `particles.rs`).  max < min = no map.
+uniform vec4 u_map;
+#define MAP_FADE_M 1.0
+
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
@@ -336,6 +342,11 @@ void main(void ) {
         vColor = vec4(0.0);
         return;
     }
+    float mapFade = 1.0;
+    if (u_map.z >= u_map.x) {
+        vec2 out2 = max(max(u_map.xy - p.xy, p.xy - u_map.zw), 0.0);
+        mapFade = clamp(1.0 - max(out2.x, out2.y) / MAP_FADE_M, 0.0, 1.0);
+    }
     float size = a_misc.y * curve4(u_size_t, u_size_v, lf);
     float half_px = 0.5 * size * ppm;
 
@@ -384,7 +395,7 @@ void main(void ) {
 
     vec4 col = colorCurve(lf);
     col.rgb *= u_tint;
-    col.a *= u_shape.w * cover;
+    col.a *= u_shape.w * cover * mapFade;
     vAmbient = vec3(1.0);
     vSunColor = vec3(0.0);
     vSunView = vec3(0.0, 0.0, 1.0);
