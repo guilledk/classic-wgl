@@ -103,11 +103,24 @@ impl Gfx {
                 s.uniform_1f(gl, "use_shadow", 1.0);
                 s.uniform_1f(gl, "shadow_debug", if shadow.debug { 1.0 } else { 0.0 });
             }
-            None => {
-                s.uniform_1f(gl, "use_shadow", 0.0);
-                s.uniform_1f(gl, "shadow_debug", 0.0);
-            }
+            None => self.bind_no_shadow(s),
         }
+    }
+
+    /// Switch a lit shader's sun shadow off.  Its `sampler2DShadow` must
+    /// still read a compare-mode depth texture on its own unit (WebGL 2
+    /// rejects the draw otherwise, and unit 0 holds the albedo `sampler2D`),
+    /// so the 1x1 placeholder is bound there.
+    fn bind_no_shadow(&self, s: &Shader) {
+        let gl = &self.gl;
+        unsafe {
+            gl.active_texture(glow::TEXTURE0 + SHADOW_MAP_UNIT);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.shadow_placeholder));
+            gl.active_texture(glow::TEXTURE0);
+        }
+        s.uniform_1i(gl, "shadow_map", SHADOW_MAP_UNIT as i32);
+        s.uniform_1f(gl, "use_shadow", 0.0);
+        s.uniform_1f(gl, "shadow_debug", 0.0);
     }
 
     /// Draw a solid-colour rectangle.
@@ -189,8 +202,7 @@ impl Gfx {
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
         s.uniform_vec3(gl, "tint", Vec3::from_array([1.0, 1.0, 1.0]));
-        s.uniform_1f(gl, "use_shadow", 0.0);
-        s.uniform_1f(gl, "shadow_debug", 0.0);
+        self.bind_no_shadow(s);
         self.bind_light_grid(s, None);
 
         vertex_attrib_ptr_f32(gl, &self.quad.verts, s.attr("vertex_pos"), 3, 0, 0);

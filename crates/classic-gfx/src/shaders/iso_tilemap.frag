@@ -42,7 +42,7 @@ uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
 
-uniform sampler2D shadow_map;
+uniform highp sampler2DShadow shadow_map;
 uniform mat4 light_view_proj;
 uniform float shadow_bias;
 uniform float shadow_strength;
@@ -180,21 +180,23 @@ vec3 evaluateLightsTiled(vec3 n, vec3 p) {
 }
 // --- END LIGHT GRID ---
 
-// Manual directional-shadow compare.  `worldPos` is projected into light clip
-// space, remapped to `[0,1]` UVs, and compared against the stored depth.  A
-// fragment is shadowed when the stored (nearest-occluder) depth is nearer than
-// the fragment's depth (with a bias).  Outside the light box there is no
-// shadow.  PCF (3x3) softens the texel edges; `shadow_strength` floors the
-// result so a fully-shadowed pixel keeps part of its sun diffuse.
-float shadowSample(vec2 suv, float fragDepth) {
-    float stored = texture(shadow_map, suv).r;
-    return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
-}
-
-// `n` is the receiver's surface normal in world space.  Nudging the sample
-// point along it by ~a texel keeps a surface from sampling the very texel it
-// wrote, which is what causes shadow acne, without detaching the shadow from
-// its caster the way a large depth bias would.
+// --- BEGIN SUN SHADOW (byte-identical in mesh.frag / iso_tilemap.frag /
+// --- sheet.frag; pinned by `lit_shaders_share_the_sun_shadow_block`) ---
+//
+// Directional-shadow lookup.  `lightPos` (plus the normal offset) is
+// projected into light clip space, remapped to `[0,1]` UVs and compared by
+// the hardware against the stored (nearest-occluder) depth: `shadow_map` is
+// a `sampler2DShadow` (`COMPARE_REF_TO_TEXTURE`, `LEQUAL`, `LINEAR`), so one
+// `texture()` returns the bilinear blend of a 2x2 depth compare.  The
+// reference is the fragment depth minus `shadow_bias`, i.e. lit when
+// `fragDepth <= stored + shadow_bias`.  Four taps at the corners of the
+// fragment's texel make a tent filter over the 3x3 texels around it (the
+// footprint of the old 9-tap box PCF).  Outside the light box there is no
+// shadow; `shadow_strength` floors the result so a fully shadowed pixel keeps
+// part of its sun diffuse.  `n` is the receiver's world normal: nudging the
+// sample point along it by ~a texel keeps a surface from sampling the very
+// texel it wrote (shadow acne) without detaching the shadow from its caster
+// the way a large depth bias would.
 float shadowFactor(vec3 lightPos, vec3 n) {
     vec4 lp = light_view_proj * vec4(lightPos + n * shadow_normal_offset, 1.0);
     vec3 ndc = lp.xyz / lp.w;
@@ -202,16 +204,15 @@ float shadowFactor(vec3 lightPos, vec3 n) {
     if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
         return 1.0;
     }
-    float fragDepth = ndc.z * 0.5 + 0.5;
-    float acc = 0.0;
-    for (int x = -1; x <= 1; x++) {
-        for (int y = -1; y <= 1; y++) {
-            acc += shadowSample(suv + vec2(float(x), float(y)) * shadow_texel, fragDepth);
-        }
-    }
-    float shadow = acc / 9.0;
+    float ref = ndc.z * 0.5 + 0.5 - shadow_bias;
+    vec2 h = 0.5 * shadow_texel;
+    float shadow = 0.25 * (texture(shadow_map, vec3(suv + vec2(-h.x, -h.y), ref))
+        + texture(shadow_map, vec3(suv + vec2(h.x, -h.y), ref))
+        + texture(shadow_map, vec3(suv + vec2(-h.x, h.y), ref))
+        + texture(shadow_map, vec3(suv + vec2(h.x, h.y), ref)));
     return mix(shadow_strength, 1.0, shadow);
 }
+// --- END SUN SHADOW ---
 
 // Tile id at integer tile coords, clamped to the map.  `texelFetch` on the
 // integer cell is exactly what the `NEAREST` lookup used to resolve, without

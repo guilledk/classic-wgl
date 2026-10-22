@@ -54,6 +54,49 @@ mod tests {
         assert_eq!(sheet, lighting_block(PARTICLE_VERT), "particle.vert drifted");
     }
 
+    /// The `BEGIN SUN SHADOW` .. `END SUN SHADOW` span of a shader.
+    fn shadow_block(src: &str) -> &str {
+        let begin = src.find("// --- BEGIN SUN SHADOW").expect("BEGIN marker");
+        let end = src.find("// --- END SUN SHADOW ---").expect("END marker");
+        &src[begin..end]
+    }
+
+    /// Terrain, sprites and models shadow through the exact same lookup: a
+    /// hardware-compared `sampler2DShadow`, four bilinear taps.
+    #[test]
+    fn lit_shaders_share_the_sun_shadow_block() {
+        let sheet = shadow_block(SHEET_FRAG);
+        assert_eq!(sheet, shadow_block(ISO_TILEMAP_FRAG), "iso_tilemap.frag drifted");
+        assert_eq!(sheet, shadow_block(MESH_FRAG), "mesh.frag drifted");
+        assert_eq!(sheet.matches("texture(shadow_map, vec3(").count(), 4, "four taps");
+        assert!(sheet.contains("float ref = ndc.z * 0.5 + 0.5 - shadow_bias;"));
+        for src in [SHEET_FRAG, ISO_TILEMAP_FRAG, MESH_FRAG] {
+            assert!(src.contains("uniform highp sampler2DShadow shadow_map;"));
+            assert!(!src.contains("shadowSample"), "no manual compare left");
+        }
+    }
+
+    /// CPU model of the four `LINEAR` compare taps at `(+-0.5, +-0.5)` texel
+    /// from a texel centre: each lands on a texel corner and averages the 2x2
+    /// compares around it, so together they weigh the 3x3 texels around the
+    /// fragment `[1, 2, 1] x [1, 2, 1] / 16` -- a tent over the footprint the
+    /// old 9-tap box PCF covered, so soft edges stay comparable.
+    #[test]
+    fn four_bilinear_taps_make_a_3x3_tent() {
+        let mut w = [[0.0f32; 3]; 3];
+        for (cx, cy) in [(-0.5f32, -0.5f32), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)] {
+            // Bilinear weights of the 2x2 texels around a corner (all 1/4).
+            for dx in [cx - 0.5, cx + 0.5] {
+                for dy in [cy - 0.5, cy + 0.5] {
+                    w[(dy + 1.0) as usize][(dx + 1.0) as usize] += 0.25 * 0.25;
+                }
+            }
+        }
+        let tent = [[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]].map(|r| r.map(|v| v / 16.0));
+        assert_eq!(w, tent);
+        assert_eq!(w.iter().flatten().sum::<f32>(), 1.0);
+    }
+
     /// Spot lights shipped with an inverted cone (`dot(L, dir)`, so a spot
     /// only lit what sat *behind* it) and a soft edge reaching
     /// `acos(0.6 cos a)` -- ~56 deg for a 20 deg cone.  Nothing noticed until
