@@ -666,3 +666,80 @@ fn fixed_radius_light_layers_ignore_the_instance_scale() {
     // Offsets scale for both; only the unfixed radius scales.
     assert_eq!(got, [(0.5, 3.0), (0.5, 6.0), (2.0, 6.0), (2.0, 12.0)]);
 }
+
+/// `index` points every id at its (first) instance.
+fn assert_indexed(e: &Engine) {
+    let ps = &e.particles;
+    assert_eq!(ps.index.len(), ps.instances.len(), "one entry per instance");
+    for (i, inst) in ps.instances.iter().enumerate() {
+        assert_eq!(ps.index.get(&inst.id), Some(&i), "{}", inst.name);
+    }
+}
+
+#[test]
+fn instance_index_survives_retirement() {
+    let mut e = engine();
+    let ent = spawn_emitter(&mut e, "p", Emitter::new("t::pop", Vec3::new(5.0, -5.0, 1.0)));
+    for k in 0..6 {
+        e.fx_emit("pop", Vec3::new(4.0 + k as f32, -5.0, 1.0), Vec3::Z, 1.0);
+        run(&mut e, 7, 1.0 / 60.0);
+        assert_indexed(&e);
+    }
+    run(&mut e, 60, 1.0 / 60.0);
+    assert_eq!(e.particle_stats().instances, 1, "the one-shots retired");
+    assert_indexed(&e);
+    // The surviving emitter instance is still found by id (burst lands).
+    e.world.get::<&mut Emitter>(ent).unwrap().burst = 1.0;
+    run(&mut e, 1, 1.0 / 60.0);
+    assert_eq!(e.particle_stats().live, 12);
+}
+
+#[test]
+fn budget_scale_is_one_until_the_budget_then_inverse() {
+    assert_eq!(budget_scale(0), 1.0);
+    assert_eq!(budget_scale(PARTICLE_BUDGET), 1.0);
+    assert_eq!(budget_scale(PARTICLE_BUDGET * 2), 0.5);
+    assert_eq!(budget_scale(PARTICLE_BUDGET * 4), 0.25);
+}
+
+/// Three 40k/s, 1 s-life streams: 120k resident unbudgeted.  The soft
+/// budget settles where `R = 120k * B / R` (~88.7k); bursts are untouched.
+#[test]
+fn over_budget_scales_continuous_spawning_deterministically() {
+    let lib = r#"{"effects":[
+      {"name":"flood","layers":[{"type":"particles","name":"p","max":65536,
+         "spawn":{"rate":40000},"life":[1,1]}]},
+      {"name":"pop","layers":[{"type":"particles","name":"p","max":4096,
+         "spawn":{"burst":3000},"life":[1,1]}]}]}"#;
+    let mk = || {
+        let mut e = engine();
+        e.register_effects("b", EffectLibrary::from_json(lib.as_bytes()).unwrap());
+        for k in 0..3 {
+            let em = Emitter::new("b::flood", Vec3::new(4.0 + k as f32, -5.0, 1.0));
+            spawn_emitter(&mut e, &format!("flood{k}"), em);
+        }
+        let pop = spawn_emitter(&mut e, "pop", Emitter::new("b::pop", Vec3::new(8.0, -5.0, 1.0)));
+        run(&mut e, 150, 1.0 / 60.0);
+        (e, pop)
+    };
+    let (mut e, pop) = mk();
+    let live = e.particle_stats().live;
+    assert!((80_000..100_000).contains(&live), "settles over the soft budget: {live}");
+    // A burst while over budget is never throttled.
+    e.world.get::<&mut Emitter>(pop).unwrap().burst = 1.0;
+    run(&mut e, 1, 1.0 / 60.0);
+    let pop_live = e
+        .particles
+        .instances
+        .iter()
+        .find(|i| i.effect.name == "pop")
+        .map(|i| match &i.layers[0] {
+            LayerRt::Particles(p) => p.ring.live_count(e.particles.local_time()),
+            _ => 0,
+        })
+        .unwrap();
+    assert_eq!(pop_live, 3000);
+    // Same inputs, same records.
+    let (a, b) = (mk().0, mk().0);
+    assert!(records(&a) == records(&b), "budgeted spawning is deterministic");
+}

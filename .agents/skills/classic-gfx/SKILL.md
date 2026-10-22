@@ -894,10 +894,20 @@ form.  No transform feedback, no per-frame CPU simulation.
 
 - **Upload**: `ParticleGpu::upload` sends only the slots written since the
   last frame — at most two `buffer_sub_data` ranges (before/after the wrap).
-- **Draw**: one `drawArraysInstanced(TRIANGLE_STRIP, 0, 4, capacity)` per
-  layer; corner from `gl_VertexID`, record from 3 per-instance `vec4`s bound
-  in the ring's **own VAO** (divisors never leak into the shared VAO;
-  `draw_particles` rebinds it).  Dead slots collapse to a degenerate vertex.
+- **Draw**: only the ring's **resident window** — `ParticleRing::
+  live_range(t)` trims the dead old end (records die in roughly push
+  order) and returns `[tail, head)` as one or two slot runs — one
+  `drawArraysInstanced(TRIANGLE_STRIP, 0, 4, run_len)` per run.  WebGL 2
+  has no base instance, so each run re-points the three per-instance
+  attributes at its first slot.  Corner from `gl_VertexID`, record from 3
+  per-instance `vec4`s bound in the ring's **own VAO** (divisors never leak
+  into the shared VAO; `draw_particles` rebinds it).  Dead slots inside the
+  window collapse to a degenerate vertex.
+- **Budget**: `PARTICLE_BUDGET` (65,536) is a global *soft* cap on resident
+  particles; above it every layer's continuous `rate` is scaled by
+  `budget / resident` (`budget_scale`).  Bursts are never throttled and
+  nothing reads the camera, so spawning stays deterministic.  Instances are
+  found by id through `ParticleSystem::index` (rebuilt on retirement).
 - **Motion** (`particle.vert`, mirrored on the CPU by
   `classic_core::effects::{ballistic, land_time}`): ballistic + linear drag
   (`dv/dt = g − k v`; drag-free below `k = 1e-3` to dodge f32 cancellation),

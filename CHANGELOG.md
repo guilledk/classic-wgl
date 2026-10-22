@@ -51,6 +51,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   culled lights contribute 0).  On a Radeon 680M at 4K, the 93-light
   `buildtest` scene goes from 104 ms to 17 ms a frame at zoom 1 and from
   19 ms to 8 ms at the default zoom (#133).
+- Particle bookkeeping scales with the effect count.  Instances are found
+  by id through a hash index (rebuilt when instances retire) instead of a
+  linear scan per emitter and burst; each layer draws only its ring's
+  resident window (`ParticleRing::live_range`: the dead old end trimmed,
+  one or two instanced draws with the attributes re-pointed on wrap)
+  instead of all `capacity` slots; and a global soft budget
+  (`PARTICLE_BUDGET`, 65,536 resident particles) scales continuous
+  spawning by `budget / resident` above it.  Bursts are never throttled
+  and spawning never depends on the camera, so fixed-timestep runs stay
+  reproducible.  `Gfx::draw_particles` takes the slot ranges to draw
+  (#138).
 
 ### Fixed
 

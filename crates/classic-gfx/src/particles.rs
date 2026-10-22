@@ -55,6 +55,11 @@ impl ParticleRecord {
 pub struct ParticleRing {
     records: Vec<ParticleRecord>,
     head: usize,
+    /// Records in push order from `tail` up to `head` (wrapping): the
+    /// *resident* window.  Everything older is known dead; the window is
+    /// trimmed from its old end by [`ParticleRing::live_range`].
+    tail: usize,
+    resident: usize,
     /// Slots written since the last [`ParticleRing::take_dirty`], from
     /// `dirty_start` (wrapping), saturating at the capacity.
     dirty_start: usize,
@@ -69,6 +74,8 @@ impl ParticleRing {
         Self {
             records: vec![ParticleRecord::default(); capacity],
             head: 0,
+            tail: 0,
+            resident: 0,
             dirty_start: 0,
             dirty_len: 0,
             max_death: f32::NEG_INFINITY,
@@ -92,7 +99,14 @@ impl ParticleRing {
         if r.life > 0.0 {
             self.max_death = self.max_death.max(r.t_birth + r.life);
         }
-        self.head = (self.head + 1) % self.records.len();
+        let cap = self.records.len();
+        if self.resident == cap {
+            // Overwrote the oldest resident record.
+            self.tail = (self.tail + 1) % cap;
+        } else {
+            self.resident += 1;
+        }
+        self.head = (self.head + 1) % cap;
         self.dirty_len = (self.dirty_len + 1).min(self.records.len());
     }
 
@@ -129,9 +143,45 @@ impl ParticleRing {
     pub fn clear(&mut self) {
         self.records.fill(ParticleRecord::default());
         self.head = 0;
+        self.tail = 0;
+        self.resident = 0;
         self.max_death = f32::NEG_INFINITY;
         self.dirty_start = 0;
         self.dirty_len = self.records.len();
+    }
+
+    /// Trim the resident window's dead old end at clock time `t` and return
+    /// the slot ranges `[start, end)` still worth drawing, oldest first: at
+    /// most two (the run to the end of the buffer and the wrapped run from
+    /// 0).  Records die in roughly push order, so the window is the live
+    /// set plus the few shorter-lived records interleaved with it (those
+    /// collapse in the shader like before).  Monotonic in `t`: a record
+    /// dead at `t` stays dead, so `t` must not go backwards (a clock rebase
+    /// shifts both sides equally).
+    pub fn live_range(&mut self, t: f32) -> Vec<(usize, usize)> {
+        self.trim(t);
+        split_window(self.tail, self.resident, self.records.len())
+    }
+
+    /// Drop the resident window's dead old end at clock time `t` (see
+    /// [`ParticleRing::live_range`]) and return the resident count.
+    pub fn trim(&mut self, t: f32) -> usize {
+        let cap = self.records.len();
+        while self.resident > 0 {
+            let r = &self.records[self.tail];
+            if r.life > 0.0 && r.t_birth + r.life >= t {
+                break;
+            }
+            self.tail = (self.tail + 1) % cap;
+            self.resident -= 1;
+        }
+        self.resident
+    }
+
+    /// Records in the resident window (an upper bound on the live count as
+    /// of the last [`ParticleRing::live_range`]); O(1).
+    pub fn resident(&self) -> usize {
+        self.resident
     }
 
     /// Live particles at clock time `t`.
@@ -150,6 +200,22 @@ impl ParticleRing {
             .filter(|r| r.life > 0.0)
             .map(|r| r.t_birth + r.life)
             .fold(f32::NEG_INFINITY, f32::max)
+    }
+}
+
+/// The slot ranges of a ring window of `len` records starting at `start`
+/// in a buffer of `cap` slots: one run, or two when it wraps.  Pure (unit
+/// tested).
+pub fn split_window(start: usize, len: usize, cap: usize) -> Vec<(usize, usize)> {
+    if len == 0 || cap == 0 {
+        return Vec::new();
+    }
+    let len = len.min(cap);
+    let end = start + len;
+    if end <= cap {
+        vec![(start, end)]
+    } else {
+        vec![(start, cap), (0, end - cap)]
     }
 }
 
@@ -289,7 +355,11 @@ const PARTICLE_TEX_UNIT: u32 = 6;
 const PARTICLE_NOISE_UNIT: u32 = 9;
 
 impl Gfx {
-    /// Draw one particle ring (all `capacity` instances; dead slots collapse).
+    /// Draw the `ranges` (slot `[start, end)` runs, from
+    /// [`ParticleRing::live_range`]) of one particle ring, one instanced
+    /// call per run.  WebGL 2 has no base instance, so each run re-points the
+    /// three per-instance attributes at its first slot.  Dead slots inside a
+    /// run collapse in the vertex shader.
     ///
     /// Depth test `LEQUAL` against the scene, no depth write, premultiplied
     /// blending (`ONE, ONE_MINUS_SRC_ALPHA`) so one blend state serves alpha
@@ -298,11 +368,15 @@ impl Gfx {
     pub fn draw_particles(
         &self,
         gpu: &ParticleGpu,
+        ranges: &[(usize, usize)],
         camera: &Mat4,
         world_matrix: &Mat4,
         settings: &RenderSettings,
         u: &ParticleLayerUniforms,
     ) {
+        if ranges.is_empty() {
+            return;
+        }
         let gl = &self.gl;
         let s = self.shader("particle");
         s.bind(gl);
@@ -354,7 +428,24 @@ impl Gfx {
             gl.depth_func(glow::LEQUAL);
             gl.depth_mask(false);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
-            gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, gpu.capacity as i32);
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(gpu.vbo));
+            for &(start, end) in ranges {
+                let end = end.min(gpu.capacity);
+                if start >= end {
+                    continue;
+                }
+                for i in 0..3u32 {
+                    gl.vertex_attrib_pointer_f32(
+                        i,
+                        4,
+                        glow::FLOAT,
+                        false,
+                        PARTICLE_RECORD_BYTES as i32,
+                        (start * PARTICLE_RECORD_BYTES) as i32 + (i * 16) as i32,
+                    );
+                }
+                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, (end - start) as i32);
+            }
             gl.bind_sampler(PARTICLE_TEX_UNIT, None);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             gl.depth_mask(true);
@@ -555,6 +646,54 @@ mod tests {
         ring.rewrite(|r| r.t_birth -= 0.5);
         assert_eq!(ring.take_dirty(), vec![(0, 4)]);
         assert_eq!(ring.live_count(0.75), 1);
+    }
+
+    #[test]
+    fn split_window_wraps_into_two_runs() {
+        assert_eq!(split_window(0, 0, 8), vec![]);
+        assert_eq!(split_window(2, 3, 8), vec![(2, 5)]);
+        assert_eq!(split_window(5, 3, 8), vec![(5, 8)]);
+        assert_eq!(split_window(6, 5, 8), vec![(6, 8), (0, 3)]);
+        assert_eq!(split_window(3, 8, 8), vec![(3, 8), (0, 3)], "a full ring from tail");
+        assert_eq!(split_window(0, 8, 8), vec![(0, 8)]);
+    }
+
+    #[test]
+    fn live_range_trims_the_dead_old_end_across_the_wrap() {
+        // Births 0..10 at 1 s spacing, life 1: at t the live records are the
+        // births in [t - 1, t].
+        let mut ring = ParticleRing::new(8);
+        for i in 0..10 {
+            ring.push(rec(i as f32));
+        }
+        // 10 pushes into 8 slots: births 2..=9, oldest (2) at slot 2.
+        assert_eq!(ring.resident(), 8);
+        assert_eq!(ring.live_range(0.0), vec![(2, 8), (0, 2)], "nothing dead yet");
+        // At t = 7.5 births 7..=9 live: slots 7, 0, 1 — a wrapped window.
+        assert_eq!(ring.live_range(7.5), vec![(7, 8), (0, 2)]);
+        assert_eq!(ring.resident(), 3);
+        assert_eq!(ring.live_count(7.5), 1, "birth 7 lives; 8 and 9 are unborn but resident");
+        // Later pushes extend the window from its head.
+        ring.push(rec(10.0));
+        assert_eq!(ring.live_range(9.5), vec![(1, 3)]);
+        assert_eq!(ring.live_range(100.0), vec![]);
+        assert_eq!(ring.resident(), 0);
+        ring.push(rec(100.0));
+        assert_eq!(ring.live_range(100.0), vec![(3, 4)]);
+        ring.clear();
+        assert_eq!(ring.live_range(100.0), vec![]);
+    }
+
+    #[test]
+    fn live_range_keeps_a_long_lived_record_behind_short_ones() {
+        let mut ring = ParticleRing::new(4);
+        let long = ParticleRecord { life: 10.0, ..rec(0.0) };
+        ring.push(long);
+        ring.push(rec(0.0));
+        ring.push(rec(0.0));
+        // The short ones died, the long one still holds the window open.
+        assert_eq!(ring.live_range(5.0), vec![(0, 3)]);
+        assert_eq!(ring.live_count(5.0), 1);
     }
 
     #[test]
