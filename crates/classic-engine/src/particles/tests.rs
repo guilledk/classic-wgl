@@ -639,3 +639,30 @@ fn disabled_emitter_lets_particles_die_naturally() {
     run(&mut e, 32, dt);
     assert_eq!(e.particle_stats().live, 0, "then die of old age");
 }
+
+#[test]
+fn fixed_radius_light_layers_ignore_the_instance_scale() {
+    let mut e = engine();
+    let lib = r#"{"effects":[
+      {"name":"lamp","layers":[{"type":"light","name":"l","duration":null,"radius":6,
+         "offset":[0,0,1],"fixed_radius":true}]},
+      {"name":"bulb","layers":[{"type":"light","name":"l","duration":null,"radius":6,
+         "offset":[0,0,1]}]}]}"#;
+    e.register_effects("k", EffectLibrary::from_json(lib.as_bytes()).unwrap());
+    let origin = Vec3::new(5.0, -5.0, 1.0);
+    for (fx, scale) in [("lamp", 0.5), ("lamp", 2.0), ("bulb", 0.5), ("bulb", 2.0)] {
+        let mut em = Emitter::new(format!("k::{fx}"), origin);
+        em.scale = scale;
+        spawn_emitter(&mut e, &format!("{fx}{scale}"), em);
+    }
+    run(&mut e, 2, 1.0 / 60.0);
+    let mut got: Vec<(f32, f32)> = e
+        .world
+        .query::<&Light>()
+        .iter()
+        .map(|(_, l)| (l.position.z - origin.z, l.radius))
+        .collect();
+    got.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    // Offsets scale for both; only the unfixed radius scales.
+    assert_eq!(got, [(0.5, 3.0), (0.5, 6.0), (2.0, 6.0), (2.0, 12.0)]);
+}
