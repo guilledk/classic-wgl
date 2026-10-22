@@ -980,6 +980,11 @@ form.  No transform feedback, no per-frame CPU simulation.
   falls back to its recycled index.
   Vehicles drive their own per-wheel dust emitters and touchdown one-shots
   (`IsoVehicle.dust_effect`/`touchdown_effect`, `classic-ecs` "Vehicles").
+- **Light layer scale**: a light layer's `radius` scales with the
+  instance (`Emitter.scale`) like everything else, unless the layer sets
+  `fixed_radius: true` (serde default `false`): then it stays in absolute
+  metres (`LightLayerDef::radius_at`) while its `offset` still scales.
+  Ribbon `flash_radius` always scales.
 - **Hiding vs pausing**: an emitter whose entity or parent is `Disabled`
   is *hidden* (`Instance::hidden_at`): its live particles fade out over
   `HIDDEN_FADE_S` (0.25 s, `hidden_fade` multiplies the layer's

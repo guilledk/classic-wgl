@@ -638,12 +638,31 @@ pub struct LightLayerDef {
     pub intensity: Curve,
     /// Peak intensity multiplier.
     pub peak: f32,
+    /// Light radius (metres), scaled by the instance scale unless
+    /// `fixed_radius`.
     pub radius: f32,
+    /// Keep `radius` in absolute metres whatever the instance scale (a
+    /// building's flame scaled down to a small kit still lights its
+    /// surroundings).  `offset` still scales.  Serde default `false`;
+    /// omitted when `false`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fixed_radius: bool,
     /// Offset from the emitter (metres).
     pub offset: [f32; 3],
     /// Random flicker amount (`0..1`) and rate (Hz).
     pub flicker: f32,
     pub flicker_hz: f32,
+}
+
+impl LightLayerDef {
+    /// The light radius (metres) of an instance at `scale`.
+    pub fn radius_at(&self, scale: f32) -> f32 {
+        if self.fixed_radius {
+            self.radius
+        } else {
+            self.radius * scale
+        }
+    }
 }
 
 impl Default for LightLayerDef {
@@ -656,6 +675,7 @@ impl Default for LightLayerDef {
             intensity: Curve::default(),
             peak: 4.0,
             radius: 10.0,
+            fixed_radius: false,
             offset: [0.0, 0.0, 0.5],
             flicker: 0.0,
             flicker_hz: 20.0,
@@ -726,6 +746,32 @@ pub fn land_time(z0: f32, vz: f32, gz: f32, k: f32, ground: f32, max_t: f32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn light_fixed_radius_defaults_off_and_round_trips() {
+        let def: LightLayerDef = serde_json::from_str(r#"{"radius": 6}"#).unwrap();
+        assert!(!def.fixed_radius);
+        let out = serde_json::to_value(&def).unwrap();
+        assert!(out.get("fixed_radius").is_none(), "omitted when false: {out}");
+        let def: LightLayerDef =
+            serde_json::from_str(r#"{"radius": 6, "fixed_radius": true}"#).unwrap();
+        assert!(def.fixed_radius);
+        let back: LightLayerDef =
+            serde_json::from_value(serde_json::to_value(&def).unwrap()).unwrap();
+        assert!(back.fixed_radius);
+        // Through the tagged layer enum too.
+        let layer: LayerDef =
+            serde_json::from_str(r#"{"type": "light", "fixed_radius": true}"#).unwrap();
+        assert!(matches!(layer, LayerDef::Light(l) if l.fixed_radius));
+    }
+
+    #[test]
+    fn light_radius_scales_unless_fixed() {
+        let mut def = LightLayerDef { radius: 6.0, ..Default::default() };
+        assert_eq!([0.25, 1.0, 3.0].map(|s| def.radius_at(s)), [1.5, 6.0, 18.0]);
+        def.fixed_radius = true;
+        assert_eq!([0.25, 1.0, 3.0].map(|s| def.radius_at(s)), [6.0; 3]);
+    }
 
     #[test]
     fn range_accepts_number_or_pair() {

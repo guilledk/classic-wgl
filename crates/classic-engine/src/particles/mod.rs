@@ -1061,7 +1061,7 @@ impl Engine {
                                 def.color[2] * inst.tint[2],
                             ],
                             intensity: level * def.peak * inst.intensity,
-                            radius: def.radius * inst.frame.scale,
+                            radius: def.radius_at(inst.frame.scale),
                             ..Default::default()
                         };
                         match handle {

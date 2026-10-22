@@ -27,6 +27,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 - `classic_core::model::parse_model_glb_with`: skips decoding images the
   caller already holds (by encoded-byte SHA-256,
   `ModelImage.content_hash`) (#132).
+- `fixed_radius` on effect light layers (`LightLayerDef`, serde default
+  `false`, omitted when `false`): the light's `radius` stays in absolute
+  metres whatever the instance scale, while its `offset` still scales
+  (`LightLayerDef::radius_at`) (#137).
 
 ### Changed
 
