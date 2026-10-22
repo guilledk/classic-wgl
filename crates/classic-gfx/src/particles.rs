@@ -320,6 +320,11 @@ pub struct ParticleLayerUniforms {
     pub tint: [f32; 3],
     /// `cols, rows, frames, fps`; `cols == 0` = no flipbook.
     pub flipbook: [f32; 4],
+    /// The map's world-xy bounds `min_x, min_y, max_x, max_y` (metres):
+    /// particles fade out over [`MAP_FADE_M`] past them, so nothing draws
+    /// over the void around the terrain.  `max < min` (the default) = no map,
+    /// no fade.
+    pub map: [f32; 4],
     /// Texture name (sampled when present, else the procedural shape).
     pub texture: Option<String>,
 }
@@ -343,6 +348,7 @@ impl Default for ParticleLayerUniforms {
             shade: [0.0; 4],
             tint: [1.0; 3],
             flipbook: [0.0; 4],
+            map: NO_MAP,
             texture: None,
         }
     }
@@ -370,6 +376,25 @@ pub fn particle_size_floor(half_px: f32, half_len_extra: f32, tex_per_px: f32) -
     let hp = half_px.max(min_half);
     let cover = ((half_len_extra + half_px) * half_px) / ((half_len_extra + hp) * hp).max(1e-12);
     (hp, cover)
+}
+
+/// Distance (metres) past the map bounds over which a particle fades to
+/// nothing (`MAP_FADE_M` in `particle.vert`).
+pub const MAP_FADE_M: f32 = 1.0;
+
+/// [`ParticleLayerUniforms::map`] with no map (the fade is off).
+pub const NO_MAP: [f32; 4] = [0.0, 0.0, -1.0, -1.0];
+
+/// CPU mirror of `particle.vert`'s map fade: the alpha multiplier of a
+/// particle at world `(x, y)` against `map` bounds (`1` inside, a linear
+/// ramp to `0` over [`MAP_FADE_M`] outside, by the larger axis distance).
+pub fn map_fade(map: [f32; 4], x: f32, y: f32) -> f32 {
+    if map[2] < map[0] {
+        return 1.0;
+    }
+    let dx = (map[0] - x).max(x - map[2]).max(0.0);
+    let dy = (map[1] - y).max(y - map[3]).max(0.0);
+    (1.0 - dx.max(dy) / MAP_FADE_M).clamp(0.0, 1.0)
 }
 
 /// Texture unit the particle sampler uses (clear of the sprite maps 0..2, the
@@ -430,6 +455,7 @@ impl Gfx {
         s.uniform_vec4(gl, "u_shade", &u.shade);
         s.uniform_vec3(gl, "u_tint", Vec3::from_array(u.tint));
         s.uniform_vec4(gl, "u_flip", &u.flipbook);
+        s.uniform_vec4(gl, "u_map", &u.map);
         match u.texture.as_deref().and_then(|t| self.textures.get(t)) {
             Some(t) => {
                 t.bind(gl, PARTICLE_TEX_UNIT);
@@ -705,9 +731,37 @@ mod tests {
             "float minHalf = texPerPx > 0.0 ? 0.5 * PARTICLE_MIN_TEXELS / texPerPx : 0.0;",
             "cover = ((0.5 * len + half_px) * half_px) / max((0.5 * len + hp) * hp, 1e-12);",
             "cover = (half_px * half_px) / max(hp * hp, 1e-12);",
-            "col.a *= u_shape.w * cover;",
+            "col.a *= u_shape.w * cover * mapFade;",
         ] {
             assert!(vert.contains(line), "particle.vert drifted from the CPU mirror: {line}");
+        }
+    }
+
+    #[test]
+    fn map_fade_ramps_out_past_the_bounds() {
+        let map = [0.0, -10.0, 20.0, 0.0];
+        assert_eq!(map_fade(map, 5.0, -5.0), 1.0, "inside");
+        assert_eq!(map_fade(map, 0.0, 0.0), 1.0, "on the corner");
+        assert!((map_fade(map, -0.25, -5.0) - 0.75).abs() < 1e-6, "past min x");
+        assert!((map_fade(map, 5.0, 0.5) - 0.5).abs() < 1e-6, "past max y");
+        assert!((map_fade(map, 20.5, -10.75) - 0.25).abs() < 1e-6, "the larger axis wins");
+        assert_eq!(map_fade(map, -3.0, -5.0), 0.0, "gone past the fade");
+        assert_eq!(map_fade(NO_MAP, -1e4, 1e4), 1.0, "no map, no fade");
+        assert_eq!(ParticleLayerUniforms::default().map, NO_MAP);
+    }
+
+    #[test]
+    fn map_fade_is_pinned_to_the_vertex_shader() {
+        let vert = crate::shaders::PARTICLE_VERT;
+        let define = format!("#define MAP_FADE_M {MAP_FADE_M:?}");
+        assert!(vert.contains(&define), "particle.vert must carry `{define}`");
+        for line in [
+            "if (u_map.z >= u_map.x) {",
+            "vec2 out2 = max(max(u_map.xy - p.xy, p.xy - u_map.zw), 0.0);",
+            "mapFade = clamp(1.0 - max(out2.x, out2.y) / MAP_FADE_M, 0.0, 1.0);",
+            "col.a *= u_shape.w * cover * mapFade;",
+        ] {
+            assert!(vert.contains(line), "particle.vert drifted from `map_fade`: {line}");
         }
     }
 

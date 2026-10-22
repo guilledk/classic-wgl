@@ -909,6 +909,12 @@ form.  No transform feedback, no per-frame CPU simulation.
   the particle pass) and multiplies its alpha by the area ratio (`cover`);
   a streak only widens.  `particle_size_floor` is the CPU mirror, pinned
   to the shader source by a test.
+- **Map edge**: the primary tilemap's world-xy bounds (`map_bounds`, the
+  region `Ground::at` samples) reach `particle.vert` as `u_map`; a
+  particle fades out linearly over `MAP_FADE_M` (1 m) past them, so debris
+  dust that flew off the map (spawned with the `-1e4` no-ground fallback)
+  does not draw over the void.  No tilemap = `NO_MAP` = no fade.
+  `map_fade` is the CPU mirror, pinned to the shader.
 - **Budget**: `PARTICLE_BUDGET` (65,536) is a global *soft* cap on resident
   particles; above it every layer's continuous `rate` is scaled by
   `budget / resident` (`budget_scale`).  Bursts are never throttled and

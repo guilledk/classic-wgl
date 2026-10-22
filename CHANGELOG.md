@@ -98,6 +98,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   target texels, from the new `u_target_px`) and scales its alpha by the
   area ratio, so a particle keeps its average light at any zoom
   (`particle_size_floor` is the CPU mirror) (#139).
+- Particles past the map edge no longer draw over the void.  The primary
+  tilemap's world-xy bounds reach `particle.vert` as `u_map`
+  (`ParticleLayerUniforms::map`), and a particle fades out linearly over
+  `MAP_FADE_M` (1 m) beyond them; without a tilemap nothing changes
+  (`NO_MAP`).  A destroyed building's debris dust used to fall past the
+  edge with no ground under it and drift over the black void (#140).
 
 ## [0.3.3] - 2026-10-17
 
