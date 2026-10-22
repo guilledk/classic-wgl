@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use classic_core::components::{Model, Tilemap};
 use classic_core::math::iso_world_pos;
-use classic_core::model::gltf_to_world;
+use classic_core::model::{gltf_to_world, ModelAsset};
 use classic_core::tilemap::sample_height_mesh;
 use classic_core::Transform;
 use glam::{Mat4, Vec3};
@@ -67,6 +67,13 @@ impl ModelDraw {
     }
 }
 
+/// Sample `m`'s pose from `asset` at `m.time` (an out-of-range or missing clip
+/// index is the rest pose) into `Model.node_world` + `Model.frame_offset`.
+fn sample_pose(asset: &ModelAsset, clip: Option<usize>, m: &mut Model, tf: &Transform) {
+    m.node_world = asset.node_world_transforms(clip.unwrap_or(usize::MAX), m.time);
+    m.frame_offset = tf.scale * asset.root_translation_from(&m.node_world);
+}
+
 impl Engine {
     /// Restart a named `Model` entity on `model` (a resolved model resource
     /// name) from time zero, looping if `repeat`.  The model counterpart of
@@ -82,6 +89,11 @@ impl Engine {
         m.repeat = repeat;
         m.playing = true;
         m.time = 0.0;
+        drop(m);
+        // Re-pose now: the guest swaps clips after this frame's
+        // `update_models` ran, so without this the draw, node lights/emitters
+        // and the camera pin would see the old glb's pose for a frame.
+        self.resample_model(entity);
         true
     }
 
@@ -113,10 +125,22 @@ impl Engine {
                     }
                 }
             }
-            // Out-of-range clip index = rest pose.
-            m.node_world = asset.node_world_transforms(clip.unwrap_or(usize::MAX), m.time);
-            m.frame_offset = tf.scale * asset.root_translation_from(&m.node_world);
+            sample_pose(asset, clip, m, tf);
         }
+    }
+
+    /// Re-sample one `Model` entity's pose at its current clip time without
+    /// advancing it (`Model.node_world` + `Model.frame_offset`), so a pose
+    /// changed outside [`Engine::update_models`] (a clip swap to a glb with a
+    /// different node set) is consistent before the next draw.
+    pub fn resample_model(&mut self, entity: hecs::Entity) {
+        let models = &self.models;
+        let Ok((m, tf)) = self.world.query_one_mut::<(&mut Model, &Transform)>(entity) else {
+            return;
+        };
+        let Some(asset) = models.get(&m.model) else { return };
+        let clip = m.clip.as_deref().and_then(|c| asset.clip_index(c));
+        sample_pose(asset, clip, m, tf);
     }
 
     /// The world placement of a model entity: its origin on the terrain ground
@@ -188,16 +212,22 @@ impl Engine {
                 continue;
             };
             let Some(asset) = self.models.get(&model.model) else { continue };
-            if model.node_world.len() != asset.nodes.len() {
-                continue;
-            }
+            // A pose not sized to this glb (a model swapped without a
+            // re-sample) falls back to the rest pose rather than vanishing.
+            let rest;
+            let node_world = if model.node_world.len() == asset.nodes.len() {
+                &model.node_world
+            } else {
+                rest = asset.node_world_transforms(usize::MAX, 0.0);
+                &rest
+            };
             let Some(placement) = self.model_placement(&tf, &model.tilemap) else { continue };
             let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
             let mut instances = Vec::new();
             for (ni, node) in asset.nodes.iter().enumerate() {
                 let Some(mi) = node.mesh else { continue };
                 let mesh = &asset.meshes[mi];
-                let world = placement * model.node_world[ni];
+                let world = placement * node_world[ni];
                 for x in [mesh.min.x, mesh.max.x] {
                     for y in [mesh.min.y, mesh.max.y] {
                         for z in [mesh.min.z, mesh.max.z] {
@@ -241,6 +271,16 @@ mod tests {
     /// the rig from glTF `(-4, 10, -4)` at t=0 to `(0, 2, 0)` at t=1 — world
     /// `(-4, 4, 10)` → `(0, 0, 2)` after the +90°-X axis fix.
     pub(crate) fn tiny_glb(clip: &str) -> Vec<u8> {
+        tiny_glb_with_nodes(clip, "")
+    }
+
+    /// [`tiny_glb`] plus `extra_nodes` (raw glTF node JSON, each starting with
+    /// a comma) appended after `body` as further children of `rig`, so two
+    /// glbs can differ in node count.
+    fn tiny_glb_with_nodes(clip: &str, extra_nodes: &str) -> Vec<u8> {
+        let extra = extra_nodes.matches("\"name\"").count();
+        let children: Vec<String> = (1..=1 + extra).map(|i| i.to_string()).collect();
+        let children = children.join(",");
         let mut bin: Vec<u8> = Vec::new();
         let floats: [f32; 9 + 2 + 6] =
             [0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 1., -4., 10., -4., 0., 2., 0.];
@@ -249,7 +289,8 @@ mod tests {
         }
         let json = format!(
             r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
-            "nodes":[{{"name":"rig","children":[1]}},{{"name":"body","mesh":0}}],
+            "nodes":[{{"name":"rig","children":[{children}]}},{{"name":"body","mesh":0}}
+                {extra_nodes}],
             "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}}}}]}}],
             "buffers":[{{"byteLength":{len}}}],
             "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},
@@ -490,6 +531,68 @@ mod tests {
         assert_eq!(inst.mesh_key, "landing::0");
         let origin = inst.model.w_axis.truncate();
         assert!(origin.cmpge(draws[0].min - 1e-4).all() && origin.cmple(draws[0].max + 1e-4).all());
+    }
+
+    #[test]
+    fn clip_swap_to_a_different_node_set_is_posed_immediately() {
+        // `start_model_clip` runs after this frame's `update_models` (the
+        // guest hook comes later), so the swap must re-pose on its own: the
+        // draw, node lights and node emitters all see the new glb at once.
+        let mut e = Engine::new_for_test();
+        flat_tilemap(&mut e);
+        e.load_model_glb("idle", &tiny_glb("idle")).unwrap();
+        let lamps = r#",{"name":"fx_lamp_0","translation":[1,0,0]},
+            {"name":"fx_lamp_1","translation":[0,0,2]}"#;
+        e.load_model_glb("work", &tiny_glb_with_nodes("work", lamps)).unwrap();
+        assert_eq!((e.models["idle"].nodes.len(), e.models["work"].nodes.len()), (2, 4));
+        let tile = Vec3::new(3.0, 2.0, 0.0);
+        let hab = e.world.spawn((Transform::new(tile, Vec3::ONE), Model::new("idle", "tilemap")));
+        e.names.insert("hab".into(), hab);
+        e.update_models(0.25);
+
+        assert!(e.start_model_clip("hab", "work", true));
+        // No `update_models` in between.
+        let m = e.world.get::<&Model>(hab).unwrap().clone();
+        assert_eq!(m.node_world.len(), 4, "pose sized to the new glb");
+        assert_eq!(m.time, 0.0);
+        let rest_rig = Vec3::new(-4.0, 4.0, 10.0);
+        assert!((m.frame_offset - rest_rig).length() < 1e-4, "clip time 0: {}", m.frame_offset);
+        let items = vec![(0.0, hab, DrawKind::Model)];
+        let draws = e.model_draws(&items, &HashMap::new());
+        assert_eq!(draws.len(), 1, "the model does not vanish for a frame");
+        assert_eq!(draws[0].instances[0].mesh_key, "work::0");
+
+        // Node attachments resolve to the new glb's nodes.
+        let tf = e.world.get::<&Transform>(hab).unwrap().clone();
+        let ground = iso_world_pos(tile.x, tile.y, 0.0);
+        let lamp0 = e.model_node_world(&tf, &m, "fx_lamp_0").expect("light node");
+        let rig = Mat4::from_translation(ground) * gltf_to_world() * m.node_world[0];
+        let want = rig.transform_point3(Vec3::new(1.0, 0.0, 0.0));
+        assert!((lamp0.w_axis.truncate() - want).length() < 1e-4);
+        let sites = e.model_nodes_world_with_prefix(&tf, &m, "fx_lamp_");
+        assert_eq!(sites.len(), 2, "emitter node pattern sees both lamps");
+        let light = e.attachment_frame(Some("hab"), Some("fx_lamp_0"), Vec3::ZERO, Vec3::Z);
+        assert!((light.unwrap().0 - want).length() < 1e-4);
+    }
+
+    #[test]
+    fn unsized_pose_draws_the_rest_pose() {
+        // Defensive: a model swapped without a re-sample draws its rest pose
+        // instead of being skipped.
+        let mut e = Engine::new_for_test();
+        flat_tilemap(&mut e);
+        e.load_model_glb("idle", &tiny_glb("idle")).unwrap();
+        let lamp = r#",{"name":"fx_lamp_0"}"#;
+        e.load_model_glb("work", &tiny_glb_with_nodes("work", lamp)).unwrap();
+        let hab = e.world.spawn((
+            Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE),
+            Model::new("idle", "tilemap"),
+        ));
+        e.update_models(0.0);
+        e.world.get::<&mut Model>(hab).unwrap().model = "work".into();
+        let draws = e.model_draws(&[(0.0, hab, DrawKind::Model)], &HashMap::new());
+        assert_eq!(draws.len(), 1);
+        assert_eq!(draws[0].instances[0].mesh_key, "work::0");
     }
 
     #[test]
