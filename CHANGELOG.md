@@ -31,6 +31,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `false`, omitted when `false`): the light's `radius` stays in absolute
   metres whatever the instance scale, while its `offset` still scales
   (`LightLayerDef::radius_at`) (#137).
+- Model emissive regions.  A glb material's `extras` may carry
+  `"classic_emissive": [{"rect": [u0, v0, u1, v1], "strength": s}, ...]`
+  (at most 8; each rect under the `classic_team_rect` rules, `s` finite
+  and `>= 0`; malformed fails the parse), read into
+  `ModelMesh.emissive` (`classic_core::model::EMISSIVE_EXTRA`,
+  `EmissiveRect`).  `mesh.frag` adds `albedo × strength` of the first
+  rect containing a fragment's UV after lighting, unlit, so windows and
+  lamps glow at night and in shadow.  A `Model` may scale every strength
+  with the new optional `emissive` (serde default `None` = 1, omitted
+  from dumps; `0` = off), and a drawn glowing model turns the bloom pass
+  on.  `Gfx::draw_model` takes the rects.  Models without the extra
+  render and trace exactly as before; no manifest or ABI change (#141).
 
 ### Changed
 

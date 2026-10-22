@@ -846,6 +846,24 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   documents the asset contract); the engine passes it only when the `Model`
   sets `tint`.  `team_rect` is `highp` (mediump cannot resolve 2048-texel
   edges).
+- **Emissive (self-lit) regions** — the asset contract
+  (`classic_core::model::EMISSIVE_EXTRA`): a glb material's `extras` may
+  carry `"classic_emissive": [{"rect": [u0, v0, u1, v1], "strength": s}, ...]`,
+  at most 8 entries (`MAX_EMISSIVE_RECTS`), each `rect` under the exact
+  `classic_team_rect` rules (TEXCOORD_0, top-left origin, `0 <= u0 < u1 <=
+  1`, `0 <= v0 < v1 <= 1`, half-open, on texel edges) and `s` finite `>= 0`.
+  Read from the textured material (like the team rect); malformed or more
+  than 8 entries fails the parse.  `parse_model_glb` fills
+  `ModelMesh.emissive`; `draw_model(.., emissive: &[EmissiveRect], ..)`
+  uploads `emissive_count`/`emissive_rect[8]`/`emissive_strength[8]`, and
+  `mesh.frag` adds `albedo × strength` of the **first** rect containing the
+  fragment's UV **after** lighting (unlit: no sun, shadow or point light),
+  in the texture's stored space like the team tint (`albedo` is the
+  post-tint, pre-light colour).  CPU reference `emissive_shade`, pinned by
+  `mesh_frag_emissive_matches_the_cpu_reference`.  `Model.emissive:
+  Option<f32>` (serde default, omitted from dumps) scales every strength;
+  `0` switches the glow off.  A drawn model with a positive strength turns
+  the bloom pass on (as an emissive particle does).
 - **No V-flip** in `mesh.vert`: textures upload top-to-bottom and every sampler
   uses a top-left origin (same as `direct_tex.vert`); a flip inverts the albedo.
 - The normal is `normalize(mat3(model) · normal)` — valid for the rigid

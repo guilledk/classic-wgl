@@ -19,6 +19,15 @@ uniform float use_team;
 uniform highp vec4 team_rect;
 uniform vec3 team_tint;
 
+// Self-lit regions (`classic_core::model::EMISSIVE_EXTRA`): the first of the
+// `emissive_count` rects containing the fragment's TEXCOORD_0 (same half-open
+// rule as the team rect) adds `albedo * emissive_strength[i]` to the lit
+// colour, unlit.  CPU reference: `classic_gfx::emissive_shade`.
+#define MAX_EMISSIVE 8
+uniform float emissive_count;
+uniform highp vec4 emissive_rect[MAX_EMISSIVE];
+uniform float emissive_strength[MAX_EMISSIVE];
+
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
@@ -192,6 +201,19 @@ vec4 teamTint(vec4 color, highp vec2 uv) {
     return color;
 }
 
+float emissiveStrength(highp vec2 uv) {
+    for (int i = 0; i < MAX_EMISSIVE; i++) {
+        if (float(i) >= emissive_count) {
+            break;
+        }
+        highp vec4 r = emissive_rect[i];
+        if (all(greaterThanEqual(uv, r.xy)) && all(lessThan(uv, r.zw))) {
+            return emissive_strength[i];
+        }
+    }
+    return 0.0;
+}
+
 void main(void ) {
     vec4 color = use_texture > 0.5 ? texture(tex_sampler, vTexCoord) : base_color;
     if (use_team > 0.5 && use_texture > 0.5) {
@@ -213,6 +235,10 @@ void main(void ) {
     if (use_shadow > 0.5) {
         diff *= shadowFactor(vLightPos, n);
     }
+    vec3 albedo = color.rgb;
     color.rgb *= ambient_color + diff * light_color + evaluateLightsTiled(n, vLightPos);
+    if (emissive_count > 0.5 && use_texture > 0.5) {
+        color.rgb += albedo * emissiveStrength(vTexCoord);
+    }
     fragColor = color;
 }

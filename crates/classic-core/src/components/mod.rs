@@ -468,6 +468,12 @@ pub struct Model {
     /// as does a model whose materials carry no team rect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<[f32; 3]>,
+    /// Multiplier on every self-lit region's `strength` (the meshes'
+    /// `classic_emissive` rects, see [`crate::model::EMISSIVE_EXTRA`]): `0`
+    /// switches the glow off (a powered-down building), `None` (the default,
+    /// omitted from dumps) is `1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive: Option<f32>,
     /// Clip time in seconds (transient).
     #[serde(skip)]
     pub time: f32,
@@ -495,6 +501,7 @@ impl Model {
             repeat: false,
             playing: false,
             tint: None,
+            emissive: None,
             time: 0.0,
             frame_offset: Vec3::ZERO,
             node_world: Vec::new(),

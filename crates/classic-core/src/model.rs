@@ -61,6 +61,10 @@ pub struct ModelMesh {
     /// space.  `None` when the material carries no team region (the mesh is
     /// never team-tinted).
     pub team_rect: Option<[f32; 4]>,
+    /// The self-lit regions of the albedo texture, from the textured
+    /// material's [`EMISSIVE_EXTRA`] extra (at most [`MAX_EMISSIVE_RECTS`]).
+    /// Empty when the material carries none (nothing glows).
+    pub emissive: Vec<EmissiveRect>,
     /// Mesh-local position bounds (for shadow-box fitting).
     pub min: Vec3,
     pub max: Vec3,
@@ -88,6 +92,48 @@ pub struct ModelMesh {
 /// as the texture's stored values (sRGB-encoded colours for sRGB textures,
 /// `0..1`), applied to the sampled texel before lighting.
 pub const TEAM_RECT_EXTRA: &str = "classic_team_rect";
+
+/// The glTF material `extras` key carrying a model's self-lit regions.
+///
+/// **Contract (written by the kit exporter, read by [`parse_model_glb`]):** a
+/// material's `extras` object may carry
+/// `"classic_emissive": [{"rect": [u0, v0, u1, v1], "strength": s}, ...]`,
+/// at most [`MAX_EMISSIVE_RECTS`] entries.  Each `rect` follows exactly the
+/// [`TEAM_RECT_EXTRA`] rules (TEXCOORD_0 space, top-left origin, `0 <= u0 <
+/// u1 <= 1`, `0 <= v0 < v1 <= 1`, half-open on the far edges, so a rect on
+/// texel edges selects exactly its texels) and names a region of that
+/// material's `baseColorTexture` whose texels are lights (windows, lamps,
+/// screens).  `strength` (finite, `>= 0`) is the glow multiplier: the engine
+/// adds `albedo × strength` to the lit colour of every fragment inside the
+/// rect, unlit (no sun, no shadow), in the texture's stored space like the
+/// team tint.  The first matching rect wins where rects overlap.  Read from
+/// the material that supplies the mesh's albedo texture; an untextured
+/// material's entry is ignored.  A present but malformed value (or more
+/// than [`MAX_EMISSIVE_RECTS`] entries) fails the parse.  A `Model` may scale
+/// every strength with `emissive` (see
+/// `classic_core::components::Model::emissive`).
+pub const EMISSIVE_EXTRA: &str = "classic_emissive";
+
+/// Most [`EMISSIVE_EXTRA`] entries one material may carry (the `mesh.frag`
+/// uniform array size).
+pub const MAX_EMISSIVE_RECTS: usize = 8;
+
+/// One self-lit texture region of a mesh (see [`EMISSIVE_EXTRA`]).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
+pub struct EmissiveRect {
+    /// `[u0, v0, u1, v1]` in TEXCOORD_0 space, half-open on the far edges.
+    pub rect: [f32; 4],
+    /// Glow multiplier on the albedo (`>= 0`).
+    pub strength: f32,
+}
+
+impl EmissiveRect {
+    /// Whether `uv` is inside [`Self::rect`] (`u0 <= u < u1 && v0 <= v < v1`).
+    pub fn contains(&self, uv: [f32; 2]) -> bool {
+        let [u0, v0, u1, v1] = self.rect;
+        u0 <= uv[0] && uv[0] < u1 && v0 <= uv[1] && uv[1] < v1
+    }
+}
 
 /// SHA-256 of a GLB-embedded image's **encoded** bytes (the PNG/JPEG
 /// buffer-view slice): the key the engine de-duplicates model textures by.
@@ -363,6 +409,7 @@ pub fn parse_model_glb_with(
                     .map(|t| t.texture().source().index());
                 if merged.image.is_some() {
                     merged.team_rect = material_team_rect(&material)?;
+                    merged.emissive = material_emissive(&material)?;
                 }
             }
             for p in positions {
@@ -510,14 +557,50 @@ fn material_team_rect(material: &gltf::Material<'_>) -> Result<Option<[f32; 4]>>
     };
     let rect: [f32; 4] =
         serde_json::from_value(value.clone()).map_err(|e| invalid(&e.to_string()))?;
-    let [u0, v0, u1, v1] = rect;
+    rect_ok(&rect).map_err(invalid)?;
+    Ok(Some(rect))
+}
+
+/// Validate a `[u0, v0, u1, v1]` rect against the shared rect contract.
+fn rect_ok(rect: &[f32; 4]) -> std::result::Result<(), &'static str> {
+    let [u0, v0, u1, v1] = *rect;
     if !rect.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)) {
-        return Err(invalid("out of 0..=1"));
+        return Err("out of 0..=1");
     }
     if u0 >= u1 || v0 >= v1 {
-        return Err(invalid("empty or inverted"));
+        return Err("empty or inverted");
     }
-    Ok(Some(rect))
+    Ok(())
+}
+
+/// The [`EMISSIVE_EXTRA`] of a material, validated against the contract:
+/// empty without `extras` or without the key; an error when the key is
+/// present but malformed.
+fn material_emissive(material: &gltf::Material<'_>) -> Result<Vec<EmissiveRect>> {
+    let Some(raw) = material.extras() else { return Ok(Vec::new()) };
+    let extras: serde_json::Value = serde_json::from_str(raw.get())
+        .map_err(|e| anyhow!("material {:?}: bad extras: {e}", material.name()))?;
+    let Some(value) = extras.get(EMISSIVE_EXTRA) else { return Ok(Vec::new()) };
+    let invalid = |why: &str| {
+        anyhow!(
+            "material {:?}: `{EMISSIVE_EXTRA}` must be at most {MAX_EMISSIVE_RECTS} \
+             {{\"rect\": [u0, v0, u1, v1], \"strength\": s}} with 0 <= u0 < u1 <= 1, \
+             0 <= v0 < v1 <= 1 and a finite s >= 0 ({why}): {value}",
+            material.name()
+        )
+    };
+    let rects: Vec<EmissiveRect> =
+        serde_json::from_value(value.clone()).map_err(|e| invalid(&e.to_string()))?;
+    if rects.len() > MAX_EMISSIVE_RECTS {
+        return Err(invalid("too many rects"));
+    }
+    for r in &rects {
+        rect_ok(&r.rect).map_err(invalid)?;
+        if !(r.strength.is_finite() && r.strength >= 0.0) {
+            return Err(invalid("bad strength"));
+        }
+    }
+    Ok(rects)
 }
 
 /// Convert glTF image pixel data (as decoded by [`gltf::image::Data`]) to
@@ -741,6 +824,63 @@ mod tests {
             let extras = format!(r#"{{"classic_team_rect":{bad}}}"#);
             let err = parse_model_glb(&textured_glb(&png, Some(&extras), true)).unwrap_err();
             assert!(err.to_string().contains(TEAM_RECT_EXTRA), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn emissive_extra_parses_from_the_textured_material() {
+        let png = png_2x1([200, 200, 200, 255], [10, 20, 30, 255]);
+        let extras = r#"{"classic_team_rect":[0,0,0.5,1],
+            "classic_emissive":[{"rect":[0.5,0,1,0.25],"strength":2.5},
+                                {"rect":[0.5,0.5,0.75,1],"strength":0}]}"#;
+        let asset = parse_model_glb(&textured_glb(&png, Some(extras), true)).unwrap();
+        let mesh = &asset.meshes[0];
+        assert_eq!(mesh.team_rect, Some([0.0, 0.0, 0.5, 1.0]), "both extras coexist");
+        assert_eq!(
+            mesh.emissive,
+            [
+                EmissiveRect { rect: [0.5, 0.0, 1.0, 0.25], strength: 2.5 },
+                EmissiveRect { rect: [0.5, 0.5, 0.75, 1.0], strength: 0.0 },
+            ]
+        );
+        assert!(mesh.emissive[0].contains([0.5, 0.0]), "near edges inside");
+        assert!(!mesh.emissive[0].contains([1.0, 0.1]) && !mesh.emissive[0].contains([0.6, 0.25]));
+    }
+
+    #[test]
+    fn emissive_is_empty_without_the_extra_or_a_texture() {
+        let png = png_2x1([255; 4], [0, 0, 0, 255]);
+        for extras in [None, Some(r#"{"classic_team_rect":[0,0,1,1]}"#), Some(r#"{"x":1}"#)] {
+            let asset = parse_model_glb(&textured_glb(&png, extras, true)).unwrap();
+            assert!(asset.meshes[0].emissive.is_empty(), "{extras:?}");
+        }
+        let lit = Some(r#"{"classic_emissive":[{"rect":[0,0,1,1],"strength":1}]}"#);
+        let asset = parse_model_glb(&textured_glb(&png, lit, false)).unwrap();
+        assert!(asset.meshes[0].emissive.is_empty(), "untextured: ignored");
+        // An empty list is valid and means nothing glows.
+        let none = Some(r#"{"classic_emissive":[]}"#);
+        assert!(parse_model_glb(&textured_glb(&png, none, true)).unwrap().meshes[0]
+            .emissive
+            .is_empty());
+    }
+
+    #[test]
+    fn malformed_emissive_fails_the_parse_loudly() {
+        let png = png_2x1([255; 4], [0, 0, 0, 255]);
+        let nine = format!("[{}]", [r#"{"rect":[0,0,1,1],"strength":1}"#; 9].join(","));
+        for bad in [
+            r#"{"rect":[0,0,1,1],"strength":1}"#,
+            r#"[{"rect":[0,0,1],"strength":1}]"#,
+            r#"[{"rect":[0.5,0,0.25,1],"strength":1}]"#,
+            r#"[{"rect":[0,0,1.5,1],"strength":1}]"#,
+            r#"[{"rect":[0,0,1,1],"strength":-1}]"#,
+            r#"[{"rect":[0,0,1,1]}]"#,
+            r#"[{"strength":1}]"#,
+            nine.as_str(),
+        ] {
+            let extras = format!(r#"{{"classic_emissive":{bad}}}"#);
+            let err = parse_model_glb(&textured_glb(&png, Some(&extras), true)).unwrap_err();
+            assert!(err.to_string().contains(EMISSIVE_EXTRA), "{bad}: {err}");
         }
     }
 

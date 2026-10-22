@@ -49,7 +49,9 @@ pub use light_grid::{
     clip_from_world, grid_map, LightGrid, LightGridView, LIGHT_GRID_UNIT, LIGHT_TILE_CAP,
     LIGHT_TILE_PX,
 };
-pub use model_pass::{model_target_size, TeamTint, MODEL_GHOST_GROUP};
+pub use model_pass::{
+    emissive_shade, model_target_size, EmissiveRect, TeamTint, MAX_EMISSIVE, MODEL_GHOST_GROUP,
+};
 pub use particle_pass::{particle_pass_size, ParticleTarget, PARTICLE_PASS_DIVISOR};
 pub use particles::{
     map_fade, particle_size_floor, ParticleGpu, ParticleLayerUniforms, ParticleRecord,

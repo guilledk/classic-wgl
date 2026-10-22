@@ -132,6 +132,13 @@ impl Shader {
         }
     }
 
+    /// Set a `float` array uniform (`name` is the array).
+    pub fn uniform_1f_array(&self, gl: &glow::Context, name: &str, v: &[f32]) {
+        if let Some(loc) = self.unif(gl, name) {
+            unsafe { gl.uniform_1_f32_slice(Some(&loc), v) }
+        }
+    }
+
     pub fn uniform_vec3(&self, gl: &glow::Context, name: &str, v: Vec3) {
         if let Some(loc) = self.unif(gl, name) {
             unsafe { gl.uniform_3_f32(Some(&loc), v[0], v[1], v[2]) }

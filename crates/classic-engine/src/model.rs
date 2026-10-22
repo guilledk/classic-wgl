@@ -33,6 +33,9 @@ pub(crate) struct ModelInstance {
     /// The team tint: `Model.tint` over the mesh's `team_rect`, set only when
     /// the model is tinted and the mesh is textured with a team region.
     pub(crate) team: Option<classic_gfx::TeamTint>,
+    /// The mesh's self-lit rects, strengths scaled by `Model.emissive`
+    /// (empty when it has none or the multiplier is `0`).
+    pub(crate) emissive: Vec<classic_gfx::EmissiveRect>,
 }
 
 /// The first upload of a model image's content (see `Engine::model_textures`).
@@ -56,6 +59,11 @@ pub(crate) struct ModelDraw {
 }
 
 impl ModelDraw {
+    /// Whether any instance glows (gates the bloom pass).
+    pub(crate) fn has_emissive(&self) -> bool {
+        self.instances.iter().any(|i| i.emissive.iter().any(|e| e.strength > 0.0))
+    }
+
     /// The AABB's bottom and top faces as unit-quad caster matrices, the form
     /// `shadow::fit_directional_light_matrix` expects for its `casters`, so the
     /// light box encloses the whole model.
@@ -241,11 +249,21 @@ impl Engine {
                     (Some(tint), Some(rect), Some(_)) => Some(classic_gfx::TeamTint { rect, tint }),
                     _ => None,
                 };
+                let gain = model.emissive.unwrap_or(1.0);
+                let emissive = match mesh.image {
+                    Some(_) if gain > 0.0 => mesh
+                        .emissive
+                        .iter()
+                        .map(|e| classic_gfx::EmissiveRect { strength: e.strength * gain, ..*e })
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 instances.push(ModelInstance {
                     model: world,
                     mesh_key: format!("{}::{mi}", model.model),
                     texture: mesh.image.map(|ii| format!("{}::image::{ii}", model.model)),
                     team,
+                    emissive,
                 });
             }
             if instances.is_empty() {
@@ -341,6 +359,14 @@ mod tests {
     /// A one-triangle `.glb` textured with `png` (embedded), its material
     /// carrying `team_rect` as the `classic_team_rect` extra when given.
     fn textured_glb(png: &[u8], team_rect: Option<[f32; 4]>) -> Vec<u8> {
+        let extras = team_rect
+            .map(|r| format!(r#","extras":{{"classic_team_rect":{r:?}}}"#))
+            .unwrap_or_default();
+        textured_glb_extras(png, &extras)
+    }
+
+    /// [`textured_glb`] with a raw material `extras` suffix (`,"extras":{..}`).
+    fn textured_glb_extras(png: &[u8], extras: &str) -> Vec<u8> {
         let mut bin: Vec<u8> = Vec::new();
         for f in [0f32, 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 1.] {
             bin.extend_from_slice(&f.to_le_bytes());
@@ -349,9 +375,6 @@ mod tests {
         while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
-        let extras = team_rect
-            .map(|r| format!(r#","extras":{{"classic_team_rect":{r:?}}}"#))
-            .unwrap_or_default();
         let json = format!(
             r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
             "nodes":[{{"name":"rig","children":[1]}},{{"name":"body","mesh":0}}],
@@ -645,6 +668,58 @@ mod tests {
         assert_eq!(team, [Some(classic_gfx::TeamTint { rect, tint: red }), None, None]);
         // The texture name stays per model even though the GL texture is shared.
         assert_eq!(draws[2].instances[0].texture.as_deref(), Some("rocket::image::0"));
+    }
+
+    #[test]
+    fn emissive_rects_reach_the_draw_scaled_by_the_model() {
+        let mut e = Engine::new_for_test();
+        flat_tilemap(&mut e);
+        let atlas = png_2x2([230, 230, 230, 255]);
+        let lit = r#","extras":{"classic_emissive":[{"rect":[0.5,0,1,0.5],"strength":2}]}"#;
+        e.load_model_glb("lamp", &textured_glb_extras(&atlas, lit)).unwrap();
+        e.load_model_glb("plain", &textured_glb(&atlas, None)).unwrap();
+        let mut spawn = |model: &str, gain: Option<f32>| {
+            let mut m = Model::new(model, "tilemap");
+            m.emissive = gain;
+            e.world.spawn((Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE), m))
+        };
+        let ents = [spawn("lamp", None), spawn("lamp", Some(0.5)), spawn("lamp", Some(0.0))];
+        let plain = spawn("plain", None);
+        e.update_models(0.0);
+        let items: Vec<_> =
+            ents.iter().chain([&plain]).map(|x| (0.0, *x, DrawKind::Model)).collect();
+        let draws = e.model_draws(&items, &HashMap::new());
+        let strengths: Vec<Vec<f32>> = draws
+            .iter()
+            .map(|d| d.instances[0].emissive.iter().map(|r| r.strength).collect())
+            .collect();
+        assert_eq!(strengths, [vec![2.0], vec![1.0], vec![], vec![]]);
+        assert_eq!(draws[0].instances[0].emissive[0].rect, [0.5, 0.0, 1.0, 0.5]);
+        let glow: Vec<bool> = draws.iter().map(|d| d.has_emissive()).collect();
+        assert_eq!(glow, [true, true, false, false], "bloom gate: only glowing models");
+        // The glow lands only inside the rect (the shader's CPU reference).
+        let rects = &draws[0].instances[0].emissive;
+        let (albedo, dark) = ([0.9, 0.9, 0.9], [0.0; 3]);
+        assert_eq!(classic_gfx::emissive_shade(rects, [0.75, 0.25], albedo, dark), [1.8; 3]);
+        assert_eq!(classic_gfx::emissive_shade(rects, [0.25, 0.25], albedo, dark), [0.0; 3]);
+        assert_eq!(classic_gfx::emissive_shade(rects, [0.75, 0.5], albedo, dark), [0.0; 3]);
+    }
+
+    #[test]
+    fn model_emissive_spawns_and_dumps_through_the_registry() {
+        classic_core::register_all_components();
+        let reg =
+            classic_core::registry::ordered_regs().into_iter().find(|r| r.name == "Model").unwrap();
+        let mut b = hecs::EntityBuilder::new();
+        let v = serde_json::json!({"position": [1, 2, 0], "model": "kit", "tilemap": "t",
+            "emissive": 0.25});
+        (reg.spawn)(&mut b, v).unwrap();
+        let mut world = hecs::World::new();
+        let ent = world.spawn(b.build());
+        assert_eq!(world.get::<&Model>(ent).unwrap().emissive, Some(0.25));
+        assert_eq!(reg.dump_value(&world, ent).unwrap()["emissive"], serde_json::json!(0.25));
+        world.get::<&mut Model>(ent).unwrap().emissive = None;
+        assert!(reg.dump_value(&world, ent).unwrap().get("emissive").is_none(), "omitted");
     }
 
     #[test]

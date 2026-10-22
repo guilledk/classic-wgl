@@ -16,6 +16,7 @@ use glow::HasContext;
 
 use crate::framebuffer::ModelTarget;
 use crate::{Gfx, IsoSpritePass};
+pub use classic_core::model::EmissiveRect;
 
 /// Stencil ghost group reserved for 3D models (all models share one
 /// composite, so they share one group).  Sprite/vehicle groups stay in
@@ -46,6 +47,23 @@ pub fn model_target_size(width: u32, height: u32, zoom: f32) -> (u32, u32) {
 pub struct TeamTint {
     pub rect: [f32; 4],
     pub tint: [f32; 3],
+}
+
+/// Most self-lit rects one mesh draw takes (`MAX_EMISSIVE` in `mesh.frag`).
+pub const MAX_EMISSIVE: usize = classic_core::model::MAX_EMISSIVE_RECTS;
+
+/// The CPU reference of `mesh.frag`'s emissive term: the colour of a
+/// fragment with `albedo` (after the team tint) lit by `light` (the summed
+/// ambient + sun + point-light factor), plus `albedo × strength` of the first
+/// of `rects` containing `uv` (strengths already scaled by `Model.emissive`).
+pub fn emissive_shade(
+    rects: &[EmissiveRect],
+    uv: [f32; 2],
+    albedo: [f32; 3],
+    light: [f32; 3],
+) -> [f32; 3] {
+    let s = rects.iter().take(MAX_EMISSIVE).find(|r| r.contains(uv)).map_or(0.0, |r| r.strength);
+    [0, 1, 2].map(|i| albedo[i] * light[i] + albedo[i] * s)
 }
 
 impl TeamTint {
@@ -224,6 +242,44 @@ mod tests {
         for uv in [[0.49, 0.3], [0.8, 0.3], [0.6, 0.2], [0.6, 0.6], [0.0, 0.0], [1.0, 1.0]] {
             assert_eq!(t.apply(uv, albedo), albedo, "{uv:?}");
         }
+    }
+
+    #[test]
+    fn emissive_adds_unlit_albedo_only_inside_its_rects() {
+        let rects = [
+            EmissiveRect { rect: [0.5, 0.0, 1.0, 0.5], strength: 2.0 },
+            EmissiveRect { rect: [0.0, 0.0, 0.75, 0.25], strength: 9.0 },
+        ];
+        let (albedo, dark) = ([0.5, 0.25, 0.125], [0.0; 3]);
+        // In the dark, inside: albedo x strength; the first matching rect wins.
+        assert_eq!(emissive_shade(&rects, [0.6, 0.1], albedo, dark), [1.0, 0.5, 0.25]);
+        assert_eq!(emissive_shade(&rects, [0.1, 0.1], albedo, dark), [4.5, 2.25, 1.125]);
+        // Outside every rect (and on the far edges): lit colour unchanged.
+        let light = [0.8, 0.8, 0.8];
+        for uv in [[0.1, 0.3], [1.0, 0.1], [0.6, 0.5], [0.75, 0.6]] {
+            assert_eq!(emissive_shade(&rects, uv, albedo, light), [0.4, 0.2, 0.1], "{uv:?}");
+        }
+        // Added on top of the lighting, not multiplied by it.
+        assert_eq!(emissive_shade(&rects, [0.6, 0.4], albedo, light), [1.4, 0.7, 0.35]);
+        assert_eq!(emissive_shade(&[], [0.6, 0.4], albedo, light), [0.4, 0.2, 0.1]);
+    }
+
+    /// `mesh.frag` must implement exactly [`emissive_shade`]: same rect
+    /// test, first match wins, added after lighting to the pre-light albedo.
+    #[test]
+    fn mesh_frag_emissive_matches_the_cpu_reference() {
+        let src = crate::shaders::MESH_FRAG;
+        assert!(src.contains(&format!("#define MAX_EMISSIVE {MAX_EMISSIVE}")));
+        assert!(src.contains("uniform highp vec4 emissive_rect[MAX_EMISSIVE];"));
+        assert!(src.contains("if (all(greaterThanEqual(uv, r.xy)) && all(lessThan(uv, r.zw))) {"));
+        assert!(src.contains("return emissive_strength[i];"), "first match wins");
+        let main = &src[src.find("void main").unwrap()..];
+        let albedo = main.find("vec3 albedo = color.rgb;").expect("albedo kept");
+        let lit = main.find("color.rgb *= ambient_color").expect("lighting");
+        let glow = main.find("color.rgb += albedo * emissiveStrength(vTexCoord);").expect("glow");
+        assert!(main.find("teamTint(").unwrap() < albedo, "the glow uses the tinted albedo");
+        assert!(albedo < lit && lit < glow, "added after lighting, unlit");
+        assert!(main.contains("emissive_count > 0.5 && use_texture > 0.5"));
     }
 
     /// `mesh.frag` must implement exactly [`TeamTint::apply`]: the same
