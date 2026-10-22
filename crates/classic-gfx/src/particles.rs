@@ -124,6 +124,16 @@ impl ParticleRing {
         }
     }
 
+    /// Drop every record (all slots unused) and mark the whole ring dirty,
+    /// so the GPU mirror is zeroed on its next upload.
+    pub fn clear(&mut self) {
+        self.records.fill(ParticleRecord::default());
+        self.head = 0;
+        self.max_death = f32::NEG_INFINITY;
+        self.dirty_start = 0;
+        self.dirty_len = self.records.len();
+    }
+
     /// Live particles at clock time `t`.
     pub fn live_count(&self, t: f32) -> usize {
         self.records.iter().filter(|r| r.alive_at(t)).count()
@@ -545,5 +555,20 @@ mod tests {
         ring.rewrite(|r| r.t_birth -= 0.5);
         assert_eq!(ring.take_dirty(), vec![(0, 4)]);
         assert_eq!(ring.live_count(0.75), 1);
+    }
+
+    #[test]
+    fn clear_drops_everything_and_reuploads_the_whole_ring() {
+        let mut ring = ParticleRing::new(4);
+        ring.push(rec(0.0));
+        ring.push(rec(0.5));
+        ring.take_dirty();
+        ring.clear();
+        assert_eq!(ring.live_count(0.75), 0);
+        assert_eq!(ring.last_death(), f32::NEG_INFINITY);
+        // A later push still uploads the zeroed slots with it.
+        ring.push(rec(2.0));
+        assert_eq!(ring.take_dirty(), vec![(0, 4)]);
+        assert_eq!(ring.live_count(2.5), 1);
     }
 }

@@ -980,6 +980,13 @@ form.  No transform feedback, no per-frame CPU simulation.
   falls back to its recycled index.
   Vehicles drive their own per-wheel dust emitters and touchdown one-shots
   (`IsoVehicle.dust_effect`/`touchdown_effect`, `classic-ecs` "Vehicles").
+- **Hiding vs pausing**: an emitter whose entity or parent is `Disabled`
+  is *hidden* (`Instance::hidden_at`): its live particles fade out over
+  `HIDDEN_FADE_S` (0.25 s, `hidden_fade` multiplies the layer's
+  `u_shape.w` alpha) and then its rings are cleared
+  (`ParticleRing::clear`); ribbons stop and light layers are released at
+  once.  Re-enabling resets the fade.  `Emitter.enabled = false` only
+  *pauses*: spawning stops and live particles die of old age.
 - **Coverage**: `classic-core` `tests/fixtures/effects.json` is the
   reference library (one effect per look); `tests/effects_library.rs` keeps
   every layer kind, spawn shape, ground/render mode, shape and blend in it.

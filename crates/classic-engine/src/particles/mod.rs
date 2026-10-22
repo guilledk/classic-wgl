@@ -58,6 +58,20 @@ const MAX_RING: u32 = 65_536;
 /// Hard cap on queued sub-effect firings (a runaway cascade guard).
 const MAX_PENDING_SUBS: usize = 512;
 
+/// Seconds a hidden emitter's live particles take to fade out (see
+/// [`hidden_fade`]); its rings are cleared once the fade completes.
+pub const HIDDEN_FADE_S: f32 = 0.25;
+
+/// The alpha multiplier of an instance hidden since `hidden_at` (clock
+/// seconds) at clock time `clock`: `1` while visible, then a linear ramp
+/// to `0` over [`HIDDEN_FADE_S`].
+pub fn hidden_fade(hidden_at: Option<f64>, clock: f64) -> f32 {
+    match hidden_at {
+        None => 1.0,
+        Some(h) => (1.0 - (clock - h) as f32 / HIDDEN_FADE_S).clamp(0.0, 1.0),
+    }
+}
+
 /// Where an instance's frame comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Source {
@@ -135,6 +149,12 @@ struct Instance {
     /// Whether the source still exists (a despawned emitter's instance
     /// finishes its live particles and then dies).
     source_alive: bool,
+    /// Clock time the source was hidden (the emitter entity or its parent
+    /// `Disabled`), `None` while visible.  A hidden instance fades its live
+    /// particles out over [`HIDDEN_FADE_S`] and then clears its rings, stops
+    /// its ribbons and releases its lights at once.  `Emitter.enabled =
+    /// false` is not hiding: it only stops spawning (natural death).
+    hidden_at: Option<f64>,
     layers: Vec<LayerRt>,
 }
 
@@ -308,6 +328,7 @@ impl ParticleSystem {
             last_burst_at: None,
             emitting: true,
             source_alive: true,
+            hidden_at: None,
             layers,
         }
     }
@@ -351,6 +372,24 @@ impl ParticleSystem {
             Source::Emitter(_) => !inst.source_alive && rings_dead,
             Source::OneShot => {
                 self.clock > inst.start + inst.effect.emit_span() as f64 + 1e-6 && rings_dead
+            }
+        }
+    }
+
+    /// Clear the rings of every hidden instance whose fade has completed, so
+    /// nothing is drawn (or kept alive for the bloom gate) behind it.
+    fn finish_hidden_fades(&mut self) {
+        let (clock, t) = (self.clock, self.local_time());
+        for inst in &mut self.instances {
+            if inst.hidden_at.is_none() || hidden_fade(inst.hidden_at, clock) > 0.0 {
+                continue;
+            }
+            for l in &mut inst.layers {
+                if let LayerRt::Particles(p) = l {
+                    if p.ring.last_death() >= t {
+                        p.ring.clear();
+                    }
+                }
             }
         }
     }
@@ -643,6 +682,13 @@ impl Engine {
         Some(self.iso_to_world(tf.position.x, tf.position.y, 0.0)? + self.parent_frame_offset(e))
     }
 
+    /// Whether an emitter is hidden: its entity, or its parent entity, is
+    /// `Disabled` (a hidden building's effects go with it).
+    fn emitter_hidden(&self, entity: hecs::Entity, parent: Option<&str>) -> bool {
+        self.is_disabled(entity)
+            || parent.and_then(|p| self.names.get(p)).is_some_and(|&pe| self.is_disabled(pe))
+    }
+
     /// Advance the particle system by `dt` (see the module docs).
     pub fn update_particles(&mut self, dt: f32) {
         let mut ps = std::mem::take(&mut self.particles);
@@ -653,6 +699,7 @@ impl Engine {
         self.fire_pending_subs(&mut ps);
         self.spawn_all(&mut ps, dt);
         self.drive_light_layers(&mut ps);
+        ps.finish_hidden_fades();
         // Retire finished instances (their GPU rings are freed at draw time).
         let mut i = 0;
         while i < ps.instances.len() {
@@ -706,7 +753,8 @@ impl Engine {
                 em.dir,
             );
             let resolved = sites.as_deref().map(sites_centroid);
-            let active = em.enabled && !self.is_disabled(entity) && resolved.is_some();
+            let hidden = self.emitter_hidden(entity, em.parent.as_deref());
+            let active = em.enabled && !hidden && resolved.is_some();
             let id = match ps.by_entity.get(&entity) {
                 Some(&id) => id,
                 None => {
@@ -734,6 +782,11 @@ impl Engine {
             };
             let Some(inst) = ps.instances.iter_mut().find(|i| i.id == id) else { continue };
             inst.emitting = active;
+            inst.hidden_at = match (hidden, inst.hidden_at) {
+                (true, None) => Some(ps.clock),
+                (true, at) => at,
+                (false, _) => None,
+            };
             inst.tint = em.color;
             inst.intensity = em.intensity;
             inst.rate = em.rate;
@@ -928,10 +981,14 @@ impl Engine {
                     }
                 }
             }
-            // Ribbons.
+            // Ribbons (a hidden instance's stop at once, mid-strike included).
             for (li, l) in inst.layers.iter_mut().enumerate() {
                 let LayerRt::Ribbon(r) = l else { continue };
                 let LayerDef::Ribbon(def) = &inst.effect.layers[r.def_index] else { continue };
+                if inst.hidden_at.is_some() {
+                    r.strands.clear();
+                    continue;
+                }
                 update_ribbon(
                     r,
                     def,
@@ -984,7 +1041,12 @@ impl Engine {
                 let LayerRt::Light(lr) = l else { continue };
                 let LayerDef::Light(def) = &inst.effect.layers[lr.def_index] else { continue };
                 let since_burst = inst.last_burst_at.map(|b| (clock - b) as f32);
-                let level = light_level(def, inst.source, inst.emitting, age, since_burst, inst.id);
+                // A hidden instance's lights go out at once (a burst light
+                // would otherwise play out its duration).
+                let level = match inst.hidden_at {
+                    Some(_) => None,
+                    None => light_level(def, inst.source, inst.emitting, age, since_burst, inst.id),
+                };
                 match (level, lr.handle) {
                     (Some(level), handle) => {
                         let light = Light {
@@ -1177,12 +1239,17 @@ impl ParticleSystem {
                             if p.ring.last_death() < t {
                                 continue;
                             }
+                            let fade = hidden_fade(inst.hidden_at, self.clock);
+                            if fade <= 0.0 {
+                                continue;
+                            }
                             let gpu = p.gpu.get_or_insert_with(|| {
                                 ParticleGpu::new(&gfx.gl, p.ring.capacity())
                             });
                             gpu.upload(&gfx.gl, &mut p.ring);
-                            let u =
+                            let mut u =
                                 layer_uniforms(def, inst.frame.scale, inst.tint, inst.intensity, t);
+                            u.shape[3] *= fade;
                             if let Some(tr) = trace.as_mut() {
                                 let name = format!("{}/{}", inst.name, def.name);
                                 tr.push(TraceItemParams {
