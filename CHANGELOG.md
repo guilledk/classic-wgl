@@ -58,6 +58,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   at once through the new `Engine::resample_model` (clip time 0, with
   `frame_offset`), and `model_draws` falls back to the rest pose rather
   than skipping a pose that does not fit its glb (#134).
+- Scenario `keyPress` steps reach the guest.  The test runner wrote the
+  key into `engine.input` after every update closure had run, and the
+  next `frame` replaced `input` with the platform snapshot, so no guest
+  ever saw a scripted key.  The step now queues it on the new
+  `Engine::scripted_input` (a one-shot pressed queue plus a held set,
+  released by `pressed: false`), merged into `input` right after the
+  platform snapshot: a press at frame N is seen by the update closures
+  at N + 1.  Mouse steps are unchanged (#135).
 
 ## [0.3.3] - 2026-10-17
 

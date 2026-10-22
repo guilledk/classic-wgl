@@ -57,6 +57,7 @@ impl Engine {
             guest_flags: HashMap::new(),
             scroll_speed: 600.0,
             input: InputState::new(),
+            scripted_input: Default::default(),
             show_grid: false,
             light_ambient: [0.15, 0.15, 0.2],
             light_dir: [0.566_422, -0.070_803, 0.821_068],
@@ -141,6 +142,9 @@ impl Engine {
         );
 
         self.input = input.clone();
+        // Scripted keys land after the platform snapshot, so a scenario's
+        // `keyPress` (issued after the update closures) is seen next frame.
+        self.scripted_input.apply(&mut self.input);
         self.time.delta = delta;
         if delta > 0.0 {
             self.time.fps = (1.0 / delta) as u32;

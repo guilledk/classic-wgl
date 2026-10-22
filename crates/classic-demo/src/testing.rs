@@ -333,10 +333,13 @@ fn run_frame(
                         engine.input.frame_had_click = true;
                     }
                 }
+                // Delivered next frame: the runner runs after the update
+                // closures, and `frame` rebuilds `input` from the platform.
                 TestAction::KeyPress { key, pressed } => {
-                    engine.input.keys_down.insert(key.clone(), *pressed);
                     if *pressed {
-                        engine.input.keys_pressed.insert(key.clone(), true);
+                        engine.scripted_input.press(key);
+                    } else {
+                        engine.scripted_input.release(key);
                     }
                 }
                 TestAction::Wheel { amount } => {
@@ -757,6 +760,47 @@ mod tests {
         assert_eq!(pins[1].tile, Some((317.5, 277.5)));
         assert_eq!(pins[1].zoom, 1.0, "zoom defaults to 1");
         assert!(pins[2].follow.is_none() && pins[2].tile.is_none(), "empty releases");
+    }
+
+    /// A scenario `keyPress` reaches the update closures (the guest) on the
+    /// next frame, once, and a held key stays down until released.  Before
+    /// the scripted queue, `frame` overwrote the runner's write to
+    /// `engine.input` with the platform snapshot, so no closure ever saw it.
+    #[test]
+    fn scenario_key_press_reaches_update_closures_next_frame() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let steps: Vec<TestStep> = serde_json::from_str(
+            r#"[{ "frame": 2, "assertions": [], "log": "press", "actions": [
+                    { "keyPress": { "key": "KeyN", "pressed": true } } ] },
+                { "frame": 5, "assertions": [], "log": "release", "actions": [
+                    { "keyPress": { "key": "KeyN", "pressed": false } } ] }]"#,
+        )
+        .unwrap();
+        let mut engine = classic_engine::Engine::new_for_test();
+        let seen: Rc<RefCell<Vec<(u64, bool, bool)>>> = Rc::default();
+        let log = Rc::clone(&seen);
+        // The guest's update closure, then the runner (the real frame order).
+        engine.on_update(move |e| {
+            let f = e.frame_number();
+            log.borrow_mut().push((
+                f,
+                e.input.was_key_pressed("KeyN"),
+                e.input.is_key_down("KeyN"),
+            ));
+        });
+        let state: super::DemoStateRef = Rc::default();
+        let runner = Rc::new(RefCell::new(super::TestRunner::default()));
+        engine.on_update(move |e| super::run_frame(e, &state, &mut runner.borrow_mut(), &steps));
+        let mut platform = engine.input.clone(); // an idle platform snapshot
+        for _ in 0..8 {
+            engine.frame(&mut platform, 640.0, 360.0, 1.0 / 60.0);
+        }
+        let pressed: Vec<u64> = seen.borrow().iter().filter(|s| s.1).map(|s| s.0).collect();
+        let down: Vec<u64> = seen.borrow().iter().filter(|s| s.2).map(|s| s.0).collect();
+        assert_eq!(pressed, [3], "pressed once, the frame after the step");
+        assert_eq!(down, [3, 4, 5], "held until the release step's next frame");
     }
 
     #[test]
