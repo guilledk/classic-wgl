@@ -36,6 +36,8 @@ pub(crate) struct ModelInstance {
     /// The mesh's self-lit rects, strengths scaled by `Model.emissive`
     /// (empty when it has none or the multiplier is `0`).
     pub(crate) emissive: Vec<classic_gfx::EmissiveRect>,
+    /// Draw with the alpha-tested program (`ModelMesh::alpha_test`).
+    pub(crate) alpha_test: bool,
 }
 
 /// The first upload of a model image's content (see `Engine::model_textures`).
@@ -45,6 +47,9 @@ pub(crate) struct SharedModelTexture {
     pub(crate) name: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    /// Its cut texels (`None` = fully opaque), kept for the meshes of later
+    /// glbs that alias it without decoding it.
+    pub(crate) alpha: Option<classic_core::model::AlphaMask>,
 }
 
 /// Precomputed per-entity model draw (all node instances), shared by the
@@ -80,6 +85,14 @@ impl ModelDraw {
 fn sample_pose(asset: &ModelAsset, clip: Option<usize>, m: &mut Model, tf: &Transform) {
     m.node_world = asset.node_world_transforms(clip.unwrap_or(usize::MAX), m.time);
     m.frame_offset = tf.scale * asset.root_translation_from(&m.node_world);
+}
+
+/// The main-pass draw order of model instances keyed `(alpha_test, view
+/// depth, _)`: every opaque instance before any alpha-tested one, each group
+/// front to back (larger view depth is nearer the camera); a stable sort, so
+/// equal keys keep render-list order.
+pub(crate) fn sort_model_draw_order<T>(order: &mut [(bool, f32, T)]) {
+    order.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
 }
 
 impl Engine {
@@ -264,6 +277,7 @@ impl Engine {
                     texture: mesh.image.map(|ii| format!("{}::image::{ii}", model.model)),
                     team,
                     emissive,
+                    alpha_test: mesh.alpha_test,
                 });
             }
             if instances.is_empty() {
@@ -616,6 +630,53 @@ mod tests {
         let draws = e.model_draws(&[(0.0, hab, DrawKind::Model)], &HashMap::new());
         assert_eq!(draws.len(), 1);
         assert_eq!(draws[0].instances[0].mesh_key, "work::0");
+    }
+
+    #[test]
+    fn model_draw_order_is_opaque_front_to_back_then_alpha_tested() {
+        let mut order = vec![
+            (false, -3.0, "far"),
+            (true, 9.0, "cut_near"),
+            (false, 5.0, "near"),
+            (true, -1.0, "cut_far"),
+            (false, 5.0, "near_tie"),
+            (false, 0.0, "mid"),
+        ];
+        sort_model_draw_order(&mut order);
+        let names: Vec<_> = order.iter().map(|o| o.2).collect();
+        assert_eq!(names, ["near", "near_tie", "mid", "far", "cut_near", "cut_far"]);
+    }
+
+    #[test]
+    fn alpha_test_follows_cut_texels_through_shared_images() {
+        // The first glb decodes an atlas with a cut texel its triangle
+        // covers; a second glb aliasing the same bytes (not decoded again)
+        // still gets the alpha-tested program from the shared mask.
+        let cut = png_2x2([200, 200, 200, 0]);
+        let mut e = Engine::new_for_test();
+        e.load_model_glb("a", &textured_glb(&cut, None)).unwrap();
+        e.load_model_glb("b", &textured_glb(&cut, None)).unwrap();
+        assert!(e.models["b"].images[0].rgba8.is_empty(), "b aliased a's texture");
+        assert!(e.models["a"].meshes[0].alpha_test && e.models["b"].meshes[0].alpha_test);
+        e.load_model_glb("solid", &textured_glb(&png_2x2([200, 200, 200, 255]), None)).unwrap();
+        assert!(!e.models["solid"].meshes[0].alpha_test, "opaque atlas: no discard");
+        // The flag reaches the draw.
+        flat_tilemap(&mut e);
+        let ents: Vec<_> = ["a", "solid"]
+            .map(|m| {
+                let ent = e.world.spawn((
+                    Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE),
+                    Model::new(m, "tilemap"),
+                ));
+                (0.0, ent, DrawKind::Model)
+            })
+            .into();
+        e.update_models(0.0);
+        let draws = e.model_draws(&ents, &HashMap::new());
+        assert_eq!(
+            [draws[0].instances[0].alpha_test, draws[1].instances[0].alpha_test],
+            [true, false]
+        );
     }
 
     #[test]

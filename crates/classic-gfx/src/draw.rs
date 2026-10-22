@@ -642,6 +642,9 @@ impl Gfx {
     /// textured); `None` draws exactly as an untinted mesh.  `emissive` are
     /// the mesh's self-lit rects (strengths already scaled by the model's
     /// multiplier, at most [`crate::MAX_EMISSIVE`] used); empty = no glow.
+    /// `alpha_test` selects the `meshAlphaTest` program (cuts texels with
+    /// alpha below 0.01); without it nothing is discarded and the draw keeps
+    /// early depth testing.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_model(
         &self,
@@ -653,10 +656,11 @@ impl Gfx {
         base_color: &[f32; 4],
         team: Option<&TeamTint>,
         emissive: &[EmissiveRect],
+        alpha_test: bool,
         settings: &RenderSettings,
     ) {
         let gl = &self.gl;
-        let s = self.shader("mesh");
+        let s = self.shader(if alpha_test { "meshAlphaTest" } else { "mesh" });
 
         s.bind(gl);
         self.bind_view(s, camera, model, false);

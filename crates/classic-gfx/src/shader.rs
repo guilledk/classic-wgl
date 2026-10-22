@@ -203,6 +203,35 @@ fn shader_filename(url: &str) -> &str {
     url.rsplit('/').next().unwrap_or(url)
 }
 
+/// Split a shader URL into its source filename and the `#`-separated
+/// preprocessor defines of a variant: `mesh.frag#ALPHA_TEST` is `mesh.frag`
+/// compiled with `#define ALPHA_TEST`.
+fn shader_variant(url: &str) -> (&str, Vec<&str>) {
+    let mut parts = shader_filename(url).split('#');
+    let file = parts.next().unwrap_or_default();
+    (file, parts.filter(|d| !d.is_empty()).collect())
+}
+
+/// Insert `#define`s right after the `#version` line (the first line).
+fn with_defines(src: &str, defines: &[&str]) -> String {
+    if defines.is_empty() {
+        return src.to_string();
+    }
+    let (version, rest) = match src.split_once('\n') {
+        Some((v, r)) if v.trim_start().starts_with("#version") => (v, r),
+        _ => ("", src),
+    };
+    let mut out = String::from(version);
+    if !version.is_empty() {
+        out.push('\n');
+    }
+    for d in defines {
+        out.push_str(&format!("#define {d}\n"));
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A name-keyed registry of GLSL shader sources.
 ///
 /// Built-in sources (embedded via `include_str!`) are registered by
@@ -259,19 +288,21 @@ impl ShaderSourceRegistry {
         self.fragment.insert(filename.to_string(), source.into());
     }
 
-    /// Resolve a vertex-shader URL to a source string.
+    /// Resolve a vertex-shader URL to a source string (a `file#DEFINE`
+    /// variant gets its defines inserted after `#version`).
     pub fn resolve_vertex(&self, url: &str) -> String {
-        let f = shader_filename(url);
-        self.vertex.get(f).cloned().unwrap_or_else(|| panic!("unknown vertex shader URL: {url}"))
+        let (f, defines) = shader_variant(url);
+        let src = self.vertex.get(f).unwrap_or_else(|| panic!("unknown vertex shader URL: {url}"));
+        with_defines(src, &defines)
     }
 
-    /// Resolve a fragment-shader URL to a source string.
+    /// Resolve a fragment-shader URL to a source string (a `file#DEFINE`
+    /// variant gets its defines inserted after `#version`).
     pub fn resolve_fragment(&self, url: &str) -> String {
-        let f = shader_filename(url);
-        self.fragment
-            .get(f)
-            .cloned()
-            .unwrap_or_else(|| panic!("unknown fragment shader URL: {url}"))
+        let (f, defines) = shader_variant(url);
+        let src =
+            self.fragment.get(f).unwrap_or_else(|| panic!("unknown fragment shader URL: {url}"));
+        with_defines(src, &defines)
     }
 }
 
@@ -478,6 +509,37 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             ],
         },
         BuiltinShader {
+            name: "meshAlphaTest",
+            vertex: "mesh.vert",
+            fragment: "mesh.frag#ALPHA_TEST",
+            attr: &["vertex_pos", "normal", "tex_coord"],
+            unif: &[
+                "world_matrix",
+                "model_matrix",
+                "camera_matrix",
+                "projection_matrix",
+                "depth_span",
+                "ppm",
+                "tex_sampler",
+                "use_texture",
+                "base_color",
+                "use_team",
+                "team_rect",
+                "team_tint",
+                "ambient_color",
+                "light_direction",
+                "light_color",
+                "shadow_map",
+                "light_view_proj",
+                "shadow_bias",
+                "shadow_strength",
+                "shadow_texel",
+                "use_shadow",
+                "shadow_debug",
+                "shadow_normal_offset",
+            ],
+        },
+        BuiltinShader {
             name: "modelComposite",
             vertex: "model_composite.vert",
             fragment: "model_composite.frag",
@@ -530,4 +592,40 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             unif: &["color_tex"],
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variant_urls_inject_defines_after_the_version_line() {
+        assert_eq!(shader_variant("/shaders/mesh.frag"), ("mesh.frag", vec![]));
+        assert_eq!(shader_variant("mesh.frag#A#B"), ("mesh.frag", vec!["A", "B"]));
+        let src = "#version 300 es\nprecision mediump float;\n";
+        assert_eq!(with_defines(src, &[]), src);
+        assert_eq!(
+            with_defines(src, &["ALPHA_TEST"]),
+            "#version 300 es\n#define ALPHA_TEST\nprecision mediump float;\n"
+        );
+        let r = ShaderSourceRegistry::builtin();
+        let alpha = r.resolve_fragment("mesh.frag#ALPHA_TEST");
+        assert!(alpha.starts_with("#version 300 es\n#define ALPHA_TEST\n"));
+        assert_eq!(alpha.replacen("#define ALPHA_TEST\n", "", 1), r.resolve_fragment("mesh.frag"));
+    }
+
+    /// The opaque `mesh` program must not contain a reachable `discard` (it
+    /// would turn early-Z off for the whole model pass); only the
+    /// `meshAlphaTest` variant cuts.
+    #[test]
+    fn only_the_alpha_test_variant_discards() {
+        let src = shaders::MESH_FRAG;
+        let at = src.find("discard;").expect("the variant's cut");
+        let guard = src[..at].rfind("#ifdef ALPHA_TEST").expect("the cut is guarded");
+        assert!(!src[guard..at].contains("#endif"), "discard sits inside the #ifdef");
+        assert_eq!(src.matches("discard;").count(), 1);
+        let names: Vec<_> = builtin_shaders().into_iter().map(|b| (b.name, b.fragment)).collect();
+        assert!(names.contains(&("mesh", "mesh.frag")));
+        assert!(names.contains(&("meshAlphaTest", "mesh.frag#ALPHA_TEST")));
+    }
 }

@@ -74,6 +74,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   and spawning never depends on the camera, so fixed-timestep runs stay
   reproducible.  `Gfx::draw_particles` takes the slot ranges to draw
   (#138).
+- The model pass keeps early depth testing.  `mesh.frag`'s alpha
+  `discard` disabled early-Z for every model draw, so the sun PCF and the
+  point-light loop ran on hidden fragments.  The cut now lives only in a
+  `meshAlphaTest` variant (`mesh.frag#ALPHA_TEST`; the shader registry
+  resolves `file#DEFINE` URLs), used by meshes whose material is not
+  `OPAQUE` or whose UVs reach a texel with alpha below 0.01
+  (`ModelMesh::alpha_test`, `AlphaMask`, `mark_alpha_test`); the rest
+  draw without it, opaque instances front to back.  Traces keep their
+  order and frames are pixel-identical.  `buildtest` at 4K on a Radeon
+  680M: zoom 1 from 16.3 to 13.3 ms a frame (model pass GPU 7.9 to
+  5.0 ms), zoom 0.15 from 7.2 to 6.7 ms.  `Gfx::draw_model` takes the
+  `alpha_test` flag (#142).
 
 ### Fixed
 
