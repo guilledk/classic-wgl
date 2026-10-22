@@ -219,9 +219,14 @@ void main(void ) {
     if (use_team > 0.5 && use_texture > 0.5) {
         color = teamTint(color, vTexCoord);
     }
+#ifdef ALPHA_TEST
+    // Only the `meshAlphaTest` variant cuts: a `discard` anywhere in a
+    // program turns early depth testing off for every draw with it, so the
+    // (overwhelmingly opaque) rest of the model pass skips it.
     if (color.a < 0.01) {
         discard;
     }
+#endif
 
     vec3 n = normalize(vNormal);
 

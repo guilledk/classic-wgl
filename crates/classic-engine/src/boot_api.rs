@@ -1471,6 +1471,19 @@ impl Engine {
             }
         };
         let dims = asset.images.first().map_or((0, 0), |i| (i.width, i.height));
+        // Which meshes need the alpha-tested program: masks of the images
+        // decoded here, else of the shared texture they alias.
+        let masks: Vec<Option<classic_core::model::AlphaMask>> = asset
+            .images
+            .iter()
+            .map(|img| match self.model_textures.get(&img.content_hash) {
+                Some(shared) => shared.alpha.clone(),
+                None => {
+                    classic_core::model::AlphaMask::from_rgba8(img.width, img.height, &img.rgba8)
+                }
+            })
+            .collect();
+        classic_core::model::mark_alpha_test(&mut asset, |i| masks.get(i)?.as_ref());
         if let Some(gfx) = self.gfx.as_mut() {
             for (mi, mesh) in asset.meshes.iter().enumerate() {
                 let gpu = classic_gfx::ModelMeshGpu::new(
@@ -1483,7 +1496,7 @@ impl Engine {
                 self.model_gpu.insert(format!("{name}::{mi}"), gpu);
             }
         }
-        for (ii, img) in asset.images.iter_mut().enumerate() {
+        for (ii, (img, alpha)) in asset.images.iter_mut().zip(masks).enumerate() {
             let tex_name = format!("{name}::image::{ii}");
             if let Some(first) = self.model_textures.get(&img.content_hash) {
                 // Same bytes as an earlier image: alias its GL texture.
@@ -1508,7 +1521,7 @@ impl Engine {
             }
             self.model_textures.insert(
                 img.content_hash,
-                SharedModelTexture { name: tex_name, width: img.width, height: img.height },
+                SharedModelTexture { name: tex_name, width: img.width, height: img.height, alpha },
             );
         }
         self.models.insert(name.to_string(), asset);

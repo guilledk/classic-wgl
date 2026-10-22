@@ -65,6 +65,16 @@ pub struct ModelMesh {
     /// material's [`EMISSIVE_EXTRA`] extra (at most [`MAX_EMISSIVE_RECTS`]).
     /// Empty when the material carries none (nothing glows).
     pub emissive: Vec<EmissiveRect>,
+    /// Whether the mesh's material asks for transparency (`alphaMode`
+    /// `MASK` or `BLEND`).  Every material the kit exporter writes is
+    /// `OPAQUE`.
+    pub alpha_material: bool,
+    /// Whether the mesh must draw with the alpha-tested `mesh.frag` variant
+    /// (`discard` below [`ALPHA_CUT`]): an [`Self::alpha_material`], or one
+    /// whose UVs can sample a cut texel ([`AlphaMask::mesh_hits`]).  The rest
+    /// draw without `discard`, which keeps early depth testing on.  Set by
+    /// [`mark_alpha_test`] (the engine knows the de-duplicated images).
+    pub alpha_test: bool,
     /// Mesh-local position bounds (for shadow-box fitting).
     pub min: Vec3,
     pub max: Vec3,
@@ -132,6 +142,84 @@ impl EmissiveRect {
     pub fn contains(&self, uv: [f32; 2]) -> bool {
         let [u0, v0, u1, v1] = self.rect;
         u0 <= uv[0] && uv[0] < u1 && v0 <= uv[1] && uv[1] < v1
+    }
+}
+
+/// `mesh.frag`'s alpha test cuts fragments whose sampled alpha is below
+/// `0.01`: an 8-bit texel with alpha `<= ALPHA_CUT` (2/255 = 0.0078).
+pub const ALPHA_CUT: u8 = 2;
+
+/// The texels of an RGBA8 image that `mesh.frag` would cut (alpha `<=`
+/// [`ALPHA_CUT`]), one bit each.  Built once per decoded image and kept with
+/// the shared texture, so a de-duplicated image (not decoded again) can still
+/// be checked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AlphaMask {
+    width: u32,
+    height: u32,
+    bits: Vec<u64>,
+}
+
+impl AlphaMask {
+    /// The mask of `rgba8` (`width × height`, top-down rows); `None` when no
+    /// texel is cut (the common, fully opaque atlas).
+    pub fn from_rgba8(width: u32, height: u32, rgba8: &[u8]) -> Option<Self> {
+        let n = (width as usize) * (height as usize);
+        if rgba8.len() < n * 4 || !rgba8.as_chunks::<4>().0.iter().any(|p| p[3] <= ALPHA_CUT) {
+            return None;
+        }
+        let mut bits = vec![0u64; n.div_ceil(64)];
+        for (i, p) in rgba8.as_chunks::<4>().0.iter().take(n).enumerate() {
+            if p[3] <= ALPHA_CUT {
+                bits[i / 64] |= 1 << (i % 64);
+            }
+        }
+        Some(Self { width, height, bits })
+    }
+
+    /// Whether texel `(x, y)` is cut.
+    pub fn is_cut(&self, x: u32, y: u32) -> bool {
+        let i = (y as usize) * (self.width as usize) + x as usize;
+        self.bits[i / 64] >> (i % 64) & 1 == 1
+    }
+
+    /// The texel a `NEAREST`, `CLAMP_TO_EDGE` sample at `t` (`0..1` along an
+    /// axis of `size` texels) reads.
+    fn texel(t: f32, size: u32) -> u32 {
+        let x = (t * size as f32).floor();
+        if x.is_nan() || x < 0.0 {
+            0
+        } else {
+            (x as u32).min(size - 1)
+        }
+    }
+
+    /// Whether any triangle of a mesh (`uvs` per vertex, `indices` in
+    /// threes) can sample a cut texel: conservatively, any cut texel inside
+    /// a triangle's UV bounding box (clamped like the sampler).  A mesh with
+    /// no UVs samples texel `(0, 0)`.
+    pub fn mesh_hits(&self, uvs: &[[f32; 2]], indices: &[u32]) -> bool {
+        if uvs.is_empty() {
+            return self.is_cut(0, 0);
+        }
+        indices.as_chunks::<3>().0.iter().any(|tri| {
+            let corner = |k: usize| uvs.get(tri[k] as usize).copied().unwrap_or([0.0; 2]);
+            let (a, b, c) = (corner(0), corner(1), corner(2));
+            let (x0, x1) = (a[0].min(b[0]).min(c[0]), a[0].max(b[0]).max(c[0]));
+            let (y0, y1) = (a[1].min(b[1]).min(c[1]), a[1].max(b[1]).max(c[1]));
+            let (tx0, tx1) = (Self::texel(x0, self.width), Self::texel(x1, self.width));
+            let (ty0, ty1) = (Self::texel(y0, self.height), Self::texel(y1, self.height));
+            (ty0..=ty1).any(|y| (tx0..=tx1).any(|x| self.is_cut(x, y)))
+        })
+    }
+}
+
+/// Decide every mesh's [`ModelMesh::alpha_test`]: `mask(image)` is the
+/// [`AlphaMask`] of a mesh's albedo image (`None` = nothing cut).
+pub fn mark_alpha_test<'a>(asset: &mut ModelAsset, mask: impl Fn(usize) -> Option<&'a AlphaMask>) {
+    for mesh in &mut asset.meshes {
+        let cut = mesh.image.and_then(&mask).is_some_and(|m| m.mesh_hits(&mesh.uvs, &mesh.indices));
+        mesh.alpha_test = mesh.alpha_material || cut;
     }
 }
 
@@ -407,6 +495,7 @@ pub fn parse_model_glb_with(
                     .pbr_metallic_roughness()
                     .base_color_texture()
                     .map(|t| t.texture().source().index());
+                merged.alpha_material |= material.alpha_mode() != gltf::material::AlphaMode::Opaque;
                 if merged.image.is_some() {
                     merged.team_rect = material_team_rect(&material)?;
                     merged.emissive = material_emissive(&material)?;
@@ -882,6 +971,63 @@ mod tests {
             let err = parse_model_glb(&textured_glb(&png, Some(&extras), true)).unwrap_err();
             assert!(err.to_string().contains(EMISSIVE_EXTRA), "{bad}: {err}");
         }
+    }
+
+    /// A `w × h` RGBA image, opaque except `cut` texels (alpha 0).
+    fn rgba_with_cuts(w: u32, h: u32, cut: &[(u32, u32)]) -> Vec<u8> {
+        let mut px = vec![255u8; (w * h * 4) as usize];
+        for &(x, y) in cut {
+            px[((y * w + x) * 4 + 3) as usize] = 0;
+        }
+        px
+    }
+
+    #[test]
+    fn alpha_mask_is_none_for_opaque_images_and_marks_cut_texels() {
+        assert_eq!(AlphaMask::from_rgba8(4, 4, &rgba_with_cuts(4, 4, &[])), None);
+        // Alpha 3 survives the 0.01 test; alpha 2 does not.
+        let mut px = rgba_with_cuts(4, 4, &[]);
+        px[3] = 3;
+        assert_eq!(AlphaMask::from_rgba8(4, 4, &px), None);
+        px[3] = ALPHA_CUT;
+        let m = AlphaMask::from_rgba8(4, 4, &px).unwrap();
+        assert!(m.is_cut(0, 0) && !m.is_cut(1, 0));
+        // Bits past a 64-texel word boundary.
+        let m = AlphaMask::from_rgba8(16, 8, &rgba_with_cuts(16, 8, &[(5, 6)])).unwrap();
+        assert!(m.is_cut(5, 6) && !m.is_cut(6, 5) && !m.is_cut(5, 5));
+    }
+
+    #[test]
+    fn mesh_hits_only_when_a_triangle_can_sample_a_cut_texel() {
+        // 8x8 atlas, one cut texel at (6, 1): u in [0.75, 0.875), v in [0.125, 0.25).
+        let m = AlphaMask::from_rgba8(8, 8, &rgba_with_cuts(8, 8, &[(6, 1)])).unwrap();
+        let tri = |uvs: [[f32; 2]; 3]| m.mesh_hits(&uvs, &[0, 1, 2]);
+        assert!(!tri([[0.0, 0.5], [0.5, 0.5], [0.0, 1.0]]), "far from the cut");
+        assert!(tri([[0.7, 0.1], [0.9, 0.1], [0.7, 0.3]]), "covers it");
+        // Conservative: the bbox reaches it even if the triangle might not.
+        assert!(tri([[0.5, 0.0], [0.9, 0.0], [0.5, 0.2]]));
+        // The far edge of the cut texel's neighbour does not sample it.
+        assert!(!tri([[0.5, 0.25], [0.74, 0.25], [0.5, 0.5]]));
+        // Out-of-range UVs clamp to the edge texels, like the sampler.
+        assert!(!tri([[-1.0, -1.0], [0.1, -1.0], [-1.0, 0.1]]));
+        let edge = AlphaMask::from_rgba8(8, 8, &rgba_with_cuts(8, 8, &[(7, 7)])).unwrap();
+        assert!(edge.mesh_hits(&[[1.5, 1.5], [2.0, 1.5], [1.5, 2.0]], &[0, 1, 2]));
+        // No UVs: samples (0, 0).
+        let origin = AlphaMask::from_rgba8(8, 8, &rgba_with_cuts(8, 8, &[(0, 0)])).unwrap();
+        assert!(origin.mesh_hits(&[], &[0, 1, 2]) && !m.mesh_hits(&[], &[0, 1, 2]));
+    }
+
+    #[test]
+    fn mark_alpha_test_flags_cut_meshes_and_non_opaque_materials() {
+        let png = png_2x1([200, 200, 200, 255], [0, 0, 0, 0]);
+        // The test triangle's UVs are (0, 0), (1, 0), (0, 1): it spans both texels.
+        let mut asset = parse_model_glb(&textured_glb(&png, None, true)).unwrap();
+        assert!(!asset.meshes[0].alpha_material && !asset.meshes[0].alpha_test);
+        let mask = AlphaMask::from_rgba8(2, 1, &asset.images[0].rgba8).unwrap();
+        mark_alpha_test(&mut asset, |_| Some(&mask));
+        assert!(asset.meshes[0].alpha_test, "its UVs reach the cut texel");
+        mark_alpha_test(&mut asset, |_| None);
+        assert!(!asset.meshes[0].alpha_test, "nothing cut");
     }
 
     #[test]

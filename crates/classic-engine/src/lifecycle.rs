@@ -9,7 +9,7 @@ use classic_core::components::{
     IsoSprite, IsoVehicle, NavMesh, RectRender, Role, SdfTextRender, Tilemap,
 };
 use classic_core::instrument::Chan;
-use classic_core::math::{iso_camera_matrix, DEPTH_FAR, DEPTH_NEAR};
+use classic_core::math::{iso_camera_matrix, iso_view_depth, DEPTH_FAR, DEPTH_NEAR};
 use classic_core::pathfinder;
 use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{PPM_TARGET, TILE_M};
@@ -938,9 +938,16 @@ impl Engine {
             ppm: PPM_TARGET,
             shadow: shadow_settings,
         };
+        // Trace in render-list order (unchanged goldens), then draw: opaque
+        // meshes front to back (larger view depth = nearer) so early depth
+        // testing rejects hidden fragments before the lighting loop, then
+        // the alpha-tested ones (their `discard` disables early-Z).
+        let mut order: Vec<(bool, f32, &crate::model::ModelInstance)> = Vec::new();
         for draw in &model_draws {
             for inst in &draw.instances {
-                let Some(mesh) = self.model_gpu.get(&inst.mesh_key) else { continue };
+                if !self.model_gpu.contains_key(&inst.mesh_key) {
+                    continue;
+                }
                 if let Some(ref mut t) = self.trace {
                     t.push(golden::TraceItemParams {
                         order: draw.order,
@@ -958,18 +965,24 @@ impl Engine {
                         screen: Some(golden::project_rect(&cam, &inst.model, false)),
                     });
                 }
-                gfx.draw_model(
-                    &inst.model,
-                    &cam,
-                    &iso_camera_matrix(),
-                    mesh,
-                    inst.texture.as_deref(),
-                    &[0.8, 0.8, 0.8, 1.0],
-                    inst.team.as_ref(),
-                    &inst.emissive,
-                    &model_settings,
-                );
+                order.push((inst.alpha_test, iso_view_depth(inst.model.w_axis.truncate()), inst));
             }
+        }
+        crate::model::sort_model_draw_order(&mut order);
+        for (_, _, inst) in order {
+            let Some(mesh) = self.model_gpu.get(&inst.mesh_key) else { continue };
+            gfx.draw_model(
+                &inst.model,
+                &cam,
+                &iso_camera_matrix(),
+                mesh,
+                inst.texture.as_deref(),
+                &[0.8, 0.8, 0.8, 1.0],
+                inst.team.as_ref(),
+                &inst.emissive,
+                inst.alpha_test,
+                &model_settings,
+            );
         }
         if has_models {
             gfx.end_model_pass();

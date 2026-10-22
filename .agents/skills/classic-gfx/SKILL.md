@@ -846,6 +846,19 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   documents the asset contract); the engine passes it only when the `Model`
   sets `tint`.  `team_rect` is `highp` (mediump cannot resolve 2048-texel
   edges).
+- **Early-Z: two mesh programs.**  A `discard` anywhere in a program turns
+  early depth testing off for every draw with it, and `mesh.frag` is the
+  costliest fragment in the frame (sun PCF + the tiled point-light loop),
+  so the cut is compiled only into the `meshAlphaTest` variant
+  (`mesh.frag#ALPHA_TEST`: the shader registry resolves `file#DEFINE` URLs
+  by inserting `#define`s after `#version`).  `ModelMesh::alpha_test`
+  (set at load by `mark_alpha_test`) picks it: a non-`OPAQUE` material, or
+  UVs whose triangle bounding boxes reach a texel with alpha `<=
+  ALPHA_CUT` (the `AlphaMask` of the albedo, kept with the de-duplicated
+  texture).  The main pass traces in render-list order, then draws opaque
+  instances **front to back** and the alpha-tested ones last
+  (`sort_model_draw_order`); `draw_model(.., alpha_test, ..)`.  Every kit
+  material is `OPAQUE` and 3 of ~14k `buildtest` meshes reach a cut texel.
 - **Emissive (self-lit) regions** — the asset contract
   (`classic_core::model::EMISSIVE_EXTRA`): a glb material's `extras` may
   carry `"classic_emissive": [{"rect": [u0, v0, u1, v1], "strength": s}, ...]`,
