@@ -66,6 +66,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   released by `pressed: false`), merged into `input` right after the
   platform snapshot: a press at frame N is seen by the update closures
   at N + 1.  Mouse steps are unchanged (#135).
+- Hidden effects go with what hides them.  When an `Emitter`'s entity
+  or its parent (a building's `Model`) is `Disabled`, its live particles
+  now fade out over `HIDDEN_FADE_S` (0.25 s, multiplying the layer's
+  alpha) and its rings are then cleared, its ribbons stop and its light
+  layers are released at once; before, the smoke, sparks and burst lights
+  of a hidden building played out their full lifetimes over empty ground.
+  Showing it again resets the fade.  `Emitter.enabled = false` is
+  unchanged: spawning stops and live particles die naturally.  New
+  `ParticleRing::clear` (#136).
 
 ## [0.3.3] - 2026-10-17
 

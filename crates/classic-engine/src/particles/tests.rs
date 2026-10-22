@@ -17,7 +17,11 @@ const LIB: &str = r#"{"effects":[
   {"name":"rain","layers":[{"type":"particles","name":"drop","max":64,
      "spawn":{"burst":8},"velocity":{"up":[1,1]},"life":[10,10],
      "ground":{"mode":"die","sub_effect":"pop","sub_chance":1}}]},
-  {"name":"zap","layers":[{"type":"ribbon","name":"a","mode":"arc","end":[2,0,0]}]}
+  {"name":"zap","layers":[{"type":"ribbon","name":"a","mode":"arc","end":[2,0,0]}]},
+  {"name":"torch","layers":[
+     {"type":"particles","name":"p","max":4096,"spawn":{"rate":100},"life":[1,1]},
+     {"type":"light","name":"glow","peak":2,"duration":null},
+     {"type":"ribbon","name":"a","mode":"arc","end":[2,0,0]}]}
 ]}"#;
 
 /// A test engine with a flat 32×32 tilemap at height 1 and the test library.
@@ -547,4 +551,91 @@ fn unmatched_node_pattern_falls_back_to_the_parent_ground_point() {
     assert!(inst.sites.is_empty() && inst.emitting);
     let base = e.attachment_frame(Some("rocket"), None, Vec3::ZERO, Vec3::Z).unwrap().0;
     assert!(inst.frame.pos.distance(base) < 1e-4);
+}
+
+fn lights(e: &Engine) -> usize {
+    e.world.query::<&Light>().iter().count()
+}
+
+fn torch_inst(e: &Engine) -> &Instance {
+    e.particles.instances.iter().find(|i| i.effect.name == "torch").unwrap()
+}
+
+fn ribbons_live(e: &Engine) -> bool {
+    torch_inst(e).layers.iter().any(|l| matches!(l, LayerRt::Ribbon(r) if !r.strands.is_empty()))
+}
+
+#[test]
+fn hidden_fade_ramps_linearly_to_zero() {
+    assert_eq!(hidden_fade(None, 10.0), 1.0);
+    assert_eq!(hidden_fade(Some(10.0), 10.0), 1.0);
+    assert!((hidden_fade(Some(10.0), 10.0 + HIDDEN_FADE_S as f64 * 0.5) - 0.5).abs() < 1e-5);
+    assert_eq!(hidden_fade(Some(10.0), 10.0 + HIDDEN_FADE_S as f64), 0.0);
+    assert_eq!(hidden_fade(Some(10.0), 99.0), 0.0);
+}
+
+/// Hide the emitter (`hide_parent`: its parent instead) after 1 s of a
+/// steady torch and check the fade, the ring clear, the ribbon stop, the
+/// light release and the reset on un-hide.
+fn hidden_torch_fades_out(hide_parent: bool) {
+    let mut e = engine();
+    let parent = e.world.spawn((
+        Transform::new(Vec3::new(4.0, 4.0, 0.0), Vec3::ONE),
+        classic_core::components::Model::new("none", "tilemap"),
+    ));
+    e.names.insert("building".into(), parent);
+    let mut em = Emitter::new("t::torch", Vec3::new(0.0, 0.0, 2.0));
+    em.parent = Some("building".into());
+    let ent = spawn_emitter(&mut e, "torch", em);
+    let dt = 1.0 / 60.0;
+    run(&mut e, 60, dt);
+    let s = (e.particle_stats().live, lights(&e), ribbons_live(&e));
+    assert!(s.0 > 90 && s.1 == 1 && s.2, "steady torch: {s:?}");
+
+    let hidden = if hide_parent { parent } else { ent };
+    e.world.insert_one(hidden, classic_core::components::Disabled).unwrap();
+    run(&mut e, 1, dt);
+    let at = torch_inst(&e).hidden_at.expect("hidden");
+    assert_eq!(lights(&e), 0, "lights go out at once");
+    assert!(!ribbons_live(&e), "ribbons stop at once");
+    let live = e.particle_stats().live;
+    assert!(live > 80, "particles stay for the fade: {live}");
+    run(&mut e, 6, dt); // 0.1 s in
+    let f = hidden_fade(Some(at), e.particles.clock);
+    assert!((f - (1.0 - 6.0 * dt / HIDDEN_FADE_S)).abs() < 1e-3, "fading: {f}");
+    run(&mut e, 10, dt); // past 0.25 s, well inside the 1 s particle life
+    assert_eq!(e.particle_stats().live, 0, "rings cleared after the fade");
+    assert_eq!(e.particle_stats().instances, 1, "the instance outlives the hide");
+
+    e.world.remove_one::<classic_core::components::Disabled>(hidden).unwrap();
+    run(&mut e, 30, dt);
+    let inst = torch_inst(&e);
+    assert!(inst.hidden_at.is_none(), "un-hide resets the fade");
+    assert_eq!(hidden_fade(inst.hidden_at, e.particles.clock), 1.0);
+    assert!(e.particle_stats().live > 40 && lights(&e) == 1 && ribbons_live(&e));
+}
+
+#[test]
+fn hidden_emitter_fades_out_and_releases_its_lights() {
+    hidden_torch_fades_out(false);
+}
+
+#[test]
+fn hidden_parent_model_fades_its_emitters_out() {
+    hidden_torch_fades_out(true);
+}
+
+#[test]
+fn disabled_emitter_lets_particles_die_naturally() {
+    let mut e = engine();
+    let ent = spawn_emitter(&mut e, "torch", Emitter::new("t::torch", Vec3::new(5.0, -5.0, 1.0)));
+    let dt = 1.0 / 60.0;
+    run(&mut e, 60, dt);
+    e.world.get::<&mut Emitter>(ent).unwrap().enabled = false;
+    run(&mut e, 30, dt); // 0.5 s: past a fade, inside the 1 s life
+    assert!(torch_inst(&e).hidden_at.is_none(), "`enabled = false` is not hiding");
+    let live = e.particle_stats().live;
+    assert!((40..=60).contains(&live), "the last 0.5 s of births live on: {live}");
+    run(&mut e, 32, dt);
+    assert_eq!(e.particle_stats().live, 0, "then die of old age");
 }
