@@ -1,9 +1,12 @@
 //! Bloom (M4 of the particle plan): emissive particles, arcs and flashes glow.
 //!
 //! Applied after the particle phase and before the UI: the main target's
-//! colour is blitted to a texture, bright-passed into a half-res target
-//! (soft-knee luminance threshold), blurred (separable Gaussian) at half and
-//! quarter resolution, and added back onto the main target.  Everything is
+//! colour is bright-passed into a half-res target (soft-knee luminance
+//! threshold), blurred (separable Gaussian) at half and quarter resolution,
+//! and added back onto the main target.  An offscreen main target (headless,
+//! golden runs) is sampled directly through a `LINEAR` sampler object; only
+//! the default framebuffer (a window, a canvas), which cannot be sampled, is
+//! first blitted to a texture.  Everything is
 //! RGBA8 (no float render targets, so WebGL2 needs no extension); the engine
 //! runs it only on frames with something emissive on screen, so scenes
 //! without effects are pixel-identical.
@@ -12,9 +15,12 @@ use glow::HasContext;
 
 use crate::{Gfx, GlFrameBuffer};
 
-/// Bloom render targets: the full-res scene copy plus two ping-pong pairs.
+/// Bloom render targets: two ping-pong pairs, plus the full-res scene copy
+/// when the main target is the default framebuffer (created on first use).
 pub struct BloomTargets {
-    src: GlFrameBuffer,
+    width: u32,
+    height: u32,
+    src: Option<GlFrameBuffer>,
     half: [GlFrameBuffer; 2],
     quarter: [GlFrameBuffer; 2],
 }
@@ -41,14 +47,16 @@ fn set_linear(gl: &glow::Context, tex: glow::Texture) {
 impl BloomTargets {
     fn new(gl: &glow::Context, w: u32, h: u32) -> Self {
         Self {
-            src: linear_target(gl, w, h),
+            width: w,
+            height: h,
+            src: None,
             half: [linear_target(gl, w / 2, h / 2), linear_target(gl, w / 2, h / 2)],
             quarter: [linear_target(gl, w / 4, h / 4), linear_target(gl, w / 4, h / 4)],
         }
     }
 
     fn size(&self) -> (u32, u32) {
-        (self.src.width, self.src.height)
+        (self.width, self.height)
     }
 }
 
@@ -65,29 +73,44 @@ impl Gfx {
         if self.bloom.as_ref().map(|b| b.size()) != Some((w, h)) {
             self.bloom = Some(BloomTargets::new(&self.gl, w, h));
         }
+        // The scene colour: the offscreen main target's own texture, else a
+        // copy of the default framebuffer.
+        let direct = self.render_target.as_ref().map(|rt| rt.texture);
+        if direct.is_none() {
+            let b = self.bloom.as_mut().expect("bloom targets");
+            if b.src.is_none() {
+                b.src = Some(linear_target(&self.gl, w, h));
+            }
+        }
         let gl = &self.gl;
         let b = self.bloom.as_ref().expect("bloom targets");
+        let scene = match (direct, b.src.as_ref()) {
+            (Some(tex), _) => tex,
+            (None, Some(src)) => {
+                unsafe {
+                    // Default framebuffer -> `src` (a resolve when it is
+                    // multisampled; same size, so that is allowed).
+                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+                    gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(src.fbo()));
+                    gl.blit_framebuffer(
+                        0,
+                        0,
+                        w as i32,
+                        h as i32,
+                        0,
+                        0,
+                        w as i32,
+                        h as i32,
+                        glow::COLOR_BUFFER_BIT,
+                        glow::NEAREST,
+                    );
+                }
+                src.texture
+            }
+            (None, None) => unreachable!("created above"),
+        };
 
         unsafe {
-            // Scene colour -> `src` (a resolve when the default framebuffer
-            // is multisampled; same size, so that is allowed).
-            gl.bind_framebuffer(
-                glow::READ_FRAMEBUFFER,
-                self.render_target.as_ref().map(|rt| rt.fbo()),
-            );
-            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(b.src.fbo()));
-            gl.blit_framebuffer(
-                0,
-                0,
-                w as i32,
-                h as i32,
-                0,
-                0,
-                w as i32,
-                h as i32,
-                glow::COLOR_BUFFER_BIT,
-                glow::NEAREST,
-            );
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
             gl.disable(glow::BLEND);
             gl.disable(glow::DEPTH_TEST);
@@ -96,23 +119,29 @@ impl Gfx {
         }
 
         let thr = self.shader("bloomThreshold");
-        let pass = |target: &GlFrameBuffer, src: &GlFrameBuffer, t: f32| {
+        let pass = |target: &GlFrameBuffer, src: glow::Texture, (sw, sh): (u32, u32), t: f32| {
             target.bind(gl);
             unsafe {
                 gl.viewport(0, 0, target.width as i32, target.height as i32);
                 gl.active_texture(glow::TEXTURE0 + BLOOM_UNIT_A);
-                gl.bind_texture(glow::TEXTURE_2D, Some(src.texture));
+                gl.bind_texture(glow::TEXTURE_2D, Some(src));
             }
             thr.bind(gl);
             thr.uniform_1i(gl, "src_tex", BLOOM_UNIT_A as i32);
-            thr.uniform_vec2(gl, "src_texel", &[0.5 / src.width as f32, 0.5 / src.height as f32]);
+            thr.uniform_vec2(gl, "src_texel", &[0.5 / sw as f32, 0.5 / sh as f32]);
             thr.uniform_1f(gl, "threshold", t);
             thr.uniform_1f(gl, "knee", 0.25);
             self.draw_post_quad(thr);
         };
-        pass(&b.half[0], &b.src, threshold);
+        // The main target's texture keeps its own (NEAREST) filtering for
+        // every other use; a sampler object makes this one read LINEAR, as
+        // the copy's texture is (the bright pass's 4 taps cover 16 texels).
+        unsafe { gl.bind_sampler(BLOOM_UNIT_A, Some(self.particle_sampler)) };
+        pass(&b.half[0], scene, (w, h), threshold);
+        unsafe { gl.bind_sampler(BLOOM_UNIT_A, None) };
         self.blur(&b.half[0], &b.half[1]);
-        pass(&b.quarter[0], &b.half[0], -1.0);
+        let half = &b.half[0];
+        pass(&b.quarter[0], half.texture, (half.width, half.height), -1.0);
         self.blur(&b.quarter[0], &b.quarter[1]);
         self.blur(&b.quarter[0], &b.quarter[1]);
 

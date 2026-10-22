@@ -1002,8 +1002,11 @@ form.  No transform feedback, no per-frame CPU simulation.
   displacement polylines expanded to camera-facing strips in pre-camera
   pixels with a window depth (same projection as `mesh.vert`), drawn
   additively in one call.
-- **Bloom** (`bloom.rs`): blit the main colour to a texture, soft-knee
-  bright-pass into half res, separable 5-tap-bilinear Gaussian at half and
+- **Bloom** (`bloom.rs`): soft-knee bright-pass of the main colour into
+  half res — straight from the offscreen main target's texture (through the
+  `LINEAR` particle sampler object, leaving the texture's own `NEAREST`
+  filter alone), or, when the main target is the default framebuffer (a
+  window, a canvas: not sampleable), from a lazily created blit copy — separable 5-tap-bilinear Gaussian at half and
   quarter res, additive composite.  RGBA8 only (no float RT on WebGL2).
   Always on (no toggle); the engine skips it only on frames with nothing
   emissive live, so effect-free scenes are pixel-identical.

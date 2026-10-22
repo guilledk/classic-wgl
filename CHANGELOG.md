@@ -95,6 +95,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   one).  Shadow edges stay as soft; `buildtest` at 4K on a Radeon 680M:
   zoom 1 from 13.3 to 12.5 ms a frame, zoom 0.15 from 6.7 to 6.6 ms
   (#143).
+- Bloom bright-passes straight from an offscreen main target.  It
+  copied the full-resolution scene colour to a texture every bloom
+  frame; with an offscreen main target (headless and golden runs) it now
+  samples that target's texture through a `LINEAR` sampler object, and
+  only the default framebuffer (a window, a canvas) is still copied
+  (the copy target is created on first use).  Frames are pixel-identical;
+  `buildtest` at 4K on a Radeon 680M: the 0.56 ms copy is gone, zoom 1
+  from 12.5 to 12.2 ms a frame (#144).
 
 ### Fixed
 
