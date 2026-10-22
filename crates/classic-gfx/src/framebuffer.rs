@@ -4,8 +4,9 @@ use glow::HasContext;
 
 /// A depth-only framebuffer: a `DEPTH_COMPONENT24` texture attached to
 /// `DEPTH_ATTACHMENT` with no color attachment (`draw_buffers([NONE])`).  Used
-/// for the directional shadow map; the depth texture is sampled as a
-/// `sampler2D` in the lit shaders (manual `step` compare, no PCF).
+/// for the directional shadow map; the depth texture is a hardware shadow
+/// texture ([`set_shadow_compare`]: `COMPARE_REF_TO_TEXTURE`, `LEQUAL`,
+/// `LINEAR`), sampled as a `sampler2DShadow` in the lit shaders.
 pub struct DepthFramebuffer {
     pub(crate) fbo: glow::Framebuffer,
     pub(crate) depth_tex: glow::Texture,
@@ -30,18 +31,7 @@ impl DepthFramebuffer {
                 glow::UNSIGNED_INT,
                 glow::PixelUnpackData::Slice(None),
             );
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
+            set_shadow_compare(gl);
             gl.bind_texture(glow::TEXTURE_2D, None);
 
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
@@ -64,6 +54,52 @@ impl DepthFramebuffer {
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
         }
+    }
+}
+
+/// Make the bound `TEXTURE_2D` (a depth texture) a hardware shadow
+/// texture: compare `r` (the reference) `<=` the stored depth, filtered
+/// `LINEAR` (so each lookup is a bilinear 2x2 PCF), clamped at the edges.
+/// WebGL 2 supports compare mode and `LINEAR` comparison filtering on
+/// `DEPTH_COMPONENT24`, and rejects a draw whose `sampler2DShadow` reads a
+/// texture without a compare mode.
+pub(crate) fn set_shadow_compare(gl: &glow::Context) {
+    unsafe {
+        for (p, v) in [
+            (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+            (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_COMPARE_MODE, glow::COMPARE_REF_TO_TEXTURE),
+            (glow::TEXTURE_COMPARE_FUNC, glow::LEQUAL),
+        ] {
+            gl.tex_parameter_i32(glow::TEXTURE_2D, p, v as i32);
+        }
+    }
+}
+
+/// A 1x1 shadow texture at depth 1 (everything lit), bound to the shadow
+/// unit when a lit draw has no shadow map, so the shader's `sampler2DShadow`
+/// always reads a compare-mode depth texture on its own unit.
+pub(crate) fn shadow_placeholder(gl: &glow::Context) -> glow::Texture {
+    unsafe {
+        let tex = gl.create_texture().expect("create shadow placeholder");
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        let one = u32::MAX.to_le_bytes();
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::DEPTH_COMPONENT24 as i32,
+            1,
+            1,
+            0,
+            glow::DEPTH_COMPONENT,
+            glow::UNSIGNED_INT,
+            glow::PixelUnpackData::Slice(Some(&one)),
+        );
+        set_shadow_compare(gl);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        tex
     }
 }
 

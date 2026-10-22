@@ -86,6 +86,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   680M: zoom 1 from 16.3 to 13.3 ms a frame (model pass GPU 7.9 to
   5.0 ms), zoom 0.15 from 7.2 to 6.7 ms.  `Gfx::draw_model` takes the
   `alpha_test` flag (#142).
+- The sun shadow lookup uses hardware depth compare.  The lit shaders
+  sampled the shadow map 9 times per fragment and compared by hand (3x3
+  box PCF); the map is now a `sampler2DShadow` (`COMPARE_REF_TO_TEXTURE`,
+  `LEQUAL`, `LINEAR`) read with 4 bilinear taps on the texel corners, a
+  tent over the same 3x3 texels, in one shared, pinned block.  Draws
+  without a shadow bind a 1x1 compare-mode placeholder (WebGL 2 requires
+  one).  Shadow edges stay as soft; `buildtest` at 4K on a Radeon 680M:
+  zoom 1 from 13.3 to 12.5 ms a frame, zoom 0.15 from 6.7 to 6.6 ms
+  (#143).
 
 ### Fixed
 

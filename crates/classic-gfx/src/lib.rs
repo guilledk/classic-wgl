@@ -169,6 +169,9 @@ pub struct Gfx {
     /// target, or the model pass target), for the grid lookup.
     pass_target: Cell<(u32, u32)>,
     shadow_map: Option<DepthFramebuffer>,
+    /// Bound in place of the shadow map on draws without one (see
+    /// `framebuffer::shadow_placeholder`).
+    shadow_placeholder: glow::Texture,
     /// The 3D-model pixelation target (see `model_pass`), created lazily.
     model_target: Option<ModelTarget>,
     /// Bloom post targets (see `bloom`), created lazily.
@@ -190,6 +193,7 @@ impl Gfx {
         let light_grid = light_grid::LightGridGpu::new(&gl);
         let particle_noise = particles::noise_texture(&gl);
         let particle_sampler = particles::linear_sampler(&gl);
+        let shadow_placeholder = framebuffer::shadow_placeholder(&gl);
         Self {
             gl,
             shaders: HashMap::new(),
@@ -202,6 +206,7 @@ impl Gfx {
             light_grid,
             pass_target: Cell::new((1, 1)),
             shadow_map: None,
+            shadow_placeholder,
             model_target: None,
             bloom: None,
             particle_noise,

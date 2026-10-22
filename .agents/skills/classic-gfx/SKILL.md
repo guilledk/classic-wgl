@@ -768,29 +768,38 @@ Three places must agree exactly, or a sprite falls in its own shadow:
 - The pass runs in `Engine::frame` **before Phase 1** and attaches the resulting
   `ShadowSettings` to all three `RenderSettings` (nav, tilemap, sprite).
 
-### Shader (`iso_tilemap.frag`, `sheet.frag`)
+### Shader (`iso_tilemap.frag`, `sheet.frag`, `mesh.frag`)
+
+The lookup is one byte-identical `SUN SHADOW` block in all three lit shaders
+(pinned by `lit_shaders_share_the_sun_shadow_block`).  `shadow_map` is a
+**hardware shadow texture**: `uniform highp sampler2DShadow`, the depth
+texture set `COMPARE_REF_TO_TEXTURE` / `LEQUAL` / `LINEAR`
+(`framebuffer::set_shadow_compare`), so each `texture()` returns the bilinear
+blend of a 2x2 depth compare (supported by WebGL 2 on `DEPTH_COMPONENT24`).
 
 ```glsl
-float shadowSample(vec2 suv, float fragDepth) {
-    float stored = texture(shadow_map, suv).r;
-    return (stored + shadow_bias < fragDepth) ? 0.0 : 1.0;
-}
 // `n` is the receiver normal, in light space — the normal-offset direction.
 float shadowFactor(vec3 lightPos, vec3 n) {
     vec4 lp = light_view_proj * vec4(lightPos + n * shadow_normal_offset, 1.0);
     vec3 ndc = lp.xyz / lp.w;
     vec2 suv = ndc.xy * 0.5 + 0.5;
     if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) return 1.0;
-    float fragDepth = ndc.z * 0.5 + 0.5;
-    float acc = 0.0;                                  // 3x3 PCF
-    for (int x = -1; x <= 1; x++)
-        for (int y = -1; y <= 1; y++)
-            acc += shadowSample(suv + vec2(float(x), float(y)) * shadow_texel, fragDepth);
-    return mix(shadow_strength, 1.0, acc / 9.0);      // + strength floor
+    float ref = ndc.z * 0.5 + 0.5 - shadow_bias;      // lit if frag <= stored + bias
+    vec2 h = 0.5 * shadow_texel;                      // 4 taps on the texel corners:
+    float shadow = 0.25 * (texture(shadow_map, vec3(suv + vec2(-h.x, -h.y), ref))
+        + /* (h.x, -h.y), (-h.x, h.y), (h.x, h.y) */ ...);  // a [1 2 1]^2/16 tent
+    return mix(shadow_strength, 1.0, shadow);         // + strength floor
 }
 // ... diff = max(dot(n, light_direction), 0.0);
 //     if (use_shadow > 0.5) diff *= shadowFactor(vLightPos, n);
 ```
+
+The four corner taps weigh the same 3x3 texels the old 9-fetch box PCF did
+(`four_bilinear_taps_make_a_3x3_tent`).  **Every draw with a lit program must
+bind a compare-mode depth texture to `SHADOW_MAP_UNIT`**: WebGL 2 rejects a
+`sampler2DShadow` reading a texture without a compare mode, and the uniform's
+default unit 0 holds the albedo `sampler2D`.  Draws without a shadow map go
+through `bind_no_shadow`, which binds a 1x1 placeholder (`shadow_placeholder`).
 
 ### Debugging shadow geometry
 
