@@ -27,6 +27,7 @@ pub mod inventory;
 pub mod inventory_ui;
 pub mod light;
 pub mod particles;
+pub mod scripted_input;
 pub mod selection;
 pub mod shadow;
 pub mod ui;
@@ -229,6 +230,9 @@ pub struct Engine {
     pub guest_flags: HashMap<String, bool>,
     pub scroll_speed: f32,
     pub input: InputState,
+    /// Keys a test scenario presses/holds, merged into `input` right after
+    /// the platform snapshot each frame (see [`scripted_input`]).
+    pub scripted_input: scripted_input::ScriptedInput,
     pub show_grid: bool,
     pub light_ambient: [f32; 3],
     pub light_dir: [f32; 3],
