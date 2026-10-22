@@ -22,6 +22,13 @@ uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
 uniform vec2 depth_span;
 uniform float ppm;
+// Size (texels) of the target this pass draws into (half-res inside the
+// particle pass).
+uniform vec2 u_target_px;
+
+// Minimum quad width in target texels (`PARTICLE_MIN_TEXELS` in
+// `particles.rs`, mirrored by `particle_size_floor`).
+#define PARTICLE_MIN_TEXELS 1.5
 
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
@@ -332,6 +339,14 @@ void main(void ) {
     float size = a_misc.y * curve4(u_size_t, u_size_v, lf);
     float half_px = 0.5 * size * ppm;
 
+    // Size floor: a quad under ~a texel wide hits no pixel centre and
+    // vanishes; widen it to PARTICLE_MIN_TEXELS and dim it by the area
+    // ratio (`cover`) so its average light is kept at any zoom.
+    mat4 pc = projection_matrix * camera_matrix;
+    float texPerPx = 0.5 * u_target_px.x * abs(pc[0][0]);
+    float minHalf = texPerPx > 0.0 ? 0.5 * PARTICLE_MIN_TEXELS / texPerPx : 0.0;
+    float cover = 1.0;
+
     float viewZ;
     vec2 sc = toScreen(p, viewZ);
     vec2 off;
@@ -343,10 +358,16 @@ void main(void ) {
         float len = length(axis);
         vec2 dir = len > 1e-3 ? axis / len : vec2(1.0, 0.0);
         vec2 perp = vec2(-dir.y, dir.x);
+        float hp = max(half_px, minHalf);
+        cover = ((0.5 * len + half_px) * half_px) / max((0.5 * len + hp) * hp, 1e-12);
+        half_px = hp;
         float halfL = 0.5 * len + half_px;
         sc = 0.5 * (sc + sc1);
         off = dir * corner.x * halfL + perp * corner.y * half_px;
     } else {
+        float hp = max(half_px, minHalf);
+        cover = (half_px * half_px) / max(hp * hp, 1e-12);
+        half_px = hp;
         float spin = (hash1(9.0) * 2.0 - 1.0) * u_turb.w;
         float a = a_misc.z + spin * t;
         float ca = cos(a);
@@ -363,7 +384,7 @@ void main(void ) {
 
     vec4 col = colorCurve(lf);
     col.rgb *= u_tint;
-    col.a *= u_shape.w;
+    col.a *= u_shape.w * cover;
     vAmbient = vec3(1.0);
     vSunColor = vec3(0.0);
     vSunView = vec3(0.0, 0.0, 1.0);

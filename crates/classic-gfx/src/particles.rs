@@ -348,6 +348,30 @@ impl Default for ParticleLayerUniforms {
     }
 }
 
+/// Minimum on-screen particle width, in texels of the target it draws into
+/// (`PARTICLE_MIN_TEXELS` in `particle.vert`).  A quad narrower than about a
+/// texel covers no pixel centre most of the time and drops out of the image
+/// entirely (zoomed-out sparks and ice crystals at ~0.2 half-res texels);
+/// it is widened to this and its alpha scaled by the area ratio instead, so
+/// a particle keeps its average light at any zoom.
+pub const PARTICLE_MIN_TEXELS: f32 = 1.5;
+
+/// CPU mirror of `particle.vert`'s size floor.  `half_px` is the quad's
+/// half width, `half_len_extra` the extra half length of a streak (`0` for
+/// a billboard, whose quad is square), both in the vertex shader's
+/// pre-camera screen units, and `tex_per_px` the target texels per unit.
+/// Returns the floored half width and the alpha multiplier (old area / new
+/// area, `<= 1`).
+pub fn particle_size_floor(half_px: f32, half_len_extra: f32, tex_per_px: f32) -> (f32, f32) {
+    if tex_per_px <= 0.0 {
+        return (half_px, 1.0);
+    }
+    let min_half = 0.5 * PARTICLE_MIN_TEXELS / tex_per_px;
+    let hp = half_px.max(min_half);
+    let cover = ((half_len_extra + half_px) * half_px) / ((half_len_extra + hp) * hp).max(1e-12);
+    (hp, cover)
+}
+
 /// Texture unit the particle sampler uses (clear of the sprite maps 0..2, the
 /// shadow map 3 and the model composite 4..5).
 const PARTICLE_TEX_UNIT: u32 = 6;
@@ -385,6 +409,8 @@ impl Gfx {
         s.uniform_mat4(gl, "world_matrix", world_matrix);
         s.uniform_vec2(gl, "depth_span", &settings.depth_span);
         s.uniform_1f(gl, "ppm", settings.ppm);
+        let (tw, th) = self.particle_draw_size();
+        s.uniform_vec2(gl, "u_target_px", &[tw as f32, th as f32]);
         s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
         s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
         s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
@@ -646,6 +672,43 @@ mod tests {
         ring.rewrite(|r| r.t_birth -= 0.5);
         assert_eq!(ring.take_dirty(), vec![(0, 4)]);
         assert_eq!(ring.live_count(0.75), 1);
+    }
+
+    #[test]
+    fn size_floor_widens_sub_texel_quads_and_keeps_their_area_light() {
+        // 2 texels per unit: the floor is 0.75 texel half width = 0.375 units.
+        let tpp = 2.0;
+        assert_eq!(particle_size_floor(1.0, 0.0, tpp), (1.0, 1.0), "big quads untouched");
+        assert_eq!(particle_size_floor(0.375, 0.0, tpp), (0.375, 1.0), "exactly at the floor");
+        let (hp, cover) = particle_size_floor(0.1, 0.0, tpp);
+        assert_eq!(hp, 0.375);
+        assert!((cover - (0.1f32 / 0.375).powi(2)).abs() < 1e-6, "billboard: area ratio");
+        // Coverage x area is conserved: the dimmed wide quad carries the
+        // small quad's light.
+        assert!((cover * hp * hp - 0.1 * 0.1).abs() < 1e-6);
+        // A streak only widens: its extra length stays, the ratio is of the
+        // full rectangles.
+        let (hp, cover) = particle_size_floor(0.1, 2.0, tpp);
+        assert_eq!(hp, 0.375);
+        assert!((cover - (2.1 * 0.1) / (2.375 * 0.375)).abs() < 1e-6);
+        // No target size: no floor.
+        assert_eq!(particle_size_floor(0.01, 0.0, 0.0), (0.01, 1.0));
+    }
+
+    #[test]
+    fn size_floor_is_pinned_to_the_vertex_shader() {
+        let vert = crate::shaders::PARTICLE_VERT;
+        let define = format!("#define PARTICLE_MIN_TEXELS {PARTICLE_MIN_TEXELS:?}");
+        assert!(vert.contains(&define), "particle.vert must carry `{define}`");
+        for line in [
+            "float texPerPx = 0.5 * u_target_px.x * abs(pc[0][0]);",
+            "float minHalf = texPerPx > 0.0 ? 0.5 * PARTICLE_MIN_TEXELS / texPerPx : 0.0;",
+            "cover = ((0.5 * len + half_px) * half_px) / max((0.5 * len + hp) * hp, 1e-12);",
+            "cover = (half_px * half_px) / max(hp * hp, 1e-12);",
+            "col.a *= u_shape.w * cover;",
+        ] {
+            assert!(vert.contains(line), "particle.vert drifted from the CPU mirror: {line}");
+        }
     }
 
     #[test]
