@@ -8,6 +8,7 @@ pub mod fields;
 pub mod instrument;
 pub mod inventory;
 pub mod math;
+pub mod meshopt;
 pub mod model;
 pub mod registry;
 pub mod sdf_builder;
