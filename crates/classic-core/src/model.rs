@@ -516,7 +516,8 @@ impl ModelAsset {
 }
 
 /// Parse a self-contained glTF binary (`.glb`) into an [`ModelAsset`],
-/// decoding every embedded image.
+/// decoding every embedded image.  `KHR_mesh_quantization` and
+/// `EXT_meshopt_compression` models are read too ([`crate::model_ext`]).
 pub fn parse_model_glb(bytes: &[u8]) -> Result<ModelAsset> {
     parse_model_glb_with(bytes, |_| None)
 }
@@ -530,6 +531,9 @@ pub fn parse_model_glb_with(
     bytes: &[u8],
     known: impl Fn(&ImageHash) -> Option<(u32, u32)>,
 ) -> Result<ModelAsset> {
+    let normalized =
+        crate::model_ext::normalize_glb(bytes).map_err(|e| anyhow!("failed to parse glb: {e}"))?;
+    let bytes = normalized.as_deref().unwrap_or(bytes);
     let gltf::Gltf { document, blob } =
         gltf::Gltf::from_slice(bytes).map_err(|e| anyhow!("failed to parse glb: {e}"))?;
     let buffers = gltf::import_buffers(&document, None, blob)
@@ -568,10 +572,25 @@ pub fn parse_model_glb_with(
         for prim in mesh.primitives() {
             let reader = prim.reader(|b| Some(&buffers[b.index()]));
             let base = merged.positions.len() as u32;
-            let positions = reader
-                .read_positions()
+            // Positions and normals through our own reader: quantized
+            // (`KHR_mesh_quantization`) integer components too.
+            let positions = prim
+                .get(&gltf::Semantic::Positions)
                 .ok_or_else(|| anyhow!("mesh {:?}: no positions", mesh.name()))?;
-            let normals = reader.read_normals();
+            let positions = crate::model_ext::read_vec3(&positions, &buffers)?;
+            let normals = match prim.get(&gltf::Semantic::Normals) {
+                Some(a) => {
+                    let quantized = a.data_type() != gltf::accessor::DataType::F32;
+                    let mut ns = crate::model_ext::read_vec3(&a, &buffers)?;
+                    if quantized {
+                        for n in &mut ns {
+                            *n = Vec3::from_array(*n).normalize_or_zero().to_array();
+                        }
+                    }
+                    Some(ns)
+                }
+                None => None,
+            };
             let uvs = reader.read_tex_coords(0).map(|r| r.into_f32());
             // First textured primitive's material supplies the mesh's albedo
             // texture (an image index, or a bound ROM atlas; the rocket is a
@@ -1253,6 +1272,215 @@ mod tests {
         bad["materials"][0]["extras"]["classic_atlas"] = serde_json::json!(3);
         let err = parse_model_glb(&glb_from(&bad, &bin)).unwrap_err();
         assert!(err.to_string().contains(ATLAS_EXTRA), "{err}");
+    }
+
+    /// A one-quad, one-clip model written the way classic-roms'
+    /// `encode_models` writes it: `KHR_mesh_quantization` attributes and,
+    /// with `meshopt`, every view `EXT_meshopt_compression`ed (fallback
+    /// buffer 1) with the OCTAHEDRAL / QUATERNION / EXPONENTIAL filters.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn quantized_glb(meshopt: bool) -> Vec<u8> {
+        use serde_json::json;
+        let k = 4.0f32; // the mesh node's folded scale
+        let pos: [[f32; 3]; 4] =
+            [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.5, 1.0], [-1.0, 0.25, 1.0]];
+        let nrm: [[f32; 3]; 4] =
+            [[0.0, 1.0, 0.0], [0.6, 0.8, 0.0], [0.0, 0.8, -0.6], [-0.6, 0.0, 0.8]];
+        let uv: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.25, 0.75]];
+        let idx: [u32; 6] = [0, 1, 2, 0, 2, 3];
+        let times = [0.0f32, 0.5, 1.0];
+        let rot: [[f32; 4]; 3] = [
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.3826834, 0.0, 0.9238795],
+            [0.0, std::f32::consts::FRAC_1_SQRT_2, 0.0, std::f32::consts::FRAC_1_SQRT_2],
+        ];
+        let tr: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.5, 0.0, -2.0], [3.0, 0.125, -4.0]];
+        let q = |v: f32| (v * 32767.0).round() as i16;
+        let i16s =
+            |vals: &[i16]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+        let f32s =
+            |vals: &[f32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+        // plain (filtered-domain) bytes of each view
+        let pos_b =
+            i16s(&pos.iter().flat_map(|p| [q(p[0]), q(p[1]), q(p[2]), 0]).collect::<Vec<_>>());
+        let nrm4: Vec<[f32; 4]> = nrm.iter().map(|n| [n[0], n[1], n[2], 0.0]).collect();
+        let nrm_oct: Vec<[i16; 4]> = meshopt::encode_filter_oct::<i16>(&nrm4, 16);
+        let nrm_plain = {
+            let mut b: Vec<u8> = nrm_oct.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+            if !meshopt {
+                // the decoded view is what a plain glb stores
+                b = crate::meshopt::decode_view(
+                    &meshopt::encode_vertex_buffer_level(&nrm_oct, 2, Some(0)).unwrap(),
+                    4,
+                    8,
+                    crate::meshopt::Mode::Attributes,
+                    crate::meshopt::Filter::Octahedral,
+                )
+                .unwrap();
+            }
+            b
+        };
+        let uv_b: Vec<u8> = uv
+            .iter()
+            .flatten()
+            .flat_map(|v| ((v * 65535.0).round() as u16).to_le_bytes())
+            .collect();
+        let idx_b: Vec<u8> = idx.iter().flat_map(|v| (*v as u16).to_le_bytes()).collect();
+        let t_b = f32s(&times);
+        let rot_q: Vec<[i16; 4]> = meshopt::encode_filter_quat(&rot, 16);
+        let rot_plain: Vec<u8> = if meshopt {
+            rot_q.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
+        } else {
+            i16s(&rot.iter().flat_map(|r| r.map(q)).collect::<Vec<_>>())
+        };
+        let tr_e: Vec<[u32; 3]> =
+            meshopt::encode_filter_exp(&tr, 20, meshopt::EncodeExpMode::Separate);
+        let tr_plain: Vec<u8> = if meshopt {
+            tr_e.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
+        } else {
+            f32s(&tr.iter().flatten().copied().collect::<Vec<_>>())
+        };
+        // (bytes, stride, count, mode, filter, target)
+        #[allow(clippy::type_complexity)]
+        let views: Vec<(Vec<u8>, usize, usize, &str, &str, Option<u32>)> = vec![
+            (pos_b, 8, 4, "ATTRIBUTES", "NONE", Some(34962)),
+            (nrm_plain, 8, 4, "ATTRIBUTES", "OCTAHEDRAL", Some(34962)),
+            (uv_b, 4, 4, "ATTRIBUTES", "NONE", Some(34962)),
+            (idx_b, 2, 6, "TRIANGLES", "NONE", Some(34963)),
+            (t_b, 4, 3, "ATTRIBUTES", "NONE", None),
+            (rot_plain, 8, 3, "ATTRIBUTES", "QUATERNION", None),
+            (tr_plain, 12, 3, "ATTRIBUTES", "EXPONENTIAL", None),
+        ];
+        let mut bin = Vec::new();
+        let mut vj = Vec::new();
+        let mut fallback = 0usize;
+        for (bytes, stride, count, mode, filter, target) in &views {
+            while !bin.len().is_multiple_of(4) {
+                bin.push(0);
+            }
+            let mut v = json!({ "buffer": 0, "byteOffset": bin.len(), "byteLength": bytes.len() });
+            if meshopt {
+                let enc = match *mode {
+                    "TRIANGLES" => meshopt::encode_index_buffer(&idx, 4).unwrap(),
+                    _ => {
+                        let n = *stride;
+                        let chunks: Vec<[u8; 4]> =
+                            bytes.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+                        let per = n / 4;
+                        let rows: Vec<Vec<[u8; 4]>> =
+                            chunks.chunks(per).map(|c| c.to_vec()).collect();
+                        match per {
+                            1 => meshopt::encode_vertex_buffer_level(
+                                &rows.iter().map(|r| r[0]).collect::<Vec<_>>(),
+                                2,
+                                Some(0),
+                            )
+                            .unwrap(),
+                            2 => meshopt::encode_vertex_buffer_level(
+                                &rows.iter().map(|r| [r[0], r[1]]).collect::<Vec<_>>(),
+                                2,
+                                Some(0),
+                            )
+                            .unwrap(),
+                            _ => meshopt::encode_vertex_buffer_level(
+                                &rows.iter().map(|r| [r[0], r[1], r[2]]).collect::<Vec<_>>(),
+                                2,
+                                Some(0),
+                            )
+                            .unwrap(),
+                        }
+                    }
+                };
+                let decoded_len = if *mode == "TRIANGLES" { count * stride } else { bytes.len() };
+                v = json!({ "buffer": 1, "byteOffset": fallback, "byteLength": decoded_len,
+                    "extensions": { "EXT_meshopt_compression": {
+                        "buffer": 0, "byteOffset": bin.len(), "byteLength": enc.len(),
+                        "byteStride": stride, "count": count, "mode": mode, "filter": filter } } });
+                fallback += decoded_len.div_ceil(4) * 4;
+                bin.extend_from_slice(&enc);
+            } else {
+                bin.extend_from_slice(bytes);
+            }
+            if *stride != 2 && target == &Some(34962) && (*stride == 8) {
+                v["byteStride"] = json!(stride);
+            }
+            if let Some(t) = target {
+                v["target"] = json!(t);
+            }
+            vj.push(v);
+        }
+        let mut exts = vec!["KHR_mesh_quantization"];
+        let mut buffers = vec![json!({ "byteLength": bin.len() })];
+        if meshopt {
+            exts.push("EXT_meshopt_compression");
+            buffers.push(json!({ "byteLength": fallback, "extensions": { "EXT_meshopt_compression": { "fallback": true } } }));
+        }
+        let rot_acc = json!({ "bufferView": 5, "componentType": 5122, "normalized": true, "count": 3, "type": "VEC4" });
+        let doc = json!({
+            "asset": { "version": "2.0" }, "scene": 0, "scenes": [{ "nodes": [0] }],
+            "extensionsUsed": exts, "extensionsRequired": exts,
+            "nodes": [{ "name": "body", "mesh": 0, "scale": [k, k, k] }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 0 }] }],
+            "materials": [{ "name": "kit", "extras": { "classic_atlas": "ns::kit_atlas" } }],
+            "buffers": buffers,
+            "bufferViews": vj,
+            "accessors": [
+                { "bufferView": 0, "componentType": 5122, "normalized": true, "count": 4, "type": "VEC3", "min": [-32767, 0, -32767], "max": [32767, 16384, 32767] },
+                { "bufferView": 1, "componentType": 5122, "normalized": true, "count": 4, "type": "VEC3" },
+                { "bufferView": 2, "componentType": 5123, "normalized": true, "count": 4, "type": "VEC2" },
+                { "bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR" },
+                { "bufferView": 4, "componentType": 5126, "count": 3, "type": "SCALAR", "min": [0.0], "max": [1.0] },
+                rot_acc,
+                { "bufferView": 6, "componentType": 5126, "count": 3, "type": "VEC3" }
+            ],
+            "animations": [{ "name": "spin", "channels": [
+                { "sampler": 0, "target": { "node": 0, "path": "rotation" } },
+                { "sampler": 1, "target": { "node": 0, "path": "translation" } }],
+                "samplers": [{ "input": 4, "output": 5 }, { "input": 4, "output": 6 }] }]
+        });
+        glb_from(&doc, &bin)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn quantized_and_meshopt_models_decode_like_their_source() {
+        for meshopt in [false, true] {
+            let asset = parse_model_glb(&quantized_glb(meshopt))
+                .unwrap_or_else(|e| panic!("meshopt {meshopt}: {e}"));
+            let mesh = &asset.meshes[0];
+            let close =
+                |a: &[f32], b: &[f32], tol: f32| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol);
+            let want_pos =
+                [[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.5, 1.0], [-1.0, 0.25, 1.0]];
+            for (p, w) in mesh.positions.iter().zip(want_pos) {
+                assert!(close(p, &w, 1.0 / 32767.0), "meshopt {meshopt}: position {p:?} vs {w:?}");
+            }
+            for (n, w) in mesh.normals.iter().zip([
+                [0.0, 1.0, 0.0],
+                [0.6, 0.8, 0.0],
+                [0.0, 0.8, -0.6],
+                [-0.6, 0.0, 0.8],
+            ]) {
+                assert!(close(n, &w, 2e-4), "meshopt {meshopt}: normal {n:?} vs {w:?}");
+                assert!((Vec3::from_array(*n).length() - 1.0).abs() < 1e-5, "renormalized");
+            }
+            assert!(close(&mesh.uvs[3], &[0.25, 0.75], 1.0 / 65535.0));
+            assert_eq!(mesh.indices, [0, 1, 2, 0, 2, 3], "meshopt {meshopt}");
+            assert_eq!(mesh.atlas.as_deref(), Some("ns::kit_atlas"));
+            // the folded dequantization: the node scale carries the extent
+            let world = asset.node_world_transforms(0, 0.0);
+            let p = world[0].transform_point3(Vec3::from_array(mesh.positions[2]));
+            assert!((p - Vec3::new(4.0, 2.0, 4.0)).length() < 1e-3, "{p:?}");
+            let clip = &asset.clips[0];
+            assert!((clip.duration - 1.0).abs() < 1e-6);
+            let w = asset.node_world_transforms(0, 1.0)[0];
+            let (_, r, t) = w.to_scale_rotation_translation();
+            assert!(
+                r.angle_between(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)) < 1e-3,
+                "meshopt {meshopt}: {r:?}"
+            );
+            assert!((t - Vec3::new(3.0, 0.125, -4.0)).length() < 1e-4, "meshopt {meshopt}: {t:?}");
+        }
     }
 
     #[test]

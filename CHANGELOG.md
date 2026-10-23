@@ -27,6 +27,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   alpha-tested path, and the glb resolves the texture by the key when it
   loads (else its bare name, for a single-ROM boot).  Embedded images work
   as before (#152).
+- `parse_model_glb` reads `KHR_mesh_quantization` and
+  `EXT_meshopt_compression` models (both in `extensionsRequired`, which
+  the `gltf` crate rejects): `classic_core::model_ext::normalize_glb`
+  decodes every compressed buffer view into buffer 0 (dropping the
+  fallback buffers) and strips both extensions before the `gltf` parse,
+  and positions / normals are read by component type (normalized
+  int8/int16 too; quantized normals renormalized), UVs and rotation keys
+  through the crate's own normalized readers.  Positions dequantize
+  through the mesh node's TRS, as the encoder folds them; the mesh is
+  still uploaded as `f32` (#153).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
