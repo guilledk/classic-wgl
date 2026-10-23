@@ -56,6 +56,10 @@ pub struct ModelMesh {
     /// Index into [`ModelAsset::images`] for the mesh's albedo texture, or
     /// `None` for an untextured (solid colour) mesh.
     pub image: Option<usize>,
+    /// The ROM catalog texture the material binds as its albedo instead of
+    /// an embedded image ([`ATLAS_EXTRA`], `"<ns>::<texture>"`).  Wins over
+    /// [`Self::image`] when both are present.
+    pub atlas: Option<String>,
     /// The team-colour region of the albedo texture, from the textured
     /// material's [`TEAM_RECT_EXTRA`] extra: `[u0, v0, u1, v1]` in TEXCOORD_0
     /// space.  `None` when the material carries no team region (the mesh is
@@ -95,8 +99,9 @@ pub struct ModelMesh {
 /// texel edges selects exactly its texels under `NEAREST` sampling).
 ///
 /// The rect is read from the material that supplies the mesh's albedo
-/// texture (the first textured primitive's), like [`ModelMesh::image`]; an
-/// untextured material's rect is ignored.  A present but malformed value fails
+/// texture (the first textured primitive's: an image or an [`ATLAS_EXTRA`]
+/// binding), like [`ModelMesh::image`]; an untextured material's rect is
+/// ignored.  A present but malformed value fails
 /// the parse.  Applied when a `Model` sets `tint` (see
 /// `classic_core::components::Model::tint`), a multiplier in the same space
 /// as the texture's stored values (sRGB-encoded colours for sRGB textures,
@@ -123,6 +128,21 @@ pub const TEAM_RECT_EXTRA: &str = "classic_team_rect";
 /// every strength with `emissive` (see
 /// `classic_core::components::Model::emissive`).
 pub const EMISSIVE_EXTRA: &str = "classic_emissive";
+
+/// The glTF material `extras` key binding a ROM catalog texture as the
+/// albedo.
+///
+/// **Contract (written by classic-roms' `encode_models`, read by
+/// [`parse_model_glb`]):** a material's `extras` may carry
+/// `"classic_atlas": "<ns>::<texture>"`, a non-empty string naming a texture
+/// of the ROM catalog (`textures[]`, the PNG the ROM ships once) under
+/// the engine's namespace-qualified texture key.  The material's albedo is
+/// that texture, sampled with `TEXCOORD_0` exactly like a `baseColorTexture`
+/// (so the material needs no image, texture or sampler of its own), and its
+/// [`TEAM_RECT_EXTRA`] / [`EMISSIVE_EXTRA`] name regions of it.  Atlases are
+/// opaque RGB: a bound mesh never takes the alpha-tested path.  A present but
+/// malformed value fails the parse.
+pub const ATLAS_EXTRA: &str = "classic_atlas";
 
 /// Most [`EMISSIVE_EXTRA`] entries one material may carry (the `mesh.frag`
 /// uniform array size).
@@ -218,7 +238,9 @@ impl AlphaMask {
 /// [`AlphaMask`] of a mesh's albedo image (`None` = nothing cut).
 pub fn mark_alpha_test<'a>(asset: &mut ModelAsset, mask: impl Fn(usize) -> Option<&'a AlphaMask>) {
     for mesh in &mut asset.meshes {
-        let cut = mesh.image.and_then(&mask).is_some_and(|m| m.mesh_hits(&mesh.uvs, &mesh.indices));
+        // A bound atlas (opaque RGB) replaces the image: nothing to cut.
+        let cut = mesh.atlas.is_none()
+            && mesh.image.and_then(&mask).is_some_and(|m| m.mesh_hits(&mesh.uvs, &mesh.indices));
         mesh.alpha_test = mesh.alpha_material || cut;
     }
 }
@@ -552,27 +574,25 @@ pub fn parse_model_glb_with(
             let normals = reader.read_normals();
             let uvs = reader.read_tex_coords(0).map(|r| r.into_f32());
             // First textured primitive's material supplies the mesh's albedo
-            // texture image index (the rocket is a single shared material
-            // across meshes) and the team region inside that texture.
-            if merged.image.is_none() {
+            // texture (an image index, or a bound ROM atlas; the rocket is a
+            // single shared material across meshes) and the team region
+            // inside that texture.
+            if merged.image.is_none() && merged.atlas.is_none() {
                 let material = prim.material();
                 merged.image = material
                     .pbr_metallic_roughness()
                     .base_color_texture()
                     .map(|t| t.texture().source().index());
+                merged.atlas = material_atlas(&material)?;
                 merged.alpha_material |= material.alpha_mode() != gltf::material::AlphaMode::Opaque;
-                if merged.image.is_some() {
+                if merged.image.is_some() || merged.atlas.is_some() {
                     merged.team_rect = material_team_rect(&material)?;
                     merged.emissive = material_emissive(&material)?;
                 }
             }
-            for p in positions {
-                merged.positions.push(p);
-            }
+            merged.positions.extend(positions);
             if let Some(ns) = normals {
-                for n in ns {
-                    merged.normals.push(n);
-                }
+                merged.normals.extend(ns);
             }
             if let Some(uv) = uvs {
                 for u in uv {
@@ -695,6 +715,22 @@ pub fn parse_model_glb_with(
         .and_then(|s| s.nodes().next().map(|n| n.index()))
         .or_else(|| nodes.iter().position(|n| n.parent.is_none()));
     Ok(ModelAsset { nodes, meshes, clips, images: model_images, root })
+}
+
+/// The [`ATLAS_EXTRA`] of a material: `None` without it; an error when it
+/// is present but not a non-empty string.
+fn material_atlas(material: &gltf::Material<'_>) -> Result<Option<String>> {
+    let Some(raw) = material.extras() else { return Ok(None) };
+    let extras: serde_json::Value = serde_json::from_str(raw.get())
+        .map_err(|e| anyhow!("material {:?}: bad extras: {e}", material.name()))?;
+    match extras.get(ATLAS_EXTRA) {
+        None => Ok(None),
+        Some(serde_json::Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+        Some(v) => bail!(
+            "material {:?}: `{ATLAS_EXTRA}` must be a non-empty \"<ns>::<texture>\" string: {v}",
+            material.name()
+        ),
+    }
 }
 
 /// The [`TEAM_RECT_EXTRA`] of a material, validated against the contract:
@@ -1158,6 +1194,65 @@ mod tests {
         assert!(asset.meshes[0].alpha_test, "its UVs reach the cut texel");
         mark_alpha_test(&mut asset, |_| None);
         assert!(!asset.meshes[0].alpha_test, "nothing cut");
+    }
+
+    /// Assemble a glb from a JSON document and its BIN chunk.
+    fn glb_from(json: &serde_json::Value, bin: &[u8]) -> Vec<u8> {
+        let mut js = serde_json::to_vec(json).unwrap();
+        while !js.len().is_multiple_of(4) {
+            js.push(b' ');
+        }
+        let mut bin = bin.to_vec();
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let mut glb = b"glTF".to_vec();
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&((12 + 8 + js.len() + 8 + bin.len()) as u32).to_le_bytes());
+        glb.extend_from_slice(&(js.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&js);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
+    #[test]
+    fn classic_atlas_binds_a_rom_texture_without_an_image() {
+        let mut bin = Vec::new();
+        for f in [0f32, 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 1.] {
+            bin.extend_from_slice(&f.to_le_bytes());
+        }
+        let json = serde_json::json!({
+            "asset": { "version": "2.0" }, "scene": 0, "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "name": "body", "mesh": 0 }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0, "TEXCOORD_0": 1 }, "material": 0 }] }],
+            "materials": [{ "name": "kit", "pbrMetallicRoughness": {},
+                "extras": { "classic_atlas": "buildtest::kit_atlas",
+                            "classic_team_rect": [0.0, 0.0, 1.0, 0.25],
+                            "classic_emissive": [{ "rect": [0.5, 0.5, 1.0, 1.0], "strength": 2.0 }] } }],
+            "buffers": [{ "byteLength": bin.len() }],
+            "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 },
+                            { "buffer": 0, "byteOffset": 36, "byteLength": 24 }],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                  "min": [0, 0, 0], "max": [1, 1, 0] },
+                { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2" }]
+        });
+        let mut asset = parse_model_glb(&glb_from(&json, &bin)).unwrap();
+        let mesh = &asset.meshes[0];
+        assert_eq!((mesh.image, mesh.atlas.as_deref()), (None, Some("buildtest::kit_atlas")));
+        assert_eq!(mesh.team_rect, Some([0.0, 0.0, 1.0, 0.25]), "regions of the bound atlas");
+        assert_eq!(mesh.emissive.len(), 1);
+        assert!(asset.images.is_empty());
+        mark_alpha_test(&mut asset, |_| None);
+        assert!(!asset.meshes[0].alpha_test, "a bound atlas is opaque");
+        // a malformed binding fails loudly
+        let mut bad = json.clone();
+        bad["materials"][0]["extras"]["classic_atlas"] = serde_json::json!(3);
+        let err = parse_model_glb(&glb_from(&bad, &bin)).unwrap_err();
+        assert!(err.to_string().contains(ATLAS_EXTRA), "{err}");
     }
 
     #[test]

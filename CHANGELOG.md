@@ -17,6 +17,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   filters.  Tested byte-for-byte against the C library (a native-only
   dev-dependency); the filters within one unit of its SIMD rounding
   (#151).
+- Model atlas binding.  A glb material's `extras` may carry
+  `"classic_atlas": "<ns>::<texture>"`: its albedo is that ROM catalog
+  texture (the lossless PNG the ROM ships once), sampled with TEXCOORD_0
+  like a `baseColorTexture`, so the glb needs no image of its own and a
+  building ships its atlas once instead of in every clip glb.
+  `ModelMesh.atlas` carries it (it wins over an embedded image), the team
+  and emissive rects name regions of it, a bound mesh never takes the
+  alpha-tested path, and the glb resolves the texture by the key when it
+  loads (else its bare name, for a single-ROM boot).  Embedded images work
+  as before (#152).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
