@@ -282,9 +282,9 @@ pub struct Engine {
     pub(crate) pose_scratch: classic_core::model::PoseScratch,
     /// Node indices of a glb by node name / name prefix (`model::NodeIndexCache`).
     pub(crate) node_index: crate::model::NodeIndexCache,
-    /// GPU model meshes keyed by `"{model}::{mesh_index}"`, uploaded from
-    /// [`Self::models`] when a `Gfx` context is present.
-    model_gpu: HashMap<String, classic_gfx::ModelMeshGpu>,
+    /// Per loaded model: GPU meshes (uploaded when a `Gfx` context is
+    /// present) and image texture names, addressed by `model::MeshRef`.
+    model_gpu: crate::model::ModelGpuStore,
     /// Model albedo textures de-duplicated by content: the SHA-256 of an
     /// embedded image's encoded bytes -> the first texture uploaded with it.
     /// Every later model image with the same bytes aliases that GL texture

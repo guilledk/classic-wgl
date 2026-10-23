@@ -14,6 +14,7 @@ mod compressed;
 mod bloom;
 mod buffer;
 mod draw;
+pub use draw::ModelDraws;
 mod framebuffer;
 mod light;
 mod light_grid;
@@ -23,6 +24,7 @@ mod particles;
 pub mod perf;
 mod shader;
 mod shadow;
+pub use shadow::ShadowModels;
 mod texture;
 
 #[cfg(not(target_arch = "wasm32"))]

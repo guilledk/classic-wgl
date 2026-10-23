@@ -5,7 +5,7 @@ use glow::HasContext;
 
 use crate::buffer::vertex_attrib_ptr_f32;
 use crate::{
-    DepthFramebuffer, Gfx, GlBuffer, ModelMeshGpu, SpriteRegion, MODEL_VERTEX_STRIDE,
+    DepthFramebuffer, Gfx, GlBuffer, ModelMeshGpu, Shader, SpriteRegion, MODEL_VERTEX_STRIDE,
     SHADOW_MAP_SIZE, SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET,
 };
 
@@ -80,16 +80,17 @@ impl Gfx {
     /// transform.  Draw model casters with the terrain's constant offset, i.e.
     /// before [`Gfx::set_shadow_sprite_offset`] switches to slope scaling.
     pub fn draw_shadow_model(&self, model: &Mat4, view_proj: &Mat4, mesh: &ModelMeshGpu) {
-        let gl = &self.gl;
+        self.begin_shadow_models(view_proj).draw(model, mesh);
+    }
+
+    /// Start a run of 3D model casters with one `view_proj`: binds the depth
+    /// program and sets the light transform once; [`ShadowModels::draw`]
+    /// then sets only each instance's model matrix.
+    pub fn begin_shadow_models(&self, view_proj: &Mat4) -> ShadowModels<'_> {
         let s = self.shader("shadowDepth");
-        s.bind(gl);
-        vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("vertex_pos"), 3, MODEL_VERTEX_STRIDE, 0);
-        s.uniform_mat4(gl, "model_matrix", model);
-        s.uniform_mat4(gl, "light_view_proj", view_proj);
-        mesh.indices.bind(gl);
-        unsafe {
-            gl.draw_elements(glow::TRIANGLES, mesh.index_count as i32, glow::UNSIGNED_INT, 0);
-        }
+        s.bind(&self.gl);
+        s.uniform_mat4(&self.gl, "light_view_proj", view_proj);
+        ShadowModels { gl: &self.gl, s }
     }
 
     /// Switch the shadow pass to slope-scaled depth offset for sprite casters.
@@ -185,6 +186,26 @@ impl Gfx {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                 gl.viewport(0, 0, self.viewport_w as i32, self.viewport_h as i32);
             }
+        }
+    }
+}
+
+/// A run of model shadow casters ([`Gfx::begin_shadow_models`]).
+pub struct ShadowModels<'a> {
+    gl: &'a glow::Context,
+    s: &'a Shader,
+}
+
+impl ShadowModels<'_> {
+    /// Draw one model mesh instance (world transform `model`) into the
+    /// shadow map.
+    pub fn draw(&self, model: &Mat4, mesh: &ModelMeshGpu) {
+        let (gl, s) = (self.gl, self.s);
+        vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("vertex_pos"), 3, MODEL_VERTEX_STRIDE, 0);
+        s.uniform_mat4(gl, "model_matrix", model);
+        mesh.indices.bind(gl);
+        unsafe {
+            gl.draw_elements(glow::TRIANGLES, mesh.index_count as i32, glow::UNSIGNED_INT, 0);
         }
     }
 }

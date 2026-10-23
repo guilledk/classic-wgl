@@ -641,14 +641,64 @@ impl Gfx {
         }
     }
 
-    /// Draw one mesh instance of a 3D glTF model (`mesh` shader).
+    /// Start a run of 3D model draws ([`Gfx::draw_model_instance`]), all with
+    /// the same camera, `world_matrix` (`iso_camera_matrix`) and lighting.
+    ///
+    /// The per-pass state — projection/camera/world matrices, depth span,
+    /// sun, shadow map and light grid — is set once here on both model
+    /// programs (`mesh` and `meshAlphaTest`; GL keeps uniforms per program),
+    /// and the scoped depth test (`LEQUAL`, depth writes) is switched on
+    /// until [`Gfx::end_model_draws`].  Each instance then sets only what is
+    /// its own.  The pixels are those of drawing each instance with every
+    /// uniform set.
+    pub fn begin_model_draws(
+        &self,
+        camera: &Mat4,
+        world_matrix: &Mat4,
+        settings: &RenderSettings,
+    ) -> ModelDraws<'_> {
+        let gl = &self.gl;
+        let programs = [self.shader("mesh"), self.shader("meshAlphaTest")];
+        // The grid lookup is the same for every instance: compute it once.
+        let clip = crate::clip_from_world(&self.projection(), camera, world_matrix, settings.ppm);
+        let grid = self.light_grid.map_for(&clip, self.pass_target.get());
+        for s in programs {
+            s.bind(gl);
+            self.bind_view(s, camera, &Mat4::IDENTITY, false);
+            s.uniform_mat4(gl, "world_matrix", world_matrix);
+            s.uniform_vec2(gl, "depth_span", &settings.depth_span);
+            s.uniform_1f(gl, "ppm", settings.ppm);
+            s.uniform_1i(gl, "tex_sampler", 0);
+            s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
+            s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
+            s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
+            self.bind_shadow(s, settings);
+            match grid {
+                Some(map) => {
+                    self.light_grid.bind(gl);
+                    s.uniform_vec4(gl, "light_grid_map", &map);
+                    s.uniform_1f(gl, "light_grid_on", 1.0);
+                }
+                None => s.uniform_1f(gl, "light_grid_on", 0.0),
+            }
+        }
+        unsafe {
+            gl.active_texture(glow::TEXTURE0);
+            gl.enable(glow::DEPTH_TEST);
+            gl.depth_func(glow::LEQUAL);
+            gl.depth_mask(true);
+        }
+        ModelDraws { programs, bound: std::cell::Cell::new(Some(1)) }
+    }
+
+    /// Draw one mesh instance of a 3D glTF model inside a
+    /// [`Gfx::begin_model_draws`] run.
     ///
     /// `model` is the node's full world transform in metres (placement ·
-    /// `gltf_to_world` · node world); `world_matrix` is `iso_camera_matrix`.
-    /// The vertex shader writes the canonical camera view depth, so the model
-    /// occludes against terrain and sprites through the shared depth buffer.
-    /// Lighting is the shared world-space block (sun + shadow + point lights).
-    /// Scoped depth test like `draw_tilemap`: enabled, drawn, disabled.
+    /// `gltf_to_world` · node world).  The vertex shader writes the canonical
+    /// camera view depth, so the model occludes against terrain and sprites
+    /// through the shared depth buffer.  Lighting is the shared world-space
+    /// block (sun + shadow + point lights).
     ///
     /// `team` tints the texels of the mesh's team region (only when it is
     /// textured); `None` draws exactly as an untinted mesh.  `emissive` are
@@ -656,34 +706,30 @@ impl Gfx {
     /// multiplier, at most [`crate::MAX_EMISSIVE`] used); empty = no glow.
     /// `alpha_test` selects the `meshAlphaTest` program (cuts texels with
     /// alpha below 0.01); without it nothing is discarded and the draw keeps
-    /// early depth testing.
+    /// early depth testing.  Programs switch only when `alpha_test` does.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_model(
+    pub fn draw_model_instance(
         &self,
+        run: &ModelDraws<'_>,
         model: &Mat4,
-        camera: &Mat4,
-        world_matrix: &Mat4,
         mesh: &ModelMeshGpu,
         texture_name: Option<&str>,
         base_color: &[f32; 4],
         team: Option<&TeamTint>,
         emissive: &[EmissiveRect],
         alpha_test: bool,
-        settings: &RenderSettings,
     ) {
         let gl = &self.gl;
-        let s = self.shader(if alpha_test { "meshAlphaTest" } else { "mesh" });
-
-        s.bind(gl);
-        self.bind_view(s, camera, model, false);
-        s.uniform_mat4(gl, "world_matrix", world_matrix);
-        s.uniform_vec2(gl, "depth_span", &settings.depth_span);
-        s.uniform_1f(gl, "ppm", settings.ppm);
-
+        let which = alpha_test as usize;
+        let s = run.programs[which];
+        if run.bound.get() != Some(which) {
+            s.bind(gl);
+            run.bound.set(Some(which));
+        }
+        s.uniform_mat4(gl, "model_matrix", model);
         match texture_name.and_then(|tn| self.textures.get(tn)) {
             Some(t) => {
                 t.bind(gl, 0);
-                s.uniform_1i(gl, "tex_sampler", 0);
                 s.uniform_1f(gl, "use_texture", 1.0);
             }
             None => s.uniform_1f(gl, "use_texture", 0.0),
@@ -700,28 +746,36 @@ impl Gfx {
         let emissive = &emissive[..emissive.len().min(crate::MAX_EMISSIVE)];
         s.uniform_1f(gl, "emissive_count", emissive.len() as f32);
         if !emissive.is_empty() {
-            let rects: Vec<[f32; 4]> = emissive.iter().map(|e| e.rect).collect();
-            let strengths: Vec<f32> = emissive.iter().map(|e| e.strength).collect();
-            s.uniform_vec4_array(gl, "emissive_rect", &rects);
-            s.uniform_1f_array(gl, "emissive_strength", &strengths);
+            let mut rects = [[0.0f32; 4]; crate::MAX_EMISSIVE];
+            let mut strengths = [0.0f32; crate::MAX_EMISSIVE];
+            for (i, e) in emissive.iter().enumerate() {
+                rects[i] = e.rect;
+                strengths[i] = e.strength;
+            }
+            s.uniform_vec4_array(gl, "emissive_rect", &rects[..emissive.len()]);
+            s.uniform_1f_array(gl, "emissive_strength", &strengths[..emissive.len()]);
         }
-        s.uniform_vec3(gl, "ambient_color", Vec3::from_array(settings.ambient));
-        s.uniform_vec3(gl, "light_direction", Vec3::from_array(settings.light_dir));
-        s.uniform_vec3(gl, "light_color", Vec3::from_array(settings.light_color));
-        self.bind_shadow(s, settings);
-        self.bind_light_grid(s, Some((camera, world_matrix, settings.ppm)));
 
         vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("vertex_pos"), 3, MODEL_VERTEX_STRIDE, 0);
         vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("normal"), 3, MODEL_VERTEX_STRIDE, 12);
         vertex_attrib_ptr_f32(gl, &mesh.vbo, s.attr("tex_coord"), 2, MODEL_VERTEX_STRIDE, 24);
         mesh.indices.bind(gl);
-
+        crate::perf::count("model_draw_calls", 1);
         unsafe {
-            gl.enable(glow::DEPTH_TEST);
-            gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(true);
             gl.draw_elements(glow::TRIANGLES, mesh.index_count as i32, glow::UNSIGNED_INT, 0);
-            gl.disable(glow::DEPTH_TEST);
         }
     }
+
+    /// End a [`Gfx::begin_model_draws`] run (switches the depth test back
+    /// off).
+    pub fn end_model_draws(&self, _run: ModelDraws<'_>) {
+        unsafe { self.gl.disable(glow::DEPTH_TEST) };
+    }
+}
+
+/// A run of model draws ([`Gfx::begin_model_draws`]): the two model programs
+/// with their pass state set, and which one is bound.
+pub struct ModelDraws<'a> {
+    programs: [&'a Shader; 2],
+    bound: std::cell::Cell<Option<usize>>,
 }

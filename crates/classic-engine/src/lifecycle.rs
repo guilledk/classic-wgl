@@ -77,7 +77,7 @@ impl Engine {
             model_generation: 0,
             pose_scratch: Default::default(),
             node_index: Default::default(),
-            model_gpu: HashMap::new(),
+            model_gpu: Default::default(),
             model_textures: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),
             next_ghost_group: 1,
@@ -762,10 +762,11 @@ impl Engine {
                     classic_gfx::perf::phase("shadow_models");
                     // 3D model casters: real geometry, drawn with the terrain's
                     // constant offset (before the sprite slope-scaled switch).
+                    let casters = gfx.begin_shadow_models(&m.view_proj);
                     for draw in &model_draws {
                         for inst in &draw.instances {
-                            if let Some(mesh) = self.model_gpu.get(&inst.mesh_key) {
-                                gfx.draw_shadow_model(&inst.model, &m.view_proj, mesh);
+                            if let Some(mesh) = self.model_gpu.mesh(inst.mesh) {
+                                casters.draw(&inst.model, mesh);
                                 classic_gfx::perf::count("shadow_model_instances", 1);
                             }
                         }
@@ -993,7 +994,7 @@ impl Engine {
         let mut order: Vec<(bool, f32, &crate::model::ModelInstance)> = Vec::new();
         for draw in &model_draws {
             for inst in &draw.instances {
-                if !self.model_gpu.contains_key(&inst.mesh_key) {
+                if self.model_gpu.mesh(inst.mesh).is_none() {
                     continue;
                 }
                 if let Some(ref mut t) = self.trace {
@@ -1003,7 +1004,7 @@ impl Engine {
                         name: &draw.name,
                         model: &inst.model,
                         camera_ignored: false,
-                        texture: inst.texture.as_deref(),
+                        texture: self.model_gpu.texture(inst.mesh),
                         frame: None,
                         // The team tint, only when it applies (untinted
                         // models trace exactly as before).
@@ -1018,20 +1019,22 @@ impl Engine {
         }
         crate::model::sort_model_draw_order(&mut order);
         classic_gfx::perf::count("model_instances", order.len() as u64);
-        for (_, _, inst) in order {
-            let Some(mesh) = self.model_gpu.get(&inst.mesh_key) else { continue };
-            gfx.draw_model(
-                &inst.model,
-                &cam,
-                &iso_camera_matrix(),
-                mesh,
-                inst.texture.as_deref(),
-                &[0.8, 0.8, 0.8, 1.0],
-                inst.team.as_ref(),
-                &inst.emissive,
-                inst.alpha_test,
-                &model_settings,
-            );
+        if !order.is_empty() {
+            let run = gfx.begin_model_draws(&cam, &iso_camera_matrix(), &model_settings);
+            for (_, _, inst) in order {
+                let Some(mesh) = self.model_gpu.mesh(inst.mesh) else { continue };
+                gfx.draw_model_instance(
+                    &run,
+                    &inst.model,
+                    mesh,
+                    self.model_gpu.texture(inst.mesh),
+                    &[0.8, 0.8, 0.8, 1.0],
+                    inst.team.as_ref(),
+                    &inst.emissive,
+                    inst.alpha_test,
+                );
+            }
+            gfx.end_model_draws(run);
         }
         if has_models {
             gfx.end_model_pass();
@@ -1384,7 +1387,7 @@ impl Engine {
                             &buf.vertices,
                             glow::DYNAMIC_DRAW,
                         );
-                        self.sdf_text_gpu.insert(
+                        let old = self.sdf_text_gpu.insert(
                             *entity,
                             SdfTextGpu {
                                 glyph_buf: gb,
@@ -1395,6 +1398,10 @@ impl Engine {
                                 last_scale: scale,
                             },
                         );
+                        // The replaced glyph buffer would otherwise leak.
+                        if let Some(old) = old {
+                            old.glyph_buf.delete(&gfx.gl);
+                        }
                         if let Ok(mut node) =
                             self.world.get::<&mut classic_core::components::UiNode>(*entity)
                         {

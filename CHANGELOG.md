@@ -156,6 +156,21 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   name/prefix) index cache (`Engine::node_indices`), cleared when a
   model reloads.  Frames are pixel-identical; 4K `buildtest`: animator
   1.3 to 0.43 ms, emitter sync 0.59 to 0.37 ms a frame (#148).
+- Model draws set per-pass state once.  `Gfx::begin_model_draws` /
+  `draw_model_instance` / `end_model_draws` replace `Gfx::draw_model`:
+  the camera, sun, shadow-map and light-grid uniforms (and the grid
+  lookup) are set once per pass on both model programs and the depth
+  test once per run, so an instance sets only its own uniforms and
+  switches programs only between the opaque and alpha-tested groups;
+  shadow casters likewise (`Gfx::begin_shadow_models`).  A shader
+  caches uniform-location misses, model instances address their GPU
+  mesh and texture through an engine slot store instead of formatting
+  `"{model}::{mesh}"` keys per frame, emissive uniforms use fixed
+  arrays, and the light UBO and light-grid texture rotate through 3
+  copies (`FRAME_RING`).  `GlBuffer::delete` frees the HUD's per-frame
+  debug buffers and replaced SDF glyph buffers, which leaked.  Frames
+  are pixel-identical; 4K `buildtest` at zoom 0.15: CPU 4.1 to 2.8 ms
+  a frame (#149).
 
 ### Fixed
 

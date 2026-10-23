@@ -99,7 +99,7 @@ test — layering is purely draw-order (z-sort on the render list).
 
 ```
 draw_tilemap()          → ENABLE; draw; DISABLE
-draw_model()            → ENABLE; LEQUAL; depthMask(true); draw; DISABLE
+begin_model_draws()     → ENABLE; LEQUAL; depthMask(true)  (end_model_draws: DISABLE)
 draw_iso_sprite(Normal) → ENABLE; LEQUAL; depthMask(depth_map.is_some());
                            stencil ALWAYS/REPLACE group; draw; DISABLE
 draw_iso_sprite(Ghost)  → ENABLE; GREATER; depthMask(false);
@@ -462,7 +462,7 @@ the field may be absent.
 | `imageSheet` | draw_sprite, draw_iso_sprite | `direct_tex.vert` | `sheet.frag` |
 | `sdf` | draw_sdf | `sdf.vert` | `sdf.frag` |
 | `isoTilemap` | draw_tilemap | `iso_tilemap.vert` | `iso_tilemap.frag` |
-| `mesh` | draw_model | `mesh.vert` | `mesh.frag` |
+| `mesh` | draw_model_instance | `mesh.vert` | `mesh.frag` |
 | `modelComposite` | composite_models | `model_composite.vert` | `model_composite.frag` |
 | `shadowDepth` | draw_shadow_tilemap, draw_shadow_model | `shadow_depth.vert` | `shadow_depth.frag` |
 
@@ -826,7 +826,7 @@ through `bind_no_shadow`, which binds a 1x1 placeholder (`shadow_placeholder`).
 
 ---
 
-## 18. 3D models (`draw_model`, `mesh` shader)
+## 18. 3D models (`begin_model_draws` + `draw_model_instance`, `mesh` shader)
 
 Node-parented glTF meshes (the US Rocket) drawn as real geometry — no billboard,
 no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
@@ -835,8 +835,14 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
 - `ModelMeshGpu::new(gl, positions, normals, uvs, indices)` — interleaved VBO
   `pos(3) normal(3) uv(2)` (`MODEL_VERTEX_STRIDE = 32`) + `u32` index buffer
   (`UNSIGNED_INT` elements are core in WebGL2).
-- `draw_model(model, camera, world_matrix, mesh, texture, base_color, team, settings)`
-  — `model` is the instance's full world matrix
+- `begin_model_draws(camera, world_matrix, settings)` sets the pass state
+  (matrices, depth span, sun, shadow map, light grid) once on both model
+  programs and enables the depth test; then
+  `draw_model_instance(run, model, mesh, texture, base_color, team, emissive,
+  alpha_test)` per instance sets only its own uniforms (programs switch only
+  between the opaque and alpha-tested groups); `end_model_draws(run)`.
+  Shadow casters: `begin_shadow_models(view_proj)` + `ShadowModels::draw`.
+  `model` is the instance's full world matrix
   (`placement · gltf_to_world() · node_world[node]`); `world_matrix` is
   `iso_camera_matrix`.  `mesh.vert` runs the tilemap's canonical view-depth
   formula (`clipPos.z` from `depth_span`), so models occlude terrain/sprites
@@ -866,7 +872,7 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   ALPHA_CUT` (the `AlphaMask` of the albedo, kept with the de-duplicated
   texture).  The main pass traces in render-list order, then draws opaque
   instances **front to back** and the alpha-tested ones last
-  (`sort_model_draw_order`); `draw_model(.., alpha_test, ..)`.  Every kit
+  (`sort_model_draw_order`); `draw_model_instance(.., alpha_test)`.  Every kit
   material is `OPAQUE` and 3 of ~14k `buildtest` meshes reach a cut texel.
 - **Emissive (self-lit) regions** — the asset contract
   (`classic_core::model::EMISSIVE_EXTRA`): a glb material's `extras` may
@@ -876,7 +882,7 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   1`, `0 <= v0 < v1 <= 1`, half-open, on texel edges) and `s` finite `>= 0`.
   Read from the textured material (like the team rect); malformed or more
   than 8 entries fails the parse.  `parse_model_glb` fills
-  `ModelMesh.emissive`; `draw_model(.., emissive: &[EmissiveRect], ..)`
+  `ModelMesh.emissive`; `draw_model_instance(.., emissive: &[EmissiveRect], ..)`
   uploads `emissive_count`/`emissive_rect[8]`/`emissive_strength[8]`, and
   `mesh.frag` adds `albedo × strength` of the **first** rect containing the
   fragment's UV **after** lighting (unlit: no sun, shadow or point light),

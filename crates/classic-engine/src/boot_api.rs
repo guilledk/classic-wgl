@@ -1484,18 +1484,23 @@ impl Engine {
             })
             .collect();
         classic_core::model::mark_alpha_test(&mut asset, |i| masks.get(i)?.as_ref());
-        if let Some(gfx) = self.gfx.as_mut() {
-            for (mi, mesh) in asset.meshes.iter().enumerate() {
-                let gpu = classic_gfx::ModelMeshGpu::new(
-                    &gfx.gl,
-                    &mesh.positions,
-                    &mesh.normals,
-                    &mesh.uvs,
-                    &mesh.indices,
-                );
-                self.model_gpu.insert(format!("{name}::{mi}"), gpu);
-            }
-        }
+        let meshes = match self.gfx.as_ref() {
+            Some(gfx) => asset
+                .meshes
+                .iter()
+                .map(|mesh| {
+                    classic_gfx::ModelMeshGpu::new(
+                        &gfx.gl,
+                        &mesh.positions,
+                        &mesh.normals,
+                        &mesh.uvs,
+                        &mesh.indices,
+                    )
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        self.model_gpu.insert(name, meshes, asset.images.len());
         for (ii, (img, alpha)) in asset.images.iter_mut().zip(masks).enumerate() {
             let tex_name = format!("{name}::image::{ii}");
             if let Some(first) = self.model_textures.get(&img.content_hash) {

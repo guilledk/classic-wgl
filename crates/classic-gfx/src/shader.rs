@@ -14,7 +14,9 @@ use crate::shaders;
 pub struct Shader {
     program: glow::Program,
     attr: HashMap<String, u32>,
-    unif: RefCell<HashMap<String, glow::UniformLocation>>,
+    /// Uniform locations by name; `None` caches a miss (an inactive or
+    /// undeclared uniform), so it is queried from the program only once.
+    unif: RefCell<HashMap<String, Option<glow::UniformLocation>>>,
 }
 
 impl Shader {
@@ -69,7 +71,7 @@ impl Shader {
         let mut unif = HashMap::new();
         for &name in unif_names {
             if let Some(loc) = unsafe { gl.get_uniform_location(program, name) } {
-                unif.insert(name.to_string(), loc);
+                unif.insert(name.to_string(), Some(loc));
             }
         }
 
@@ -93,11 +95,11 @@ impl Shader {
     #[allow(clippy::clone_on_copy)]
     fn unif(&self, gl: &glow::Context, name: &str) -> Option<glow::UniformLocation> {
         if let Some(loc) = self.unif.borrow().get(name) {
-            return Some(loc.clone());
+            return loc.clone();
         }
-        let loc = unsafe { gl.get_uniform_location(self.program, name) }?;
+        let loc = unsafe { gl.get_uniform_location(self.program, name) };
         self.unif.borrow_mut().insert(name.to_string(), loc.clone());
-        Some(loc)
+        loc
     }
 
     // -- uniform setters ---------------------------------------------------
