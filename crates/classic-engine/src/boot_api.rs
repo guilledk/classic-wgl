@@ -1500,7 +1500,12 @@ impl Engine {
                 .collect(),
             None => Vec::new(),
         };
-        self.model_gpu.insert(name, meshes, asset.images.len());
+        let atlases = asset
+            .meshes
+            .iter()
+            .map(|m| m.atlas.as_deref().map(|k| self.model_atlas_texture(k)))
+            .collect();
+        self.model_gpu.insert(name, meshes, asset.images.len(), atlases);
         for (ii, (img, alpha)) in asset.images.iter_mut().zip(masks).enumerate() {
             let tex_name = format!("{name}::image::{ii}");
             if let Some(first) = self.model_textures.get(&img.content_hash) {

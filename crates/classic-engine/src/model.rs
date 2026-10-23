@@ -43,19 +43,38 @@ pub(crate) struct ModelGpuStore {
 
 struct ModelGpuSlot {
     meshes: Vec<classic_gfx::ModelMeshGpu>,
+    /// The embedded images' names, then the bound atlases' (`classic_atlas`).
     images: Vec<String>,
+    /// Per mesh: the index in `images` of its bound atlas, if any.
+    mesh_atlas: Vec<Option<u32>>,
 }
 
 impl ModelGpuStore {
-    /// Register (or replace) `name`'s meshes and `images` image names.
+    /// Register (or replace) `name`'s meshes, its `images` embedded image
+    /// names and, per mesh, the `Gfx.textures` name of a bound atlas
+    /// (`classic_atlas`, resolved by `Engine::model_atlas_texture`).
     pub(crate) fn insert(
         &mut self,
         name: &str,
         meshes: Vec<classic_gfx::ModelMeshGpu>,
         images: usize,
+        atlases: Vec<Option<String>>,
     ) {
-        let images = (0..images).map(|i| format!("{name}::image::{i}")).collect();
-        let slot = ModelGpuSlot { meshes, images };
+        let mut images: Vec<String> = (0..images).map(|i| format!("{name}::image::{i}")).collect();
+        let mesh_atlas = atlases
+            .into_iter()
+            .map(|a| {
+                let a = a?;
+                Some(match images.iter().position(|n| *n == a) {
+                    Some(i) => i as u32,
+                    None => {
+                        images.push(a);
+                        images.len() as u32 - 1
+                    }
+                })
+            })
+            .collect();
+        let slot = ModelGpuSlot { meshes, images, mesh_atlas };
         match self.slots.get(name) {
             Some(&s) => self.models[s as usize] = slot,
             None => {
@@ -73,6 +92,18 @@ impl ModelGpuStore {
     /// The GPU mesh (`None` without a `Gfx`).
     pub(crate) fn mesh(&self, r: MeshRef) -> Option<&classic_gfx::ModelMeshGpu> {
         self.models.get(r.slot as usize)?.meshes.get(r.mesh as usize)
+    }
+
+    /// The albedo image index of mesh `mesh` of `slot`: its bound atlas,
+    /// else its embedded image (`embedded`), else none.
+    pub(crate) fn mesh_image(
+        &self,
+        slot: u32,
+        mesh: usize,
+        embedded: Option<usize>,
+    ) -> Option<u32> {
+        let atlas = self.models.get(slot as usize).and_then(|s| s.mesh_atlas.get(mesh).copied());
+        atlas.flatten().or(embedded.map(|i| i as u32))
     }
 
     /// The albedo texture name, if textured.
@@ -220,6 +251,23 @@ impl Engine {
         // and the camera pin would see the old glb's pose for a frame.
         self.resample_model(entity);
         true
+    }
+
+    /// The `Gfx.textures` key a mesh's bound atlas (`classic_atlas`,
+    /// `"<ns>::<texture>"`, a ROM catalog PNG) draws with: the key itself,
+    /// else its bare `<texture>` (a single-ROM boot registers textures
+    /// unqualified).  Resolved when the glb loads: a ROM's textures upload
+    /// before its models.
+    pub(crate) fn model_atlas_texture(&self, key: &str) -> String {
+        let has = |k: &str| self.gfx.as_ref().is_some_and(|g| g.textures.contains_key(k));
+        if !has(key) {
+            if let Some((_, bare)) = key.rsplit_once("::") {
+                if has(bare) {
+                    return bare.to_string();
+                }
+            }
+        }
+        key.to_string()
     }
 
     /// Whether a named (namespace-resolved) model resource is loaded.
@@ -421,13 +469,15 @@ impl Engine {
                         }
                     }
                 }
-                let team = match (model.tint, mesh.team_rect, mesh.image) {
-                    (Some(tint), Some(rect), Some(_)) => Some(classic_gfx::TeamTint { rect, tint }),
+                let image = self.model_gpu.mesh_image(slot, mi, mesh.image);
+                let textured = image.is_some();
+                let team = match (model.tint, mesh.team_rect, textured) {
+                    (Some(tint), Some(rect), true) => Some(classic_gfx::TeamTint { rect, tint }),
                     _ => None,
                 };
                 let gain = model.emissive.unwrap_or(1.0);
-                let emissive = match mesh.image {
-                    Some(_) if gain > 0.0 => mesh
+                let emissive = match textured {
+                    true if gain > 0.0 => mesh
                         .emissive
                         .iter()
                         .map(|e| classic_gfx::EmissiveRect { strength: e.strength * gain, ..*e })
@@ -436,7 +486,7 @@ impl Engine {
                 };
                 instances.push(ModelInstance {
                     model: world,
-                    mesh: MeshRef { slot, mesh: mi as u32, image: mesh.image.map(|ii| ii as u32) },
+                    mesh: MeshRef { slot, mesh: mi as u32, image },
                     team,
                     emissive,
                     alpha_test: mesh.alpha_test,
@@ -955,6 +1005,27 @@ mod tests {
         assert_eq!(team, [Some(classic_gfx::TeamTint { rect, tint: red }), None, None]);
         // The texture name stays per model even though the GL texture is shared.
         assert_eq!(e.model_gpu.texture(draws[2].instances[0].mesh), Some("rocket::image::0"));
+    }
+
+    #[test]
+    fn a_bound_atlas_is_the_draw_texture() {
+        // `classic_atlas` wins over an embedded image; the team / emissive
+        // regions apply to the bound texture.
+        let mut e = Engine::new_for_test();
+        flat_tilemap(&mut e);
+        let extras = r#","extras":{"classic_atlas":"buildtest::kit_atlas","classic_team_rect":[0,0,1,0.25],
+            "classic_emissive":[{"rect":[0.5,0.5,1,1],"strength":2}]}"#;
+        e.load_model_glb("kit", &textured_glb_extras(&png_2x2([0, 0, 0, 0]), extras)).unwrap();
+        let mut m = Model::new("kit", "tilemap");
+        m.tint = Some([1.0, 0.0, 0.0]);
+        let ent = e.world.spawn((Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE), m));
+        e.update_models(0.0);
+        let draws = e.model_draws(&[(0.0, ent, DrawKind::Model)], &HashMap::new());
+        let inst = &draws[0].instances[0];
+        // no Gfx in tests: the key is used as is
+        assert_eq!(e.model_gpu.texture(inst.mesh), Some("buildtest::kit_atlas"));
+        assert!(inst.team.is_some() && inst.emissive.len() == 1);
+        assert!(!inst.alpha_test, "the (cut) embedded image is not what draws");
     }
 
     #[test]
