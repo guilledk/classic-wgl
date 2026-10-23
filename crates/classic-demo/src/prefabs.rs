@@ -75,10 +75,9 @@ fn interpolate_offset(animation: &AnimationData, counter: f32) -> glam::Vec3 {
     if counter >= kf[kf.len() - 1].frame as f32 {
         return glam::Vec3::from_array(kf[kf.len() - 1].offset);
     }
-    let mut lo = 0usize;
-    while lo + 1 < kf.len() && (kf[lo + 1].frame as f32) <= counter {
-        lo += 1;
-    }
+    // The last keyframe at or before `counter` (keyframes are sorted by
+    // frame), below the final one: what a front-to-back scan stops on.
+    let lo = kf[1..].partition_point(|k| (k.frame as f32) <= counter);
     let lo_kf = &kf[lo];
     let hi_kf = &kf[lo + 1];
     let span = hi_kf.frame as f32 - lo_kf.frame as f32;
@@ -91,34 +90,47 @@ fn interpolate_offset(animation: &AnimationData, counter: f32) -> glam::Vec3 {
 /// the light's field unchanged, so a clip with no light channels (e.g. the
 /// rocket's launch) simply holds the light's last state.
 fn apply_light_channels(data: &AnimationData, counter: f32, l: &mut Light) {
-    if let Some(p) = data.channel_sample("light.position", counter) {
-        if p.len() >= 3 {
-            l.position = glam::Vec3::new(p[0], p[1], p[2]);
+    const NAMES: [&str; 6] = [
+        "light.position",
+        "light.color",
+        "light.intensity",
+        "light.radius",
+        "light.dir",
+        "light.cone",
+    ];
+    for_each_named_channel(data, counter, &NAMES, |slot, v| {
+        let vec3 = || (v.len >= 3).then(|| glam::Vec3::new(v.v[0], v.v[1], v.v[2]));
+        let scalar = || (v.len >= 1).then_some(v.v[0]);
+        match slot {
+            0 => l.position = vec3().unwrap_or(l.position),
+            1 => l.color = vec3().map_or(l.color, |c| c.to_array()),
+            2 => l.intensity = scalar().unwrap_or(l.intensity),
+            3 => l.radius = scalar().unwrap_or(l.radius),
+            4 => l.dir = vec3().unwrap_or(l.dir),
+            _ => l.cone_angle = scalar().unwrap_or(l.cone_angle),
         }
-    }
-    if let Some(c) = data.channel_sample("light.color", counter) {
-        if c.len() >= 3 {
-            l.color = [c[0], c[1], c[2]];
+    });
+}
+
+/// Sample every channel of `data` named in `names` at `counter` and hand it
+/// to `apply` with its index in `names`: one pass over the channels, no
+/// allocation.  Like a by-name lookup, only the first channel of a name
+/// counts (an empty one hides any later namesake).
+fn for_each_named_channel(
+    data: &AnimationData,
+    counter: f32,
+    names: &[&str],
+    mut apply: impl FnMut(usize, classic_core::types::ChannelValue),
+) {
+    let mut seen = 0u32;
+    for ch in &data.channels {
+        let Some(slot) = names.iter().position(|n| *n == ch.name) else { continue };
+        if seen & (1 << slot) != 0 {
+            continue;
         }
-    }
-    if let Some(i) = data.channel_sample("light.intensity", counter) {
-        if let Some(&v) = i.first() {
-            l.intensity = v;
-        }
-    }
-    if let Some(r) = data.channel_sample("light.radius", counter) {
-        if let Some(&v) = r.first() {
-            l.radius = v;
-        }
-    }
-    if let Some(d) = data.channel_sample("light.dir", counter) {
-        if d.len() >= 3 {
-            l.dir = glam::Vec3::new(d[0], d[1], d[2]);
-        }
-    }
-    if let Some(k) = data.channel_sample("light.cone", counter) {
-        if let Some(&v) = k.first() {
-            l.cone_angle = v;
+        seen |= 1 << slot;
+        if let Some(v) = ch.sample_fixed(counter) {
+            apply(slot, v);
         }
     }
 }
@@ -127,39 +139,32 @@ fn apply_light_channels(data: &AnimationData, counter: f32, l: &mut Light) {
 /// counterpart of [`apply_light_channels`]).  `emitter.burst` is a cumulative
 /// step channel: the particle system fires one burst per integer it crosses.
 pub fn apply_emitter_channels(data: &AnimationData, counter: f32, em: &mut Emitter) {
-    let scalar = |name: &str| data.channel_sample(name, counter).and_then(|v| v.first().copied());
-    let vec3 = |name: &str| {
-        data.channel_sample(name, counter)
-            .filter(|v| v.len() >= 3)
-            .map(|v| glam::Vec3::new(v[0], v[1], v[2]))
-    };
-    if let Some(v) = scalar("emitter.rate") {
-        em.rate = v;
-    }
-    if let Some(v) = scalar("emitter.speed") {
-        em.speed = v;
-    }
-    if let Some(v) = scalar("emitter.scale") {
-        em.scale = v;
-    }
-    if let Some(v) = scalar("emitter.intensity") {
-        em.intensity = v;
-    }
-    if let Some(v) = scalar("emitter.burst") {
-        em.burst = v;
-    }
-    if let Some(v) = scalar("emitter.enabled") {
-        em.enabled = v > 0.5;
-    }
-    if let Some(c) = vec3("emitter.color") {
-        em.color = c.to_array();
-    }
-    if let Some(p) = vec3("emitter.position") {
-        em.position = p;
-    }
-    if let Some(d) = vec3("emitter.dir") {
-        em.dir = d;
-    }
+    const NAMES: [&str; 9] = [
+        "emitter.rate",
+        "emitter.speed",
+        "emitter.scale",
+        "emitter.intensity",
+        "emitter.burst",
+        "emitter.enabled",
+        "emitter.color",
+        "emitter.position",
+        "emitter.dir",
+    ];
+    for_each_named_channel(data, counter, &NAMES, |slot, v| {
+        let vec3 = || (v.len >= 3).then(|| glam::Vec3::new(v.v[0], v.v[1], v.v[2]));
+        let Some(s) = (v.len >= 1).then_some(v.v[0]) else { return };
+        match slot {
+            0 => em.rate = s,
+            1 => em.speed = s,
+            2 => em.scale = s,
+            3 => em.intensity = s,
+            4 => em.burst = s,
+            5 => em.enabled = s > 0.5,
+            6 => em.color = vec3().map_or(em.color, |c| c.to_array()),
+            7 => em.position = vec3().unwrap_or(em.position),
+            _ => em.dir = vec3().unwrap_or(em.dir),
+        }
+    });
 }
 
 /// The frame a finished animation rests on.  A looping animation returns to its
@@ -176,40 +181,51 @@ fn rest_frame(sequence: &[u32], repeat: bool) -> f32 {
 
 /// Register the animator system: advances all `Animator` counters and
 /// pushes frame changes to their target IsoSprite / IsoAgent components.
+/// Register the animator system: advances all `Animator` counters and
+/// pushes frame changes to their target IsoSprite / IsoAgent components.
+///
+/// Allocation-light: animations are looked up in place (no per-frame map of
+/// every animation), a write borrows its `AnimationData`, and a sprite's
+/// `frame_name` is only replaced when it actually changes.
 pub fn init_animator_system(engine: &mut Engine) {
-    engine.on_update(|engine| {
+    /// The component an `Animator.target` (`"<entity>.<Component>"`) drives.
+    #[derive(Clone, Copy)]
+    enum Target {
+        IsoAgent,
+        IsoSprite,
+        Light,
+        Emitter,
+    }
+
+    struct FrameWrite<'a> {
+        entity: hecs::Entity,
+        target: Target,
+        frame: f32,
+        offset: glam::Vec3,
+        counter: f32,
+        data: &'a AnimationData,
+    }
+
+    let mut name_buf = String::new();
+    engine.on_update(move |engine| {
         let _perf = classic_gfx::perf::scope("animator");
         let delta = engine.time.delta;
-
-        let anim_rates: std::collections::HashMap<String, (f32, usize)> = engine
-            .animations
-            .iter()
-            .map(|(n, a)| (n.clone(), (a.rate, a.sequence.len())))
-            .collect();
-
-        struct FrameWrite {
-            entity: hecs::Entity,
-            comp_type: String,
-            frame: f32,
-            offset: glam::Vec3,
-            counter: f32,
-            texture: Option<String>,
-            anim_name: Option<String>,
-        }
+        let Engine { world, animations, names, frame_tables, .. } = engine;
 
         let mut frame_writes: Vec<FrameWrite> = Vec::new();
-        for (_e, anim) in engine.world.query::<&mut Animator>().iter() {
+        for (_e, anim) in world.query::<&mut Animator>().iter() {
             if !anim.playing && !anim.repeat {
                 continue;
             }
             let Some(ref anim_name) = anim.animation else {
                 continue;
             };
-            let Some(&(rate, seq_len)) = anim_rates.get(anim_name.as_str()) else {
+            let Some(data) = animations.get(anim_name.as_str()) else {
                 continue;
             };
+            let seq_len = data.sequence.len();
 
-            anim.counter += delta * rate * anim.speed;
+            anim.counter += delta * data.rate * anim.speed;
 
             if seq_len == 0 {
                 anim.counter = 0.0;
@@ -219,14 +235,10 @@ pub fn init_animator_system(engine: &mut Engine) {
             }
 
             let frame_idx = anim.counter.floor() as usize;
-            let animation_data = engine.animations.get(anim_name.as_str());
-            let frame_offset = animation_data
-                .map(|a| interpolate_offset(a, anim.counter))
-                .unwrap_or(glam::Vec3::ZERO);
+            let frame_offset = interpolate_offset(data, anim.counter);
             anim.offset = frame_offset;
             if frame_idx >= seq_len {
-                anim.frame =
-                    animation_data.map(|a| rest_frame(&a.sequence, anim.repeat)).unwrap_or(0.0);
+                anim.frame = rest_frame(&data.sequence, anim.repeat);
                 if anim.repeat {
                     anim.counter = 0.0;
                     anim.offset = glam::Vec3::ZERO;
@@ -237,93 +249,81 @@ pub fn init_animator_system(engine: &mut Engine) {
                     anim.counter = seq_len as f32;
                     anim.playing = false;
                 }
-            } else if let Some(&frame) = animation_data.and_then(|a| a.sequence.get(frame_idx)) {
+            } else if let Some(&frame) = data.sequence.get(frame_idx) {
                 anim.frame = frame as f32;
             }
 
-            let texture = animation_data.map(|a| a.src.clone());
-            let parts: Vec<&str> = anim.target.splitn(2, '.').collect();
-            if parts.len() == 2 {
-                if let Some(&target_e) = engine.names.get(parts[0]) {
-                    frame_writes.push(FrameWrite {
-                        entity: target_e,
-                        comp_type: parts[1].to_string(),
-                        frame: anim.frame,
-                        offset: frame_offset,
-                        counter: anim.counter,
-                        texture,
-                        anim_name: Some(anim_name.clone()),
-                    });
-                }
+            let Some((target_name, component)) = anim.target.split_once('.') else {
+                continue;
+            };
+            let target = match component {
+                "IsoAgent" => Target::IsoAgent,
+                "IsoSprite" => Target::IsoSprite,
+                "Light" => Target::Light,
+                "Emitter" => Target::Emitter,
+                _ => continue,
+            };
+            if let Some(&entity) = names.get(target_name) {
+                frame_writes.push(FrameWrite {
+                    entity,
+                    target,
+                    frame: anim.frame,
+                    offset: frame_offset,
+                    counter: anim.counter,
+                    data,
+                });
             }
         }
 
+        // `frame_name` = `"<texture>_<frame>"` when the texture has a frame
+        // table, else `None`; built in a reused buffer, stored only on change.
+        let mut set_frame_name = |slot: &mut Option<String>, texture: &str, frame: f32| {
+            if !frame_tables.contains_key(texture) {
+                *slot = None;
+                return;
+            }
+            use std::fmt::Write as _;
+            name_buf.clear();
+            let _ = write!(name_buf, "{texture}_{}", frame as u32);
+            if slot.as_deref() != Some(name_buf.as_str()) {
+                *slot = Some(name_buf.clone());
+            }
+        };
         for w in &frame_writes {
-            match w.comp_type.as_str() {
-                "IsoAgent" => {
-                    if let Ok(mut a) = engine.world.get::<&mut IsoAgent>(w.entity) {
-                        if let Some(t) = &w.texture {
-                            if &a.texture != t {
-                                a.texture.clone_from(t);
+            let texture = &w.data.src;
+            match w.target {
+                Target::IsoAgent | Target::IsoSprite => {
+                    if matches!(w.target, Target::IsoAgent) {
+                        if let Ok(mut a) = world.get::<&mut IsoAgent>(w.entity) {
+                            if &a.texture != texture {
+                                a.texture.clone_from(texture);
                             }
+                            a.frame = w.frame;
+                            a.frame_offset = w.offset;
+                            let a = &mut *a;
+                            set_frame_name(&mut a.frame_name, &a.texture, w.frame);
                         }
-                        a.frame = w.frame;
-                        a.frame_offset = w.offset;
-                        a.frame_name = engine
-                            .frame_tables
-                            .contains_key(&a.texture)
-                            .then(|| format!("{}_{}", a.texture, w.frame as u32));
                     }
-                    if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(w.entity) {
-                        if let Some(t) = &w.texture {
-                            if &s.texture != t {
-                                s.texture.clone_from(t);
-                            }
+                    if let Ok(mut s) = world.get::<&mut IsoSprite>(w.entity) {
+                        if &s.texture != texture {
+                            s.texture.clone_from(texture);
                         }
                         s.frame = w.frame;
                         s.frame_offset = w.offset;
-                        s.frame_name = engine
-                            .frame_tables
-                            .contains_key(&s.texture)
-                            .then(|| format!("{}_{}", s.texture, w.frame as u32));
+                        let s = &mut *s;
+                        set_frame_name(&mut s.frame_name, &s.texture, w.frame);
                     }
                 }
-                "IsoSprite" => {
-                    if let Ok(mut s) = engine.world.get::<&mut IsoSprite>(w.entity) {
-                        if let Some(t) = &w.texture {
-                            if &s.texture != t {
-                                s.texture.clone_from(t);
-                            }
-                        }
-                        s.frame = w.frame;
-                        s.frame_offset = w.offset;
-                        s.frame_name = engine
-                            .frame_tables
-                            .contains_key(&s.texture)
-                            .then(|| format!("{}_{}", s.texture, w.frame as u32));
+                Target::Light => {
+                    if let Ok(mut l) = world.get::<&mut Light>(w.entity) {
+                        apply_light_channels(w.data, w.counter, &mut l);
                     }
                 }
-                "Light" => {
-                    if let Ok(mut l) = engine.world.get::<&mut Light>(w.entity) {
-                        let Some(data) =
-                            w.anim_name.as_deref().and_then(|n| engine.animations.get(n))
-                        else {
-                            continue;
-                        };
-                        apply_light_channels(data, w.counter, &mut l);
+                Target::Emitter => {
+                    if let Ok(mut em) = world.get::<&mut Emitter>(w.entity) {
+                        apply_emitter_channels(w.data, w.counter, &mut em);
                     }
                 }
-                "Emitter" => {
-                    if let Ok(mut em) = engine.world.get::<&mut Emitter>(w.entity) {
-                        let Some(data) =
-                            w.anim_name.as_deref().and_then(|n| engine.animations.get(n))
-                        else {
-                            continue;
-                        };
-                        apply_emitter_channels(data, w.counter, &mut em);
-                    }
-                }
-                _ => {}
             }
         }
     });
@@ -548,5 +548,137 @@ mod tests {
         // Before ignition the light is off.
         apply_light_channels(&data, 100.0, &mut light);
         assert_eq!(light.intensity, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod scan_equivalence {
+    //! The binary-searched, allocation-free animator paths against the
+    //! front-to-back scans they replaced, bit for bit.
+    use super::{apply_emitter_channels, apply_light_channels, interpolate_offset};
+    use classic_core::components::{Emitter, Light};
+    use classic_core::types::{AnimChannel, AnimationData, OffsetKeyframe};
+
+    /// The old `interpolate_offset` keyframe scan.
+    fn scan_offset(kf: &[OffsetKeyframe], counter: f32) -> glam::Vec3 {
+        if counter <= kf[0].frame as f32 {
+            return glam::Vec3::from_array(kf[0].offset);
+        }
+        if counter >= kf[kf.len() - 1].frame as f32 {
+            return glam::Vec3::from_array(kf[kf.len() - 1].offset);
+        }
+        let mut lo = 0usize;
+        while lo + 1 < kf.len() && (kf[lo + 1].frame as f32) <= counter {
+            lo += 1;
+        }
+        let (a, b) = (&kf[lo], &kf[lo + 1]);
+        let span = b.frame as f32 - a.frame as f32;
+        let t = if span > f32::EPSILON { (counter - a.frame as f32) / span } else { 0.0 };
+        glam::Vec3::from_array(a.offset).lerp(glam::Vec3::from_array(b.offset), t)
+    }
+
+    /// The old `channel_sample` key scan.
+    fn scan_sample(ch: &AnimChannel, counter: f32) -> Option<Vec<f32>> {
+        let first = ch.keys.first()?;
+        if counter <= first.0 as f32 {
+            return Some(first.1.clone());
+        }
+        let last = &ch.keys[ch.keys.len() - 1];
+        if counter >= last.0 as f32 {
+            return Some(last.1.clone());
+        }
+        for i in 0..ch.keys.len() - 1 {
+            let ((f0, v0), (f1, v1)) = (&ch.keys[i], &ch.keys[i + 1]);
+            let (f0, f1) = (*f0 as f32, *f1 as f32);
+            if counter >= f0 && counter <= f1 {
+                let t = if f1 > f0 { (counter - f0) / (f1 - f0) } else { 0.0 };
+                return Some(v0.iter().zip(v1).map(|(a, b)| a + (b - a) * t).collect());
+            }
+        }
+        Some(last.1.clone())
+    }
+
+    fn counters() -> Vec<f32> {
+        let mut c: Vec<f32> = (-8..=160).map(|i| i as f32 * 0.25).collect();
+        c.extend([f32::NAN, 3.0, 7.0, 7.0001, 19.999, 1e9, -1e9]);
+        c
+    }
+
+    /// Sorted keys with ties (two keys on frame 7) and uneven spans.
+    const FRAMES: [u32; 7] = [0, 3, 7, 7, 12, 20, 33];
+
+    #[test]
+    fn offsets_and_channels_match_the_scan() {
+        let kf: Vec<OffsetKeyframe> = FRAMES
+            .iter()
+            .enumerate()
+            .map(|(i, &frame)| OffsetKeyframe { frame, offset: [i as f32, -(i as f32) * 0.5, 2.0] })
+            .collect();
+        let mut data: AnimationData =
+            serde_json::from_str(r#"{"name":"a","src":"a","rate":24.0,"sequence":[0]}"#).unwrap();
+        data.offset_keyframes = kf.clone();
+        let ch = AnimChannel {
+            name: "light.color".into(),
+            component: 3,
+            keys: FRAMES
+                .iter()
+                .map(|&f| (f, vec![f as f32 * 0.1, 1.0 - f as f32 * 0.03, 0.5]))
+                .collect(),
+        };
+        data.channels = vec![ch.clone()];
+        for c in counters() {
+            let bits = |v: glam::Vec3| v.to_array().map(f32::to_bits);
+            assert_eq!(bits(interpolate_offset(&data, c)), bits(scan_offset(&kf, c)), "offset {c}");
+            let want = scan_sample(&ch, c).unwrap();
+            let got = ch.sample_fixed(c).unwrap();
+            assert_eq!(got.len, want.len());
+            let fb: Vec<u32> = got.v[..got.len].iter().map(|v| v.to_bits()).collect();
+            let wb: Vec<u32> = want.iter().map(|v| v.to_bits()).collect();
+            assert_eq!(fb, wb, "channel {c}");
+            assert_eq!(
+                data.channel_sample("light.color", c)
+                    .map(|v| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>()),
+                Some(wb),
+                "channel_sample {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn first_channel_of_a_name_wins() {
+        let mut data: AnimationData =
+            serde_json::from_str(r#"{"name":"a","src":"a","rate":24.0,"sequence":[0]}"#).unwrap();
+        let ch = |name: &str, keys: Vec<(u32, Vec<f32>)>| AnimChannel {
+            name: name.into(),
+            component: keys.first().map_or(1, |k| k.1.len() as u8),
+            keys,
+        };
+        data.channels = vec![
+            ch("light.intensity", vec![]),
+            ch("light.intensity", vec![(0, vec![9.0])]),
+            ch("light.radius", vec![(0, vec![2.0]), (10, vec![4.0])]),
+            ch("light.radius", vec![(0, vec![7.0])]),
+            ch("emitter.color", vec![(0, vec![1.0, 2.0])]),
+            ch("emitter.rate", vec![(0, vec![5.0]), (10, vec![15.0])]),
+        ];
+        let mut l = Light {
+            kind: classic_core::components::LightKind::Point,
+            position: glam::Vec3::ZERO,
+            color: [0.0; 3],
+            intensity: 1.0,
+            radius: 0.0,
+            dir: glam::Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: None,
+            node: None,
+        };
+        apply_light_channels(&data, 5.0, &mut l);
+        assert_eq!(l.intensity, 1.0, "an empty first channel hides its namesake");
+        assert_eq!(l.radius, 3.0);
+        let mut em: Emitter = serde_json::from_str(r#"{"effect":"fx"}"#).unwrap();
+        let color = em.color;
+        apply_emitter_channels(&data, 5.0, &mut em);
+        assert_eq!(em.color, color, "a 2-float colour is ignored");
+        assert_eq!(em.rate, 10.0);
     }
 }

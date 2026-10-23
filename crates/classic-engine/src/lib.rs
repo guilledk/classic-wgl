@@ -280,6 +280,8 @@ pub struct Engine {
     pub(crate) model_generation: u64,
     /// Reused pose-sampling buffers (`Engine::update_models`).
     pub(crate) pose_scratch: classic_core::model::PoseScratch,
+    /// Node indices of a glb by node name / name prefix (`model::NodeIndexCache`).
+    pub(crate) node_index: crate::model::NodeIndexCache,
     /// GPU model meshes keyed by `"{model}::{mesh_index}"`, uploaded from
     /// [`Self::models`] when a `Gfx` context is present.
     model_gpu: HashMap<String, classic_gfx::ModelMeshGpu>,
