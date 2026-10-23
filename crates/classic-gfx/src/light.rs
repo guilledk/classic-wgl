@@ -59,10 +59,17 @@ pub fn pack_lights(lights: &[Light], capacity: usize) -> Vec<f32> {
     out
 }
 
+/// Frames of GPU buffers/textures rewritten every frame rotate through, so a
+/// frame never overwrites one the GPU may still read for an earlier frame
+/// (which makes the driver wait or copy).
+pub const FRAME_RING: usize = 3;
+
 /// A host-side UBO backing the `LightBlock` uniform block.  Owns the CPU-side
-/// capacity and the GPU buffer; uploaded once per frame by [`Gfx::upload_lights`].
+/// capacity and a ring of [`FRAME_RING`] GPU buffers, one written per frame
+/// by [`Gfx::upload_lights`].
 pub struct LightBuffer {
-    buffer: GlBuffer,
+    buffers: [GlBuffer; FRAME_RING],
+    next: usize,
     capacity: usize,
 }
 
@@ -70,15 +77,20 @@ impl LightBuffer {
     pub fn new(gl: &glow::Context, capacity: usize) -> Self {
         let floats = (1 + capacity * 3) * 4;
         let zeros = vec![0.0f32; floats];
-        let buffer = GlBuffer::from_slice(gl, glow::UNIFORM_BUFFER, &zeros, glow::DYNAMIC_DRAW);
-        Self { buffer, capacity }
+        let buffers = std::array::from_fn(|_| {
+            GlBuffer::from_slice(gl, glow::UNIFORM_BUFFER, &zeros, glow::DYNAMIC_DRAW)
+        });
+        Self { buffers, next: 0, capacity }
     }
 
-    /// Upload the packed light block and bind it to [`LIGHT_UBO_BINDING`].
-    pub fn upload(&self, gl: &glow::Context, lights: &[Light]) {
+    /// Upload the packed light block into the next ring buffer and bind it to
+    /// [`LIGHT_UBO_BINDING`].
+    pub fn upload(&mut self, gl: &glow::Context, lights: &[Light]) {
         let data = pack_lights(lights, self.capacity);
-        self.buffer.sub_data(gl, &data);
-        self.buffer.bind_base(gl, LIGHT_UBO_BINDING);
+        let buffer = &self.buffers[self.next];
+        self.next = (self.next + 1) % FRAME_RING;
+        buffer.sub_data(gl, &data);
+        buffer.bind_base(gl, LIGHT_UBO_BINDING);
     }
 }
 

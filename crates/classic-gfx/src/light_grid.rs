@@ -251,8 +251,13 @@ impl LightGrid {
 
 /// The GPU side: the `R32UI` grid texture plus the state the lit draws bind.
 pub struct LightGridGpu {
-    texture: glow::Texture,
-    rows: u32,
+    /// A ring of [`crate::light::FRAME_RING`] textures, one written per
+    /// upload, so a frame never rewrites the grid an earlier frame may still
+    /// be sampling; `cur` is the one bound for this frame's draws.
+    textures: [glow::Texture; crate::light::FRAME_RING],
+    /// Allocated rows of each texture.
+    rows: [u32; crate::light::FRAME_RING],
+    cur: usize,
     max_rows: u32,
     /// `None` while the grid is off (no lights, a non-orthographic camera,
     /// or no build since the last light upload): the shaders run the full loop.
@@ -269,11 +274,32 @@ impl LightGridGpu {
     /// [`LIGHT_GRID_UNIT`], so the `usampler2D` always samples an integer
     /// texture (WebGL rejects a draw whose sampler type mismatches its unit).
     pub fn new(gl: &glow::Context) -> Self {
-        let texture = unsafe { gl.create_texture() }.expect("create light grid texture");
+        let textures = std::array::from_fn(|_| {
+            unsafe { gl.create_texture() }.expect("create light grid texture")
+        });
         let max_rows = unsafe { gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE) }.max(2048) as u32;
-        let mut grid =
-            Self { texture, rows: 0, max_rows, tiles: None, main: (1, 1), clip: Mat4::ZERO };
-        grid.store(gl, &[0]);
+        let mut grid = Self {
+            textures,
+            rows: [0; crate::light::FRAME_RING],
+            cur: 0,
+            max_rows,
+            tiles: None,
+            main: (1, 1),
+            clip: Mat4::ZERO,
+        };
+        // Allocate every ring texture (the last one stays bound).
+        for i in (0..crate::light::FRAME_RING).rev() {
+            grid.cur = i;
+            grid.store(gl, &[0]);
+            grid.set_params(gl);
+        }
+        unsafe { gl.active_texture(glow::TEXTURE0) };
+        grid
+    }
+
+    /// Integer-texture sampling state of the texture bound on
+    /// [`LIGHT_GRID_UNIT`] (set once per ring texture).
+    fn set_params(&self, gl: &glow::Context) {
         unsafe {
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
@@ -287,9 +313,7 @@ impl LightGridGpu {
                 glow::TEXTURE_WRAP_T,
                 glow::CLAMP_TO_EDGE as i32,
             );
-            gl.active_texture(glow::TEXTURE0);
         }
-        grid
     }
 
     /// Most words the texture can hold.
@@ -309,6 +333,7 @@ impl LightGridGpu {
             self.tiles = None;
             return;
         };
+        self.cur = (self.cur + 1) % crate::light::FRAME_RING;
         self.store(gl, &grid.words);
         unsafe { gl.active_texture(glow::TEXTURE0) };
         self.tiles = Some((grid.tiles_x, grid.tiles_y));
@@ -332,9 +357,9 @@ impl LightGridGpu {
         let bytes: &[u8] = bytemuck::cast_slice(data);
         unsafe {
             gl.active_texture(glow::TEXTURE0 + LIGHT_GRID_UNIT);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.textures[self.cur]));
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
-            if rows > self.rows {
+            if rows > self.rows[self.cur] {
                 gl.tex_image_2d(
                     glow::TEXTURE_2D,
                     0,
@@ -346,7 +371,7 @@ impl LightGridGpu {
                     glow::UNSIGNED_INT,
                     glow::PixelUnpackData::Slice(Some(bytes)),
                 );
-                self.rows = rows;
+                self.rows[self.cur] = rows;
             } else {
                 gl.tex_sub_image_2d(
                     glow::TEXTURE_2D,
@@ -377,7 +402,7 @@ impl LightGridGpu {
     pub fn bind(&self, gl: &glow::Context) {
         unsafe {
             gl.active_texture(glow::TEXTURE0 + LIGHT_GRID_UNIT);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.textures[self.cur]));
             gl.active_texture(glow::TEXTURE0);
         }
     }

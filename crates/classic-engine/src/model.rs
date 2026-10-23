@@ -22,16 +22,78 @@ use glam::{Mat4, Vec3};
 
 use crate::{DrawKind, Engine};
 
+/// A model mesh instance's GPU resources: `slot` in [`ModelGpuStore`], mesh
+/// index, and albedo image index (if textured).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MeshRef {
+    pub(crate) slot: u32,
+    pub(crate) mesh: u32,
+    pub(crate) image: Option<u32>,
+}
+
+/// Per loaded glb: its GPU meshes and the `Gfx` texture names of its images
+/// (`"{model}::image::{i}"`, per model even when the GL texture is shared by
+/// content, so traces keep naming the model's image), looked up by
+/// [`MeshRef`] instead of formatting a string key per instance per frame.
+#[derive(Default)]
+pub(crate) struct ModelGpuStore {
+    slots: HashMap<String, u32>,
+    models: Vec<ModelGpuSlot>,
+}
+
+struct ModelGpuSlot {
+    meshes: Vec<classic_gfx::ModelMeshGpu>,
+    images: Vec<String>,
+}
+
+impl ModelGpuStore {
+    /// Register (or replace) `name`'s meshes and `images` image names.
+    pub(crate) fn insert(
+        &mut self,
+        name: &str,
+        meshes: Vec<classic_gfx::ModelMeshGpu>,
+        images: usize,
+    ) {
+        let images = (0..images).map(|i| format!("{name}::image::{i}")).collect();
+        let slot = ModelGpuSlot { meshes, images };
+        match self.slots.get(name) {
+            Some(&s) => self.models[s as usize] = slot,
+            None => {
+                self.slots.insert(name.to_string(), self.models.len() as u32);
+                self.models.push(slot);
+            }
+        }
+    }
+
+    /// The slot of a loaded model.
+    pub(crate) fn slot(&self, name: &str) -> Option<u32> {
+        self.slots.get(name).copied()
+    }
+
+    /// The GPU mesh (`None` without a `Gfx`).
+    pub(crate) fn mesh(&self, r: MeshRef) -> Option<&classic_gfx::ModelMeshGpu> {
+        self.models.get(r.slot as usize)?.meshes.get(r.mesh as usize)
+    }
+
+    /// The albedo texture name, if textured.
+    pub(crate) fn texture(&self, r: MeshRef) -> Option<&str> {
+        let slot = self.models.get(r.slot as usize)?;
+        r.image.and_then(|i| slot.images.get(i as usize)).map(String::as_str)
+    }
+
+    /// The legacy `"{model}::{mesh}"` key (tests).
+    #[cfg(test)]
+    pub(crate) fn key(&self, r: MeshRef) -> String {
+        let name = self.slots.iter().find(|(_, &s)| s == r.slot).map(|(n, _)| n.as_str());
+        format!("{}::{}", name.unwrap_or("?"), r.mesh)
+    }
+}
 /// One mesh instance of a model draw.
 pub(crate) struct ModelInstance {
     /// The node's full world transform (metres).
     pub(crate) model: Mat4,
-    /// Key into `Engine::model_gpu` (`"{model}::{mesh}"`).
-    pub(crate) mesh_key: String,
-    /// The albedo texture name (`"{model}::image::{i}"`), if textured.  The
-    /// name is per model even when the GL texture is shared (see
-    /// [`Engine::load_model_glb`]), so traces keep naming the model's image.
-    pub(crate) texture: Option<String>,
+    /// Its GPU mesh and albedo image in `Engine::model_gpu`.
+    pub(crate) mesh: MeshRef,
     /// The team tint: `Model.tint` over the mesh's `team_rect`, set only when
     /// the model is tinted and the mesh is textured with a team region.
     pub(crate) team: Option<classic_gfx::TeamTint>,
@@ -333,6 +395,7 @@ impl Engine {
                 continue;
             };
             let Some(asset) = self.models.get(&model.model) else { continue };
+            let Some(slot) = self.model_gpu.slot(&model.model) else { continue };
             // A pose not sized to this glb (a model swapped without a
             // re-sample) falls back to the rest pose rather than vanishing.
             let rest;
@@ -373,8 +436,7 @@ impl Engine {
                 };
                 instances.push(ModelInstance {
                     model: world,
-                    mesh_key: format!("{}::{mi}", model.model),
-                    texture: mesh.image.map(|ii| format!("{}::image::{ii}", model.model)),
+                    mesh: MeshRef { slot, mesh: mi as u32, image: mesh.image.map(|ii| ii as u32) },
                     team,
                     emissive,
                     alpha_test: mesh.alpha_test,
@@ -707,7 +769,7 @@ mod tests {
         assert!((rig_world.w_axis.truncate() - (expected - offset)).length() < 1e-4);
         // The mesh instance sits under the rig and the AABB encloses it.
         let inst = &draws[0].instances[0];
-        assert_eq!(inst.mesh_key, "landing::0");
+        assert_eq!(e.model_gpu.key(inst.mesh), "landing::0");
         let origin = inst.model.w_axis.truncate();
         assert!(origin.cmpge(draws[0].min - 1e-4).all() && origin.cmple(draws[0].max + 1e-4).all());
     }
@@ -761,7 +823,7 @@ mod tests {
         let items = vec![(0.0, hab, DrawKind::Model)];
         let draws = e.model_draws(&items, &HashMap::new());
         assert_eq!(draws.len(), 1, "the model does not vanish for a frame");
-        assert_eq!(draws[0].instances[0].mesh_key, "work::0");
+        assert_eq!(e.model_gpu.key(draws[0].instances[0].mesh), "work::0");
 
         // Node attachments resolve to the new glb's nodes.
         let tf = e.world.get::<&Transform>(hab).unwrap().clone();
@@ -793,7 +855,7 @@ mod tests {
         e.world.get::<&mut Model>(hab).unwrap().model = "work".into();
         let draws = e.model_draws(&[(0.0, hab, DrawKind::Model)], &HashMap::new());
         assert_eq!(draws.len(), 1);
-        assert_eq!(draws[0].instances[0].mesh_key, "work::0");
+        assert_eq!(e.model_gpu.key(draws[0].instances[0].mesh), "work::0");
     }
 
     #[test]
@@ -892,7 +954,7 @@ mod tests {
         let team: Vec<_> = draws.iter().map(|d| d.instances[0].team).collect();
         assert_eq!(team, [Some(classic_gfx::TeamTint { rect, tint: red }), None, None]);
         // The texture name stays per model even though the GL texture is shared.
-        assert_eq!(draws[2].instances[0].texture.as_deref(), Some("rocket::image::0"));
+        assert_eq!(e.model_gpu.texture(draws[2].instances[0].mesh), Some("rocket::image::0"));
     }
 
     #[test]

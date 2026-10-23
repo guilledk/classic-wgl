@@ -44,6 +44,12 @@ impl GlBuffer {
     pub fn bind_base(&self, gl: &glow::Context, index: u32) {
         unsafe { gl.bind_buffer_base(self.target, index, Some(self.buffer)) }
     }
+
+    /// Free the GL buffer (a `GlBuffer` has no `Drop`: it holds no context).
+    /// Safe right after the draws that read it; GL defers the deletion.
+    pub fn delete(self, gl: &glow::Context) {
+        unsafe { gl.delete_buffer(self.buffer) }
+    }
 }
 
 // ---------------------------------------------------------------------------

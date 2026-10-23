@@ -153,7 +153,7 @@ create a `plans/` dir here (`.gitignore` keeps `/plans/` as a guard).
    purely draw-order (z-sort).  Enabling it globally depth-rejects UI under ortho projection.
    See `classic-gfx` skill.
 - **3D models**: a `Model` component draws a node-parented glTF `.glb` (a ROM
-  `models[]` resource, `/models/<name>.glb`) as real geometry via `draw_model`
+  `models[]` resource, `/models/<name>.glb`) as real geometry via `draw_model_instance`
   (`mesh` shader: shared world-space lighting block, sun shadow, true view
   depth), between the terrain and the sprite passes.  Models keep the sprite
   pixel look: they render into a `NEAREST` pixelation target at the sprite

@@ -36,6 +36,7 @@ pub fn draw_rts_rubber_band(engine: &mut Engine) {
     let verts = vec![x, y, 0.0, x + w, y, 0.0, x + w, y + h, 0.0, x, y + h, 0.0];
     let buf = GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &verts, glow::STREAM_DRAW);
     gfx.draw_line_loop(&buf, 4, &Mat4::IDENTITY, &Mat4::IDENTITY, &[0.0, 1.0, 0.0, 0.9]);
+    buf.delete(&gfx.gl);
 }
 
 /// Route the mouse wheel to the text-demo panel when it is open and under the
@@ -452,6 +453,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                 let vcount = (world_fp.len() / 3) as i32;
 
                 gfx.draw_line_loop(&fp_buf, vcount, &Mat4::IDENTITY, &cam, &[0.0, 1.0, 0.5, 0.7]);
+                fp_buf.delete(&gfx.gl);
 
                 let ax = tf.position.x;
                 let ay = tf.position.y;
@@ -489,10 +491,12 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                             glow::STREAM_DRAW,
                         );
                         gfx.draw_line_loop(&rb, 4, &Mat4::IDENTITY, &cam, &[1.0, 1.0, 0.0, 0.8]);
+                        rb.delete(&gfx.gl);
                     }
                 }
             }
         }
+        x_cross_buf.delete(&gfx.gl);
     }
 
     // Vehicle path indicators (planned A* routes), shown while their vehicle is
@@ -544,6 +548,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                         &[1.0, 0.6, 0.0, 0.9],
                     );
                 }
+                buf.delete(&gfx.gl);
 
                 // Diamond marker at the waypoint currently being driven toward.
                 let [tx, ty] = vehicle.path[vehicle.path_idx];
@@ -561,6 +566,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                     glow::STREAM_DRAW,
                 );
                 gfx.draw_line_loop(&rb, 4, &Mat4::IDENTITY, &cam, &[1.0, 0.9, 0.2, 0.95]);
+                rb.delete(&gfx.gl);
             }
 
             // Candidate path from the reachability probe (a drop-preview target),
@@ -589,6 +595,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
                     &cam,
                     &[1.0, 0.55, 0.1, 0.95],
                 );
+                buf.delete(&gfx.gl);
             }
         }
     }
@@ -640,12 +647,14 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
             let line_buf =
                 GlBuffer::from_slice(&gfx.gl, glow::ARRAY_BUFFER, &line, glow::STREAM_DRAW);
             gfx.draw_line_strip(&line_buf, 0, 2, &Mat4::IDENTITY, &cam, &[1.0, 1.0, 0.0, 0.9]);
+            line_buf.delete(&gfx.gl);
 
             // X crosshair at the light position.
             let m = Mat4::from_translation(Vec3::from_array(light));
             gfx.draw_line_strip(&cross_buf, 0, 2, &m, &cam, &[1.0, 1.0, 0.0, 1.0]);
             gfx.draw_line_strip(&cross_buf, 2, 2, &m, &cam, &[1.0, 1.0, 0.0, 1.0]);
         }
+        cross_buf.delete(&gfx.gl);
     }
 
     // Iso compass rose (always visible).
