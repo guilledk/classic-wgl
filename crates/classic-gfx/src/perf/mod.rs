@@ -128,6 +128,36 @@ pub fn phase(name: &'static str) {
     }
 }
 
+/// Open phase `name` until the returned guard drops, then reopen the phase
+/// that was running (a sub-phase carved out of an enclosing one, e.g. the
+/// model update inside `update`).
+#[inline]
+#[must_use = "the phase ends when the guard drops"]
+pub fn scope(name: &'static str) -> Scope {
+    let mut prev = None;
+    if enabled() {
+        with(|p| {
+            prev = p.cur.map(|(n, _)| n);
+            p.phase(name);
+        });
+    }
+    Scope { prev }
+}
+
+/// The guard of [`scope`].
+pub struct Scope {
+    prev: Option<&'static str>,
+}
+
+impl Drop for Scope {
+    #[inline]
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev {
+            phase(prev);
+        }
+    }
+}
+
 /// Add `n` to the per-frame counter `name`.
 #[inline]
 pub fn count(name: &'static str, n: u64) {

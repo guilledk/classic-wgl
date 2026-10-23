@@ -486,6 +486,10 @@ pub struct Model {
     /// each frame and consumed by the draw path (transient).
     #[serde(skip)]
     pub node_world: Vec<Mat4>,
+    /// What `node_world` + `frame_offset` were last sampled from (transient):
+    /// while it still matches, `Engine::update_models` skips the re-sample.
+    #[serde(skip)]
+    pub pose_key: Option<crate::model::PoseKey>,
 }
 
 impl Model {
@@ -505,6 +509,7 @@ impl Model {
             time: 0.0,
             frame_offset: Vec3::ZERO,
             node_world: Vec::new(),
+            pose_key: None,
         }
     }
 }
