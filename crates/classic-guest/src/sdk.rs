@@ -265,6 +265,26 @@ impl GuestHost {
         self.engine_mut().set_enabled_named(&name, enabled != 0) as i32
     }
 
+    /// The bench mode: `0` interactive, `1` full, `2` short
+    /// (`CLASSIC_BENCH`, web `?bench`).
+    pub fn bench_mode(&mut self) -> i32 {
+        self.engine().bench_mode() as i32
+    }
+
+    /// Start the benchmark section `name` with this frame (`cargo xtask
+    /// bench` reports each section on its own).
+    pub fn bench_section(&mut self, name: &str) -> i32 {
+        self.engine_mut().bench_section(name);
+        1
+    }
+
+    /// End the benchmark (this frame is excluded); in a bench mode the app
+    /// then exits.
+    pub fn bench_end(&mut self) -> i32 {
+        self.engine_mut().bench_end();
+        1
+    }
+
     /// Whether the editor's agent tool is active.
     pub fn agent_selected(&mut self) -> i32 {
         self.engine().guest_flag("agent_selected") as i32

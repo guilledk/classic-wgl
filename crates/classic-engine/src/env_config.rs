@@ -14,10 +14,11 @@ pub enum LoaderMode {
 pub struct EnvConfig {
     /// CLASSIC_TEST: `1`/`all` or scenario name (empty = disabled).
     pub test: String,
-    /// CLASSIC_FRAMES frame limit (desktop binary exits after N frames).
+    /// CLASSIC_FRAMES frame limit (desktop binary exits after N frames; web:
+    /// `?frames=N` stops the loop).
     pub max_frames: Option<u64>,
-    /// CLASSIC_FIXED_DT: override delta per frame. Auto-defaults to 1/60
-    /// when CLASSIC_TEST is set.
+    /// CLASSIC_FIXED_DT (web: `?fixed_dt=`): override delta per frame.
+    /// Auto-defaults to 1/60 when CLASSIC_TEST is set.
     pub fixed_dt: Option<f32>,
     /// CLASSIC_WIDTH: forced logical viewport width.
     pub forced_width: Option<f32>,
@@ -84,6 +85,9 @@ pub struct EnvConfig {
     pub perf: Option<String>,
     /// CLASSIC_PERF_GPU=1 (web: `?perf_gpu`): also time each phase on the GPU.
     pub perf_gpu: bool,
+    /// CLASSIC_BENCH=full|short (web: `?bench` / `?bench=short`): what a
+    /// bench-aware ROM runs (see `bench`).
+    pub bench: crate::bench::BenchMode,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -92,14 +96,10 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
     let golden_mode: String = read("CLASSIC_GOLDEN");
     let golden_layout = !golden_mode.is_empty() && read("CLASSIC_GOLDEN_LAYOUT") != "0";
     EnvConfig {
-        max_frames: read("CLASSIC_FRAMES").parse().ok(),
-        fixed_dt: read("CLASSIC_FIXED_DT").parse().ok().or_else(|| {
-            if test_active {
-                Some(1.0 / 60.0)
-            } else {
-                None
-            }
-        }),
+        max_frames: env_or_query("CLASSIC_FRAMES", "frames").and_then(|v| v.parse().ok()),
+        fixed_dt: env_or_query("CLASSIC_FIXED_DT", "fixed_dt")
+            .and_then(|v| v.parse().ok())
+            .or_else(|| if test_active { Some(1.0 / 60.0) } else { None }),
         forced_width: read("CLASSIC_WIDTH").parse().ok(),
         forced_height: read("CLASSIC_HEIGHT").parse().ok(),
         ui_debug: read_bool("CLASSIC_UI_DEBUG"),
@@ -144,7 +144,8 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
             .parse()
             .ok()
             .unwrap_or_else(default_loader_threads),
-        perf: read_perf(),
+        perf: env_or_query("CLASSIC_PERF", "perf"),
+        bench: crate::bench::BenchMode::parse(env_or_query("CLASSIC_BENCH", "bench").as_deref()),
         perf_gpu: read_bool("CLASSIC_PERF_GPU") || web_query("perf_gpu").is_some(),
         test,
     }
@@ -190,14 +191,10 @@ fn read_bool(key: &str) -> bool {
     matches!(std::env::var(key).as_deref(), Ok("1" | "true" | "yes"))
 }
 
-/// `CLASSIC_PERF` (a non-empty path), or on the web a `?perf` query
-/// parameter (any value).
-fn read_perf() -> Option<String> {
-    let path = read("CLASSIC_PERF");
-    if !path.is_empty() {
-        return Some(path);
-    }
-    web_query("perf")
+/// The env var `key` when set and non-empty, else (web) the page URL query
+/// parameter `query` (present = `Some`, even when empty).
+fn env_or_query(key: &str, query: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.is_empty()).or_else(|| web_query(query))
 }
 
 /// A query parameter of the page URL (always `None` natively).

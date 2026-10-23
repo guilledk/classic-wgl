@@ -57,6 +57,21 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `EXT_disjoint_timer_query_webgl2` (dropping results across a disjoint
   event) and logs a console summary every 600 frames.  Off, each hook is
   one thread-local flag read (#145).
+- Benchmark sections.  Three guest imports (`abi_manifest`, `native`
+  `web` `worker`): `bench_mode() -> i32` (`0` interactive, `1` full, `2`
+  short, from `CLASSIC_BENCH=full|short` or web `?bench[=short]`),
+  `bench_section(name)` and `bench_end()`, which write `section` /
+  `section_end` lines (with camera and viewport params) into the
+  `CLASSIC_PERF` output and, in a bench mode, exit the app.  The web
+  `EnvConfig` also reads `?fixed_dt=` and `?frames=N` (the loop stops
+  after N frames).  `cargo xtask bench [--rom <path>] [--short] [--runs N]
+  [--out <file>]` runs a ROM headless at 4K behind an idle-machine gate
+  (warmup + N runs, plus one GPU-timer run) and writes a per-section
+  report (schema `classic-bench` v1: engine rev, ROM sha256, GL renderer,
+  resolution, dt, mode; per section params, frames, wall/CPU/GPU
+  mean/median/p95/p99/max, per-phase means, counters); `cargo xtask
+  bench-compare a.json b.json` prints per-section deltas against a noise
+  floor (#146).
 
 ### Changed
 

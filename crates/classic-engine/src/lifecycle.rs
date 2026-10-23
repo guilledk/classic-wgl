@@ -114,6 +114,7 @@ impl Engine {
             selection_end_hooks: Vec::new(),
             overlay_hooks: Vec::new(),
             test_runner: None,
+            bench: Default::default(),
             test_should_close: false,
             test_failed: false,
             golden_capture_frame: 55, // default: one frame after default scenario's last step (54)
@@ -145,6 +146,7 @@ impl Engine {
             classic_gfx::perf::begin_frame(&gfx.gl);
         }
         self.frame_inner(input, vw, vh, delta);
+        self.flush_bench_marker();
         classic_gfx::perf::end_frame();
     }
 

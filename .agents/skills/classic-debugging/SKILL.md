@@ -591,3 +591,44 @@ with `classic_gfx::perf::phase("name")`, a counter with
   separate on run.
 - **Discard warmup.**  Skip the first ~120 frames, and the first run after
   a build (cold caches, clocks ramping).  Wait for an idle machine.
+
+### Bench sections and `cargo xtask bench`
+
+A bench-aware ROM's guest reads `bench_mode()` (`0` interactive, `1` full,
+`2` short; `CLASSIC_BENCH=full|short`, web `?bench` / `?bench=short`),
+marks stretches of frames with `bench_section(name)` and finishes with
+`bench_end()` (which exits the app in a bench mode).  Each call queues a
+marker that is written at the end of its frame, so a section starts with
+the frame that called it:
+
+| `kind` | Fields |
+|---|---|
+| `section` | `f`, `name`, `params` (`zoom`, `camera`, `viewport`, `entities`, taken at the end of the frame) |
+| `section_end` | `f` (that frame and later belong to no section) |
+
+```bash
+cargo xtask bench --rom roms/out/bench.rom            # full, 3 runs + warmup + a GPU run
+cargo xtask bench --rom roms/out/bench.rom --short --runs 1 --no-gpu
+cargo xtask bench --rom <any.rom> --frames 781 --scenario cam.json --skip 120
+cargo xtask bench-compare before.json after.json
+```
+
+`bench` builds the release desktop (or takes `--bin`), waits for an idle
+machine before every run (no `classic-desktop`, no process over 50% of a
+core, GPU under 20% busy; `--no-idle-gate` skips), runs `--warmup` (1,
+discarded) + `--runs` (3) times with GPU timers off and once with them on
+(`--no-gpu` skips), headless at `--width`×`--height` (3840×2160) with
+`CLASSIC_FIXED_DT` = 1/60.  Frames before any marker form section `main`;
+a ROM without `bench_end` needs `--frames N`.  The first `--skip` (10)
+frames of every section are dropped.  The report (`--out`, default
+`target/bench/bench-<unix>.json`; per-run `.jsonl` + `.log` beside it) is
+schema `classic-bench` v1: `engine_rev`, `engine_dirty`, `rom` (path +
+`sha256`), `gl_renderer`, `resolution`, `dt`, `mode`, `runs`, and per
+section `params`, `frames`, `wall`/`cpu`/`pace`/`gpu` stats
+(`n`/`mean`/`median`/`p95`/`p99`/`max`), `runs` (per-run wall/CPU means),
+`phases_cpu`, `phases_gpu` and `counters` (per-frame means).
+
+`bench-compare` matches sections by name and prints wall
+mean/median/p95, CPU mean/p95 and GPU mean deltas.  A delta counts only
+past its noise floor: the larger of `--noise-pct` (2%) of the base,
+0.02 ms, and twice the larger run-to-run deviation of the per-run means.
