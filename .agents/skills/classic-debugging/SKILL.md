@@ -540,3 +540,54 @@ Diagnosing a "stale" failure:
   via the rclone publish step (see the classic-roms release skill / `AGENTS.md`),
   or (local dev only) pass `--skip-verify`.
 
+
+## 11. Frame profiler (`CLASSIC_PERF`)
+
+`classic_gfx::perf` (`crates/classic-gfx/src/perf/`, a `native.rs` /
+`web.rs` pair) times every frame by phase.  Off by default; each hook then
+costs one thread-local flag read.
+
+```bash
+CLASSIC_PERF=/tmp/run.jsonl CLASSIC_PERF_GPU=1 \
+CLASSIC_HEADLESS=1 CLASSIC_WIDTH=3840 CLASSIC_HEIGHT=2160 CLASSIC_FRAMES=781 \
+CLASSIC_ROM=<path/to.rom> cargo run --release -p classic-desktop
+```
+
+Web: append `?perf` (and `&perf_gpu`) to the page URL; a `[perf] {"kind":
+"summary",…}` line reaches the console every 600 frames.
+
+**Output (schema `perf: 1`, one JSON object per line, times in ms):**
+
+| `kind` | When | Fields |
+|---|---|---|
+| `header` | first frame | `perf` (schema), `renderer`, `vendor`, `version`, `gpu`, `max_in_flight` |
+| `frame` | every frame | `f`, `wall` (since the previous frame's start; 0 on frame 0), `cpu` (frame CPU minus `pace`), `pace` (fence wait), `phases` {name: ms}, `counters` {name: n} |
+| `gpu` | a few frames after its `frame` (join on `f`) | `f`, `total`, `phases` {name: ms} |
+| `summary` | process exit (`perf::finish`) | `frames`; `wall`/`cpu`/`gpu`: {`n`,`mean`,`median`,`p95`,`p99`,`max`}; `phases_cpu`/`phases_gpu`/`counters`: per-frame means |
+
+**Phases** tile `Engine::frame` (`phase(name)` closes the running one; a
+repeated name accumulates): `frame_head`, `pre_update`, `update`,
+`vehicles`, `particles_update` + `pu_*`, `test_runner`, `render_prep`,
+`lights`, `render_list`, `model_draws`, `shadow_fit`, `begin_frame`,
+`light_ubo`, `light_grid`, `shadow_clear`/`shadow_terrain`/
+`shadow_models`/`shadow_sprites`, `terrain`, `models`, `model_composite`,
+`sprites`, `model_ghost`, `particles_draw` + `p_*`, `bloom` +
+`bloom_bright`/`bloom_blur`/`bloom_composite`, `ui`, `tail`.  Add a phase
+with `classic_gfx::perf::phase("name")`, a counter with
+`perf::count("name", n)`; gate anything costly behind `perf::enabled()`.
+
+**Reading it:**
+
+- **Headless runs are paced.**  With `CLASSIC_HEADLESS=1` the profiler
+  fences each frame and waits until at most 2 are in flight.  A GPU-bound
+  frame shows its back-pressure as `pace`; without pacing it lands inside
+  whichever GL call the driver blocks in (a phase then looks CPU-heavy but
+  is not).  `cpu` excludes `pace`.
+- **GPU phase times are GPU wall time** (`TIME_ELAPSED`): a CPU-bound phase
+  that starves the GPU also counts the idle gap.  Read `gpu.total` against
+  `cpu` to tell which side bounds the frame.
+- **GPU timers perturb wall time** (≈40 queries a frame): take wall/CPU
+  numbers from a `CLASSIC_PERF_GPU` = off run and GPU numbers from a
+  separate on run.
+- **Discard warmup.**  Skip the first ~120 frames, and the first run after
+  a build (cold caches, clocks ramping).  Wait for an idle machine.

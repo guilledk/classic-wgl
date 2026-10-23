@@ -43,6 +43,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   from dumps; `0` = off), and a drawn glowing model turns the bloom pass
   on.  `Gfx::draw_model` takes the rects.  Models without the extra
   render and trace exactly as before; no manifest or ABI change (#141).
+- `classic_gfx::perf`, an opt-in frame profiler.  `CLASSIC_PERF=<file>`
+  writes JSON lines (schema `perf: 1`): a header (GL renderer), one
+  `frame` line per frame (wall, CPU, fence wait and per-phase CPU
+  milliseconds, plus counters), one `gpu` line per frame with
+  `CLASSIC_PERF_GPU=1` (a `TIME_ELAPSED` query per phase, read back a few
+  frames late so nothing stalls), and a `summary` line at exit
+  (mean/median/p95/p99/max).  Phases tile `Engine::frame` across the
+  update, lifecycle, light grid, shadow, model, particle and bloom passes.
+  Headless perf runs fence each frame and keep at most 2 in flight, so the
+  GPU's back-pressure shows as `pace` instead of inside a random GL call.
+  The web reads `?perf` / `?perf_gpu`, times the GPU through
+  `EXT_disjoint_timer_query_webgl2` (dropping results across a disjoint
+  event) and logs a console summary every 600 frames.  Off, each hook is
+  one thread-local flag read (#145).
 
 ### Changed
 

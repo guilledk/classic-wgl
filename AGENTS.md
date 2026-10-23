@@ -398,6 +398,8 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
 | `CLASSIC_LOADER` | Boot loading-screen mode (`console` / `visual` / `off`; web: `?loader=`) | visual |
 | `CLASSIC_BOOT_LOG` | Always log the boot event stream to the `boot` channel | off |
 | `CLASSIC_UI_DEBUG` | Per-frame UI entity dump (first 120 frames) | off |
+| `CLASSIC_PERF` | Frame profiler: JSON-lines output file (web: `?perf`, console summaries); see `classic-debugging` §11 | off |
+| `CLASSIC_PERF_GPU` | `1`: also time each profiler phase on the GPU (web: `?perf_gpu`) | off |
 
 ## Git / PR notes
 

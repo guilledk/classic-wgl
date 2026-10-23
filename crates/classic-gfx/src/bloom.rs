@@ -136,15 +136,18 @@ impl Gfx {
         // The main target's texture keeps its own (NEAREST) filtering for
         // every other use; a sampler object makes this one read LINEAR, as
         // the copy's texture is (the bright pass's 4 taps cover 16 texels).
+        crate::perf::phase("bloom_bright");
         unsafe { gl.bind_sampler(BLOOM_UNIT_A, Some(self.particle_sampler)) };
         pass(&b.half[0], scene, (w, h), threshold);
         unsafe { gl.bind_sampler(BLOOM_UNIT_A, None) };
+        crate::perf::phase("bloom_blur");
         self.blur(&b.half[0], &b.half[1]);
         let half = &b.half[0];
         pass(&b.quarter[0], half.texture, (half.width, half.height), -1.0);
         self.blur(&b.quarter[0], &b.quarter[1]);
         self.blur(&b.quarter[0], &b.quarter[1]);
 
+        crate::perf::phase("bloom_composite");
         // Composite onto the main target.
         self.bind_main_target();
         let c = self.shader("bloomComposite");

@@ -767,11 +767,17 @@ impl Engine {
         ps.frame += 1;
         ps.maybe_rebase();
         ps.map = self.ground_sampler().map(|g| g.bounds());
+        classic_gfx::perf::phase("pu_sync");
         self.sync_emitter_instances(&mut ps, dt);
+        classic_gfx::perf::phase("pu_subs");
         self.fire_pending_subs(&mut ps);
+        classic_gfx::perf::phase("pu_spawn");
         self.spawn_all(&mut ps, dt);
+        classic_gfx::perf::phase("pu_lights");
         self.drive_light_layers(&mut ps);
         ps.finish_hidden_fades();
+        classic_gfx::perf::phase("pu_retire");
+        classic_gfx::perf::count("particle_instances", ps.instances.len() as u64);
         // Retire finished instances (their GPU rings are freed at draw time).
         let before = ps.instances.len();
         let mut i = 0;
@@ -1297,6 +1303,7 @@ impl ParticleSystem {
                 .iter()
                 .any(|l| matches!(l, LayerRt::Particles(p) if p.ring.last_death() >= t))
         });
+        classic_gfx::perf::phase("p_begin");
         let half_res = any_particles && gfx.begin_particle_pass();
         // Two phases, each back to front by instance origin: every alpha
         // (absorbing) layer first, then every glowing layer (additive or
@@ -1304,6 +1311,7 @@ impl ParticleSystem {
         // covers whom; a flame must add its light over the smoke and dust
         // around it, never be composited under them (fire over smoke).
         for glow_phase in [false, true] {
+            classic_gfx::perf::phase(if glow_phase { "p_glow" } else { "p_alpha" });
             for &ii in &order {
                 let inst = &mut self.instances[ii];
                 for l in &mut inst.layers {
@@ -1379,9 +1387,11 @@ impl ParticleSystem {
                 }
             }
         }
+        classic_gfx::perf::phase("p_composite");
         if half_res {
             gfx.end_particle_pass();
         }
+        classic_gfx::perf::phase("p_ribbons");
         if !self.ribbon_verts.is_empty() {
             let count = (self.ribbon_verts.len() / RIBBON_VERTEX_FLOATS) as i32;
             let vb = self.ribbon_vb.get_or_insert_with(|| DynamicVb::new(&gfx.gl, 1 << 16));
