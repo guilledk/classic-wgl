@@ -127,6 +127,28 @@ impl Engine {
     }
 
     pub fn frame(&mut self, input: &mut InputState, vw: f32, vh: f32, delta: f32) {
+        // The frame profiler (`CLASSIC_PERF`): off unless configured, and
+        // then bracketing every frame (see `classic_gfx::perf`).
+        static PERF_INIT: std::sync::Once = std::sync::Once::new();
+        PERF_INIT.call_once(|| {
+            let config = env_config::EnvConfig::get();
+            if let Some(out) = config.perf.clone() {
+                classic_gfx::perf::enable(classic_gfx::perf::PerfConfig {
+                    out,
+                    gpu: config.perf_gpu,
+                    // A window's swap paces; the headless loop does not.
+                    max_in_flight: config.headless.then_some(2),
+                });
+            }
+        });
+        if let Some(gfx) = self.gfx.as_ref() {
+            classic_gfx::perf::begin_frame(&gfx.gl);
+        }
+        self.frame_inner(input, vw, vh, delta);
+        classic_gfx::perf::end_frame();
+    }
+
+    fn frame_inner(&mut self, input: &mut InputState, vw: f32, vh: f32, delta: f32) {
         let config = env_config::EnvConfig::get();
         let vw = config.forced_width.unwrap_or(vw);
         let vh = config.forced_height.unwrap_or(vh);
@@ -270,6 +292,7 @@ impl Engine {
         // Frame ordering: demo pre-update hooks run BEFORE on_update closures.
         // The camera's on_update runs first in registration order and would
         // consume the wheel; the demo's text-scroll hook zeroes it first.
+        classic_gfx::perf::phase("pre_update");
         let mut pre = std::mem::take(&mut self.pre_update_hooks);
         for f in pre.iter_mut() {
             f(self);
@@ -285,6 +308,7 @@ impl Engine {
         // `self.update_fns`; append them before restoring so they survive.
         // Handlers use iter_mut(), NOT std::mem::take — they must survive
         // across frames (click, enter, exit, selection).
+        classic_gfx::perf::phase("update");
         let mut fns = std::mem::take(&mut self.update_fns);
         for f in fns.iter_mut() {
             f(self);
@@ -295,13 +319,16 @@ impl Engine {
         // Wheeled-vehicle simulation runs after the guest update closures
         // (so a `vehicle_goto` issued this frame is honoured) and before the
         // render list is built.
+        classic_gfx::perf::phase("vehicles");
         self.update_vehicles();
 
         // Particles after every mover (models posed, vehicles stepped) so
         // attached emitters spawn from this frame's positions.  A scene
         // without emitters never creates an instance (a no-op).
+        classic_gfx::perf::phase("particles_update");
         self.update_particles(delta);
 
+        classic_gfx::perf::phase("test_runner");
         // ---- CLASSIC_TEST automated test runner (registered by the demo) ----
         if env_config::EnvConfig::get().test_active() {
             let mut runner = self.test_runner.take();
@@ -317,6 +344,7 @@ impl Engine {
             self.join_workers();
         }
 
+        classic_gfx::perf::phase("render_prep");
         // Wheel decay: 1.4 * delta, then [-1, 1] clamp.
         // Without write-back, decay resets to zero every frame.
         let mw = &mut self.input.mouse_wheel;
@@ -505,8 +533,11 @@ impl Engine {
         let paint_mode = if self.guest_flag("rts_selection") { -1 } else { self.selection_mode };
 
         // Decay transient lights and gather the active set for the UBO upload.
+        classic_gfx::perf::phase("lights");
         self.light_handles.decay(&mut self.world, delta);
         let lights = self.gather_lights();
+        classic_gfx::perf::phase("render_list");
+        classic_gfx::perf::count("lights", lights.len() as u64);
 
         // Model matrix z MUST stay inside [-10000, 10000] — the orthographic
         // projection clips everything outside. The sort key can differ from
@@ -640,7 +671,9 @@ impl Engine {
 
         // 3D model draws (every node mesh instance), shared by the shadow
         // casters and the model pass.
+        classic_gfx::perf::phase("model_draws");
         let model_draws = self.model_draws(&items, &name_by_entity);
+        classic_gfx::perf::phase("shadow_fit");
 
         // Fit the directional shadow matrix to the primary tilemap's extents
         // plus the sprite casters' world quads (so their shadows aren't clipped
@@ -675,14 +708,17 @@ impl Engine {
         // begin_frame sets depthFunc/depthMask but does NOT glEnable(DEPTH_TEST).
         // draw_tilemap/draw_iso_sprite toggle it locally. UI/SDF runs without it.
         // Enabling it globally depth-rejects all UI under ortho projection.
+        classic_gfx::perf::phase("begin_frame");
         gfx.begin_frame();
         // Upload the dynamic light block once per frame (consumed by the lit
         // tilemap + sprite shaders).
+        classic_gfx::perf::phase("light_ubo");
         gfx.upload_lights(&lights);
         let cam = self.camera.matrix();
         // Bin them into screen tiles for this camera, so a lit fragment loops
         // over the lights near it only (terrain, models and iso sprites all
         // rasterise through `cam` · `iso_camera_matrix` at `PPM_TARGET`).
+        classic_gfx::perf::phase("light_grid");
         gfx.upload_light_grid(&lights, &cam, &iso_camera_matrix(), PPM_TARGET);
 
         // Directional shadow pass (terrain casters) — before Phase 1.  Renders
@@ -691,7 +727,9 @@ impl Engine {
             Some(m) => {
                 let tex = gfx.shadow_map_texture();
                 if let Some(tex) = tex {
+                    classic_gfx::perf::phase("shadow_clear");
                     gfx.begin_shadow_pass();
+                    classic_gfx::perf::phase("shadow_terrain");
                     for (_, entity, kind) in &items {
                         if !matches!(kind, DrawKind::Tilemap) {
                             continue;
@@ -716,15 +754,18 @@ impl Engine {
                             );
                         }
                     }
+                    classic_gfx::perf::phase("shadow_models");
                     // 3D model casters: real geometry, drawn with the terrain's
                     // constant offset (before the sprite slope-scaled switch).
                     for draw in &model_draws {
                         for inst in &draw.instances {
                             if let Some(mesh) = self.model_gpu.get(&inst.mesh_key) {
                                 gfx.draw_shadow_model(&inst.model, &m.view_proj, mesh);
+                                classic_gfx::perf::count("shadow_model_instances", 1);
                             }
                         }
                     }
+                    classic_gfx::perf::phase("shadow_sprites");
                     // Sprite shadow casters: each iso sprite casts its alpha
                     // silhouette into the shadow map (vehicles, agents, props).
                     // Billboards are their own receivers, so they need a
@@ -769,6 +810,7 @@ impl Engine {
             ));
         }
 
+        classic_gfx::perf::phase("terrain");
         // Phase 1: terrain (tilemap + nav mesh) — writes the depth buffer.
         for (order, entity, kind) in &items {
             if !matches!(kind, DrawKind::Tilemap) {
@@ -924,6 +966,7 @@ impl Engine {
         // with its true camera view depth before the sprites, so a sprite behind
         // a model depth-fails its normal pass and shows through the ghost pass.
         // Skipped entirely without models (model-less frames are unchanged).
+        classic_gfx::perf::phase("models");
         let has_models = model_draws.iter().any(|d| !d.instances.is_empty());
         // A glowing model also needs the bloom pass (below).
         let models_emissive = model_draws.iter().any(|d| d.has_emissive());
@@ -969,6 +1012,7 @@ impl Engine {
             }
         }
         crate::model::sort_model_draw_order(&mut order);
+        classic_gfx::perf::count("model_instances", order.len() as u64);
         for (_, _, inst) in order {
             let Some(mesh) = self.model_gpu.get(&inst.mesh_key) else { continue };
             gfx.draw_model(
@@ -986,9 +1030,11 @@ impl Engine {
         }
         if has_models {
             gfx.end_model_pass();
+            classic_gfx::perf::phase("model_composite");
             gfx.composite_models(IsoSpritePass::Normal, classic_gfx::MODEL_GHOST_GROUP);
         }
 
+        classic_gfx::perf::phase("sprites");
         // Phase 2: isometric normal passes — draw on top of terrain, writing
         // depth (depth-mapped sprites) and stencil ghost-group ids.  A single
         // `RenderSettings` (shared by both sprite passes) carries the light
@@ -1059,12 +1105,14 @@ impl Engine {
                 OUTLINE_RADIUS_PX,
             );
         }
+        classic_gfx::perf::phase("model_ghost");
         // Phase 3b: model ghost — 40% alpha wherever a model is behind sprites or
         // terrain, skipping pixels its own composite covers (like sprites).
         if has_models {
             gfx.composite_models(IsoSpritePass::Ghost, classic_gfx::MODEL_GHOST_GROUP);
         }
 
+        classic_gfx::perf::phase("particles_draw");
         // Phase 3c: particles + ribbons — depth-tested against the scene, no
         // depth write, premultiplied blend (see `particles`).
         let particle_settings = RenderSettings {
@@ -1077,6 +1125,7 @@ impl Engine {
         };
         self.particles.draw(gfx, &cam, &particle_settings, self.trace.as_mut());
 
+        classic_gfx::perf::phase("bloom");
         // Bloom (before the UI): only on frames with something emissive on
         // screen, so scenes without effects stay pixel-identical.
         if self.particles.has_emissive() || models_emissive {
@@ -1098,6 +1147,7 @@ impl Engine {
             gfx.apply_bloom(particles::BLOOM_THRESHOLD, particles::BLOOM_INTENSITY);
         }
 
+        classic_gfx::perf::phase("ui");
         // Phase 4: UI + sprites + text (no depth test — draw-order layering).
         for (order, entity, kind) in &items {
             if matches!(kind, DrawKind::Tilemap | DrawKind::IsoSprite | DrawKind::Model) {
@@ -1442,6 +1492,7 @@ impl Engine {
             }
         }
 
+        classic_gfx::perf::phase("tail");
         // --- golden trace finalization ---
         if let Some(t) = self.trace.take() {
             let trace = t.finish();

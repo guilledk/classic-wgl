@@ -161,6 +161,8 @@ fn main() {
             }
         });
 
+        // Flush the frame profiler (`CLASSIC_PERF`) before any exit.
+        classic_gfx::perf::finish();
         if test_failed.get() {
             std::process::exit(1);
         }
@@ -242,6 +244,7 @@ fn main() {
         }
     });
 
+    classic_gfx::perf::finish();
     if test_failed.get() {
         std::process::exit(1);
     }

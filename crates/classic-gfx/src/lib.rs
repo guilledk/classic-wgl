@@ -20,6 +20,7 @@ mod light_grid;
 mod model_pass;
 mod particle_pass;
 mod particles;
+pub mod perf;
 mod shader;
 mod shadow;
 mod texture;

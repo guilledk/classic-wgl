@@ -78,6 +78,12 @@ pub struct EnvConfig {
     /// CLASSIC_LOADER_THREADS: worker threads for parallel texture decode
     /// (default: the machine's available parallelism).
     pub loader_threads: usize,
+    /// CLASSIC_PERF: the frame profiler's JSON-lines output file (see
+    /// `classic_gfx::perf`); web: the `?perf` query parameter, whose output
+    /// goes to the console.  `None` = profiler off.
+    pub perf: Option<String>,
+    /// CLASSIC_PERF_GPU=1 (web: `?perf_gpu`): also time each phase on the GPU.
+    pub perf_gpu: bool,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -138,6 +144,8 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
             .parse()
             .ok()
             .unwrap_or_else(default_loader_threads),
+        perf: read_perf(),
+        perf_gpu: read_bool("CLASSIC_PERF_GPU") || web_query("perf_gpu").is_some(),
         test,
     }
 });
@@ -180,6 +188,30 @@ fn read_string(key: &str) -> String {
 
 fn read_bool(key: &str) -> bool {
     matches!(std::env::var(key).as_deref(), Ok("1" | "true" | "yes"))
+}
+
+/// `CLASSIC_PERF` (a non-empty path), or on the web a `?perf` query
+/// parameter (any value).
+fn read_perf() -> Option<String> {
+    let path = read("CLASSIC_PERF");
+    if !path.is_empty() {
+        return Some(path);
+    }
+    web_query("perf")
+}
+
+/// A query parameter of the page URL (always `None` natively).
+fn web_query(name: &str) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let search = web_sys::window()?.location().search().ok()?;
+        web_sys::UrlSearchParams::new_with_str(&search).ok()?.get(name)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = name;
+        None
+    }
 }
 
 /// A `CLASSIC_GOLDEN_PNG` frame list.  The boolean spellings (`1`, `true`,

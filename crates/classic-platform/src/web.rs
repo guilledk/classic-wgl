@@ -16,6 +16,8 @@ use crate::{InputState, Platform};
 pub struct WebPlatform {
     canvas: HtmlCanvasElement,
     gl: Rc<glow::Context>,
+    /// The raw context behind `gl` (for APIs glow does not cover).
+    raw: WebGl2RenderingContext,
     input: Rc<RefCell<InputState>>,
 }
 
@@ -48,6 +50,7 @@ impl WebPlatform {
         let gl_ctx: WebGl2RenderingContext =
             gl_ctx.dyn_into().map_err(|_| JsValue::from_str("not a WebGL2 context"))?;
 
+        let raw = gl_ctx.clone();
         let gl = Rc::new(glow::Context::from_webgl2_context(gl_ctx));
 
         let input = Rc::new(RefCell::new(InputState::new()));
@@ -197,12 +200,18 @@ impl WebPlatform {
             c.forget();
         }
 
-        Ok(Self { canvas, gl, input })
+        Ok(Self { canvas, gl, raw, input })
     }
 
     /// The WebGL2 context, cloned for async engine bootstrap before `run_loop`.
     pub fn gl(&self) -> Rc<glow::Context> {
         self.gl.clone()
+    }
+
+    /// The raw `WebGl2RenderingContext` behind [`Self::gl`] (the frame
+    /// profiler reads its timer queries through it).
+    pub fn webgl2(&self) -> &WebGl2RenderingContext {
+        &self.raw
     }
 
     /// The shared input state (keydown/keyup listeners installed in `new`),

@@ -169,6 +169,9 @@ async fn run() -> anyhow::Result<()> {
         }
     };
     let gl = platform.gl();
+    if classic_engine::env_config::EnvConfig::get().perf.is_some() {
+        classic_gfx::perf::attach_webgl2(platform.webgl2().clone());
+    }
     let (vw, vh) = platform.viewport();
 
     // Set up the GL layer, embedded font and loading screen up front so the
