@@ -11,9 +11,9 @@
 
 use std::collections::HashMap;
 
-use classic_core::components::{Model, Tilemap};
+use classic_core::components::{Disabled, Model, Tilemap};
 use classic_core::math::iso_world_pos;
-use classic_core::model::{gltf_to_world, ModelAsset};
+use classic_core::model::{gltf_to_world, ModelAsset, PoseKey, PoseScratch};
 use classic_core::tilemap::sample_height_mesh;
 use classic_core::Transform;
 use glam::{Mat4, Vec3};
@@ -81,10 +81,37 @@ impl ModelDraw {
 }
 
 /// Sample `m`'s pose from `asset` at `m.time` (an out-of-range or missing clip
-/// index is the rest pose) into `Model.node_world` + `Model.frame_offset`.
-fn sample_pose(asset: &ModelAsset, clip: Option<usize>, m: &mut Model, tf: &Transform) {
-    m.node_world = asset.node_world_transforms(clip.unwrap_or(usize::MAX), m.time);
+/// index is the rest pose) into `Model.node_world` + `Model.frame_offset`,
+/// unless `m.pose_key` says the cached pose already is exactly that.
+fn sample_pose(
+    asset: &ModelAsset,
+    generation: u64,
+    clip: Option<usize>,
+    m: &mut Model,
+    tf: &Transform,
+    scratch: &mut PoseScratch,
+) {
+    let fresh = m.pose_key.as_ref().is_some_and(|k| {
+        k.generation == generation
+            && k.clip == clip
+            && k.time == m.time.to_bits()
+            && k.scale == tf.scale.to_array().map(f32::to_bits)
+            && k.model == m.model
+    });
+    if fresh {
+        return;
+    }
+    let mut world = std::mem::take(&mut m.node_world);
+    asset.node_world_transforms_into(clip.unwrap_or(usize::MAX), m.time, &mut world, scratch);
+    m.node_world = world;
     m.frame_offset = tf.scale * asset.root_translation_from(&m.node_world);
+    m.pose_key = Some(PoseKey {
+        model: m.model.clone(),
+        generation,
+        clip,
+        time: m.time.to_bits(),
+        scale: tf.scale.to_array().map(f32::to_bits),
+    });
 }
 
 /// The main-pass draw order of model instances keyed `(alpha_test, view
@@ -127,9 +154,22 @@ impl Engine {
     /// into `Model.node_world` + `Model.frame_offset`.  A model with no clip
     /// (or an unknown one) holds its bind pose; a finished one-shot clip holds
     /// its last pose.  Run once per frame by the demo's model system.
+    ///
+    /// The pose is only re-sampled when it can have changed (a different
+    /// glb, clip, clip time or scale; see [`PoseKey`]), and not at all for a
+    /// hidden (`Disabled`) model nothing reads it from: it is not drawn and
+    /// its parented lights are off, but an `Emitter` parented to it keeps
+    /// following it while its particles fade, so those keep sampling.  A
+    /// skipped model's clip still advances, and it re-samples once shown.
     pub fn update_models(&mut self, delta: f32) {
+        let _perf = classic_gfx::perf::scope("update_models");
+        let followed = self.emitter_followed_hidden_models();
         let models = &self.models;
-        for (_e, (m, tf)) in self.world.query_mut::<(&mut Model, &Transform)>() {
+        let generation = self.model_generation;
+        let scratch = &mut self.pose_scratch;
+        for (e, (m, tf, hidden)) in
+            self.world.query_mut::<(&mut Model, &Transform, Option<&Disabled>)>()
+        {
             let Some(asset) = models.get(&m.model) else { continue };
             let clip = m.clip.as_deref().and_then(|c| asset.clip_index(c));
             if let Some(ci) = clip {
@@ -146,8 +186,25 @@ impl Engine {
                     }
                 }
             }
-            sample_pose(asset, clip, m, tf);
+            if hidden.is_some() && !followed.contains(&e) {
+                continue;
+            }
+            sample_pose(asset, generation, clip, m, tf, scratch);
         }
+    }
+
+    /// Hidden model entities an `Emitter` is parented to (empty, without
+    /// scanning the emitters, when no model is hidden).
+    fn emitter_followed_hidden_models(&self) -> Vec<hecs::Entity> {
+        let mut hidden = self.world.query::<(&Model, &Disabled)>();
+        if hidden.iter().next().is_none() {
+            return Vec::new();
+        }
+        let mut emitters = self.world.query::<&classic_core::components::Emitter>();
+        emitters
+            .iter()
+            .filter_map(|(_, em)| em.parent.as_deref().and_then(|p| self.names.get(p)).copied())
+            .collect()
     }
 
     /// Re-sample one `Model` entity's pose at its current clip time without
@@ -155,13 +212,15 @@ impl Engine {
     /// changed outside [`Engine::update_models`] (a clip swap to a glb with a
     /// different node set) is consistent before the next draw.
     pub fn resample_model(&mut self, entity: hecs::Entity) {
+        let _perf = classic_gfx::perf::scope("update_models");
         let models = &self.models;
+        let (generation, scratch) = (self.model_generation, &mut self.pose_scratch);
         let Ok((m, tf)) = self.world.query_one_mut::<(&mut Model, &Transform)>(entity) else {
             return;
         };
         let Some(asset) = models.get(&m.model) else { return };
         let clip = m.clip.as_deref().and_then(|c| asset.clip_index(c));
-        sample_pose(asset, clip, m, tf);
+        sample_pose(asset, generation, clip, m, tf, scratch);
     }
 
     /// The world placement of a model entity: its origin on the terrain ground
@@ -520,6 +579,48 @@ mod tests {
         assert!(e.start_model_clip("rocket", "landing", true));
         e.update_models(1.25);
         assert!((at(&e) - Vec3::new(-3.0, 3.0, 8.0)).length() < 1e-3, "{}", at(&e));
+    }
+
+    #[test]
+    fn unchanged_and_hidden_poses_are_not_resampled() {
+        let mut e = Engine::new_for_test();
+        e.load_model_glb("landing", &tiny_glb("landing")).unwrap();
+        let rocket = e.world.spawn((
+            Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE),
+            Model::new("x", "tilemap"),
+        ));
+        e.names.insert("rocket".into(), rocket);
+        assert!(e.start_model_clip("rocket", "landing", false));
+        e.update_models(10.0);
+        // Finished one-shot: a sentinel pose survives a frame (no re-sample).
+        let sentinel = Vec3::splat(123.0);
+        let pose = |e: &Engine| e.world.get::<&Model>(rocket).unwrap().frame_offset;
+        e.world.get::<&mut Model>(rocket).unwrap().frame_offset = sentinel;
+        e.update_models(0.016);
+        assert_eq!(pose(&e), sentinel, "unchanged key skips the sample");
+        // A new scale is a new key.
+        e.world.get::<&mut Transform>(rocket).unwrap().scale = Vec3::splat(2.0);
+        e.update_models(0.016);
+        assert!((pose(&e) - Vec3::new(0.0, 0.0, 4.0)).length() < 1e-4, "{}", pose(&e));
+        // Hidden and playing: the clip advances but the pose is not sampled...
+        assert!(e.start_model_clip("rocket", "landing", true));
+        e.world.insert_one(rocket, Disabled).unwrap();
+        e.world.get::<&mut Model>(rocket).unwrap().frame_offset = sentinel;
+        e.update_models(0.5);
+        assert_eq!(pose(&e), sentinel, "hidden model skipped");
+        assert_eq!(e.world.get::<&Model>(rocket).unwrap().time, 0.5);
+        // ...unless an emitter follows it.
+        e.world.spawn((classic_core::components::Emitter {
+            parent: Some("rocket".into()),
+            ..serde_json::from_str("{\"effect\": \"fx\"}").unwrap()
+        },));
+        e.update_models(0.0);
+        assert!((pose(&e) - Vec3::new(-4.0, 4.0, 12.0)).length() < 1e-3, "{}", pose(&e));
+        // Shown again: samples (the key moved on while hidden).
+        let _ = e.world.remove_one::<Disabled>(rocket);
+        e.world.get::<&mut Model>(rocket).unwrap().frame_offset = sentinel;
+        e.update_models(0.25);
+        assert_ne!(pose(&e), sentinel);
     }
 
     #[test]

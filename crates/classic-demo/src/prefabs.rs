@@ -178,6 +178,7 @@ fn rest_frame(sequence: &[u32], repeat: bool) -> f32 {
 /// pushes frame changes to their target IsoSprite / IsoAgent components.
 pub fn init_animator_system(engine: &mut Engine) {
     engine.on_update(|engine| {
+        let _perf = classic_gfx::perf::scope("animator");
         let delta = engine.time.delta;
 
         let anim_rates: std::collections::HashMap<String, (f32, usize)> = engine

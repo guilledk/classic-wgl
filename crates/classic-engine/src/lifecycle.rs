@@ -74,6 +74,8 @@ impl Engine {
             vehicles: HashMap::new(),
             vehicle_anchors: HashMap::new(),
             models: HashMap::new(),
+            model_generation: 0,
+            pose_scratch: Default::default(),
             model_gpu: HashMap::new(),
             model_textures: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),

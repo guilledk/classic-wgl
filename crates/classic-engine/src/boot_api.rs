@@ -1524,6 +1524,7 @@ impl Engine {
                 SharedModelTexture { name: tex_name, width: img.width, height: img.height, alpha },
             );
         }
+        self.model_generation += 1;
         self.models.insert(name.to_string(), asset);
         Some(dims)
     }

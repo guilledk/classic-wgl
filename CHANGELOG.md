@@ -133,6 +133,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   (the copy target is created on first use).  Frames are pixel-identical;
   `buildtest` at 4K on a Radeon 680M: the 0.56 ms copy is gone, zoom 1
   from 12.5 to 12.2 ms a frame (#144).
+- Model poses are sampled once per change.  Clips index their channels
+  per node at parse (`ModelClip::node_channels`, `index_channels`), a
+  pose samples into reused buffers
+  (`ModelAsset::node_world_transforms_into` + `PoseScratch`), and
+  `Engine::update_models` skips a model whose glb, load generation,
+  clip, clip time and scale are unchanged (`Model.pose_key`, a
+  transient `PoseKey`) or that is hidden with no `Emitter` parented to
+  it.  Poses are bit-identical; 4K `buildtest` model sampling goes
+  from 2.1-3.2 ms to 0.15-0.2 ms a frame.  `classic_gfx::perf::scope`
+  splits `update_models` and `animator` out of the `update` phase
+  (#147).
 
 ### Fixed
 

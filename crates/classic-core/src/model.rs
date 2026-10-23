@@ -338,12 +338,62 @@ pub struct ModelClip {
     pub name: String,
     pub duration: f32,
     pub channels: Vec<ModelChannel>,
+    /// Per node, the index into `channels` of its translation, rotation and
+    /// scale channel (the first one, as a scan would find), built by
+    /// [`ModelClip::index_channels`] (the parser calls it).  Empty = not
+    /// indexed: lookups fall back to scanning `channels`.
+    pub node_channels: Vec<[Option<u32>; 3]>,
 }
 
 impl ModelClip {
-    fn channel_for(&self, node: usize, property: TrsProperty) -> Option<&ModelChannel> {
-        self.channels.iter().find(|c| c.node == node && c.property == property)
+    /// Build [`Self::node_channels`] for a model of `nodes` nodes, so a pose
+    /// sample finds a node's channels in O(1) instead of scanning every
+    /// channel three times per node.
+    pub fn index_channels(&mut self, nodes: usize) {
+        let len = self.channels.iter().map(|c| c.node + 1).fold(nodes, usize::max);
+        let mut index = vec![[None; 3]; len];
+        for (i, c) in self.channels.iter().enumerate() {
+            let slot = &mut index[c.node][c.property as usize];
+            if slot.is_none() {
+                *slot = Some(i as u32);
+            }
+        }
+        self.node_channels = index;
     }
+
+    fn channel_for(&self, node: usize, property: TrsProperty) -> Option<&ModelChannel> {
+        if self.node_channels.is_empty() {
+            return self.channels.iter().find(|c| c.node == node && c.property == property);
+        }
+        let i = self.node_channels.get(node)?[property as usize]?;
+        Some(&self.channels[i as usize])
+    }
+}
+
+/// What a model entity's cached pose was sampled from.  Two samples with
+/// equal keys produce bit-identical poses, so an unchanged key skips the
+/// re-sample (a finished one-shot clip, a paused or bind-pose model).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PoseKey {
+    /// The model resource name.
+    pub model: String,
+    /// The engine's model-load generation (bumped whenever a model loads, so
+    /// a re-loaded resource under the same name re-samples).
+    pub generation: u64,
+    /// The clip index (`None` = bind pose).
+    pub clip: Option<usize>,
+    /// The clip time's bits.
+    pub time: u32,
+    /// The entity's `Transform.scale` bits (it scales `frame_offset`).
+    pub scale: [u32; 3],
+}
+
+/// Reusable buffers for [`ModelAsset::node_world_transforms_into`], so a
+/// per-frame pose sample allocates nothing once warm.
+#[derive(Clone, Debug, Default)]
+pub struct PoseScratch {
+    local: Vec<Mat4>,
+    stack: Vec<usize>,
 }
 
 /// A parsed glTF model: node hierarchy + meshes + clips.
@@ -367,7 +417,24 @@ impl ModelAsset {
     /// When `clip` is out of range every node keeps its rest TRS (so a model
     /// with no clips still renders its bind pose).
     pub fn node_world_transforms(&self, clip: usize, time: f32) -> Vec<Mat4> {
-        let mut local = vec![Mat4::IDENTITY; self.nodes.len()];
+        let mut world = Vec::new();
+        self.node_world_transforms_into(clip, time, &mut world, &mut PoseScratch::default());
+        world
+    }
+
+    /// [`Self::node_world_transforms`] into `world` (resized to the node
+    /// count), reusing `scratch`: the per-frame form, which allocates only
+    /// when a buffer has to grow.
+    pub fn node_world_transforms_into(
+        &self,
+        clip: usize,
+        time: f32,
+        world: &mut Vec<Mat4>,
+        scratch: &mut PoseScratch,
+    ) {
+        let local = &mut scratch.local;
+        local.clear();
+        local.resize(self.nodes.len(), Mat4::IDENTITY);
         let clip_ref = self.clips.get(clip);
         for (i, node) in self.nodes.iter().enumerate() {
             let mut t = node.translation;
@@ -388,20 +455,18 @@ impl ModelAsset {
         }
 
         // Top-down: process parents before children via a DFS from every root.
-        let mut world = vec![Mat4::IDENTITY; self.nodes.len()];
-        let mut stack: Vec<usize> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.parent.is_none())
-            .map(|(i, _)| i)
-            .collect();
+        world.clear();
+        world.resize(self.nodes.len(), Mat4::IDENTITY);
+        let stack = &mut scratch.stack;
+        stack.clear();
+        stack.extend(
+            self.nodes.iter().enumerate().filter(|(_, n)| n.parent.is_none()).map(|(i, _)| i),
+        );
         while let Some(i) = stack.pop() {
             let parent_world = self.nodes[i].parent.map(|p| world[p]).unwrap_or(Mat4::IDENTITY);
             world[i] = parent_world * local[i];
             stack.extend(self.nodes[i].children.iter().copied());
         }
-        world
     }
 
     /// The model's world-metre descent/drift at `clip` time `time`: the root
@@ -612,11 +677,14 @@ pub fn parse_model_glb_with(
             channels.push(ModelChannel { node, property, interpolation, times, values });
         }
         let duration = channels.iter().map(|c| c.end_time()).fold(0.0f32, f32::max);
-        clips.push(ModelClip {
+        let mut clip = ModelClip {
             name: anim.name().unwrap_or_default().to_string(),
             duration,
             channels,
-        });
+            node_channels: Vec::new(),
+        };
+        clip.index_channels(nodes.len());
+        clips.push(clip);
     }
 
     // The rig origin: the default scene's first root node (the exporter emits a
@@ -810,6 +878,68 @@ mod tests {
         let world = asset.node_world_transforms(usize::MAX, 0.0);
         // child world translation = root(5) + child(10) = 15 in glTF +Y.
         assert!((world[1].w_axis.truncate() - Vec3::new(0.0, 15.0, 0.0)).length() < 1e-5);
+    }
+
+    #[test]
+    fn indexed_buffered_pose_matches_the_scan_bit_for_bit() {
+        // root -> {a, b}; a has T/R/S channels plus a duplicate T channel
+        // (the first one wins, as a scan finds it), b only rotation.
+        let node = |name: &str, parent, children| ModelNode {
+            name: name.into(),
+            parent,
+            children,
+            translation: Vec3::new(0.5, 1.0, -0.25),
+            rotation: Quat::from_rotation_y(0.3),
+            scale: Vec3::splat(1.5),
+            mesh: None,
+        };
+        let ch = |node, property, values: Vec<Vec4>| ModelChannel {
+            node,
+            property,
+            interpolation: Interpolation::Linear,
+            times: vec![0.0, 1.0],
+            values,
+        };
+        let q = |a: f32| Vec4::from(Quat::from_rotation_z(a));
+        let clip = ModelClip {
+            name: "c".into(),
+            duration: 1.0,
+            channels: vec![
+                ch(2, TrsProperty::Rotation, vec![q(0.0), q(1.0)]),
+                ch(1, TrsProperty::Translation, vec![Vec4::ZERO, Vec4::new(1.0, 2.0, 3.0, 0.0)]),
+                ch(1, TrsProperty::Translation, vec![Vec4::ONE, Vec4::ONE]),
+                ch(1, TrsProperty::Rotation, vec![q(0.2), q(-0.7)]),
+                ch(1, TrsProperty::Scale, vec![Vec4::ONE, Vec4::new(2.0, 0.5, 1.0, 0.0)]),
+            ],
+            node_channels: Vec::new(),
+        };
+        let mut indexed = clip.clone();
+        indexed.index_channels(3);
+        assert_eq!(indexed.node_channels[1], [Some(1), Some(3), Some(4)]);
+        assert_eq!(indexed.node_channels[0], [None; 3]);
+        let asset = |clip: ModelClip| ModelAsset {
+            nodes: vec![
+                node("root", None, vec![1, 2]),
+                node("a", Some(0), vec![]),
+                node("b", Some(0), vec![]),
+            ],
+            clips: vec![clip],
+            root: Some(0),
+            ..Default::default()
+        };
+        let (scan, fast) = (asset(clip), asset(indexed));
+        let mut world = Vec::new();
+        let mut scratch = PoseScratch::default();
+        for t in [0.0, 0.25, 0.6, 1.0, 3.0] {
+            for c in [0, usize::MAX] {
+                fast.node_world_transforms_into(c, t, &mut world, &mut scratch);
+                let want = scan.node_world_transforms(c, t);
+                let bits = |m: &[Mat4]| {
+                    m.iter().flat_map(|m| m.to_cols_array()).map(f32::to_bits).collect::<Vec<_>>()
+                };
+                assert_eq!(bits(&world), bits(&want), "clip {c} t {t}");
+            }
+        }
     }
 
     /// A 2x1 RGBA PNG: left texel `left`, right texel `right`.

@@ -275,6 +275,11 @@ pub struct Engine {
     /// `models` resources at boot: node hierarchy + clips + CPU mesh data (the
     /// embedded texture pixels are released once uploaded to GL).
     pub models: HashMap<String, classic_core::model::ModelAsset>,
+    /// Bumped on every model load (a cached pose of an older load
+    /// re-samples; see `classic_core::model::PoseKey`).
+    pub(crate) model_generation: u64,
+    /// Reused pose-sampling buffers (`Engine::update_models`).
+    pub(crate) pose_scratch: classic_core::model::PoseScratch,
     /// GPU model meshes keyed by `"{model}::{mesh_index}"`, uploaded from
     /// [`Self::models`] when a `Gfx` context is present.
     model_gpu: HashMap<String, classic_gfx::ModelMeshGpu>,
