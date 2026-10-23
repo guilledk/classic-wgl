@@ -292,3 +292,94 @@ fn shader_constants_match_the_layout() {
     }
     assert!(crate::shaders::SHEET_FRAG.contains(&format!("#define MAX_LIGHTS {MAX_LIGHTS}\n")));
 }
+
+/// `Footprint::touches_tile` against brute force: a tile counts as touched
+/// iff some point of its (margin-grown) box lies inside the ellipse, judged
+/// on a dense sample grid; the closed form may only add tiles a sample
+/// grid misses at the boundary, never drop one.
+#[test]
+fn footprint_tile_test_matches_brute_force() {
+    let mut rng = Rng(7);
+    let (_, view) = view_for(1920, 1080, 1.0, Vec3::new(40.0, 40.0, 0.0));
+    let mut culled = 0;
+    for _ in 0..200 {
+        let pos = Vec3::new(rng.range(20.0, 60.0), rng.range(20.0, 60.0), rng.range(-2.0, 6.0));
+        let light = point(pos, rng.range(0.5, 12.0));
+        let (Some(fp), Some(r)) = (view.footprint(&light), view.tile_rect(&light)) else {
+            continue;
+        };
+        let c = view.pixel(light.position).map(f64::from);
+        let r2 = light.radius as f64 * light.radius as f64;
+        let inside = |px: f64, py: f64| fp.q(px - c[0], py - c[1]) <= r2;
+        for ty in r[1]..=r[3] {
+            for tx in r[0]..=r[2] {
+                let t = LIGHT_TILE_PX as f64;
+                let m = LIGHT_RECT_MARGIN_PX as f64;
+                let mut any = false;
+                for i in 0..=16 {
+                    for j in 0..=16 {
+                        let px = tx as f64 * t - m + (t + 2.0 * m) * i as f64 / 16.0;
+                        let py = ty as f64 * t - m + (t + 2.0 * m) * j as f64 / 16.0;
+                        any |= inside(px, py);
+                    }
+                }
+                if any {
+                    assert!(fp.touches_tile(tx, ty), "missed tile ({tx},{ty}) of {light:?}");
+                }
+                if !fp.touches_tile(tx, ty) {
+                    culled += 1;
+                }
+            }
+        }
+    }
+    assert!(culled > 0, "the ellipse never culled a bbox tile");
+}
+
+/// A light's bounding-box corner tiles that its ellipse misses get no entry.
+#[test]
+fn bbox_corners_outside_the_ellipse_are_not_listed() {
+    let (_, view) = view_for(1920, 1080, 1.0, Vec3::new(40.0, 40.0, 0.0));
+    let light = point(Vec3::new(40.0, 40.0, 0.0), 8.0);
+    let r = view.tile_rect(&light).unwrap();
+    let grid = LightGrid::build(std::slice::from_ref(&light), &view, usize::MAX);
+    let fp = view.footprint(&light).unwrap();
+    let mut listed = 0;
+    let mut dropped = 0;
+    for ty in r[1]..=r[3] {
+        for tx in r[0]..=r[2] {
+            let has = grid.tile_lights(tx, ty).is_some_and(|l| l == [0]);
+            assert_eq!(has, fp.touches_tile(tx, ty));
+            if has {
+                listed += 1
+            } else {
+                dropped += 1
+            }
+        }
+    }
+    assert!(listed > 0 && dropped > 0, "listed {listed}, dropped {dropped}");
+}
+
+/// The per-row span is the per-tile test, row by row.
+#[test]
+fn row_spans_match_the_tile_test() {
+    let mut rng = Rng(11);
+    for zoom in [0.15, 0.5, 1.0, 2.0] {
+        let (_, view) = view_for(1920, 1080, zoom, Vec3::new(40.0, 40.0, 0.0));
+        let (tx, _) = view.tiles();
+        for _ in 0..200 {
+            let pos = Vec3::new(rng.range(10.0, 70.0), rng.range(10.0, 70.0), rng.range(-2.0, 8.0));
+            let light = point(pos, rng.range(0.3, 15.0));
+            let (Some(fp), Some(r)) = (view.footprint(&light), view.tile_rect(&light)) else {
+                continue;
+            };
+            for y in r[1]..=r[3] {
+                let tiles: Vec<u32> = (r[0]..=r[2]).filter(|&x| fp.touches_tile(x, y)).collect();
+                let span: Vec<u32> = fp
+                    .row_span(y, tx)
+                    .map(|(a, b)| (a.max(r[0])..=b.min(r[2])).collect())
+                    .unwrap_or_default();
+                assert_eq!(span, tiles, "row {y} of {light:?} at zoom {zoom}");
+            }
+        }
+    }
+}

@@ -171,6 +171,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   debug buffers and replaced SDF glyph buffers, which leaked.  Frames
   are pixel-identical; 4K `buildtest` at zoom 0.15: CPU 4.1 to 2.8 ms
   a frame (#149).
+- Lights are binned into the tiles their projected ball touches, not
+  its whole bounding rect.  Under the orthographic iso camera a light's
+  sphere projects to exactly a filled ellipse (`LightGridView::footprint`,
+  `Footprint`); `Footprint::row_span` gives each tile row's touched
+  columns in closed form, so the rect's corner tiles drop out of the
+  lists.  Conservative as before (same 1 px margin), so frames are
+  pixel-identical; on 4K `buildtest` list entries fall 18% and zoom 1
+  GPU time from 11.7 to 11.3 ms a frame.  With `CLASSIC_PERF` the grid
+  reports `grid_tiles`, `grid_lit_tiles`, `grid_entries`, `grid_max` and
+  `grid_overflow` (#150).
 
 ### Fixed
 

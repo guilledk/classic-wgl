@@ -244,6 +244,9 @@ impl Gfx {
         let clip = clip_from_world(&self.projection(), camera, world_matrix, ppm);
         let view = if lights.is_empty() { None } else { LightGridView::new(&clip, main.0, main.1) };
         let grid = view.map(|v| LightGrid::build(lights, &v, self.light_grid.max_words()));
+        if let (true, Some(g)) = (crate::perf::enabled(), grid.as_ref()) {
+            g.count_stats();
+        }
         self.light_grid.upload(&self.gl, grid.as_ref().map(|g| (g, main, clip)));
     }
 

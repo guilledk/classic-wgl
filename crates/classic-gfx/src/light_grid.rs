@@ -1,11 +1,11 @@
 //! Screen-tile light culling ("forward+ lite") for the lit fragment shaders.
 //!
 //! Every lit fragment used to loop over every light in the `LightBlock` UBO.
-//! Instead, once per frame the CPU projects each light's sphere to a
-//! conservative rect in screen space (the iso camera is orthographic, so the
-//! projection is affine and a sphere's bound is exact), bins it into a grid of
-//! [`LIGHT_TILE_PX`]-pixel tiles of the main target, and uploads the per-tile
-//! light lists as one `R32UI` texture.  `sheet.frag`, `iso_tilemap.frag` and
+//! Instead, once per frame the CPU projects each light's sphere to screen
+//! space (the iso camera is orthographic, so the projection is affine and a
+//! sphere maps to exactly a filled ellipse), bins it into the
+//! [`LIGHT_TILE_PX`]-pixel tiles of the main target it touches, and uploads
+//! the per-tile light lists as one `R32UI` texture.  `sheet.frag`, `iso_tilemap.frag` and
 //! `mesh.frag` look up their tile from `gl_FragCoord` (the `LIGHT GRID` block,
 //! `evaluateLightsTiled`) and loop over that list only.
 //!
@@ -166,6 +166,117 @@ impl LightGridView {
         }
         Some(out)
     }
+
+    /// The light's projected ball: an affine map sends the ball of radius
+    /// `r` about `position` to exactly the filled ellipse `(x − c)ᵀ (A Aᵀ)⁻¹
+    /// (x − c) ≤ r²` (`A` = the linear part of `world -> pixel`), and every
+    /// fragment the light reaches rasterises inside it.  `None` for a light
+    /// that reaches everywhere or a degenerate map (the rect alone decides).
+    pub fn footprint(&self, light: &Light) -> Option<Footprint> {
+        let r = light.radius as f64;
+        if !(r > 0.0 && r.is_finite()) {
+            return None;
+        }
+        let [a, b] = self.rows.map(|row| row.truncate().as_dvec3());
+        // M = A Aᵀ (2x2, symmetric) and its inverse.
+        let (m00, m01, m11) = (a.dot(a), a.dot(b), b.dot(b));
+        let det = m00 * m11 - m01 * m01;
+        if !det.is_finite() || det <= 1e-12 * m00 * m11 {
+            return None;
+        }
+        let c = self.pixel(light.position);
+        Some(Footprint {
+            c: [c[0] as f64, c[1] as f64],
+            inv: [m11 / det, -m01 / det, m00 / det],
+            r2: r * r,
+        })
+    }
+}
+
+/// A light's screen footprint ([`LightGridView::footprint`]), in main-target
+/// pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct Footprint {
+    c: [f64; 2],
+    /// `(A Aᵀ)⁻¹` as `[xx, xy, yy]`.
+    inv: [f64; 3],
+    r2: f64,
+}
+
+impl Footprint {
+    /// `(x − c)ᵀ (A Aᵀ)⁻¹ (x − c)` for an offset `(dx, dy)` from the centre.
+    fn q(&self, dx: f64, dy: f64) -> f64 {
+        let [xx, xy, yy] = self.inv;
+        xx * dx * dx + 2.0 * xy * dx * dy + yy * dy * dy
+    }
+
+    /// Whether the ellipse touches tile `(tx, ty)`, grown by the rect test's
+    /// pixel margin: the minimum of the (convex) quadratic over the box is
+    /// 0 with the centre inside, else attained on one of its four edges.
+    pub fn touches_tile(&self, tx: u32, ty: u32) -> bool {
+        let t = LIGHT_TILE_PX as f64;
+        let m = LIGHT_RECT_MARGIN_PX as f64;
+        let (x0, x1) = (tx as f64 * t - m - self.c[0], (tx + 1) as f64 * t + m - self.c[0]);
+        let (y0, y1) = (ty as f64 * t - m - self.c[1], (ty + 1) as f64 * t + m - self.c[1]);
+        if x0 <= 0.0 && 0.0 <= x1 && y0 <= 0.0 && 0.0 <= y1 {
+            return true;
+        }
+        let [xx, xy, yy] = self.inv;
+        // On an edge x = const the minimiser is y = −xy·x / yy, clamped to
+        // the edge (and symmetrically for y = const).
+        let edge_x = |x: f64| self.q(x, (-xy * x / yy).clamp(y0, y1));
+        let edge_y = |y: f64| self.q((-xy * y / xx).clamp(x0, x1), y);
+        let min = edge_x(x0).min(edge_x(x1)).min(edge_y(y0)).min(edge_y(y1));
+        min <= self.r2
+    }
+
+    /// The tiles of row `ty` the ellipse touches (by [`Self::touches_tile`]'s
+    /// rule), as an inclusive `[x0, x1]` within `0..tiles_x`: the ellipse's
+    /// x-extent over the row's (margin-grown) band, in closed form.  A box
+    /// meets a convex set iff their x-ranges over the box's band overlap.
+    pub fn row_span(&self, ty: u32, tiles_x: u32) -> Option<(u32, u32)> {
+        let t = LIGHT_TILE_PX as f64;
+        let m = LIGHT_RECT_MARGIN_PX as f64;
+        let [xx, xy, yy] = self.inv;
+        // Half-extents: x_max = r·sqrt(M00), y_max = r·sqrt(M11), with
+        // M = inv⁻¹ = [yy, −xy; −xy, xx] / det(inv).
+        let det = xx * yy - xy * xy;
+        let (mx, my) = (yy / det, xx / det);
+        let (rx, ry) = ((self.r2 * mx).sqrt(), (self.r2 * my).sqrt());
+        // The band, relative to the centre, clipped to the ellipse's y-range.
+        let y0 = (ty as f64 * t - m - self.c[1]).max(-ry);
+        let y1 = ((ty + 1) as f64 * t + m - self.c[1]).min(ry);
+        if y0 > y1 {
+            return None;
+        }
+        // The section at height y: x = (−xy·y ± sqrt(xy²y² − xx(yy·y² − r²))) / xx.
+        let section = |y: f64| {
+            let disc = (xy * xy * y * y - xx * (yy * y * y - self.r2)).max(0.0);
+            let (mid, half) = (-xy * y / xx, disc.sqrt() / xx);
+            (mid - half, mid + half)
+        };
+        let (lo0, hi0) = section(y0);
+        let (lo1, hi1) = section(y1);
+        let (mut lo, mut hi) = (lo0.min(lo1), hi0.max(hi1));
+        // The extreme points (where the tangent is vertical) sit at
+        // y = −xy·x / yy for x = ±rx: inside the band, they bound it.
+        let y_at = |x: f64| -xy * x / yy;
+        if (y0..=y1).contains(&y_at(rx)) {
+            hi = rx;
+        }
+        if (y0..=y1).contains(&y_at(-rx)) {
+            lo = -rx;
+        }
+        // Tiles whose grown x-range meets [lo, hi]; a hair of slack keeps
+        // round-off on the conservative side.
+        let eps = 1e-6;
+        // Tile x meets it iff x·t − m <= hi and (x + 1)·t + m >= lo.
+        let x_lo = ((lo + self.c[0] - m - eps) / t).ceil() - 1.0;
+        let x_hi = ((hi + self.c[0] + m + eps) / t).floor();
+        let last = tiles_x as f64 - 1.0;
+        let (a, b) = (x_lo.max(0.0), x_hi.min(last));
+        (a <= b).then_some((a as u32, b as u32))
+    }
 }
 
 /// One frame's binned light lists, in the texture's word layout.
@@ -185,20 +296,32 @@ impl LightGrid {
         let (tiles_x, tiles_y) = view.tiles();
         let n_tiles = (tiles_x * tiles_y) as usize;
         let lights = &lights[..lights.len().min(MAX_LIGHTS)];
-        let rects: Vec<Option<[u32; 4]>> = lights.iter().map(|l| view.tile_rect(l)).collect();
-        let each_tile = |r: &[u32; 4], f: &mut dyn FnMut(usize)| {
-            for y in r[1]..=r[3] {
-                let row = (y * tiles_x) as usize;
-                for x in r[0]..=r[2] {
-                    f(row + x as usize);
+        // Every light's tiles, in light (UBO) order: the tiles of its rect
+        // that its projected ball (an exact ellipse) touches.
+        let mut hits: Vec<u32> = Vec::new();
+        let mut spans: Vec<(usize, usize)> = Vec::with_capacity(lights.len());
+        for light in lights {
+            let start = hits.len();
+            if let Some(r) = view.tile_rect(light) {
+                let fp = view.footprint(light);
+                for y in r[1]..=r[3] {
+                    let (x0, x1) = match &fp {
+                        Some(fp) => match fp.row_span(y, tiles_x) {
+                            Some((a, b)) => (a.max(r[0]), b.min(r[2])),
+                            None => continue,
+                        },
+                        None => (r[0], r[2]),
+                    };
+                    hits.extend((x0..=x1).map(|x| y * tiles_x + x));
                 }
             }
-        };
+            spans.push((start, hits.len()));
+        }
 
         // Pass 1: count per tile.
         let mut counts = vec![0u32; n_tiles];
-        for r in rects.iter().flatten() {
-            each_tile(r, &mut |t| counts[t] += 1);
+        for &t in &hits {
+            counts[t as usize] += 1;
         }
 
         // Headers: place each list, or mark the tile overflowed.
@@ -218,18 +341,42 @@ impl LightGrid {
         words.resize(next, 0);
 
         // Pass 2: write indices in UBO order, so every list is ascending.
-        for (i, r) in rects.iter().enumerate() {
-            let Some(r) = r else { continue };
-            each_tile(r, &mut |t| {
+        for (i, &(start, end)) in spans.iter().enumerate() {
+            for &t in &hits[start..end] {
+                let t = t as usize;
                 if words[t] & LIGHT_GRID_OVERFLOW == LIGHT_GRID_OVERFLOW {
-                    return;
+                    continue;
                 }
                 let slot = cursor[t];
                 words[slot / 4] |= (i as u32) << ((slot % 4) * 8);
                 cursor[t] = slot + 1;
-            });
+            }
         }
         Self { tiles_x, tiles_y, words }
+    }
+
+    /// Profiler counters (`CLASSIC_PERF`): `grid_tiles`, `grid_lit_tiles`
+    /// (tiles with a list of at least one light), `grid_entries` (sum of the
+    /// list lengths), `grid_max` (longest list) and `grid_overflow` (tiles
+    /// on the full loop).
+    pub fn count_stats(&self) {
+        let n = (self.tiles_x * self.tiles_y) as usize;
+        let (mut lit, mut entries, mut max, mut overflow) = (0u64, 0u64, 0u64, 0u64);
+        for &h in &self.words[..n] {
+            let count = (h & LIGHT_GRID_OVERFLOW) as u64;
+            if count == LIGHT_GRID_OVERFLOW as u64 {
+                overflow += 1;
+            } else if count > 0 {
+                lit += 1;
+                entries += count;
+                max = max.max(count);
+            }
+        }
+        crate::perf::count("grid_tiles", n as u64);
+        crate::perf::count("grid_lit_tiles", lit);
+        crate::perf::count("grid_entries", entries);
+        crate::perf::count("grid_max", max);
+        crate::perf::count("grid_overflow", overflow);
     }
 
     /// CPU reference of the shader lookup: the light indices tile
