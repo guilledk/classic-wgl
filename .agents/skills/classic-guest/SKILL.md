@@ -156,6 +156,9 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `vehicle_goto` | `(name_ptr, name_len, tx: i32, ty: i32) -> i32` | set a vehicle's destination; the host runs A* and stores the waypoints |
 | `vehicle_stop` | `(name_ptr, name_len) -> i32` | stop a vehicle, clearing its movement path |
 | `vehicle_spawn` | `(def_ptr, def_len, name_ptr, name_len, x: f64, y: f64) -> i32` | spawn a vehicle of a declared definition at `(x, y)` |
+| `bench_mode` | `() -> i32` | what to run: `0` interactive, `1` full benchmark, `2` short (`CLASSIC_BENCH=full\|short`, web `?bench[=short]`) |
+| `bench_section` | `(name_ptr, name_len) -> i32` | start the benchmark section `name` with this frame (its marker, with camera + viewport params, lands in the `CLASSIC_PERF` output; `cargo xtask bench` reports per section) |
+| `bench_end` | `() -> i32` | end the benchmark with this frame (excluded); in a bench mode the app then exits |
 
 ### 3a. Bulk terrain imports (guest-driven map generation)
 

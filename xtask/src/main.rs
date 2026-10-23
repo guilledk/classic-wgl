@@ -17,6 +17,11 @@
 //!   cargo xtask release --version <X.Y.Z>      # set an explicit version
 //!   cargo xtask check-version                  # fail when Cargo.toml/CHANGELOG.md drift
 //!   cargo xtask check-patterns                 # fail when the codified patterns regress
+//!   cargo xtask bench [--rom <path>] [--short] [--runs N] [--out <file>]
+//!                                              # per-section frame report of a bench ROM (see bench.rs)
+//!   cargo xtask bench-compare <a.json> <b.json> # per-section deltas against a noise floor
+
+mod bench;
 
 use std::fs;
 use std::io::Read;
@@ -61,9 +66,11 @@ fn main() -> anyhow::Result<()> {
         "release" => return cmd_release(&args),
         "check-version" => return cmd_check_version(),
         "check-patterns" => return cmd_check_patterns(),
+        "bench" => return bench::cmd_bench(&args),
+        "bench-compare" => return bench::cmd_bench_compare(&args),
         "fetch-roms" | "all" => {}
         other => anyhow::bail!(
-            "unknown command `{other}` (expected fetch-roms, lock-roms, check-roms, release, check-version, or build-pathfinder)"
+            "unknown command `{other}` (expected fetch-roms, lock-roms, check-roms, release, check-version, check-patterns, bench, bench-compare, or build-pathfinder)"
         ),
     }
 

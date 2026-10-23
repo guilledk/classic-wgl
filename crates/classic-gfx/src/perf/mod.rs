@@ -31,6 +31,8 @@
 //! {"perf":1,"kind":"header","renderer":"…","vendor":"…","version":"…","gpu":true,"max_in_flight":2}
 //! {"kind":"frame","f":12,"wall":13.88,"cpu":8.89,"pace":0.41,"phases":{"update":3.07,…},"counters":{"lights":88,…}}
 //! {"kind":"gpu","f":12,"total":11.95,"phases":{"models":2.13,…}}
+//! {"kind":"section","f":120,"name":"models_z1","params":{"zoom":1.0,…}}
+//! {"kind":"section_end","f":900}
 //! {"kind":"summary","frames":781,"wall":{"mean":…,"median":…,"p95":…,"p99":…,"max":…},"cpu":{…},"gpu":{…},"phases_cpu":{…},"phases_gpu":{…},"counters":{…}}
 //! ```
 //!
@@ -42,6 +44,12 @@
 //! `phases_*` and `counters` are per-frame means.  The web writes no frame
 //! lines: it logs one `summary` line to the console every
 //! [`WEB_SUMMARY_FRAMES`] frames.
+//!
+//! A `section` line ([`section`], the guest `bench_section` import) starts a
+//! named benchmark section at frame `f`: that frame and every later one
+//! belong to it, until the next `section` or a `section_end`
+//! ([`section_end`], `bench_end`).  `cargo xtask bench` builds its
+//! per-section report from these lines.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
@@ -133,6 +141,32 @@ pub fn count(name: &'static str, n: u64) {
 pub fn end_frame() {
     if enabled() {
         with(|p| p.end_frame());
+    }
+}
+
+/// Start the benchmark section `name` at the current frame; `params` is a
+/// JSON object describing it (camera, viewport, ...).
+pub fn section(name: &str, params: serde_json::Value) {
+    if enabled() {
+        with(|p| {
+            let line = serde_json::json!({
+                "kind": "section",
+                "f": p.frame,
+                "name": name,
+                "params": params,
+            });
+            p.out.line(&line.to_string());
+        });
+    }
+}
+
+/// End the running benchmark section at the current frame.
+pub fn section_end() {
+    if enabled() {
+        with(|p| {
+            let line = format!("{{\"kind\":\"section_end\",\"f\":{}}}", p.frame);
+            p.out.line(&line);
+        });
     }
 }
 

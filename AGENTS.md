@@ -47,6 +47,11 @@ cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm t
 # Versioning / releases (see VERSIONING.md)
 cargo xtask check-version            # fail when Cargo.toml/CHANGELOG.md drift
 cargo xtask check-patterns           # fail when the codified patterns regress (see "Patterns")
+
+# Benchmarks (see the `classic-debugging` skill §11)
+cargo xtask bench --rom <bench.rom> [--short] [--runs N] [--out r.json]
+                                     # per-section wall/CPU/GPU report (headless 4K, idle-gated)
+cargo xtask bench-compare a.json b.json   # per-section deltas against a noise floor
 cargo xtask release patch            # bump version + freeze changelog (prints commit/tag cmds)
 ```
 
@@ -380,8 +385,8 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
 |---|---|---|
 | `CLASSIC_TEST` | Enable e2e test runner | off |
 | `CLASSIC_ROM` | ROM to boot: `rom:<name>` (embedded `demo`/`lunar`), a file path, or an `http(s)://` URL | `rom:demo` |
-| `CLASSIC_FRAMES` | Max frames in headless mode | unlimited |
-| `CLASSIC_FIXED_DT` | Fixed delta time (auto 1/60 under test) | real dt |
+| `CLASSIC_FRAMES` | Max frames in headless mode (web: `?frames=N`) | unlimited |
+| `CLASSIC_FIXED_DT` | Fixed delta time, auto 1/60 under test (web: `?fixed_dt=`) | real dt |
 | `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Forced viewport | window size |
 | `CLASSIC_HEADLESS` | Surfaceless EGL, no window | off |
 | `CLASSIC_OFFSCREEN` | Render to FBO | off |
@@ -400,6 +405,7 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
 | `CLASSIC_UI_DEBUG` | Per-frame UI entity dump (first 120 frames) | off |
 | `CLASSIC_PERF` | Frame profiler: JSON-lines output file (web: `?perf`, console summaries); see `classic-debugging` §11 | off |
 | `CLASSIC_PERF_GPU` | `1`: also time each profiler phase on the GPU (web: `?perf_gpu`) | off |
+| `CLASSIC_BENCH` | `full` / `short`: what a bench-aware ROM runs (`bench_mode`); `bench_end` then exits (web: `?bench[=short]`) | interactive |
 
 ## Git / PR notes
 

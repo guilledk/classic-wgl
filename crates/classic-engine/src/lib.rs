@@ -18,6 +18,7 @@
 //! - [classic-testing](.agents/skills/classic-testing/SKILL.md) — CLASSIC_TEST, golden harness
 //! - [classic-debugging](.agents/skills/classic-debugging/SKILL.md) — CLASSIC_LOG, debugging playbook
 
+pub mod bench;
 pub mod boot;
 pub mod boot_loader;
 pub mod env_config;
@@ -353,6 +354,8 @@ pub struct Engine {
     selection_end_hooks: Vec<UpdateFn>,
     overlay_hooks: Vec<UpdateFn>,
     test_runner: Option<UpdateFn>,
+    /// Benchmark sections (`bench_section` / `bench_end`, see `bench`).
+    pub bench: bench::BenchState,
     pub test_should_close: bool,
     pub test_failed: bool,
     pub golden_capture_frame: u64,

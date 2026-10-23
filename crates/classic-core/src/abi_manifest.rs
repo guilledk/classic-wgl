@@ -242,6 +242,11 @@ macro_rules! for_each_host_import {
             find_path(sx: i32, sy: i32, ex: i32, ey: i32) -> path_opt [tier3];
             task_arg() -> bytes_out [tier3];
             task_return(bytes: bytes_owned) -> unit [tier3];
+
+            // ---- Benchmarking (`cargo xtask bench`) ----------------------
+            bench_mode() -> i32 [native web worker];
+            bench_section(name: str) -> i32 [native web worker];
+            bench_end() -> i32 [native web worker];
         }
     };
 }
@@ -957,9 +962,9 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 115);
-        assert_eq!(imports_for(Backend::Web).count(), 115);
-        assert_eq!(imports_for(Backend::Worker).count(), 115);
+        assert_eq!(imports_for(Backend::Native).count(), 118);
+        assert_eq!(imports_for(Backend::Web).count(), 118);
+        assert_eq!(imports_for(Backend::Worker).count(), 118);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
         assert_eq!(imports_for(Backend::Tier3Trap).count(), 28);
     }

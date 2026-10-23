@@ -222,10 +222,16 @@ async fn run() -> anyhow::Result<()> {
     }
     sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed_duration() });
 
+    // `?frames=N` stops the loop after N frames (bench runs); the profiler
+    // (`?perf`) logs its final summary when the loop stops.
+    let max_frames = classic_engine::env_config::EnvConfig::get().max_frames;
+    let mut frames: u64 = 0;
     platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {
         engine.frame(input, vw, vh, delta);
-        if engine.test_should_close {
+        frames += 1;
+        if engine.test_should_close || max_frames.is_some_and(|n| frames >= n) {
             *should_close = true;
+            classic_gfx::perf::finish();
         }
     });
 

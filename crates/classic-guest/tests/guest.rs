@@ -1542,3 +1542,33 @@ fn guest_has_resource_wiring() {
         },
     );
 }
+
+#[test]
+fn guest_bench_imports_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "bench_mode" (func $mode (result i32)))
+            (import "env" "bench_section" (func $section (param i32 i32) (result i32)))
+            (import "env" "bench_end" (func $end (result i32)))
+            (import "env" "spawn" (func $spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "models")
+            (data (i32.const 16) "interactive")
+            (func (export "update") (param f64)
+                (if (i32.eqz (call $mode))
+                    (then (drop (call $spawn (i32.const 16) (i32.const 11)))))
+                (drop (call $section (i32.const 0) (i32.const 6)))
+                (drop (call $end))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            rt.update(&mut engine, 0.016).unwrap();
+            // No CLASSIC_BENCH under `cargo test`: interactive (0), and
+            // `bench_end` records the end without closing the app.
+            assert!(engine.has_name("interactive"));
+            assert!(engine.bench.ended);
+            assert!(engine.bench.section.is_none());
+            assert!(!engine.test_should_close);
+        },
+    );
+}
