@@ -47,6 +47,7 @@ struct Opts {
     idle_gate: bool,
     bin: Option<PathBuf>,
     timeout: Duration,
+    retries: usize,
     env: Vec<(String, String)>,
 }
 
@@ -67,6 +68,7 @@ fn parse_opts(args: &[String]) -> anyhow::Result<Opts> {
         idle_gate: true,
         bin: None,
         timeout: Duration::from_secs(900),
+        retries: 5,
         env: Vec::new(),
     };
     let mut i = 1;
@@ -94,6 +96,7 @@ fn parse_opts(args: &[String]) -> anyhow::Result<Opts> {
             "--timeout" => {
                 o.timeout = Duration::from_secs(val(&mut i, a)?.parse().context("--timeout")?)
             }
+            "--retries" => o.retries = val(&mut i, a)?.parse().context("--retries")?,
             "--env" => {
                 let kv = val(&mut i, a)?;
                 let (k, v) = kv.split_once('=').context("--env takes KEY=VALUE")?;
@@ -102,7 +105,7 @@ fn parse_opts(args: &[String]) -> anyhow::Result<Opts> {
             other => bail!(
                 "unknown bench argument `{other}` (expected --rom, --short, --runs, --warmup, \
                  --out, --width, --height, --fixed-dt, --frames, --scenario, --skip, --no-gpu, \
-                 --no-idle-gate, --bin, --timeout, --env)"
+                 --no-idle-gate, --bin, --timeout, --retries, --env)"
             ),
         }
         i += 1;
@@ -152,7 +155,15 @@ pub fn cmd_bench(args: &[String]) -> anyhow::Result<()> {
             if *gpu { " (GPU timers)" } else { "" },
             perf.display()
         );
-        run_once(&o, &bin, &rom, &perf, &log, *gpu)?;
+        let mut attempt = 0;
+        while let Some(why) = run_once(&o, &bin, &rom, &perf, &log, *gpu)? {
+            attempt += 1;
+            if attempt > o.retries {
+                bail!("run {tag} contaminated {attempt} times (last: {why}); giving up");
+            }
+            eprintln!("bench: run {tag} contaminated ({why}); retrying after the idle gate");
+            idle_gate(Duration::from_secs(1500))?;
+        }
         let run = Run::load(&perf)?;
         if *gpu {
             gpu_run = Some(run);
@@ -185,6 +196,10 @@ fn build_release(root: &Path) -> anyhow::Result<PathBuf> {
     Ok(target.join("release/classic-desktop"))
 }
 
+/// Run the binary once.  With the idle gate on, other processes are watched
+/// while it runs: one holding more than half a core for 2 s in a row
+/// contaminates the run, which is killed and returned as `Some(reason)` for
+/// the caller to retry.
 fn run_once(
     o: &Opts,
     bin: &Path,
@@ -192,7 +207,7 @@ fn run_once(
     perf: &Path,
     log: &Path,
     gpu: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     let mut cmd = Command::new(bin);
     cmd.env_remove("LIBGL_ALWAYS_SOFTWARE")
         .env("CLASSIC_HEADLESS", "1")
@@ -220,12 +235,27 @@ fn run_once(
     cmd.stdout(Stdio::from(file.try_clone()?)).stderr(Stdio::from(file));
     let mut child = cmd.spawn().with_context(|| format!("spawn {}", bin.display()))?;
     let start = Instant::now();
+    let watch = o.idle_gate && cfg!(target_os = "linux");
+    let skip = [child.id(), std::process::id()];
+    let (mut last, mut last_at, mut busy) = (proc_ticks(), Instant::now(), 0);
     loop {
         if let Some(status) = child.try_wait()? {
             if !status.success() {
                 bail!("{} exited with {status}; see {}", bin.display(), log.display());
             }
-            return Ok(());
+            return Ok(None);
+        }
+        if watch && last_at.elapsed() >= Duration::from_secs(1) {
+            let now = proc_ticks();
+            let secs = last_at.elapsed().as_secs_f64();
+            let (pct, comm) = top_cpu(&last, &now, secs, &skip);
+            (last, last_at) = (now, Instant::now());
+            busy = if pct > 50.0 { busy + 1 } else { 0 };
+            if busy >= 2 {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(Some(format!("{comm} at {pct:.0}% of a core")));
+            }
         }
         if start.elapsed() > o.timeout {
             let _ = child.kill();
@@ -532,16 +562,7 @@ fn idle_gate(timeout: Duration) -> anyhow::Result<()> {
         let before = proc_ticks();
         std::thread::sleep(Duration::from_secs(2));
         let after = proc_ticks();
-        let hz = 100.0;
-        let mut top = (0.0f64, String::new());
-        for (pid, (comm, t1)) in &after {
-            if let Some((_, t0)) = before.get(pid) {
-                let pct = (t1.saturating_sub(*t0)) as f64 / (2.0 * hz) * 100.0;
-                if pct > top.0 {
-                    top = (pct, comm.clone());
-                }
-            }
-        }
+        let top = top_cpu(&before, &after, 2.0, &[std::process::id()]);
         let running = after.values().any(|(c, _)| c == "classic-desktop");
         let gpu = gpu_busy();
         if !running && top.0 < 50.0 && gpu < 20 {
@@ -556,6 +577,29 @@ fn idle_gate(timeout: Duration) -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_secs(3));
     }
+}
+
+/// The busiest process between two [`proc_ticks`] snapshots `secs` apart
+/// (percent of one core, assuming 100 Hz ticks), ignoring `skip` pids.
+fn top_cpu(
+    before: &BTreeMap<u32, (String, u64)>,
+    after: &BTreeMap<u32, (String, u64)>,
+    secs: f64,
+    skip: &[u32],
+) -> (f64, String) {
+    let mut top = (0.0f64, String::new());
+    for (pid, (comm, t1)) in after {
+        if skip.contains(pid) {
+            continue;
+        }
+        if let Some((_, t0)) = before.get(pid) {
+            let pct = t1.saturating_sub(*t0) as f64 / (secs * 100.0) * 100.0;
+            if pct > top.0 {
+                top = (pct, comm.clone());
+            }
+        }
+    }
+    top
 }
 
 /// `pid -> (comm, utime + stime ticks)` for every process.

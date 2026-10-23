@@ -66,12 +66,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `EnvConfig` also reads `?fixed_dt=` and `?frames=N` (the loop stops
   after N frames).  `cargo xtask bench [--rom <path>] [--short] [--runs N]
   [--out <file>]` runs a ROM headless at 4K behind an idle-machine gate
-  (warmup + N runs, plus one GPU-timer run) and writes a per-section
-  report (schema `classic-bench` v1: engine rev, ROM sha256, GL renderer,
-  resolution, dt, mode; per section params, frames, wall/CPU/GPU
-  mean/median/p95/p99/max, per-phase means, counters); `cargo xtask
-  bench-compare a.json b.json` prints per-section deltas against a noise
-  floor (#146).
+  (warmup + N runs, plus one GPU-timer run; a run during which another
+  process takes over half a core is killed and retried) and writes a
+  per-section report (schema `classic-bench` v1: engine rev, ROM
+  sha256, GL renderer, resolution, dt, mode; per section params, frames,
+  wall/CPU/GPU mean/median/p95/p99/max, per-phase means, counters);
+  `cargo xtask bench-compare a.json b.json` prints per-section deltas
+  against a noise floor (#146).
 
 ### Changed
 

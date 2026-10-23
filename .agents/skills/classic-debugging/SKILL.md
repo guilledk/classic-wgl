@@ -615,9 +615,11 @@ cargo xtask bench-compare before.json after.json
 
 `bench` builds the release desktop (or takes `--bin`), waits for an idle
 machine before every run (no `classic-desktop`, no process over 50% of a
-core, GPU under 20% busy; `--no-idle-gate` skips), runs `--warmup` (1,
-discarded) + `--runs` (3) times with GPU timers off and once with them on
-(`--no-gpu` skips), headless at `--width`×`--height` (3840×2160) with
+core, GPU under 20% busy; `--no-idle-gate` skips) and watches it during
+each run (another process over half a core for 2 s kills the run, which
+is retried after the gate, up to `--retries` = 5 times), then runs
+`--warmup` (1, discarded) + `--runs` (3) times with GPU timers off and
+once with them on (`--no-gpu` skips), headless at `--width`×`--height` (3840×2160) with
 `CLASSIC_FIXED_DT` = 1/60.  Frames before any marker form section `main`;
 a ROM without `bench_end` needs `--frames N`.  The first `--skip` (10)
 frames of every section are dropped.  The report (`--out`, default
