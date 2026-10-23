@@ -10,6 +10,7 @@ pub mod inventory;
 pub mod math;
 pub mod meshopt;
 pub mod model;
+pub mod model_ext;
 pub mod registry;
 pub mod sdf_builder;
 pub mod terrain;
