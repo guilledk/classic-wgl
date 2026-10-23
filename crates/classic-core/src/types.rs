@@ -443,33 +443,82 @@ pub struct AnimationData {
     pub metadata: Option<String>,
 }
 
+/// Where a fractional timeline position falls in a channel's keys.
+enum KeySpan {
+    /// Exactly a key's value (clamped before the first / past the last).
+    Key(usize),
+    /// Between keys `i` and `i + 1`, at fraction `t`.
+    Lerp(usize, f32),
+}
+
+/// A channel sample as a fixed array: the first `len` (at most 4) floats.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ChannelValue {
+    pub v: [f32; 4],
+    pub len: usize,
+}
+
+impl AnimChannel {
+    /// The keys around `counter`.  Keys are sorted by frame (the format's
+    /// contract), so a binary search finds the first span whose end reaches
+    /// `counter`, the span a front-to-back scan picks (ties included).
+    fn span(&self, counter: f32) -> Option<KeySpan> {
+        let keys = &self.keys;
+        let n = keys.len();
+        if n == 0 {
+            return None;
+        }
+        if counter <= keys[0].0 as f32 {
+            return Some(KeySpan::Key(0));
+        }
+        if counter >= keys[n - 1].0 as f32 {
+            return Some(KeySpan::Key(n - 1));
+        }
+        let i = keys[1..].partition_point(|k| (k.0 as f32) < counter);
+        let (f0, f1) = (keys[i].0 as f32, keys[i + 1].0 as f32);
+        if !(counter >= f0 && counter <= f1) {
+            // NaN: the scan matches no span and falls through to the last key.
+            return Some(KeySpan::Key(n - 1));
+        }
+        let t = if f1 > f0 { (counter - f0) / (f1 - f0) } else { 0.0 };
+        Some(KeySpan::Lerp(i, t))
+    }
+
+    /// The channel at `counter` as a fixed array (no allocation): the same
+    /// values as [`AnimationData::channel_sample`], truncated to 4 floats.
+    pub fn sample_fixed(&self, counter: f32) -> Option<ChannelValue> {
+        let mut out = ChannelValue::default();
+        match self.span(counter)? {
+            KeySpan::Key(k) => {
+                let v = &self.keys[k].1;
+                out.len = v.len().min(4);
+                out.v[..out.len].copy_from_slice(&v[..out.len]);
+            }
+            KeySpan::Lerp(i, t) => {
+                let (v0, v1) = (&self.keys[i].1, &self.keys[i + 1].1);
+                for (o, (a, b)) in out.v.iter_mut().zip(v0.iter().zip(v1)) {
+                    *o = a + (b - a) * t;
+                    out.len += 1;
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
 impl AnimationData {
     /// Sample a named channel at a fractional timeline position, linearly
     /// interpolating between the surrounding keyframes (clamping beyond the
     /// ends).  Returns `None` when the channel is absent or empty.
     pub fn channel_sample(&self, name: &str, counter: f32) -> Option<Vec<f32>> {
         let ch = self.channels.iter().find(|c| c.name == name)?;
-        if ch.keys.is_empty() {
-            return None;
-        }
-        let first = &ch.keys[0];
-        if counter <= first.0 as f32 {
-            return Some(first.1.clone());
-        }
-        let last = &ch.keys[ch.keys.len() - 1];
-        if counter >= last.0 as f32 {
-            return Some(last.1.clone());
-        }
-        for i in 0..ch.keys.len() - 1 {
-            let (f0, v0) = &ch.keys[i];
-            let (f1, v1) = &ch.keys[i + 1];
-            let (f0, f1) = (*f0 as f32, *f1 as f32);
-            if counter >= f0 && counter <= f1 {
-                let t = if f1 > f0 { (counter - f0) / (f1 - f0) } else { 0.0 };
-                return Some(v0.iter().zip(v1).map(|(a, b)| a + (b - a) * t).collect());
+        Some(match ch.span(counter)? {
+            KeySpan::Key(k) => ch.keys[k].1.clone(),
+            KeySpan::Lerp(i, t) => {
+                let (v0, v1) = (&ch.keys[i].1, &ch.keys[i + 1].1);
+                v0.iter().zip(v1).map(|(a, b)| a + (b - a) * t).collect()
             }
-        }
-        Some(last.1.clone())
+        })
     }
 }
 

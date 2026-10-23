@@ -9,7 +9,9 @@
 //! parented light tracks the model.  See the `classic-gfx` / `classic-iso`
 //! skills ("3D models").
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use classic_core::components::{Disabled, Model, Tilemap};
 use classic_core::math::iso_world_pos;
@@ -112,6 +114,19 @@ fn sample_pose(
         time: m.time.to_bits(),
         scale: tf.scale.to_array().map(f32::to_bits),
     });
+}
+
+/// [`Engine::node_indices`] results, per glb resource name then per node
+/// name / prefix.  Cleared whenever the engine's model-load generation moves
+/// (a re-loaded glb); a clip swap to another glb is simply another key.
+#[derive(Default)]
+pub(crate) struct NodeIndexCache(RefCell<NodeIndexes>);
+
+#[derive(Default)]
+struct NodeIndexes {
+    generation: u64,
+    exact: HashMap<String, HashMap<String, Rc<[usize]>>>,
+    prefix: HashMap<String, HashMap<String, Rc<[usize]>>>,
 }
 
 /// The main-pass draw order of model instances keyed `(alpha_test, view
@@ -245,9 +260,38 @@ impl Engine {
     /// (`placement · node_world[node]`), for `node`-attached lights and emitters.
     pub(crate) fn model_node_world(&self, tf: &Transform, m: &Model, node: &str) -> Option<Mat4> {
         let asset = self.models.get(&m.model)?;
-        let idx = asset.nodes.iter().position(|n| n.name == node)?;
+        let idx = *self.node_indices(&m.model, asset, node, false).first()?;
         let pose = m.node_world.get(idx)?;
         Some(self.model_placement(tf, &m.tilemap)? * *pose)
+    }
+
+    /// The indices of `asset`'s (resource `model`'s) nodes named `pattern`
+    /// (the first one; `prefix == false`) or whose name starts with it (all,
+    /// in node order), cached per (glb, pattern) so a node-attached emitter
+    /// or light does not scan every node name each frame.
+    pub(crate) fn node_indices(
+        &self,
+        model: &str,
+        asset: &ModelAsset,
+        pattern: &str,
+        prefix: bool,
+    ) -> Rc<[usize]> {
+        let mut cache = self.node_index.0.borrow_mut();
+        if cache.generation != self.model_generation {
+            *cache = NodeIndexes { generation: self.model_generation, ..Default::default() };
+        }
+        let map = if prefix { &mut cache.prefix } else { &mut cache.exact };
+        if let Some(hit) = map.get(model).and_then(|m| m.get(pattern)) {
+            return hit.clone();
+        }
+        let nodes = asset.nodes.iter().enumerate();
+        let found: Rc<[usize]> = if prefix {
+            nodes.filter(|(_, n)| n.name.starts_with(pattern)).map(|(i, _)| i).collect()
+        } else {
+            nodes.filter(|(_, n)| n.name == pattern).map(|(i, _)| i).take(1).collect()
+        };
+        map.entry(model.to_string()).or_default().insert(pattern.to_string(), found.clone());
+        found
     }
 
     /// World transforms of every node of `m`'s **current** glb whose name
@@ -266,12 +310,9 @@ impl Engine {
             return Vec::new();
         }
         let Some(placement) = self.model_placement(tf, &m.tilemap) else { return Vec::new() };
-        asset
-            .nodes
+        self.node_indices(&m.model, asset, prefix, true)
             .iter()
-            .zip(&m.node_world)
-            .filter(|(n, _)| n.name.starts_with(prefix))
-            .map(|(_, pose)| placement * *pose)
+            .filter_map(|&i| m.node_world.get(i).map(|pose| placement * *pose))
             .collect()
     }
 
@@ -669,6 +710,28 @@ mod tests {
         assert_eq!(inst.mesh_key, "landing::0");
         let origin = inst.model.w_axis.truncate();
         assert!(origin.cmpge(draws[0].min - 1e-4).all() && origin.cmple(draws[0].max + 1e-4).all());
+    }
+
+    #[test]
+    fn node_indices_are_cached_per_glb_and_reload() {
+        let mut e = Engine::new_for_test();
+        let lamps = r#",{"name":"fx_lamp_0","translation":[1,0,0]},
+            {"name":"fx_lamp_1","translation":[0,0,2]}"#;
+        e.load_model_glb("work", &tiny_glb_with_nodes("work", lamps)).unwrap();
+        let asset = e.models["work"].clone();
+        let scan: Vec<usize> = (0..asset.nodes.len())
+            .filter(|&i| asset.nodes[i].name.starts_with("fx_lamp_"))
+            .collect();
+        assert_eq!(&*e.node_indices("work", &asset, "fx_lamp_", true), scan.as_slice());
+        assert_eq!(&*e.node_indices("work", &asset, "fx_lamp_1", false), &[scan[1]]);
+        assert!(e.node_indices("work", &asset, "nope", false).is_empty());
+        // Cached: the same allocation comes back.
+        let a = e.node_indices("work", &asset, "fx_lamp_", true);
+        assert!(Rc::ptr_eq(&a, &e.node_indices("work", &asset, "fx_lamp_", true)));
+        // Re-loading `work` without lamps moves the generation: a miss.
+        e.load_model_glb("work", &tiny_glb("work")).unwrap();
+        let asset = e.models["work"].clone();
+        assert!(e.node_indices("work", &asset, "fx_lamp_", true).is_empty());
     }
 
     #[test]

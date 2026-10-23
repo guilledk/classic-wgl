@@ -144,6 +144,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   from 2.1-3.2 ms to 0.15-0.2 ms a frame.  `classic_gfx::perf::scope`
   splits `update_models` and `animator` out of the `update` phase
   (#147).
+- The animator and node attachments stop rescanning per frame.  The
+  demo animator looks animations up in place (no per-frame map of every
+  animation), borrows each write's `AnimationData`, parses the target
+  without allocating and replaces a sprite's `frame_name` only when it
+  changes; `interpolate_offset` and channel sampling binary-search the
+  sorted keys (`AnimChannel::sample_fixed` returns a fixed
+  `ChannelValue`, `channel_sample` shares the lookup), and the
+  `light.*` / `emitter.*` channels apply in one pass.  Node-attached
+  emitters and lights look their glb nodes up through a per-(glb,
+  name/prefix) index cache (`Engine::node_indices`), cleared when a
+  model reloads.  Frames are pixel-identical; 4K `buildtest`: animator
+  1.3 to 0.43 ms, emitter sync 0.59 to 0.37 ms a frame (#148).
 
 ### Fixed
 

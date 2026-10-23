@@ -76,6 +76,7 @@ impl Engine {
             models: HashMap::new(),
             model_generation: 0,
             pose_scratch: Default::default(),
+            node_index: Default::default(),
             model_gpu: HashMap::new(),
             model_textures: HashMap::new(),
             items: classic_core::inventory::ItemRegistry::default(),
