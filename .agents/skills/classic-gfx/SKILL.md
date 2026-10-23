@@ -609,8 +609,15 @@ keep the full `evaluateLights` loop.
   orthographic, so `clip_from_world` (the vertex shaders' raster formula,
   pinned by `clip_from_world_mirrors_the_vertex_shaders`) is affine and a
   light sphere's screen bound is exactly `centre ± r · |row|` (+1 px margin).
-  `LightGrid::build` bins each light into `LIGHT_TILE_PX` = 32 px tiles of
-  the **main** target, in UBO order (ascending lists).  `radius <= 0` reaches
+  Within that rect only the tiles the projected ball touches are listed: an
+  affine map sends a ball to exactly a filled ellipse (`Footprint`, from
+  `LightGridView::footprint`), and `Footprint::row_span` gives each tile
+  row's touched columns in closed form (pinned against the per-tile
+  `touches_tile` and a brute-force sample; drops the bbox corners, ~18% of
+  `buildtest`'s list entries).  `LightGrid::build` bins each light into
+  `LIGHT_TILE_PX` = 32 px tiles of the **main** target, in UBO order
+  (ascending lists).  With `CLASSIC_PERF` on it counts `grid_tiles`,
+  `grid_lit_tiles`, `grid_entries`, `grid_max` and `grid_overflow`.  `radius <= 0` reaches
   every tile; an off-screen light none.
 - **Layout (declared once, in `light_grid.rs`)**: one `R32UI` texture on unit
   `LIGHT_GRID_UNIT` = 11, `LIGHT_GRID_ROW` = 1024 words per row.  Words

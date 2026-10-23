@@ -47,12 +47,12 @@ cargo xtask build-pathfinder         # compiles crates/classic-pathfinder-wasm t
 # Versioning / releases (see VERSIONING.md)
 cargo xtask check-version            # fail when Cargo.toml/CHANGELOG.md drift
 cargo xtask check-patterns           # fail when the codified patterns regress (see "Patterns")
+cargo xtask release patch            # bump version + freeze changelog (prints commit/tag cmds)
 
 # Benchmarks (see the `classic-debugging` skill §11)
 cargo xtask bench --rom <bench.rom> [--short] [--runs N] [--out r.json]
                                      # per-section wall/CPU/GPU report (headless 4K, idle-gated)
 cargo xtask bench-compare a.json b.json   # per-section deltas against a noise floor
-cargo xtask release patch            # bump version + freeze changelog (prints commit/tag cmds)
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
