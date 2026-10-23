@@ -18,3 +18,8 @@ sha2.workspace = true
 
 [dev-dependencies]
 image.workspace = true
+
+# The C meshoptimizer, the reference the pure-Rust `meshopt` decoder is
+# tested against (native tests only; it links C++).
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+meshopt = "0.7"

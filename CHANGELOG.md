@@ -10,6 +10,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `classic_core::meshopt`: a pure-Rust `EXT_meshopt_compression`
+  decoder (builds for wasm32): meshoptimizer's vertex codec (versions 0
+  and 1), index codec (`TRIANGLES`, versions 0 and 1) and index sequence
+  (`INDICES`), and the `OCTAHEDRAL` / `QUATERNION` / `EXPONENTIAL`
+  filters.  Tested byte-for-byte against the C library (a native-only
+  dev-dependency); the filters within one unit of its SIMD rounding
+  (#151).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
