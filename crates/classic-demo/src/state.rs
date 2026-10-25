@@ -72,7 +72,7 @@ pub struct DemoState {
     /// light-widget test toggle), so it can be released/updated on toggle off.
     pub test_light_handle: Option<u32>,
     /// Draw each active light as an X marker + a vertical Z line from the
-    /// terrain surface to the light (KeyL).
+    /// terrain surface to the light (Shift+KeyL).
     pub debug_lights: bool,
     /// The ROM guest runtimes (installed by `init_guests`), one per ROM in
     /// topological order (deps first).  Held so the runtimes outlive the

@@ -51,6 +51,16 @@ pub(super) fn wrap_pi(a: f32) -> f32 {
     a
 }
 
+/// A per-direction table's entry for direction `dir`, wrapping on the
+/// table's own length (a table never has to match the quantized count),
+/// `[0, 0]` for an empty one.
+pub(super) fn dir_entry(vals: &[[f32; 2]], dir: u32) -> [f32; 2] {
+    if vals.is_empty() {
+        return [0.0, 0.0];
+    }
+    vals[dir as usize % vals.len()]
+}
+
 /// Lerp a per-direction `[f32; 2]` value (wheel offset or anchor) between the
 /// two direction frames straddling a continuous heading (`vals.len()`
 /// directions).

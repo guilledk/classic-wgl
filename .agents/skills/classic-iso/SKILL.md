@@ -655,7 +655,9 @@ it about `pitch_pivot` by the gun pitch), turned by the layer's composed yaw,
 placed at the layer's chassis position, tilted by the body pitch / roll and
 rotated by the heading.  A `Light` or `Emitter` with `parent: <vehicle>` and
 `node` (JSON alias `socket`) rides it, offset and direction in its frame
-(`attachment_frame`), so vehicle lamps cast real light.
+(`attachment_frame`), so vehicle lamps cast real light.  A spot's `dir` is authored in the
+socket layer's frame too (`gather_lights` turns it; model-node lights keep a
+world beam).
 
 **ABI** (`abi_manifest`): `vehicle_aim(name, x, y)` (tile point; elevation to
 the terrain there), `vehicle_aim_angles(name, yaw_deg, pitch_deg)` (yaw

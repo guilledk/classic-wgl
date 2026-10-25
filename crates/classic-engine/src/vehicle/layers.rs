@@ -272,6 +272,10 @@ impl Engine {
             tilemap: tilemap_name,
             directions: dirs,
             body_anchors: layer_anchors(hull),
+            // The v1 wheel tables, sized to the direction count (v2 places
+            // contacts from `contact_offsets_m`; these stay neutral).
+            wheel_anchors: std::array::from_fn(|_| vec![[0.5, 0.5]; dirs as usize]),
+            wheel_tile_offsets: std::array::from_fn(|_| vec![[0.0, 0.0]; dirs as usize]),
             speed: 2.6,
             pitch_levels,
             pitch_max,

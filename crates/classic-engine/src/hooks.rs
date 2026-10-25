@@ -1073,12 +1073,22 @@ impl Engine {
                 continue;
             }
             let mut l = light.clone();
-            // A `node`-attached light rides that glTF node's full transform.
+            // A `node`-attached light rides that glTF node's full transform; on a
+            // vehicle the node is a socket, whose frame also turns a spot's beam
+            // (authored in the socket layer's local frame: `x` forward, `y`
+            // left, `z` up).  A model node light keeps its world beam.
             if let (Some(parent), Some(node)) = (l.parent.as_deref(), l.node.as_deref()) {
-                if let Some((pos, _, _)) =
+                let on_vehicle = self
+                    .names
+                    .get(parent)
+                    .is_some_and(|&pe| self.world.get::<&IsoVehicle>(pe).is_ok());
+                if let Some((pos, _, dir)) =
                     self.attachment_frame(Some(parent), Some(node), l.position, l.dir)
                 {
                     l.position = pos;
+                    if on_vehicle {
+                        l.dir = dir;
+                    }
                     l.parent = None;
                 }
             }
