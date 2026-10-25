@@ -628,8 +628,32 @@ every violation and still loads the def.
   origin at its ground anchor; a hull socket turns with heading, pitch and
   roll, a turret socket with turret yaw then gun pitch.
 
-Until the layer runtime lands, `spawn_vehicle` still spawns only v1 defs (a
-v2 def loads and validates but does not spawn).
+**Runtime** (`classic-engine` `vehicle/layers.rs`): `spawn_vehicle` spawns a v2
+def as one sprite entity per layer, named `{vehicle}.{layer}` (the hull is
+the body entity, with `IsoVehicle`), all in the vehicle's ghost group
+(`ghost: false` sets `IsoSprite.no_ghost`; `visible: false` starts it
+`Disabled`).  The chassis sim is the v1 one, fed with four virtual contacts
+from the wheel / gear layers' footprint (`IsoVehicle.contact_offsets_m`, a
+track reaching a radius ahead / behind), which rotate exactly with the
+heading.  `apply_layers` places each layer from its offset (composed through
+`parent`, turning with a turret parent's yaw) on the chassis plane (`z +=
+x·sin pitch + y·sin roll`) and frames it: hull pitch / roll from the chassis;
+wheel and gear spin from `IsoVehicle.odometer_m` plus the turn differential
+(`turned · y`); wheel steer from `IsoVehicle.steer`; a turret's own yaw
+(slewing at `yaw_rate_deg_per_sec` toward `vehicle_aim` / `vehicle_aim_angles`)
+over its own directions, gun pitch and the `fire` clip; tool / legs / cargo /
+lift clip frames from `vehicle_play`.  A layer with no anchors-artifact entry
+(e.g. cargo) takes its frames' packer `anchor`, else the cell centre.
+`dir_interp` sheets interpolate per layer.  `pivot_turn`: a heading error
+over 30° stops the vehicle and turns it in place.  Turret layers may set
+`pitch_pivot` (metres, turret frame) for sockets.
+
+**ABI** (`abi_manifest`): `vehicle_aim(name, x, y)` (tile point; elevation to
+the terrain there), `vehicle_aim_angles(name, yaw_deg, pitch_deg)` (yaw
+relative to the hull), `vehicle_play(name, layer, clip, speed, repeat)`
+(`speed` multiplies fps, negative plays backward; `repeat` 0 loops, n holds
+the end frame; `fire` on a turret), `vehicle_layer_visible(name, layer,
+visible)`, `vehicle_layer_color(name, layer, r, g, b, a)`; all return 1 / 0.
 
 ---
 

@@ -258,7 +258,8 @@ fn default_clip_fps() -> f32 {
 /// `offset` is metres in the layer's local frame: `x` forward (along the
 /// layer's heading), `y` left, `z` up, origin at the layer's ground anchor.
 /// A turret socket turns with the turret's yaw, then with its gun pitch about
-/// the turret's local `y` axis through the origin; a hull socket turns with
+/// the turret's local `y` axis through its `pitch_pivot` (default the
+/// origin; offsets are authored at zero elevation); a hull socket turns with
 /// the heading, pitch and roll.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct SocketDef {
@@ -328,6 +329,11 @@ pub struct VehicleLayerDef {
     /// Turret slew rate (degrees per second); `0` = instant.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub yaw_rate_deg_per_sec: f32,
+    /// Turret gun-pitch pivot (trunnion), metres in the turret frame (`x`
+    /// forward, `y` left, `z` up); `None` = the layer origin.  Socket offsets
+    /// on the turret are authored at zero elevation and pitch about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_pivot: Option<[f32; 3]>,
     /// Named clips over the clip axis (tool / legs / cargo / lift).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub clips: BTreeMap<String, ClipDef>,
@@ -375,6 +381,7 @@ impl VehicleLayerDef {
             radius_m: 0.0,
             fire_frames: 0,
             yaw_rate_deg_per_sec: 0.0,
+            pitch_pivot: None,
             clips: BTreeMap::new(),
             ghost: true,
             visible: true,

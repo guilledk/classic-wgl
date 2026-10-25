@@ -110,6 +110,7 @@ pub fn register_all_components() {
                     ghost_group: 0,
                     color: [1.0, 1.0, 1.0, 1.0],
                     dir_blend: None,
+                    no_ghost: false,
                 });
                 b.add(a);
                 Ok(())

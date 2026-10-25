@@ -96,7 +96,8 @@ pub struct IsoSpriteInstance {
     /// `tint.rgb, depth_scale` (window units per `gray − 0.5` of the depth
     /// map: `1` legacy global, `2R / (near − far)` anchor-relative).
     pub tint: [f32; 4],
-    /// `depth_base, ghost_group, selected (0/1), region mode` (0 packed, 1
+    /// `depth_base, ghost_group, flags` (1 selected + 2 no ghost pass),
+    /// region mode` (0 packed, 1
     /// grid, 2 direction blend).
     pub misc: [f32; 4],
     /// `outline_delta.xy` (sheet-UV silhouette offset), then `source_size.xy`
@@ -171,6 +172,12 @@ impl IsoSpriteInstance {
     /// Whether this instance is a direction blend.
     pub fn is_blend(&self) -> bool {
         self.misc[3] > 1.5
+    }
+
+    /// Leave this instance out of the ghost pass (`misc.z` bit 1).
+    pub fn without_ghost(mut self) -> Self {
+        self.misc[2] += 2.0;
+        self
     }
 
     /// The instance's ghost group.

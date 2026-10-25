@@ -556,7 +556,10 @@ impl Engine {
             let selected: Vec<hecs::Entity> = self.selection.selected.iter().copied().collect();
             for entity in selected {
                 if let Ok(veh) = self.world.get::<&IsoVehicle>(entity) {
-                    for name in veh.wheel_entities.iter().chain(veh.tire_entities.iter()) {
+                    let layers = veh.layers.iter().map(|s| &s.entity);
+                    for name in
+                        veh.wheel_entities.iter().chain(veh.tire_entities.iter()).chain(layers)
+                    {
                         if name.is_empty() {
                             continue;
                         }
@@ -716,6 +719,7 @@ impl Engine {
                 ghost_group: iso_sprite.ghost_group,
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
+                no_ghost: iso_sprite.no_ghost,
                 world_matrix,
                 blend,
                 shadow_caster,

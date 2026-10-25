@@ -131,6 +131,8 @@ struct IsoDraw {
     color: [f32; 4],
     /// Whether the sprite is currently RTS-selected (draws a silhouette edge).
     selected: bool,
+    /// Skip the ghost pass (`IsoSprite::no_ghost`).
+    no_ghost: bool,
     /// World -> camera view space (metres): `iso_camera_matrix`.
     world_matrix: Mat4,
     /// A direction blend: direction B's half and textures (`model` is then
@@ -708,6 +710,7 @@ mod tests {
             ghost_group: 0,
             color: [1.0, 1.0, 1.0, 1.0],
             dir_blend: None,
+            no_ghost: false,
         };
         let sprite_tf = Transform::new(iso_sprite.position, iso_sprite.scale);
         let tex_dim = (48.0, 96.0);
@@ -996,6 +999,7 @@ mod tests {
                 ghost_group: 0,
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
+                no_ghost: false,
                 frame_offset,
             },
         ));

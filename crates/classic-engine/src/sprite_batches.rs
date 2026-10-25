@@ -94,10 +94,11 @@ pub(crate) fn plan_sprite_frame(
             }
             None => (base, d.texture.clone()),
         };
-        all.push(match &d.blend {
+        let inst = match &d.blend {
             Some((b, _)) => base.blend(b),
             None => base,
-        });
+        };
+        all.push(if d.no_ghost { inst.without_ghost() } else { inst });
         shadow_all.push(shadow_instance);
         any_ghost_group |= d.ghost_group != 0;
         let rect = iso_screen_rect(&d.model, &d.world_matrix, camera);

@@ -14,6 +14,9 @@
 mod control;
 mod dust;
 mod kinematics;
+#[cfg(test)]
+mod layer_tests;
+mod layers;
 mod sim;
 #[cfg(test)]
 mod tests;
@@ -21,6 +24,7 @@ mod tests;
 use classic_core::tilemap::{sample_height_mesh, PPM_TARGET};
 
 pub use kinematics::dir_index;
+pub use layers::FIRE_CLIP;
 
 /// Vertical acceleration (metres/s²) — the `40 px/s²` hop re-expressed at
 /// `PPM_TARGET` px/m, kept equivalent so the moon-gravity feel is unchanged.
@@ -78,6 +82,10 @@ const GOAL_TOLERANCE: f32 = 0.5;
 /// penalty makes the vehicle prefer flat routes but take a jump when it
 /// clearly shortens the path.
 const JUMP_COST: f32 = 1.3;
+
+/// Heading error (radians) above which a `pivot_turn` (tracked) vehicle
+/// stops and turns in place instead of arcing.
+const PIVOT_TURN_ENTER: f32 = 30.0f32.to_radians();
 
 /// Heading error (radians) above which the vehicle shifts into reverse to
 /// reorient rather than arcing forward off-traversable.
@@ -144,6 +152,8 @@ struct VehicleWrite {
     body: [f32; 3],
     /// The vehicle's direction count.
     directions: u32,
+    /// A v2 (layered) vehicle: `apply_layers` frames the body.
+    layered: bool,
     /// Body lift above its own terrain in **world metres** (`frame_offset.z`).
     body_altitude: f32,
     body_anchor: [f32; 2],

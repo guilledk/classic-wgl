@@ -409,6 +409,53 @@ impl GuestHost {
         self.engine_mut().vehicle_set_speed(&name, speed as f32) as i32
     }
 
+    /// Aim a vehicle's turret layers at the map point `(x, y)`.
+    pub fn vehicle_aim(&mut self, name: &str, x: f64, y: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_aim(&name, x as f32, y as f32) as i32
+    }
+
+    /// Set a vehicle's turret yaw (relative to the hull) and gun pitch, degrees.
+    pub fn vehicle_aim_angles(&mut self, name: &str, yaw_deg: f64, pitch_deg: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_aim_angles(&name, yaw_deg as f32, pitch_deg as f32) as i32
+    }
+
+    /// Play a vehicle layer clip (`speed` < 0 plays it backward; `repeat` 0
+    /// loops).
+    pub fn vehicle_play(
+        &mut self,
+        name: &str,
+        layer: &str,
+        clip: &str,
+        speed: f64,
+        repeat: i32,
+    ) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_play(&name, layer, clip, speed as f32, repeat) as i32
+    }
+
+    /// Show (`visible` != 0) or hide a vehicle layer.
+    pub fn vehicle_layer_visible(&mut self, name: &str, layer: &str, visible: i32) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_layer_visible(&name, layer, visible != 0) as i32
+    }
+
+    /// Tint a vehicle layer (RGBA).
+    pub fn vehicle_layer_color(
+        &mut self,
+        name: &str,
+        layer: &str,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) -> i32 {
+        let name = self.resolve(name);
+        let rgba = [r as f32, g as f32, b as f32, a as f32];
+        self.engine_mut().vehicle_layer_color(&name, layer, rgba) as i32
+    }
+
     /// Non-mutating vehicle reachability probe: run the vehicle's A* to
     /// `(tx, ty)` without driving it.  Returns `1` reachable, `-1` no path,
     /// `0` pending (call again), `-2` unknown vehicle.  On success the waypoints
