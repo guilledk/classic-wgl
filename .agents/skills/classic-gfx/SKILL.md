@@ -109,6 +109,9 @@ draw_line_loop()        → depthFunc(ALWAYS); depthMask(false); draw;
 draw_line_strip()       → same as line_loop
 ```
 
+The engine no longer calls `draw_iso_sprite` per sprite: it draws **instanced
+batches** (`draw_iso_sprite_batches`, §5b) with the same per-pass state.
+
 The engine drives isometric sprites in **two phases** (all normals, then all
 ghosts, before the UI overlay) so sprite-vs-sprite occlusion is resolved by
 the depth buffer, not draw order.  The stencil buffer records a per-instance
@@ -312,6 +315,51 @@ The depth map binds on texture unit 1 (`depth_sampler`) and the normal map on
 unit 2 (`normal_sampler`); colour is unit 0 (`tex_sampler`).
 
 ---
+
+## 5b. Instanced iso sprites (`sprite_batch.rs`)
+
+The engine's iso sprites draw as instanced batches; `draw_iso_sprite` stays
+as the one-sprite reference the instanced path mirrors.
+
+- **Instance**: `IsoSpriteInstance` (10 `vec4`s, 160 B: model matrix, depth
+  corners, region, tint, `misc = depth_base, ghost_group, selected, grid`,
+  `outline = outline_delta, source_size`).  A packed region carries
+  `uv_rect` + `[trim_offset, content_size]` + `source_size` and a grid
+  region `[frame, tile_set_size]` (`region_uv`), so the shader runs the
+  per-draw path's exact expressions (`tileUv` / the trimmed-content map)
+  and samples the same texels.  The programs are the same sources with
+  `#define INSTANCED` (`imageSheetInst` = `direct_tex.vert#INSTANCED` +
+  `sheet.frag#INSTANCED`, `spriteGhostIds` adds `#ID_PASS`,
+  `shadowSpriteInst`); the per-sprite uniforms become flat varyings under
+  the uniform names (macros).  Attribute locations are
+  `SPRITE_INSTANCE_ATTRS`, bound in the batcher's own VAO (divisor 1, never
+  in the shared VAO); WebGL 2 has no base instance, so each batch
+  re-points the attributes at its first record.  The instance buffer is
+  orphaned every frame (`STREAM_DRAW`).
+- **Order** (`plan_batches`): instances keep the render-list order except
+  that one joins an earlier batch with its key (colour + normal + depth
+  textures: an atlas page) when its screen rect (`iso_screen_rect`) overlaps
+  nothing drawn in between.  Overlapping pairs never swap, so blending,
+  depth ties and the ghost ids come out as one-by-one.  Shadow casters
+  commute and batch by texture alone (`plan_shadow_batches`).
+- **Ghost groups in the shader**: a per-draw stencil reference would split
+  every vehicle into its own draw.  `begin_ghost_ids(bounds)` blits the
+  scene depth (only the grouped instances' screen bounds) into the
+  `GhostIdTarget` (`R8` ids + `DEPTH24_STENCIL8`) and clears its ids;
+  `draw_ghost_id_batches` draws every instance with the normal pass's depth
+  state and discards, writing `group / 255` (the stencil `REPLACE`
+  semantics); the ghost pass `texelFetch`es it on `GHOST_ID_UNIT` = 12 and
+  discards where it is its own group (`NOTEQUAL`).  The normal pass still
+  writes stencil, a constant 0, so the model ghost composite's `NOTEQUAL
+  255` is unchanged.  A multisampled main framebuffer or a failed first blit
+  (`glGetError` is checked once only: under Mesa glthread every `glGet*`
+  syncs) falls back for good to batches split by group with the stencil
+  reference (`SpriteBatch.ghost_group`).
+- **Result**: identical golden traces (one item per instance, unchanged)
+  and pixels equal to the per-draw path up to rasterisation rounding (demo,
+  lrvtest, buildtest bit-identical under llvmpipe; a few dozen pixels in
+  lunar / lighttest).  Perf counters: `sprite_instances`,
+  `sprite_batches`, `sprite_draws`.
 
 ## 6. draw_sprite / draw_rect
 
@@ -1050,7 +1098,7 @@ form.  No transform feedback, no per-frame CPU simulation.
   Always on (no toggle); the engine skips it only on frames with nothing
   emissive live, so effect-free scenes are pixel-identical.
 - **Texture units**: particles 6, bloom 7–8, smoke noise 9, half-res composite 10,
-  light grid 11
+  light grid 11, sprite ghost ids 12
   (sprites 0–2, shadow 3, model
   composite 4–5).  ROM textures load `NEAREST` for the sprites; the particle
   draw binds a LINEAR/clamp **sampler object** on unit 6 (and unbinds it

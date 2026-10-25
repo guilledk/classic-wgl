@@ -9,18 +9,8 @@ uniform sampler2D tex_sampler;
 uniform sampler2D depth_sampler;
 uniform sampler2D normal_sampler;
 
-uniform vec2 tile_set_size;
-uniform float tile_id_flat;
 uniform float ghost_alpha;
-uniform float use_uv_rect;
-uniform highp vec4 uv_rect;
-uniform highp vec2 trim_offset;
-uniform highp vec2 source_size;
-uniform highp vec2 content_size;
 uniform float use_depth_map;
-/// The sprite's ground-anchor window depth `[0, 1]` (see the `gl_FragDepth`
-/// re-anchor below).
-uniform float depth_base;
 // Whether this draw participates in scene lighting at all.  The 2D/baked
 // `draw_sprite` path (cursor, HUD, UI) sets 0: it never writes a light-space
 // position, so its `vLightPos` is meaningless.  This used to be implied by
@@ -34,6 +24,41 @@ uniform float use_normal_map;
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
 uniform vec3 light_color;
+uniform vec3 selection_color;
+
+#ifdef INSTANCED
+// Instanced iso sprites (`sprite_batch.rs`): the per-sprite values arrive as
+// flat varyings (see `direct_tex.vert`), under the uniform path's names.
+flat in highp vec4 vUvRect;
+flat in highp vec4 vContent;
+flat in vec4 vTint;
+flat in highp vec4 vMisc;
+flat in highp vec4 vOutline;
+#define depth_base vMisc.x
+#define selected vMisc.z
+#define tint vTint.rgb
+#define outline_delta vOutline.xy
+#define vSource vOutline.zw
+#define vGrid vMisc.w
+#define tile_set_size vUvRect.yz
+#ifndef ID_PASS
+// The ghost pass's group test: the id of the sprite group that last passed
+// the normal pass's depth test at this pixel (`Gfx::begin_ghost_ids`), the
+// stencil `NOTEQUAL ghost_group` test of the per-draw path.
+uniform highp sampler2D ghost_ids;
+uniform float use_ghost_ids;
+#endif
+#else
+uniform vec2 tile_set_size;
+uniform float tile_id_flat;
+uniform float use_uv_rect;
+uniform highp vec4 uv_rect;
+uniform highp vec2 trim_offset;
+uniform highp vec2 source_size;
+uniform highp vec2 content_size;
+/// The sprite's ground-anchor window depth `[0, 1]` (see the `gl_FragDepth`
+/// re-anchor below).
+uniform float depth_base;
 // Per-sprite tint (multiplied onto the albedo before the Lambertian term).
 // Defaults to (1,1,1) — a no-op for every existing asset.  Tintable sprites
 // ship a grayscale albedo and set this at runtime (see IsoSprite.color).
@@ -42,8 +67,8 @@ uniform vec3 tint;
 // adjacent to an opaque texel (within `outline_delta` sheet-UV) are drawn in
 // `selection_color` as a per-sprite outline.
 uniform float selected;
-uniform vec3 selection_color;
 uniform vec2 outline_delta;
+#endif
 
 uniform highp sampler2DShadow shadow_map;
 uniform mat4 light_view_proj;
@@ -233,6 +258,22 @@ vec2 tileUv(float tile_id_flat, vec2 tex_coord) {
 // trimmed content sub-rect into `uv_rect`; the uniform-grid path uses
 // `tileUv`.  Discards the trimmed padding in the packed path.
 vec2 sheetUv(vec2 tex_coord) {
+#ifdef INSTANCED
+    if (vGrid > 0.5) {
+        // A uniform-grid frame: `vUvRect` = (frame, tile_set_size).
+        return tileUv(vUvRect.x, tex_coord);
+    }
+    // The packed form: `vContent` = trim offset + content size, `vSource` = source size (the
+    // per-draw path's exact expression).
+    highp vec2 content_min = vContent.xy / vSource;
+    highp vec2 content_ext = vContent.zw / vSource;
+    highp vec2 content_uv = (tex_coord - content_min) / content_ext;
+    if (content_uv.x < 0.0 || content_uv.x > 1.0
+        || content_uv.y < 0.0 || content_uv.y > 1.0) {
+        discard;
+    }
+    return mix(vUvRect.xy, vUvRect.zw, content_uv);
+#else
     if (use_uv_rect > 0.5) {
         highp vec2 content_min = trim_offset / source_size;
         highp vec2 content_ext = content_size / source_size;
@@ -244,14 +285,24 @@ vec2 sheetUv(vec2 tex_coord) {
         return mix(uv_rect.xy, uv_rect.zw, content_uv);
     }
     return tileUv(tile_id_flat, tex_coord);
+#endif
 }
 
-vec4 getTilePixel(float tile_id_flat, vec2 tex_coord) {
+vec4 getTilePixel(vec2 tex_coord) {
     return texture(tex_sampler, sheetUv(tex_coord));
 }
 
 void main(void ) {
-    vec4 color = getTilePixel(tile_id_flat, vec2(vTexCoord.x, vTexCoord.y));
+#if defined(INSTANCED) && !defined(ID_PASS)
+    // Ghost-group test first: it rejects without a texture fetch.
+    if (use_ghost_ids > 0.5 && vMisc.y > 0.5) {
+        highp float id = texelFetch(ghost_ids, ivec2(gl_FragCoord.xy), 0).r * 255.0;
+        if (abs(id - vMisc.y) < 0.5) {
+            discard;
+        }
+    }
+#endif
+    vec4 color = getTilePixel(vec2(vTexCoord.x, vTexCoord.y));
 
     if (selected > 0.5) {
         if (color.a < 0.01) {
@@ -268,7 +319,11 @@ void main(void ) {
             if (neighbour < 0.01) {
                 discard;
             }
+#ifdef ID_PASS
+            fragColor = vec4(vMisc.y / 255.0, 0.0, 0.0, 1.0);
+#else
             fragColor = vec4(selection_color, 1.0);
+#endif
             return;
         }
     } else if (color.a < 0.01) {
@@ -290,6 +345,12 @@ void main(void ) {
         gl_FragDepth = depth_base
             + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5);
     }
+#ifdef ID_PASS
+    // The ghost-id pass (`Gfx::draw_ghost_id_batches`): the same coverage and
+    // depth as the normal pass, writing the group id instead of colour.
+    fragColor = vec4(vMisc.y / 255.0, 0.0, 0.0, 1.0);
+    return;
+#endif
 
     // Normal from the sheet's normal-map companion, used in world space (the
     // Blender space it was baked in).  A (0.5,0.5,0.5) texel decodes to

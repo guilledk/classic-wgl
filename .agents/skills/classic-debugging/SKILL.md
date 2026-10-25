@@ -569,9 +569,10 @@ Web: append `?perf` (and `&perf_gpu`) to the page URL; a `[perf] {"kind":
 repeated name accumulates): `frame_head`, `pre_update`, `update`,
 `vehicles`, `particles_update` + `pu_*`, `test_runner`, `render_prep`,
 `lights`, `render_list`, `model_draws`, `shadow_fit`, `begin_frame`,
-`light_ubo`, `light_grid`, `shadow_clear`/`shadow_terrain`/
-`shadow_models`/`shadow_sprites`, `terrain`, `models`, `model_composite`,
-`sprites`, `model_ghost`, `particles_draw` + `p_*`, `bloom` +
+`light_ubo`, `light_grid`, `sprite_plan` (instanced sprite planning),
+`shadow_clear`/`shadow_terrain`/`shadow_models`/`shadow_sprites`, `terrain`,
+`models`, `model_composite`, `sprite_ids` + `sprite_ids_draw` (the ghost-id
+blit + draws), `sprites` (normal pass), `sprite_ghosts`, `model_ghost`, `particles_draw` + `p_*`, `bloom` +
 `bloom_bright`/`bloom_blur`/`bloom_composite`, `ui`, `tail`.  Add a phase
 with `classic_gfx::perf::phase("name")`, a counter with
 `perf::count("name", n)`; gate anything costly behind `perf::enabled()`.

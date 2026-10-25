@@ -25,6 +25,12 @@ pub mod perf;
 mod shader;
 mod shadow;
 pub use shadow::ShadowModels;
+mod sprite_batch;
+pub use sprite_batch::{
+    outline_delta, plan_batches, plan_shadow_batches, region_uv, GhostIdTarget, IsoSpriteInstance,
+    PlannedBatch, ScreenRect, SpriteBatch, GHOST_ALPHA, GHOST_ID_UNIT, PLAN_LOOKBACK,
+    SPRITE_INSTANCE_ATTRS, SPRITE_INSTANCE_BYTES,
+};
 mod texture;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -185,6 +191,8 @@ pub struct Gfx {
     particle_sampler: glow::Sampler,
     /// Half-res particle pass (see `particle_pass`).
     particle_pass: particle_pass::ParticlePassState,
+    /// Instanced iso sprites (see `sprite_batch`).
+    sprite_batch: sprite_batch::SpriteBatchState,
     vao: glow::VertexArray,
 }
 
@@ -215,6 +223,7 @@ impl Gfx {
             particle_noise,
             particle_sampler,
             particle_pass: Default::default(),
+            sprite_batch: Default::default(),
             vao,
         }
     }

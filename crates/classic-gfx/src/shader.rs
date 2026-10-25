@@ -389,6 +389,30 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "shadow_normal_offset",
             ],
         },
+        // Instanced iso sprites (`sprite_batch.rs`): the same sources with
+        // the per-sprite values as instance attributes.  The attribute order
+        // is the batcher's VAO layout; the remaining uniforms resolve lazily.
+        BuiltinShader {
+            name: "imageSheetInst",
+            vertex: "direct_tex.vert#INSTANCED",
+            fragment: "sheet.frag#INSTANCED",
+            attr: &crate::sprite_batch::SPRITE_INSTANCE_ATTRS,
+            unif: &["camera_matrix", "projection_matrix", "world_matrix", "ppm"],
+        },
+        BuiltinShader {
+            name: "spriteGhostIds",
+            vertex: "direct_tex.vert#INSTANCED",
+            fragment: "sheet.frag#INSTANCED#ID_PASS",
+            attr: &crate::sprite_batch::SPRITE_INSTANCE_ATTRS,
+            unif: &["camera_matrix", "projection_matrix", "world_matrix", "ppm"],
+        },
+        BuiltinShader {
+            name: "shadowSpriteInst",
+            vertex: "shadow_sprite.vert#INSTANCED",
+            fragment: "shadow_sprite.frag#INSTANCED",
+            attr: &crate::sprite_batch::SPRITE_INSTANCE_ATTRS,
+            unif: &["light_view_proj", "tex_sampler"],
+        },
         BuiltinShader {
             name: "sdf",
             vertex: "sdf.vert",
