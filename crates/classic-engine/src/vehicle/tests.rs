@@ -30,6 +30,10 @@ fn test_tilemap() -> Tilemap {
 }
 
 /// A flat, fully-walkable-looking tilemap of arbitrary size (heights all 1).
+pub(super) fn flat_tilemap_pub(size_x: i32, size_y: i32) -> Tilemap {
+    flat_tilemap(size_x, size_y)
+}
+
 fn flat_tilemap(size_x: i32, size_y: i32) -> Tilemap {
     Tilemap {
         position: Vec3::ZERO,

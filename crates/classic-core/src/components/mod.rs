@@ -358,6 +358,9 @@ pub struct IsoSprite {
     /// vehicle system each frame; never dumped (a review scene may set it).
     #[serde(default, skip_serializing)]
     pub dir_blend: Option<DirBlend>,
+    /// Skip the ghost pass (a vehicle layer with `ghost: false`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_ghost: bool,
 }
 
 /// The second baked direction of a direction-interpolated [`IsoSprite`]
@@ -755,6 +758,64 @@ pub struct IsoVehicle {
     /// Ground speed (metres/second) last frame, for the dust burst term.
     #[serde(skip)]
     pub dust_speed: f32,
+    // -- v2 layered vehicles (`VehicleDef` version 2) ---------------------
+    /// The (namespace-qualified) vehicle def this was spawned from; empty for
+    /// a v1 vehicle.
+    #[serde(skip)]
+    pub def_name: String,
+    /// Per-layer runtime state, in def order (empty for a v1 vehicle).
+    #[serde(skip)]
+    pub layers: Vec<VehicleLayerState>,
+    /// The four ground contacts in chassis metres (`x` forward, `y` left),
+    /// `[fl, fr, rl, rr]`: when set, contacts rotate exactly with the
+    /// heading instead of lerping `wheel_tile_offsets`.
+    #[serde(skip)]
+    pub contact_offsets_m: Vec<[f32; 2]>,
+    /// Signed distance driven (metres): wheel and track spin.
+    #[serde(skip)]
+    pub odometer_m: f32,
+    /// Accumulated heading change (radians): the left / right track and
+    /// wheel differential.
+    #[serde(skip)]
+    pub turned: f32,
+    /// Turn in place instead of arcing (tracked vehicles).
+    #[serde(skip)]
+    pub pivot_turn: bool,
+}
+
+/// Runtime state of one v2 vehicle layer (`classic_core::vehicle_def`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VehicleLayerState {
+    /// The layer's def name.
+    pub name: String,
+    /// Its sprite entity (the body for the hull).
+    pub entity: String,
+    /// Index into the def's `layers`.
+    pub def_index: usize,
+    pub visible: bool,
+    /// RGBA multiplied onto the layer (`vehicle_layer_color`).
+    pub color: [f32; 4],
+    /// Turret yaw relative to the hull (tile radians) and its slew target.
+    pub yaw: f32,
+    pub yaw_target: f32,
+    /// Turret gun pitch (radians, up positive).
+    pub pitch: f32,
+    /// A map point (tile `x, y`) the turret keeps aiming at.
+    pub aim: Option<(f32, f32)>,
+    /// The playing clip, if any.
+    pub clip: Option<ClipPlay>,
+}
+
+/// A layer clip in playback (`vehicle_play`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClipPlay {
+    pub clip: String,
+    /// Seconds since the clip started.
+    pub time: f32,
+    /// Multiplies the clip fps; negative plays backward.
+    pub speed: f32,
+    /// `0` loops; `n` plays `n` times then holds the end frame.
+    pub repeat: i32,
 }
 
 fn default_vehicle_speed() -> f32 {
@@ -818,6 +879,12 @@ impl Default for IsoVehicle {
             steer: 0.0,
             reversing: false,
             dust_speed: 0.0,
+            def_name: String::new(),
+            layers: Vec::new(),
+            contact_offsets_m: Vec::new(),
+            odometer_m: 0.0,
+            turned: 0.0,
+            pivot_turn: false,
         }
     }
 }

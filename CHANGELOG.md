@@ -74,6 +74,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   wheel-offset arrays (now `Vec`s) and drives the heading quantization
   and frame stride of non-interpolated sheets and the direction count of
   interpolated ones.  The LRV stays at 8 (#158).
+- Layered vehicles (vehicle def v2): `spawn_vehicle` spawns a v2 def as
+  one sprite per layer (`{vehicle}.{layer}`), driven by the v1 chassis
+  sim over four contacts from the wheel / gear layers.  Layers sit at
+  their (parent-composed) offsets on the chassis plane; wheels and tracks
+  spin with the odometer and turn differential, wheels steer, turrets
+  slew their own yaw over their own directions with gun pitch and fire
+  frames, and tool / legs / cargo / lift layers play clips.  `pivot_turn`
+  turns tracked vehicles in place; `ghost: false` layers skip the ghost
+  pass.  New ABI rows `vehicle_aim`, `vehicle_aim_angles`,
+  `vehicle_play`, `vehicle_layer_visible`, `vehicle_layer_color`; the
+  contract gains turret `pitch_pivot` (#159).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,

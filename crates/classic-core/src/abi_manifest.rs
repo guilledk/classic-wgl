@@ -105,6 +105,13 @@ macro_rules! for_each_host_import {
             vehicle_probe(name: str, tx: i32, ty: i32) -> i32 [native web worker];
             vehicle_probe_clear(name: str) -> i32 [native web worker];
             vehicle_footprint_radius(name: str) -> f64 [native web worker];
+            vehicle_aim(name: str, x: f64, y: f64) -> i32 [native web worker];
+            vehicle_aim_angles(name: str, yaw_deg: f64, pitch_deg: f64) -> i32 [native web worker];
+            vehicle_play(name: str, layer: str, clip: str, speed: f64, repeat: i32) -> i32
+                [native web worker];
+            vehicle_layer_visible(name: str, layer: str, visible: i32) -> i32 [native web worker];
+            vehicle_layer_color(name: str, layer: str, r: f64, g: f64, b: f64, a: f64) -> i32
+                [native web worker];
 
             // ---- Selection + inventory -----------------------------------
             selected_names() -> json [native web worker];
@@ -962,9 +969,9 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 118);
-        assert_eq!(imports_for(Backend::Web).count(), 118);
-        assert_eq!(imports_for(Backend::Worker).count(), 118);
+        assert_eq!(imports_for(Backend::Native).count(), 123);
+        assert_eq!(imports_for(Backend::Web).count(), 123);
+        assert_eq!(imports_for(Backend::Worker).count(), 123);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
         assert_eq!(imports_for(Backend::Tier3Trap).count(), 28);
     }

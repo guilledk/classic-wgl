@@ -38,8 +38,10 @@ impl Engine {
             let mut wheel_xy = [[0.0f32; 2]; 4];
             let mut wheel_z = [0.0f32; 4];
             for i in 0..4 {
-                let (ox, oy) =
-                    (v.wheel_tile_offsets[i][direction][0], v.wheel_tile_offsets[i][direction][1]);
+                let [ox, oy] = match v.contact_offsets_m.get(i) {
+                    Some(c) => super::layers::chassis_to_tile(*c, v.heading),
+                    None => v.wheel_tile_offsets[i][direction],
+                };
                 let wx = x + ox;
                 let wy = y + oy;
                 wheel_xy[i] = [wx, wy];
@@ -74,6 +76,7 @@ impl Engine {
             VehicleWrite {
                 body: [x, y, v.altitude],
                 directions: v.directions,
+                layered: !v.layers.is_empty(),
                 body_altitude: v.altitude - terrain.height(x, y),
                 body_anchor: v.body_anchors[direction],
                 direction: v.direction,
@@ -93,6 +96,7 @@ impl Engine {
         };
 
         self.apply_pose(ve, &wheel_handles, &tire_handles, &write);
+        self.apply_layers(ve, &write, &terrain, 0.0);
         true
     }
 

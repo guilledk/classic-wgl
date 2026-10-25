@@ -36,7 +36,7 @@ flat in highp vec4 vMisc;
 flat in highp vec4 vOutline;
 #define depth_base vMisc.x
 #define depth_scale vTint.w
-#define selected vMisc.z
+#define selected mod(vMisc.z, 2.0)
 #define tint vTint.rgb
 #define outline_delta vOutline.xy
 #define vSource vOutline.zw
@@ -447,6 +447,9 @@ WarpTexel blendDirections() {
 void main(void ) {
 #if defined(INSTANCED) && !defined(ID_PASS)
     // Ghost-group test first: it rejects without a texture fetch.
+    if (ghost_alpha > 0.0 && vMisc.z > 1.5) {
+        discard;
+    }
     if (use_ghost_ids > 0.5 && vMisc.y > 0.5) {
         highp float id = texelFetch(ghost_ids, ivec2(gl_FragCoord.xy), 0).r * 255.0;
         if (abs(id - vMisc.y) < 0.5) {

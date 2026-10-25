@@ -15,7 +15,7 @@ use super::kinematics::{
 };
 use super::{
     TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DUST_CONTACT_M, GOAL_TOLERANCE,
-    MOON_GRAVITY, WHEEL_SUFFIXES,
+    MOON_GRAVITY, PIVOT_TURN_ENTER, WHEEL_SUFFIXES,
 };
 
 impl Engine {
@@ -77,6 +77,9 @@ impl Engine {
             return false;
         }
 
+        if def.is_v2() {
+            return self.spawn_vehicle_v2(def_name, &def, entity_name, x, y);
+        }
         let Some(body_part) = def.parts.first().cloned() else { return false };
         if def.parts.len() != 5 {
             return false;
@@ -203,6 +206,7 @@ impl Engine {
                 ghost_group,
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
+                no_ghost: false,
             };
             let we = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
             let _ = self.world.insert_one(we, DebugName(wheel_names[i].clone()));
@@ -234,6 +238,7 @@ impl Engine {
                 ghost_group,
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
+                no_ghost: false,
             };
             let te = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
             let _ = self.world.insert_one(te, DebugName(name.clone()));
@@ -257,6 +262,7 @@ impl Engine {
             ghost_group,
             color: [1.0, 1.0, 1.0, 1.0],
             dir_blend: None,
+            no_ghost: false,
         };
         let vehicle = IsoVehicle {
             tilemap: tilemap_name,
@@ -381,11 +387,25 @@ impl Engine {
                     // turn rate.
                     v.steer = step_steer(v.steer, err, v.steer_max, v.steer_rate, delta);
                     let max_turn = v.turn_rate * delta;
-                    v.heading = wrap_pi(v.heading + err.clamp(-max_turn, max_turn));
+                    let turn = err.clamp(-max_turn, max_turn);
+                    v.heading = wrap_pi(v.heading + turn);
+                    v.turned += turn;
+                    // A tracked vehicle turns in place while far off its target.
+                    let pivoting = v.pivot_turn && err.abs() > PIVOT_TURN_ENTER;
+                    if pivoting {
+                        v.reversing = false;
+                        v.steer = 0.0;
+                    }
 
                     // Forward drives ahead; reverse backs up along the heading.
                     let dir: f32 = if v.reversing { -1.0 } else { 1.0 };
-                    let drive_speed = if v.reversing { v.reverse_speed } else { v.speed };
+                    let drive_speed = if pivoting {
+                        0.0
+                    } else if v.reversing {
+                        v.reverse_speed
+                    } else {
+                        v.speed
+                    };
                     let step = drive_speed * delta;
                     x += dir * v.heading.cos() * step;
                     y += dir * v.heading.sin() * step;
@@ -408,7 +428,10 @@ impl Engine {
             let mut wheel_xy = [[0.0f32; 2]; 4];
             let mut wheel_ground = [0.0f32; 4];
             for i in 0..4 {
-                let [ox, oy] = lerp_dir2(&v.wheel_tile_offsets[i], v.heading);
+                let [ox, oy] = match v.contact_offsets_m.get(i) {
+                    Some(c) => super::layers::chassis_to_tile(*c, v.heading),
+                    None => lerp_dir2(&v.wheel_tile_offsets[i], v.heading),
+                };
                 let wx = x + ox;
                 let wy = y + oy;
                 wheel_xy[i] = [wx, wy];
@@ -520,6 +543,7 @@ impl Engine {
 
             // Dust drivers: ground speed (m/s), its change since last frame,
             // and which wheels touch the ground.
+            v.odometer_m += drive_tiles * TILE_M * delta;
             let speed_mps = drive_tiles.abs() * TILE_M;
             let dspeed_mps = (speed_mps - v.dust_speed).abs();
             v.dust_speed = speed_mps;
@@ -531,6 +555,7 @@ impl Engine {
             VehicleWrite {
                 body: [x, y, v.altitude],
                 directions: v.directions,
+                layered: !v.layers.is_empty(),
                 body_altitude,
                 body_anchor: lerp_dir2(&v.body_anchors, v.heading),
                 direction: v.direction,
@@ -550,6 +575,7 @@ impl Engine {
         };
 
         self.apply_pose(ve, &wheel_handles, &tire_handles, &write);
+        self.apply_layers(ve, &write, terrain, delta);
         self.drive_vehicle_fx(ve, &write);
     }
 
@@ -573,7 +599,7 @@ impl Engine {
             Some(v) => (&v.body_anchors, &v.wheel_anchors),
             None => (&[], &no_anchors),
         };
-        if let Ok(mut s) = self.world.get::<&mut IsoSprite>(ve) {
+        if let (false, Ok(mut s)) = (write.layered, self.world.get::<&mut IsoSprite>(ve)) {
             s.frame = write.body_frame;
             s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, write.body_frame);
             s.frame_offset.z = write.body_altitude;

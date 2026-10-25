@@ -2,8 +2,8 @@
 //! always; wasmtime on native) with small hand-written WAT guest modules.
 
 use classic_core::components::{
-    Animator, ColliderData, Disabled, Emitter, IsoSprite, Light, Model, NavMesh, Role, Shape,
-    Tilemap,
+    Animator, ColliderData, Disabled, Emitter, IsoSprite, IsoVehicle, Light, Model, NavMesh, Role,
+    Shape, Tilemap,
 };
 use classic_core::types::{AnimationData, SdfFontMetrics};
 use classic_core::RoleKind;
@@ -122,6 +122,7 @@ fn guest_can_set_sprite_frame_and_color() {
                         ghost_group: 0,
                         color: [1.0, 1.0, 1.0, 1.0],
                         dir_blend: None,
+                        no_ghost: false,
                     },
                 )
                 .unwrap();
@@ -168,6 +169,7 @@ fn guest_can_spawn_sprite_clone() {
                         ghost_group: 0,
                         color: [0.55, 0.65, 0.95, 1.0],
                         dir_blend: None,
+                        no_ghost: false,
                     },
                 )
                 .unwrap();
@@ -452,6 +454,7 @@ fn guest_get_sprite_frame_and_inventory_capacity_wired() {
                 ghost_group: 0,
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
+                no_ghost: false,
             };
 
             engine.spawn_named("unit");
@@ -1572,6 +1575,87 @@ fn guest_bench_imports_wired() {
             assert!(engine.bench.ended);
             assert!(engine.bench.section.is_none());
             assert!(!engine.test_should_close);
+        },
+    );
+}
+
+/// A v2 vehicle the layer imports act on: hull, a slewing turret with fire
+/// frames, and a crane tool with a clip.
+fn spawn_test_tank(engine: &mut Engine) {
+    install_test_tilemap(engine);
+    let def: classic_core::types::VehicleDef = serde_json::from_value(serde_json::json!({
+        "version": 2, "name": "tank", "directions": 16,
+        "layers": [
+            { "name": "hull", "kind": "hull", "texture": "tankHull" },
+            { "name": "turret", "kind": "turret", "texture": "tankTurret",
+              "offset": [0.0, 0.0, 1.2], "fire_frames": 3, "yaw_rate_deg_per_sec": 90.0,
+              "pitch": { "levels": 4, "min_deg": -5.0, "max_deg": 25.0 } },
+            { "name": "crane", "kind": "tool", "texture": "tankCrane", "parent": "turret",
+              "clips": { "swing": { "start": 0, "frames": 6 } } }
+        ]
+    }))
+    .unwrap();
+    engine.vehicles.insert("tank".into(), def);
+    assert!(engine.spawn_vehicle("tank", "tank", 1.0, 1.0));
+}
+
+#[test]
+fn guest_vehicle_layer_imports_drive_layers() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_aim" (func $aim (param i32 i32 f64 f64) (result i32)))
+            (import "env" "vehicle_aim_angles" (func $aa (param i32 i32 f64 f64) (result i32)))
+            (import "env" "vehicle_play" (func $play (param i32 i32 i32 i32 i32 i32 f64 i32) (result i32)))
+            (import "env" "vehicle_layer_visible" (func $vis (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "vehicle_layer_color" (func $col (param i32 i32 i32 i32 f64 f64 f64 f64) (result i32)))
+            (import "env" "set_pos" (func $sp (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "tank")
+            (data (i32.const 16) "turret")
+            (data (i32.const 32) "fire")
+            (data (i32.const 48) "crane")
+            (data (i32.const 64) "swing")
+            (data (i32.const 80) "ok")
+            (func (export "update") (param f64) (local $n i32)
+                (local.set $n (call $aim (i32.const 0) (i32.const 4) (f64.const 2.0) (f64.const 2.0)))
+                (local.set $n (i32.add (local.get $n)
+                    (call $aa (i32.const 0) (i32.const 4) (f64.const 45.0) (f64.const 10.0))))
+                (local.set $n (i32.add (local.get $n)
+                    (call $play (i32.const 0) (i32.const 4) (i32.const 48) (i32.const 5)
+                        (i32.const 64) (i32.const 5) (f64.const -1.0) (i32.const 2))))
+                (local.set $n (i32.add (local.get $n)
+                    (call $play (i32.const 0) (i32.const 4) (i32.const 16) (i32.const 6)
+                        (i32.const 32) (i32.const 4) (f64.const 1.0) (i32.const 1))))
+                (local.set $n (i32.add (local.get $n)
+                    (call $vis (i32.const 0) (i32.const 4) (i32.const 48) (i32.const 5) (i32.const 0))))
+                (local.set $n (i32.add (local.get $n)
+                    (call $col (i32.const 0) (i32.const 4) (i32.const 16) (i32.const 6)
+                        (f64.const 1.0) (f64.const 0.0) (f64.const 0.0) (f64.const 1.0))))
+                ;; Report the success count through an entity position.
+                (drop (call $sp (i32.const 80) (i32.const 2)
+                    (f64.convert_i32_s (local.get $n)) (f64.const 0.0) (f64.const 0.0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            spawn_test_tank(&mut engine);
+            engine.spawn_named("ok");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("ok").map(|p| p.0), Some(6.0), "every import succeeded");
+            let tank = engine.names["tank"];
+            let v = engine.world.get::<&IsoVehicle>(tank).unwrap();
+            let layer = |n: &str| v.layers.iter().find(|s| s.name == n).unwrap().clone();
+            let turret = layer("turret");
+            assert!(turret.aim.is_none(), "aim_angles drops the aim point");
+            assert!((turret.yaw_target - 45f32.to_radians()).abs() < 1e-5);
+            assert!((turret.pitch - 10f32.to_radians()).abs() < 1e-5);
+            assert_eq!(turret.color, [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(turret.clip.as_ref().map(|c| c.clip.as_str()), Some("fire"));
+            let crane = layer("crane");
+            assert!(!crane.visible);
+            let c = crane.clip.unwrap();
+            assert_eq!((c.clip.as_str(), c.speed, c.repeat), ("swing", -1.0, 2));
+            drop(v);
+            assert!(engine.is_disabled(engine.names["tank.crane"]));
         },
     );
 }
