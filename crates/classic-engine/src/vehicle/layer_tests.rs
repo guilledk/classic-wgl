@@ -226,3 +226,81 @@ fn tracks_spin_with_distance_and_pivot_turns() {
     );
     assert!(engine.world.get::<&IsoVehicle>(tank).unwrap().heading.abs() > 0.1);
 }
+
+fn socket_tank() -> Engine {
+    let mut engine = Engine::new_for_test();
+    let tm = engine.world.spawn((
+        super::tests::flat_tilemap_pub(24, 24),
+        Role::new(RoleKind::Tilemap),
+        Transform::new(glam::Vec3::ZERO, glam::Vec3::ONE),
+    ));
+    engine.names.insert("tilemap".into(), tm);
+    let mut def = tank_def();
+    def.layers[3].pitch_pivot = Some([0.5, 0.0, 0.6]);
+    def.sockets.insert(
+        "muzzle".into(),
+        classic_core::vehicle_def::SocketDef { layer: "turret".into(), offset: [2.5, 0.0, 0.6] },
+    );
+    def.sockets.insert(
+        "lamp".into(),
+        classic_core::vehicle_def::SocketDef { layer: "hull".into(), offset: [1.0, 0.5, 0.8] },
+    );
+    engine.vehicles.insert("tank".into(), def);
+    tables(&mut engine);
+    assert!(engine.spawn_vehicle("tank", "tank", 8.0, 8.0));
+    engine
+}
+
+#[test]
+fn sockets_follow_heading_turret_yaw_and_gun_pitch() {
+    let mut engine = socket_tank();
+    let base = {
+        let tank = engine.names["tank"];
+        let tf = engine.world.get::<&Transform>(tank).unwrap().position;
+        let alt = engine.world.get::<&IsoVehicle>(tank).unwrap().altitude;
+        engine.iso_to_world(tf.x, tf.y, alt - engine.height_at(tf.x, tf.y)).unwrap()
+    };
+    // Heading 0 (East = world +X): a hull socket 1 m forward, 0.5 m left
+    // (world +Y), 0.8 m up.
+    let lamp = engine.vehicle_socket_pos("tank", "lamp").unwrap();
+    assert!((lamp - base - glam::Vec3::new(1.0, 0.5, 0.8)).length() < 1e-4, "{lamp:?}");
+    // Turret at (-0.5, 0, 1.2); muzzle 2.5 m forward of the turret origin.
+    let muzzle = engine.vehicle_socket_pos("tank", "muzzle").unwrap();
+    assert!((muzzle - base - glam::Vec3::new(2.0, 0.0, 1.8)).length() < 1e-4, "{muzzle:?}");
+    // Gun pitch 25° about the trunnion (0.5 m forward, 0.6 m up): the muzzle
+    // swings on a 2 m arm.
+    assert!(engine.vehicle_aim_angles("tank", 0.0, 25.0));
+    engine.time.delta = 1e-6;
+    engine.update_vehicles();
+    let p = 25f32.to_radians();
+    let expect = glam::Vec3::new(-0.5 + 0.5 + 2.0 * p.cos(), 0.0, 1.2 + 0.6 + 2.0 * p.sin());
+    let muzzle = engine.vehicle_socket_pos("tank", "muzzle").unwrap();
+    assert!((muzzle - base - expect).length() < 1e-3, "{muzzle:?} vs {expect:?}");
+    // Turret yaw 90° (clockwise on screen: toward the chassis right, world
+    // -Y at heading 0): the arm now points right.
+    assert!(engine.vehicle_aim_angles("tank", 90.0, 0.0));
+    engine.time.delta = 1.0;
+    engine.update_vehicles();
+    let muzzle = engine.vehicle_socket_pos("tank", "muzzle").unwrap();
+    assert!((muzzle - base - glam::Vec3::new(-0.5, -2.5, 1.8)).length() < 1e-3, "{muzzle:?}");
+    // The socket frame's forward axis points along the gun.
+    let (_, basis) = engine.vehicle_socket_frame("tank", "muzzle").unwrap();
+    assert!((basis.x_axis - glam::Vec3::new(0.0, -1.0, 0.0)).length() < 1e-3);
+    assert!(engine.vehicle_socket_pos("tank", "nope").is_none());
+}
+
+#[test]
+fn lights_ride_vehicle_sockets() {
+    let mut engine = socket_tank();
+    let light: classic_core::components::Light = serde_json::from_value(serde_json::json!({
+        "kind": "point", "position": [0.0, 0.0, 0.1], "color": [1, 1, 1], "intensity": 1,
+        "radius": 3, "parent": "tank", "socket": "lamp"
+    }))
+    .unwrap();
+    assert_eq!(light.node.as_deref(), Some("lamp"), "`socket` is the node key");
+    engine.world.spawn((light,));
+    let lamp = engine.vehicle_socket_pos("tank", "lamp").unwrap();
+    let lights = engine.gather_lights();
+    assert_eq!(lights.len(), 1);
+    assert!((lights[0].position - lamp - glam::Vec3::new(0.0, 0.0, 0.1)).length() < 1e-4);
+}

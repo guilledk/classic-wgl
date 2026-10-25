@@ -1122,8 +1122,11 @@ pub struct Light {
     pub parent: Option<String>,
     /// Optional glTF node of a `Model` parent: `position` is then an offset in
     /// that node's frame (full TRS), so the light follows the node's lean and
-    /// rotation, not just the rig origin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// rotation, not just the rig origin.  On a vehicle parent it names a
+    /// **socket** (`VehicleDef::sockets`; JSON key `socket` works too): the
+    /// offset is then in the socket's frame, turning with heading, pitch,
+    /// roll, turret yaw and gun pitch.
+    #[serde(default, alias = "socket", skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
 }
 
@@ -1184,7 +1187,11 @@ pub struct Emitter {
     /// parent's current glb: each node runs the effect's layers at their full
     /// rate (one plume per node), births dealt round-robin into one shared
     /// ring per layer (see [`Emitter::node_prefix`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// On a vehicle parent it names a **socket** (`VehicleDef::sockets`;
+    /// JSON key `socket` works too), whose frame turns with heading, pitch,
+    /// roll, turret yaw and gun pitch.
+    #[serde(default, alias = "socket", skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
     /// Spatial scale (spawn volume, speeds and sizes).
     #[serde(default = "default_one")]

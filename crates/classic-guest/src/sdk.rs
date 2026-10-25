@@ -468,6 +468,19 @@ impl GuestHost {
         self.engine_mut().vehicle_emissive(&name, strength as f32) as i32
     }
 
+    /// A vehicle socket's world position (metres, +Z up), or `None`.
+    pub fn vehicle_socket_pos(&mut self, name: &str, socket: &str) -> Option<(f64, f64, f64)> {
+        let name = self.resolve(name);
+        let p = self.engine().vehicle_socket_pos(&name, socket)?;
+        Some((p.x as f64, p.y as f64, p.z as f64))
+    }
+
+    /// Fire a one-shot effect at a vehicle socket (along its forward axis).
+    pub fn vehicle_socket_fx(&mut self, name: &str, socket: &str, effect: &str) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_socket_fx(&name, socket, effect) as i32
+    }
+
     /// Non-mutating vehicle reachability probe: run the vehicle's A* to
     /// `(tx, ty)` without driving it.  Returns `1` reachable, `-1` no path,
     /// `0` pending (call again), `-2` unknown vehicle.  On success the waypoints

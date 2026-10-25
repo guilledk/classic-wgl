@@ -18,6 +18,7 @@ mod kinematics;
 mod layer_tests;
 mod layers;
 mod sim;
+mod sockets;
 #[cfg(test)]
 mod tests;
 

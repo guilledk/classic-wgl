@@ -92,6 +92,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   sprite above 1 turns bloom on.  ABI rows `vehicle_team` and
   `vehicle_emissive` (every part of a vehicle); `spawnVehicles` takes
   `team` / `emissive` (#160).
+- Vehicle sockets: `Engine::vehicle_socket_frame` resolves a def socket
+  to a world frame that turns with the heading, body pitch / roll, the
+  layer's composed yaw and (on a turret) the gun pitch about
+  `pitch_pivot`.  A `Light` / `Emitter` with `parent: <vehicle>` and
+  `node` (JSON alias `socket`) rides it, so vehicle lamps cast real light.
+  ABI rows `vehicle_socket_pos` (world metres) and `vehicle_socket_fx`
+  (a one-shot effect along the socket's forward axis) (#161).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
