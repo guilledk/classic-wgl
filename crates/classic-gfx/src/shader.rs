@@ -406,6 +406,21 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             attr: &crate::sprite_batch::SPRITE_INSTANCE_ATTRS,
             unif: &["camera_matrix", "projection_matrix", "world_matrix", "ppm"],
         },
+        // Direction-interpolated iso sprites (`sheet.frag#INTERP`).
+        BuiltinShader {
+            name: "imageSheetInterp",
+            vertex: "direct_tex.vert#INSTANCED#INTERP",
+            fragment: "sheet.frag#INSTANCED#INTERP",
+            attr: &crate::sprite_batch::SPRITE_INSTANCE_ATTRS,
+            unif: &["camera_matrix", "projection_matrix", "world_matrix", "ppm"],
+        },
+        BuiltinShader {
+            name: "spriteGhostIdsInterp",
+            vertex: "direct_tex.vert#INSTANCED#INTERP",
+            fragment: "sheet.frag#INSTANCED#INTERP#ID_PASS",
+            attr: &crate::sprite_batch::SPRITE_INSTANCE_ATTRS,
+            unif: &["camera_matrix", "projection_matrix", "world_matrix", "ppm"],
+        },
         BuiltinShader {
             name: "shadowSpriteInst",
             vertex: "shadow_sprite.vert#INSTANCED",

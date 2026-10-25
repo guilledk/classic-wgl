@@ -115,6 +115,7 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
             footprint: agent.footprint.clone(),
             ghost_group: 0,
             color: [1.0, 1.0, 1.0, 1.0],
+            dir_blend: None,
         },
         agent.clone(),
     ));

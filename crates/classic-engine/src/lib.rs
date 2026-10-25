@@ -35,6 +35,7 @@ pub mod ui;
 pub mod vehicle;
 
 mod boot_api;
+mod dir_blend;
 mod hooks;
 mod lifecycle;
 mod model;
@@ -132,6 +133,12 @@ struct IsoDraw {
     selected: bool,
     /// World -> camera view space (metres): `iso_camera_matrix`.
     world_matrix: Mat4,
+    /// A direction blend: direction B's half and textures (`model` is then
+    /// the union quad of both directions).
+    blend: Option<(classic_gfx::DirBlendRegion, classic_gfx::BlendTextures)>,
+    /// The shadow caster when it is not `model` / `texture` / `uv`: a blend
+    /// casts its nearer direction.
+    shadow_caster: Option<(Mat4, String, IsoUv)>,
 }
 
 impl IsoDraw {
@@ -157,6 +164,7 @@ struct SdfTextGpu {
 }
 
 /// A frame resolved through a packed-atlas frame table.
+#[derive(Clone, Debug)]
 pub(crate) struct ResolvedFrame {
     pub(crate) sheet_name: String,
     pub(crate) uv_rect: [f32; 4],
@@ -178,6 +186,10 @@ pub(crate) struct ResolvedFrame {
     /// legacy global sheet, `2R / (DEPTH_NEAR − DEPTH_FAR)` for an
     /// anchor-relative one; `SpriteSheetEntry::depth_scale`).
     pub(crate) depth_scale: f32,
+    /// The sheet's depth companion is anchor-relative (sheet v2).
+    pub(crate) anchor_depth: bool,
+    /// The frame table opts into direction interpolation (`dir_interp`).
+    pub(crate) dir_interp: bool,
 }
 
 /// The namespace-resolvable resource categories, mirroring the guest SDK's
@@ -529,6 +541,8 @@ mod tests {
             normal_tex: None,
             depth_tex: None,
             depth_scale: 1.0,
+            anchor_depth: false,
+            dir_interp: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &full);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
@@ -545,6 +559,8 @@ mod tests {
             normal_tex: None,
             depth_tex: None,
             depth_scale: 1.0,
+            anchor_depth: false,
+            dir_interp: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &trimmed);
         assert!((a.x - (0.5 * 512.0 - 8.0) / 466.0).abs() < 1e-6, "got {a:?}");
@@ -561,6 +577,8 @@ mod tests {
             normal_tex: None,
             depth_tex: None,
             depth_scale: 1.0,
+            anchor_depth: false,
+            dir_interp: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &packed);
         assert!((a.x - 0.25).abs() < 1e-6 && (a.y - 0.75).abs() < 1e-6, "got {a:?}");
@@ -576,6 +594,8 @@ mod tests {
             normal_tex: None,
             depth_tex: None,
             depth_scale: 1.0,
+            anchor_depth: false,
+            dir_interp: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &unknown);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
@@ -687,6 +707,7 @@ mod tests {
             ],
             ghost_group: 0,
             color: [1.0, 1.0, 1.0, 1.0],
+            dir_blend: None,
         };
         let sprite_tf = Transform::new(iso_sprite.position, iso_sprite.scale);
         let tex_dim = (48.0, 96.0);
@@ -974,6 +995,7 @@ mod tests {
                 footprint: vec![],
                 ghost_group: 0,
                 color: [1.0, 1.0, 1.0, 1.0],
+                dir_blend: None,
                 frame_offset,
             },
         ));

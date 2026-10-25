@@ -203,6 +203,7 @@ impl Engine {
                 footprint: vec![],
                 ghost_group,
                 color: [1.0, 1.0, 1.0, 1.0],
+                dir_blend: None,
             };
             let we = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
             let _ = self.world.insert_one(we, DebugName(wheel_names[i].clone()));
@@ -233,6 +234,7 @@ impl Engine {
                 footprint: vec![],
                 ghost_group,
                 color: [1.0, 1.0, 1.0, 1.0],
+                dir_blend: None,
             };
             let te = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
             let _ = self.world.insert_one(te, DebugName(name.clone()));
@@ -255,6 +257,7 @@ impl Engine {
             footprint: vec![],
             ghost_group,
             color: [1.0, 1.0, 1.0, 1.0],
+            dir_blend: None,
         };
         let vehicle = IsoVehicle {
             tilemap: tilemap_name,
@@ -527,6 +530,8 @@ impl Engine {
 
             VehicleWrite {
                 body: [x, y, v.altitude],
+                body_anchors8: v.body_anchors,
+                wheel_anchors8: v.wheel_anchors,
                 body_altitude,
                 body_anchor: lerp_dir2(&v.body_anchors, v.heading),
                 direction: v.direction,
@@ -567,6 +572,14 @@ impl Engine {
             s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, write.body_frame);
             s.frame_offset.z = write.body_altitude;
             s.anchor = Vec2::from(write.body_anchor);
+            let base = write.body_frame as u32 - write.direction;
+            Self::apply_dir_frame(
+                &self.frame_tables,
+                &mut s,
+                base,
+                write.heading,
+                &write.body_anchors8,
+            );
         }
 
         for (i, handle) in wheel_handles.iter().enumerate() {
@@ -581,6 +594,8 @@ impl Engine {
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, s.frame);
                 s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
+                let anchors = &write.wheel_anchors8[i];
+                Self::apply_dir_frame(&self.frame_tables, &mut s, 0, write.heading, anchors);
             }
         }
 
@@ -599,7 +614,38 @@ impl Engine {
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, frame);
                 s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
+                let base = write.steer_index * DIRECTIONS;
+                let anchors = &write.wheel_anchors8[i];
+                Self::apply_dir_frame(&self.frame_tables, &mut s, base, write.heading, anchors);
             }
         }
+    }
+
+    /// Direction interpolation for one part: when its texture opts in
+    /// (`dir_interp`), draw the two baked directions straddling the
+    /// continuous `heading` (frames `base + dir`, each at its own anchor)
+    /// instead of the quantized one; otherwise clear any blend.
+    fn apply_dir_frame(
+        tables: &std::collections::HashMap<String, classic_core::types::FrameTable>,
+        s: &mut IsoSprite,
+        base: u32,
+        heading: f32,
+        anchors: &[[f32; 2]; 8],
+    ) {
+        if !tables.get(&s.texture).is_some_and(|t| t.dir_interp) {
+            s.dir_blend = None;
+            return;
+        }
+        let (a, b, t) = classic_core::vehicle_def::heading_neighbours(heading, DIRECTIONS);
+        let step = std::f32::consts::TAU / DIRECTIONS as f32;
+        s.frame = (base + a) as f32;
+        s.frame_name = Self::frame_name(tables, &s.texture, s.frame);
+        s.anchor = Vec2::from(anchors[a as usize]);
+        s.dir_blend = Some(classic_core::components::DirBlend {
+            frame_b: (base + b) as f32,
+            anchor_b: Vec2::from(anchors[b as usize]),
+            dtheta_a: t * step,
+            dtheta_b: (t - 1.0) * step,
+        });
     }
 }

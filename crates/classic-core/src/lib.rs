@@ -109,6 +109,7 @@ pub fn register_all_components() {
                     footprint: a.footprint.clone(),
                     ghost_group: 0,
                     color: [1.0, 1.0, 1.0, 1.0],
+                    dir_blend: None,
                 });
                 b.add(a);
                 Ok(())
