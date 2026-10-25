@@ -600,7 +600,7 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
         }
     }
 
-    // Light markers (KeyL): an X crosshair at each active light plus a vertical
+    // Light markers (Shift+KeyL): an X crosshair at each active light plus a vertical
     // Z line from the terrain surface up to the light, so its 3D placement is
     // visible at a glance.
     if state.borrow().debug_lights {

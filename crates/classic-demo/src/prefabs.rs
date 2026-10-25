@@ -410,7 +410,7 @@ pub fn init_footprint_colliders(engine: &mut Engine) {
 }
 
 /// Register keyboard toggles for debug overlays (F = footprints, V = vehicle
-/// paths, L = lights, F9 = dump, F10 = save ROM archive).
+/// paths, Shift+L = light markers, F9 = dump, F10 = save ROM archive).
 pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
     let state = Rc::clone(state);
     engine.on_update(move |engine| {
@@ -421,7 +421,11 @@ pub fn init_debug_toggles(engine: &mut Engine, state: &DemoStateRef) {
                 engine.show_grid = s.editor.debug_footprints;
             }
         }
-        if engine.input.was_key_pressed("KeyL") {
+        // Shift+L: a bare L is a common guest binding (unittest v2 toggles
+        // night with it), and flipping the light markers with it drew a yellow
+        // cross at every light in the guest's night captures.
+        let shift = engine.input.is_key_down("ShiftLeft") || engine.input.is_key_down("ShiftRight");
+        if shift && engine.input.was_key_pressed("KeyL") {
             let mut s = state.borrow_mut();
             s.debug_lights = !s.debug_lights;
         }

@@ -287,6 +287,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Layered (v2) vehicles: `vehicle_teleport` read the v1 wheel and anchor
+  tables at the quantized direction, which a 16-direction v2 vehicle
+  sized at 8, panicking past direction 7 (the mule's scripted reverse
+  teleports every frame).  v2 spawns size every per-direction table to
+  the def's count and the teleport reads them by their own length.
+  Spot lights on a vehicle socket now turn their beam with the socket
+  frame instead of keeping the authored world direction.  The demo's
+  light-marker overlay moved from L to Shift+L, so a guest binding L no
+  longer draws a yellow cross at every light (#162).
 - Anchor-relative depth sheets re-anchor against the frame's own ground
   anchor depth instead of the quad's top-left corner (which sat
   `0.5 · anchor_y · height` metres nearer and skewed every layer by a

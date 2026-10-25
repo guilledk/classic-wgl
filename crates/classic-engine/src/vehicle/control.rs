@@ -7,7 +7,7 @@ use classic_worker::{VehiclePathQuery, VehicleSnapshot};
 
 use crate::Engine;
 
-use super::kinematics::{dir_to_heading, pitch_index, straight_steer};
+use super::kinematics::{dir_entry, dir_to_heading, pitch_index, straight_steer};
 use super::{
     PreviewProbe, PreviewProbeState, VehicleGotoPoll, VehicleGotoSubmit, VehicleWrite, JUMP_COST,
 };
@@ -23,7 +23,6 @@ impl Engine {
 
         let write = {
             let Some(mut v) = self.world.get::<&mut IsoVehicle>(ve).ok() else { return false };
-            let direction = v.direction as usize;
             v.vel_z = 0.0;
             v.airborne = false;
             v.heading = dir_to_heading(v.direction, v.directions);
@@ -40,7 +39,7 @@ impl Engine {
             for i in 0..4 {
                 let [ox, oy] = match v.contact_offsets_m.get(i) {
                     Some(c) => super::layers::chassis_to_tile(*c, v.heading),
-                    None => v.wheel_tile_offsets[i][direction],
+                    None => dir_entry(&v.wheel_tile_offsets[i], v.direction),
                 };
                 let wx = x + ox;
                 let wy = y + oy;
@@ -68,7 +67,7 @@ impl Engine {
             v.roll_index = pitch_index(v.roll, v.roll_max, v.roll_levels);
             let mut wheel_anchors = [[0.0f32; 2]; 4];
             for (i, a) in wheel_anchors.iter_mut().enumerate() {
-                *a = v.wheel_anchors[i][direction];
+                *a = dir_entry(&v.wheel_anchors[i], v.direction);
             }
             let body_frame = ((v.pitch_index * v.roll_levels + v.roll_index) * v.directions
                 + v.direction) as f32;
@@ -78,7 +77,7 @@ impl Engine {
                 directions: v.directions,
                 layered: !v.layers.is_empty(),
                 body_altitude: v.altitude - terrain.height(x, y),
-                body_anchor: v.body_anchors[direction],
+                body_anchor: dir_entry(&v.body_anchors, v.direction),
                 direction: v.direction,
                 body_frame,
                 wheel_xy,

@@ -304,3 +304,62 @@ fn lights_ride_vehicle_sockets() {
     assert_eq!(lights.len(), 1);
     assert!((lights[0].position - lamp - glam::Vec3::new(0.0, 0.0, 0.1)).length() < 1e-4);
 }
+
+/// A 16-direction vehicle teleports at a direction past the first 8 (the
+/// mule's scripted reverse teleports every frame): every per-direction table
+/// is sized to the direction count, and the teleport reads them by its own
+/// length.
+#[test]
+fn sixteen_direction_vehicles_teleport_past_direction_eight() {
+    let mut engine = spawn_tank(8.0, 8.0);
+    let tank = engine.names["tank"];
+    {
+        let v = engine.world.get::<&IsoVehicle>(tank).unwrap();
+        assert_eq!(v.body_anchors.len(), 16);
+        assert!(v.wheel_anchors.iter().all(|a| a.len() == 16));
+        assert!(v.wheel_tile_offsets.iter().all(|a| a.len() == 16));
+    }
+    for dir in [8u32, 10, 15] {
+        engine.world.get::<&mut IsoVehicle>(tank).unwrap().direction = dir;
+        assert!(engine.vehicle_teleport("tank", 9.0, 9.0), "teleport at direction {dir}");
+        let v = engine.world.get::<&IsoVehicle>(tank).unwrap();
+        let step = std::f32::consts::TAU / 16.0;
+        assert!((v.heading - dir as f32 * step).abs() < 1e-5);
+        drop(v);
+        assert_eq!(frame_name(&engine, "tank"), format!("tankHull_{}", 16 + dir));
+    }
+}
+
+/// Tables of another length (an anchors artifact shorter than the count)
+/// wrap instead of panicking.
+#[test]
+fn dir_entry_wraps_on_the_table_length() {
+    use super::kinematics::dir_entry;
+    let t = [[0.1, 0.2], [0.3, 0.4]];
+    assert_eq!(dir_entry(&t, 0), [0.1, 0.2]);
+    assert_eq!(dir_entry(&t, 3), [0.3, 0.4]);
+    assert_eq!(dir_entry(&[], 5), [0.0, 0.0]);
+}
+
+/// A spot light on a vehicle socket turns its beam with the socket frame:
+/// the authored direction is in the socket layer's local frame.
+#[test]
+fn socket_spot_lights_turn_with_the_vehicle() {
+    let mut engine = socket_tank();
+    let light: classic_core::components::Light = serde_json::from_value(serde_json::json!({
+        "kind": "spot", "position": [0.0, 0.0, 0.0], "color": [1, 1, 1], "intensity": 1,
+        "radius": 6, "dir": [1.0, 0.0, -0.25], "cone_angle": 0.4,
+        "parent": "tank", "socket": "lamp"
+    }))
+    .unwrap();
+    engine.world.spawn((light,));
+    let beam = |engine: &Engine| engine.gather_lights()[0].dir.normalize();
+    // Heading 0 (East): forward is world +X.
+    let d = beam(&engine);
+    assert!((d - glam::Vec3::new(1.0, 0.0, -0.25).normalize()).length() < 1e-4, "{d:?}");
+    // A quarter turn clockwise on screen (tile +y, world -Y).
+    let tank = engine.names["tank"];
+    engine.world.get::<&mut IsoVehicle>(tank).unwrap().heading = std::f32::consts::FRAC_PI_2;
+    let d = beam(&engine);
+    assert!((d - glam::Vec3::new(0.0, -1.0, -0.25).normalize()).length() < 1e-4, "{d:?}");
+}
