@@ -375,6 +375,8 @@ impl Engine {
             normal_tex,
             depth_tex,
             depth_scale: sheet.depth_scale(None),
+            anchor_depth: sheet.anchor_depth_range(None).is_some(),
+            dir_interp: table.dir_interp,
         })
     }
 

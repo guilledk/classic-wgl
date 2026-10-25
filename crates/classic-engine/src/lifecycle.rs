@@ -19,6 +19,7 @@ use classic_platform::InputState;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
+use crate::dir_blend::{packed_geometry, DirChoice};
 use crate::{
     env_config, fields, golden, inventory_ui, light, particles, selection, shadow, DrawKind,
     Engine, GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, RTS_DRAG_THRESHOLD_PX, SELECTION_COLOR,
@@ -597,22 +598,22 @@ impl Engine {
             // (quad size, anchor px, sheet name, uv params).  Packed frames are
             // drawn at their source cell size with the trimmed content offset;
             // the uniform-grid path uses the cell size directly.
+            // Direction interpolation: blend the two baked directions, or draw
+            // the nearer one (`dir_blend`).
+            let choice = Self::dir_choice(
+                &self.frame_tables,
+                &iso_sprite,
+                frame_ref.as_ref(),
+                visual_selected.contains(entity),
+            );
+            let (frame_ref, sprite_anchor) = match &choice {
+                DirChoice::UseB { frame, anchor } => (Some(frame.clone()), *anchor),
+                _ => (frame_ref, iso_sprite.anchor),
+            };
             let (tex_dim, anchor_px, sheet_name, uv) = match &frame_ref {
                 Some(fr) => {
-                    let sw =
-                        if fr.source_size[0] > 0 { fr.source_size[0] as f32 } else { fr.size[0] };
-                    let sh =
-                        if fr.source_size[1] > 0 { fr.source_size[1] as f32 } else { fr.size[1] };
-                    let (cw, ch) = (fr.size[0], fr.size[1]);
-                    let (bx, by) = (fr.trim_offset[0] as f32, fr.trim_offset[1] as f32);
-                    let a_trim = Self::effective_anchor(iso_sprite.anchor, fr);
-                    let anchor_px = Vec2::new(a_trim.x * cw + bx, a_trim.y * ch + by);
-                    (
-                        (sw, sh),
-                        anchor_px,
-                        fr.sheet_name.clone(),
-                        Some((fr.uv_rect, [bx, by], [sw, sh], [cw, ch])),
-                    )
+                    let (td, ap, uv) = packed_geometry(fr, sprite_anchor);
+                    (td, ap, fr.sheet_name.clone(), Some(uv))
                 }
                 None => {
                     let Some(tex) =
@@ -638,10 +639,55 @@ impl Engine {
                 tex_dim,
                 anchor_px,
             );
-            // The model's translation column is the sprite's ground anchor in
-            // world metres; its window depth is the anchor offset the (origin-
-            // relative) depth map is re-anchored against in the fragment shader.
-            let depth_base = Self::world_depth(model.w_axis.truncate());
+            let anchor_depth = frame_ref.as_ref().is_some_and(|fr| fr.anchor_depth);
+            // The shadow caster always draws one baked direction (the nearer).
+            let mut shadow_caster = None;
+            let (model, blend) = match choice {
+                DirChoice::Blend(g) => {
+                    if let Some((fb, ab)) = &g.nearest_b {
+                        let (td, ap, uv_b) = packed_geometry(fb, *ab);
+                        let m = Self::compute_iso_sprite_model(
+                            &iso_sprite,
+                            &tf,
+                            &tilemap_tf,
+                            &tilemap,
+                            td,
+                            ap,
+                        );
+                        shadow_caster = Some((m, fb.sheet_name.clone(), uv_b));
+                    } else if let Some(uv_a) = uv {
+                        shadow_caster = Some((model, sheet_name.clone(), uv_a));
+                    }
+                    let m = Self::compute_iso_sprite_model(
+                        &iso_sprite,
+                        &tf,
+                        &tilemap_tf,
+                        &tilemap,
+                        g.tex_dim,
+                        g.anchor_px,
+                    );
+                    (m, Some((g.region, g.textures)))
+                }
+                _ => (model, None),
+            };
+            // The depth map is re-anchored against this window depth in the
+            // fragment shader.  An anchor-relative sheet (v2) is baked about the
+            // frame's ground anchor, so the base is the anchor's own depth.  A
+            // legacy sheet keeps the model's translation column (the quad's
+            // top-left corner, which its origin-relative bake was tuned to).
+            let depth_base = if anchor_depth {
+                let (td, ap) = match &blend {
+                    Some((r, _)) => ((r.quad[2], r.quad[3]), Vec2::new(-r.quad[0], -r.quad[1])),
+                    None => (tex_dim, anchor_px),
+                };
+                Self::world_depth(model.transform_point3(Vec3::new(
+                    ap.x / td.0.max(f32::EPSILON),
+                    ap.y / td.1.max(f32::EPSILON),
+                    0.0,
+                )))
+            } else {
+                Self::world_depth(model.w_axis.truncate())
+            };
             let world_matrix = iso_camera_matrix();
             let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
             // Per-sheet normal/depth companions (from the resolved frame's
@@ -671,6 +717,8 @@ impl Engine {
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
                 world_matrix,
+                blend,
+                shadow_caster,
             });
         }
 

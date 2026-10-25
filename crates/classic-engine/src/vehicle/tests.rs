@@ -1539,3 +1539,42 @@ fn long_frames_through_hops_stay_finite() {
     }
     assert!(hops >= 3, "the rover hopped and landed repeatedly ({hops})");
 }
+
+/// A part whose texture opts into direction interpolation draws the two
+/// baked directions straddling the continuous heading, each at its anchor;
+/// the others keep the quantized frame and no blend.
+#[test]
+fn dir_interp_parts_blend_the_straddling_directions() {
+    let mut engine = Engine::new_for_test();
+    let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), tm);
+    insert_lrv(&mut engine, lrv_def(720.0));
+    let table = |interp: bool| FrameTable {
+        version: 2,
+        sheets: vec![],
+        frames: Default::default(),
+        dir_interp: interp,
+        companions: vec![],
+    };
+    engine.frame_tables.insert("lrvBody".into(), table(true));
+    engine.frame_tables.insert("lrvWheelFl".into(), table(false));
+    assert!(engine.spawn_vehicle("lrv", "lrv", 4.0, 4.0));
+    let body = *engine.names.get("lrv").unwrap();
+    let wheel = *engine.names.get("lrvWheelFl").unwrap();
+    // 0.3 of the way from direction 2 to 3.
+    let step = std::f32::consts::FRAC_PI_4;
+    engine.world.get::<&mut IsoVehicle>(body).unwrap().heading = 2.3 * step;
+    engine.time.delta = 1.0 / 60.0;
+    engine.update_vehicles();
+
+    let s = engine.world.get::<&IsoSprite>(body).unwrap();
+    let blend = s.dir_blend.expect("body blends");
+    let base = s.frame as u32 - 2;
+    assert_eq!(s.frame_name.as_deref(), Some(format!("lrvBody_{}", base + 2).as_str()));
+    assert_eq!(blend.frame_b as u32, base + 3);
+    assert!((blend.dtheta_a - 0.3 * step).abs() < 1e-4);
+    assert!((blend.dtheta_b + 0.7 * step).abs() < 1e-4);
+    let w = engine.world.get::<&IsoSprite>(wheel).unwrap();
+    assert!(w.dir_blend.is_none(), "a part without dir_interp keeps one frame");
+    assert_eq!(w.frame, 2.0, "quantized to the nearer direction");
+}

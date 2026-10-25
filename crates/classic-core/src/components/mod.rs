@@ -352,6 +352,26 @@ pub struct IsoSprite {
     /// at spawn to render the same sheet in different colours.
     #[serde(default = "default_white", skip_serializing_if = "is_white")]
     pub color: [f32; 4],
+    /// Direction interpolation (sheet v2 `dir_interp`): when set, the sprite
+    /// draws a blend of `frame` / `frame_name` (direction A, at `anchor`) and
+    /// [`DirBlend::frame_b`] warped to a heading between them.  Written by the
+    /// vehicle system each frame; never dumped (a review scene may set it).
+    #[serde(default, skip_serializing)]
+    pub dir_blend: Option<DirBlend>,
+}
+
+/// The second baked direction of a direction-interpolated [`IsoSprite`]
+/// and the rotation that takes each neighbour to the drawn heading.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DirBlend {
+    /// Frame index of direction B (`{texture}_{frame_b}` in the frame table).
+    pub frame_b: f32,
+    /// Direction B's anchor, `[0..1]` of its source cell.
+    pub anchor_b: Vec2,
+    /// Drawn heading minus direction A's heading (tile-space radians, `>= 0`).
+    pub dtheta_a: f32,
+    /// Drawn heading minus direction B's heading (tile-space radians, `<= 0`).
+    pub dtheta_b: f32,
 }
 
 fn is_zero(v: &u32) -> bool {

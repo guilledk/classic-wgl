@@ -10,7 +10,6 @@ in vec2 tex_coord;
 // region arrive per instance.
 in vec4 i_m0;
 in vec4 i_m1;
-in vec4 i_m2;
 in vec4 i_m3;
 in vec4 i_uv;
 in vec4 i_content;
@@ -20,7 +19,7 @@ flat out highp vec4 vUvRect;
 flat out highp vec4 vContent;
 flat out highp vec2 vSource;
 flat out float vGrid;
-#define model_matrix mat4(i_m0, i_m1, i_m2, i_m3)
+#define model_matrix mat4(i_m0, i_m1, vec4(0.0), i_m3)
 #else
 uniform mat4 model_matrix;
 #endif

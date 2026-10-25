@@ -11,7 +11,6 @@ in vec2 tex_coord;
 // rasterise the same quad.
 in vec4 i_m0;
 in vec4 i_m1;
-in vec4 i_m2;
 in vec4 i_m3;
 in vec4 i_corners;
 in highp vec4 i_uv;
@@ -24,7 +23,20 @@ flat out highp vec4 vContent;
 flat out vec4 vTint;
 flat out highp vec4 vMisc;
 flat out highp vec4 vOutline;
-#define model_matrix mat4(i_m0, i_m1, i_m2, i_m3)
+#ifdef INTERP
+// Direction blend (`sheet.frag#INTERP`): direction B's region, the anchors
+// and rotations, and the drawn quad.
+in highp vec4 i_uv_b;
+in highp vec4 i_content_b;
+in highp vec4 i_interp;
+in highp vec4 i_quad;
+flat out highp vec4 vUvB;
+flat out highp vec4 vContentB;
+flat out highp vec4 vInterp;
+flat out highp vec4 vQuad;
+#endif
+// The quad has z = 0, so the model's z column never contributes.
+#define model_matrix mat4(i_m0, i_m1, vec4(0.0), i_m3)
 #define iso_depth_corners i_corners
 #define use_iso_depth 1.0
 #else
@@ -50,6 +62,12 @@ void main(void ) {
     vTint = i_tint;
     vMisc = i_misc;
     vOutline = i_outline;
+#ifdef INTERP
+    vUvB = i_uv_b;
+    vContentB = i_content_b;
+    vInterp = i_interp;
+    vQuad = i_quad;
+#endif
 #endif
     if (use_iso_depth > 0.5) {
         // Iso sprites are authored in Blender-world metres and share the

@@ -74,6 +74,8 @@ impl Engine {
 
             VehicleWrite {
                 body: [x, y, v.altitude],
+                body_anchors8: v.body_anchors,
+                wheel_anchors8: v.wheel_anchors,
                 body_altitude: v.altitude - terrain.height(x, y),
                 body_anchor: v.body_anchors[direction],
                 direction: v.direction,

@@ -42,6 +42,12 @@ flat in highp vec4 vOutline;
 #define vSource vOutline.zw
 #define vGrid vMisc.w
 #define tile_set_size vUvRect.yz
+#ifdef INTERP
+flat in highp vec4 vUvB;
+flat in highp vec4 vContentB;
+flat in highp vec4 vInterp;
+flat in highp vec4 vQuad;
+#endif
 #ifndef ID_PASS
 // The ghost pass's group test: the id of the sprite group that last passed
 // the normal pass's depth test at this pixel (`Gfx::begin_ghost_ids`), the
@@ -296,6 +302,148 @@ vec4 getTilePixel(vec2 tex_coord) {
     return texture(tex_sampler, sheetUv(tex_coord));
 }
 
+#ifdef INTERP
+// ---- Direction interpolation (sheet v2 `dir_interp`) ----------------------
+//
+// Two-neighbour backward warp (the prototype's "bwd4"): each output pixel `q`
+// (sheet pixels from the ground anchor, y down) is looked up in the two baked
+// directions straddling the drawn heading.  For a direction rotated `phi`
+// (world radians about +Z through the anchor) away from the drawn heading, a
+// fixed-point search finds the source pixel `s` whose depth-unprojected
+// point, rotated by `phi`, projects onto `q`; it is accepted within 0.75 px.
+// The two results merge by angle where their depths agree within 6 cm, else
+// the nearer wins, and either fills the other's holes.  Normals rotate with
+// the point; depth, team mask and emissive travel with the chosen texel.
+uniform sampler2D tex_sampler_b;
+uniform sampler2D depth_sampler_b;
+uniform sampler2D normal_sampler_b;
+// Sheet pixels per metre (shared with the vertex stage).
+uniform highp float ppm;
+// `[DEPTH_NEAR, DEPTH_FAR]` (metres): the window span of an anchor offset.
+uniform highp vec2 depth_span;
+
+#define WARP_STEPS 4
+#define WARP_ACCEPT_PX 0.75
+#define WARP_MERGE_M 0.06
+// Depth grays at or below this are background (half an 8-bit step).
+#define WARP_BACKGROUND_GRAY 0.002
+
+// `classic_core::math::iso_basis` (the bake camera, `render/iso.py`).
+const highp vec3 CAM_R = vec3(0.70710678, -0.70710678, 0.0);
+const highp vec3 CAM_U = vec3(0.35355339, 0.35355339, 0.86602540);
+const highp vec3 CAM_B = vec3(-0.61237244, -0.61237244, 0.5);
+
+struct WarpTexel {
+    vec4 color;
+    vec3 normal;
+    float team;
+    highp float depth;
+    bool ok;
+};
+
+// World offset -> pixel offset (y down) and view-depth offset (+ farther).
+// Its inverse at pixel `q`, depth `d` is `(q.x R - q.y U) / ppm - d B`.
+highp vec3 projectPx(highp vec3 p) {
+    return vec3(dot(p, CAM_R) * ppm, -dot(p, CAM_U) * ppm, -dot(p, CAM_B));
+}
+
+highp vec3 rotZ(highp vec3 p, highp float a) {
+    highp float c = cos(a);
+    highp float s = sin(a);
+    return vec3(c * p.x - s * p.y, s * p.x + c * p.y, p.z);
+}
+
+// Sheet UV of a source-cell pixel position; false outside the trimmed
+// content (`tc` = trim offset, content size).
+bool cellUv(highp vec2 cell, highp vec4 uvr, highp vec4 tc, out highp vec2 uv) {
+    highp vec2 c = (cell - tc.xy) / tc.zw;
+    uv = mix(uvr.xy, uvr.zw, c);
+    return c.x >= 0.0 && c.y >= 0.0 && c.x < 1.0 && c.y < 1.0;
+}
+
+WarpTexel warpDirection(sampler2D col, sampler2D dep, sampler2D nrm, highp vec4 uvr,
+                        highp vec4 tc, highp vec2 anchor, highp float phi,
+                        highp float rangeM, highp vec2 q) {
+    WarpTexel w;
+    w.ok = false;
+    // unproject -> rotate -> project is linear in (s, d): precompute its
+    // columns once (one sin/cos pair), so a step is two fused vec3 terms.
+    highp vec3 mx = projectPx(rotZ(CAM_R / ppm, phi));
+    highp vec3 my = projectPx(rotZ(-CAM_U / ppm, phi));
+    highp vec3 md = projectPx(rotZ(-CAM_B, phi));
+    highp vec2 s = q;
+    highp vec2 uv;
+    for (int i = 0; i < WARP_STEPS; i++) {
+        // Background (gray 0, or outside the frame) is taken at the anchor's
+        // depth: one fetch per step, no alpha (a `dir_interp` sheet keeps
+        // gray 0 for transparent texels).
+        highp float d = 0.0;
+        if (cellUv(anchor + s, uvr, tc, uv)) {
+            highp float g = textureLod(dep, uv, 0.0).r;
+            d = g > WARP_BACKGROUND_GRAY ? (g - 0.5) * 2.0 * rangeM : 0.0;
+        }
+        s += q - (mx.xy * s.x + my.xy * s.y + md.xy * d);
+    }
+    if (!cellUv(anchor + s, uvr, tc, uv)) {
+        return w;
+    }
+    w.color = textureLod(col, uv, 0.0);
+    if (w.color.a <= 0.02) {
+        return w;
+    }
+    highp float d = (textureLod(dep, uv, 0.0).r - 0.5) * 2.0 * rangeM;
+    highp vec3 f = mx * s.x + my * s.y + md * d;
+    if (length(f.xy - q) >= WARP_ACCEPT_PX) {
+        return w;
+    }
+    w.normal = vec3(0.0);
+    w.team = 1.0;
+    if (use_normal_map > 0.5) {
+        vec4 ns = textureLod(nrm, uv, 0.0);
+        w.normal = rotZ(ns.rgb * 2.0 - 1.0, phi);
+        w.team = ns.a;
+    }
+    w.depth = f.z;
+    w.ok = true;
+    return w;
+}
+
+// The merged direction blend at this fragment (discards where neither
+// neighbour covers it).  `vOutline.zw` / `vInterp.xy` are the anchors,
+// `vInterp.zw` the drawn heading minus each neighbour's (tile radians; a
+// tile-space turn is the opposite world turn).
+WarpTexel blendDirections() {
+    highp vec2 q = vQuad.xy + vTexCoord * vQuad.zw;
+    highp float rangeM = depth_scale * (depth_span.x - depth_span.y) * 0.5;
+    WarpTexel a = warpDirection(tex_sampler, depth_sampler, normal_sampler, vUvRect, vContent,
+                                vOutline.zw, -vInterp.z, rangeM, q);
+    WarpTexel b = warpDirection(tex_sampler_b, depth_sampler_b, normal_sampler_b, vUvB, vContentB,
+                                vInterp.xy, -vInterp.w, rangeM, q);
+    if (!a.ok && !b.ok) {
+        discard;
+    }
+    if (!b.ok) {
+        return a;
+    }
+    if (!a.ok) {
+        return b;
+    }
+    if (abs(a.depth - b.depth) >= WARP_MERGE_M) {
+        return a.depth < b.depth ? a : b;
+    }
+    highp float t = clamp(vInterp.z / max(vInterp.z - vInterp.w, 1e-6), 0.0, 1.0);
+    WarpTexel m;
+    m.ok = true;
+    m.color = mix(a.color, b.color, t);
+    vec3 n = mix(a.normal, b.normal, t);
+    // Keep the emissive marker (zero normal) when both sides carry it.
+    m.normal = dot(n, n) > 0.001 ? normalize(n) : vec3(0.0);
+    m.team = mix(a.team, b.team, t);
+    m.depth = mix(a.depth, b.depth, t);
+    return m;
+}
+#endif
+
 void main(void ) {
 #if defined(INSTANCED) && !defined(ID_PASS)
     // Ghost-group test first: it rejects without a texture fetch.
@@ -306,8 +454,16 @@ void main(void ) {
         }
     }
 #endif
+#ifdef INTERP
+    // A direction blend (never selected: the engine draws a selected sprite
+    // on its nearest direction, with the silhouette).
+    WarpTexel blended = blendDirections();
+    vec4 color = blended.color;
+#else
     vec4 color = getTilePixel(vec2(vTexCoord.x, vTexCoord.y));
+#endif
 
+#ifndef INTERP
     if (selected > 0.5) {
         if (color.a < 0.01) {
             // Transparent texel: draw a silhouette edge where a cardinal
@@ -333,8 +489,13 @@ void main(void ) {
     } else if (color.a < 0.01) {
         discard;
     }
+#endif
 
     color.rgb *= tint;
+#ifdef INTERP
+    // The warped texel's view-depth offset (metres) from the anchor.
+    gl_FragDepth = depth_base + blended.depth / (depth_span.x - depth_span.y);
+#else
     if (use_depth_map > 0.5) {
         // The depth sheet stores view depth relative to the frame's ground
         // anchor (`gray = 0.5` at the anchor), so offset it by the sprite's
@@ -348,6 +509,7 @@ void main(void ) {
             + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5)
                 * depth_scale;
     }
+#endif
 #ifdef ID_PASS
     // The ghost-id pass (`Gfx::draw_ghost_id_batches`): the same coverage and
     // depth as the normal pass, writing the group id instead of colour.
@@ -366,10 +528,15 @@ void main(void ) {
     // Those now shade off a flat +Z normal like a decal on the ground.
     vec3 rawNormal = vec3(0.0);
     bool emissive = false;
+#ifdef INTERP
+    rawNormal = blended.normal;
+    emissive = use_normal_map > 0.5 && dot(rawNormal, rawNormal) <= 0.001;
+#else
     if (use_normal_map > 0.5) {
         rawNormal = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).rgb * 2.0 - 1.0;
         emissive = dot(rawNormal, rawNormal) <= 0.001;
     }
+#endif
     // Normal-offset bias needs a direction even where the sprite is emissive or
     // has no normal map; away from the terrain (+Z) is the safe default.
     vec3 n = dot(rawNormal, rawNormal) > 0.001

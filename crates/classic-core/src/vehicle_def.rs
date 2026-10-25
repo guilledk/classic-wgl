@@ -65,7 +65,8 @@
 //! Per frame table: `dir_interp: true` opts the texture into the engine's
 //! direction interpolation (two-neighbour backward warp).  It needs an
 //! anchor-relative depth companion, and the bake must yaw the unit about its
-//! ground anchor's vertical axis.
+//! ground anchor's vertical axis.  Its depth companion keeps gray 0 for transparent
+//! texels (real depth uses 1..255): the warp reads it as background.
 
 use std::collections::BTreeMap;
 

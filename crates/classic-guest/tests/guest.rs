@@ -121,6 +121,7 @@ fn guest_can_set_sprite_frame_and_color() {
                         footprint: vec![],
                         ghost_group: 0,
                         color: [1.0, 1.0, 1.0, 1.0],
+                        dir_blend: None,
                     },
                 )
                 .unwrap();
@@ -166,6 +167,7 @@ fn guest_can_spawn_sprite_clone() {
                         footprint: vec![],
                         ghost_group: 0,
                         color: [0.55, 0.65, 0.95, 1.0],
+                        dir_blend: None,
                     },
                 )
                 .unwrap();
@@ -449,6 +451,7 @@ fn guest_get_sprite_frame_and_inventory_capacity_wired() {
                 footprint: vec![],
                 ghost_group: 0,
                 color: [1.0, 1.0, 1.0, 1.0],
+                dir_blend: None,
             };
 
             engine.spawn_named("unit");

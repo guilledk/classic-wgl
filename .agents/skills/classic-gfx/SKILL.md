@@ -302,7 +302,7 @@ table reads and writes byte-identically:
 still loads the table.  Anchor-relative depth is live: `resolve_frame` reads
 the sheet's scale, and at boot `fill_anchor_depth_ranges` gives an anchor
 sheet with no range of its own the vehicle layer's (else the def's)
-`depth_range_m`.  Team mask and interpolation are not wired yet.
+`depth_range_m`.  Interpolation: §5c.  The team mask is not wired yet.
 
 Two **separate** passes (driven by two engine loops, all normals then all
 ghosts):
@@ -365,6 +365,42 @@ as the one-sprite reference the instanced path mirrors.
   lrvtest, buildtest bit-identical under llvmpipe; a few dozen pixels in
   lunar / lighttest).  Perf counters: `sprite_instances`,
   `sprite_batches`, `sprite_draws`.
+
+## 5c. Direction interpolation (`sheet.frag#INTERP`)
+
+A sprite whose texture opts in (`frames.json` `dir_interp`, anchor-relative
+depth) and whose `IsoSprite.dir_blend` is set draws a blend of two baked
+directions warped to a heading between them, so 16 baked directions turn
+smoothly (`classic_core::components::DirBlend`: direction B's frame and
+anchor, and the drawn heading minus each neighbour's, in tile radians).
+
+- **Who sets it**: the vehicle system (`apply_dir_frame`) for every part
+  whose texture has `dir_interp`, from the continuous `IsoVehicle.heading`;
+  otherwise parts keep the quantized frame and `dir_blend = None`.
+- **Planning** (`classic-engine` `dir_blend.rs`, `dir_choice`): blend when
+  both frames resolve, the table has `dir_interp`, both sheets have anchor
+  depth companions and the sprite is not selected (the silhouette needs one
+  frame); else draw the nearer direction.  The drawn quad is the union of
+  both directions' content rects (from their anchors) plus 4 px; the shadow
+  caster is the nearer direction's plain frame.
+- **Shader**: per neighbour a fixed-point backward warp (4 steps, one depth
+  fetch each; gray 0 = background at the anchor's depth) finds the source
+  pixel whose depth-unprojected point, rotated by the opposite world turn
+  about the anchor's vertical, lands on the output pixel; accepted within
+  0.75 px.  Merge: blend by angle where the depths agree within 6 cm, else
+  the nearer, and either fills the other's holes; normals rotate with the
+  point; `gl_FragDepth` is the warped depth; the normal alpha (team mask)
+  travels with the texel.  The camera basis is `iso_basis` as constants.
+- **Instances**: `misc.w = 2`, `outline.zw` = A's anchor, plus `uv_b`,
+  `content_b`, `interp` (B's anchor, both angles) and `quad` (13 `vec4`s
+  total; the model's unused z column was dropped to stay within 16
+  attributes).  Programs `imageSheetInterp` / `spriteGhostIdsInterp`;
+  direction B's colour / depth / normal bind on `BLEND_UNITS` = 13-15, and
+  a batch key includes them.
+- **Cost**: about 3x a plain sprite per covered pixel (both warps run even
+  on pixels that end transparent); see the PR for numbers.
+- **Depth base**: anchor-relative sheets now re-anchor against the frame's
+  own ground-anchor depth; legacy sheets keep the quad-corner base.
 
 ## 6. draw_sprite / draw_rect
 

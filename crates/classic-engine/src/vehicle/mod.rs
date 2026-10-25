@@ -146,6 +146,10 @@ impl TerrainSnapshot {
 /// The values pushed into the body + wheel sprites each frame.
 struct VehicleWrite {
     body: [f32; 3],
+    /// Per-direction anchors (body, then the four wheels), for direction
+    /// interpolation (`apply_dir_frame`).
+    body_anchors8: [[f32; 2]; 8],
+    wheel_anchors8: [[[f32; 2]; 8]; 4],
     /// Body lift above its own terrain in **world metres** (`frame_offset.z`).
     body_altitude: f32,
     body_anchor: [f32; 2],

@@ -58,6 +58,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   now ~2.4 cm a step at R = 3 m instead of ~1.7 m, which fixes the mule's
   near rail sorting against its container.  A `spawnEntities` test
   action loads hand-placed entities for review scenes (#156).
+- Sprite direction interpolation (sheet v2 `dir_interp`): a part whose
+  texture opts in draws its two baked directions warped to the
+  continuous vehicle heading (`IsoSprite.dir_blend`, set by the vehicle
+  system) with a two-neighbour backward warp in `sheet.frag#INTERP`:
+  4 fixed-point steps per neighbour, accepted within 0.75 px, merged by
+  angle where depths agree within 6 cm (else the nearer), normals
+  rotated, warped `gl_FragDepth`, the normal alpha carried along.  The
+  quad is the union of both directions plus 4 px; selected sprites and
+  shadow casters draw the nearer direction.  The instance grows to 13
+  `vec4`s (the model's unused z column dropped) and direction B binds on
+  units 13-15 (#157).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
@@ -246,6 +257,10 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Anchor-relative depth sheets re-anchor against the frame's own ground
+  anchor depth instead of the quad's top-left corner (which sat
+  `0.5 · anchor_y · height` metres nearer and skewed every layer by a
+  different amount); legacy sheets keep the corner base (#157).
 - A model no longer vanishes for one frame when a guest swaps it to a
   glb with a different node set.  `start_model_clip` runs after that
   frame's `update_models`, so the pose was still sized for the old glb:

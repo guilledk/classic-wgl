@@ -5,7 +5,10 @@
 use std::collections::HashMap;
 
 use classic_core::tilemap::PPM_TARGET;
-use classic_gfx::{plan_batches, plan_shadow_batches, Gfx, IsoSpriteInstance, SpriteBatch};
+use classic_gfx::{
+    plan_batches, plan_shadow_batches, BlendTextures, Gfx, IsoSpriteInstance, SpriteBatch,
+    SpriteRegion,
+};
 use glam::{Mat4, Vec3};
 
 use crate::{IsoDraw, OUTLINE_RADIUS_PX};
@@ -43,7 +46,7 @@ pub(crate) fn iso_screen_rect(model: &Mat4, world_matrix: &Mat4, camera: &Mat4) 
     [r[0] - 1.0, r[1] - 1.0, r[2] + 1.0, r[3] + 1.0]
 }
 
-type Key = (String, Option<String>, Option<String>, u32);
+type Key = (String, Option<String>, Option<String>, u32, Option<BlendTextures>);
 
 /// Plan this frame's sprite batches.  `stencil_groups` splits batches by
 /// ghost group (the stencil fallback when the ghost-id pass cannot run).
@@ -58,26 +61,44 @@ pub(crate) fn plan_sprite_frame(
     let mut key_index: HashMap<Key, u32> = HashMap::new();
     let mut rects = Vec::with_capacity(draws.len());
     let mut all: Vec<IsoSpriteInstance> = Vec::with_capacity(draws.len());
+    let mut shadow_all: Vec<IsoSpriteInstance> = Vec::with_capacity(draws.len());
     let mut shadow_keys: Vec<u32> = Vec::with_capacity(draws.len());
     let mut shadow_key_table: Vec<String> = Vec::new();
-    let mut shadow_key_index: HashMap<&str, u32> = HashMap::new();
+    let mut shadow_key_index: HashMap<String, u32> = HashMap::new();
     let mut any_ghost_group = false;
     let mut group_bounds: Option<[f32; 4]> = None;
     for d in draws {
         let tex_size = gfx.textures.get(&d.texture).map_or((1, 1), |t| t.size);
         let region = d.region();
-        all.push(IsoSpriteInstance::new(
-            &d.model,
-            &region,
-            tex_size,
-            &d.depth_corners,
-            d.depth_base,
-            d.depth_scale,
-            d.ghost_group,
-            &[d.color[0], d.color[1], d.color[2]],
-            d.selected,
-            OUTLINE_RADIUS_PX,
-        ));
+        let instance = |model: &Mat4, region: &SpriteRegion<'_>, tex_size| {
+            IsoSpriteInstance::new(
+                model,
+                region,
+                tex_size,
+                &d.depth_corners,
+                d.depth_base,
+                d.depth_scale,
+                d.ghost_group,
+                &[d.color[0], d.color[1], d.color[2]],
+                d.selected,
+                OUTLINE_RADIUS_PX,
+            )
+        };
+        let base = instance(&d.model, &region, tex_size);
+        // The shadow caster: one baked direction (a blend casts its nearer).
+        let (shadow_instance, shadow_texture) = match &d.shadow_caster {
+            Some((m, tex, (uv_rect, trim_offset, source_size, content_size))) => {
+                let r = SpriteRegion::Uv { uv_rect, trim_offset, source_size, content_size };
+                let ts = gfx.textures.get(tex).map_or((1, 1), |t| t.size);
+                (instance(m, &r, ts), tex.clone())
+            }
+            None => (base, d.texture.clone()),
+        };
+        all.push(match &d.blend {
+            Some((b, _)) => base.blend(b),
+            None => base,
+        });
+        shadow_all.push(shadow_instance);
         any_ghost_group |= d.ghost_group != 0;
         let rect = iso_screen_rect(&d.model, &d.world_matrix, camera);
         if d.ghost_group != 0 {
@@ -93,6 +114,7 @@ pub(crate) fn plan_sprite_frame(
             d.depth_map.clone(),
             d.normal_map.clone(),
             if stencil_groups { d.ghost_group } else { 0 },
+            d.blend.as_ref().map(|(_, t)| t.clone()),
         );
         let next = key_table.len() as u32;
         let k = *key_index.entry(key.clone()).or_insert_with(|| {
@@ -102,8 +124,8 @@ pub(crate) fn plan_sprite_frame(
         keys.push(k);
         rects.push(rect);
         let next = shadow_key_table.len() as u32;
-        let sk = *shadow_key_index.entry(d.texture.as_str()).or_insert_with(|| {
-            shadow_key_table.push(d.texture.clone());
+        let sk = *shadow_key_index.entry(shadow_texture.clone()).or_insert_with(|| {
+            shadow_key_table.push(shadow_texture);
             next
         });
         shadow_keys.push(sk);
@@ -112,7 +134,7 @@ pub(crate) fn plan_sprite_frame(
     let mut frame =
         SpriteFrame { any_ghost_group, group_bounds, stencil_groups, ..Default::default() };
     for p in plan_batches(&keys, &rects) {
-        let (texture, depth_map, normal_map, group) = key_table[p.key as usize].clone();
+        let (texture, depth_map, normal_map, group, blend) = key_table[p.key as usize].clone();
         frame.batches.push(SpriteBatch {
             first: frame.instances.len() as u32,
             count: p.instances.len() as u32,
@@ -120,6 +142,7 @@ pub(crate) fn plan_sprite_frame(
             depth_map,
             normal_map,
             ghost_group: stencil_groups.then_some(group),
+            blend,
         });
         frame.instances.extend(p.instances.iter().map(|&i| all[i as usize]));
     }
@@ -131,8 +154,9 @@ pub(crate) fn plan_sprite_frame(
             depth_map: None,
             normal_map: None,
             ghost_group: None,
+            blend: None,
         });
-        frame.shadow_instances.extend(p.instances.iter().map(|&i| all[i as usize]));
+        frame.shadow_instances.extend(p.instances.iter().map(|&i| shadow_all[i as usize]));
     }
     frame
 }

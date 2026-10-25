@@ -39,12 +39,11 @@ use crate::{Gfx, IsoSpritePass, RenderSettings, SpriteRegion};
 
 /// Attribute locations of the per-instance `vec4`s (after `vertex_pos` = 0
 /// and `tex_coord` = 1), shared by every instanced sprite program.
-pub const SPRITE_INSTANCE_ATTRS: [&str; 12] = [
+pub const SPRITE_INSTANCE_ATTRS: [&str; 15] = [
     "vertex_pos",
     "tex_coord",
     "i_m0",
     "i_m1",
-    "i_m2",
     "i_m3",
     "i_corners",
     "i_uv",
@@ -52,10 +51,14 @@ pub const SPRITE_INSTANCE_ATTRS: [&str; 12] = [
     "i_tint",
     "i_misc",
     "i_outline",
+    "i_uv_b",
+    "i_content_b",
+    "i_interp",
+    "i_quad",
 ];
 
 /// Number of per-instance `vec4` attributes.
-const INSTANCE_VEC4S: u32 = 10;
+const INSTANCE_VEC4S: u32 = 13;
 /// First per-instance attribute location.
 const FIRST_INSTANCE_LOC: u32 = 2;
 
@@ -67,15 +70,20 @@ pub const SPRITE_INSTANCE_BYTES: usize = std::mem::size_of::<IsoSpriteInstance>(
 /// bloom 7-8, smoke noise 9, particle composite 10, light grid 11).
 pub const GHOST_ID_UNIT: u32 = 12;
 
+/// Texture units of a direction blend's direction-B colour, depth and normal
+/// sheets (A uses 0-2; 13-15 are clear of every other binding).
+pub const BLEND_UNITS: [u32; 3] = [13, 14, 15];
+
 /// The ghost-pass alpha (`classic-gfx` §14).
 pub const GHOST_ALPHA: f32 = 0.4;
 
-/// One iso sprite's per-instance data (10 `vec4`s, std430-like packing).
+/// One iso sprite's per-instance data (13 `vec4`s, std430-like packing).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IsoSpriteInstance {
-    /// Model matrix columns (`compute_iso_sprite_model`).
-    pub m: [[f32; 4]; 4],
+    /// Model matrix columns x, y and w (`compute_iso_sprite_model`); the
+    /// quad has `z = 0`, so its z column never contributes.
+    pub m: [[f32; 4]; 3],
     /// Window-space depth corners `[bottom-left, bottom-right, top-left,
     /// top-right]` (`compute_iso_depth_corners`).
     pub corners: [f32; 4],
@@ -88,10 +96,22 @@ pub struct IsoSpriteInstance {
     /// `tint.rgb, depth_scale` (window units per `gray − 0.5` of the depth
     /// map: `1` legacy global, `2R / (near − far)` anchor-relative).
     pub tint: [f32; 4],
-    /// `depth_base, ghost_group, selected (0/1), grid region (0/1)`.
+    /// `depth_base, ghost_group, selected (0/1), region mode` (0 packed, 1
+    /// grid, 2 direction blend).
     pub misc: [f32; 4],
-    /// `outline_delta.xy` (sheet-UV silhouette offset), `source_size.xy`.
+    /// `outline_delta.xy` (sheet-UV silhouette offset), then `source_size.xy`
+    /// (packed), or direction A's anchor in its source cell, in pixels (blend).
     pub outline: [f32; 4],
+    /// Direction blend only: B's sheet UV rect.
+    pub uv_b: [f32; 4],
+    /// Direction blend only: B's `trim_offset.xy, content_size.xy`.
+    pub content_b: [f32; 4],
+    /// Direction blend only: B's anchor in its source cell (px), then the
+    /// drawn heading minus A's and minus B's (tile-space radians).
+    pub interp: [f32; 4],
+    /// Direction blend only: the drawn quad `x0, y0, w, h` in pixels from the
+    /// anchor (x right, y down).
+    pub quad: [f32; 4],
 }
 
 impl IsoSpriteInstance {
@@ -112,7 +132,10 @@ impl IsoSpriteInstance {
     ) -> Self {
         let (uv, content, source, grid) = region_uv(region);
         Self {
-            m: model.to_cols_array_2d(),
+            m: {
+                let c = model.to_cols_array_2d();
+                [c[0], c[1], c[3]]
+            },
             corners: *corners,
             uv,
             content,
@@ -127,13 +150,49 @@ impl IsoSpriteInstance {
                 let d = outline_delta(region, tex_size, outline_radius);
                 [d[0], d[1], source[0], source[1]]
             },
+            ..Default::default()
         }
+    }
+
+    /// Turn this instance into a direction blend (`misc.w = 2`): it draws
+    /// `b.quad` and warps the region it was built with (direction A) and
+    /// `b`'s direction B to the drawn heading (`sheet.frag#INTERP`).
+    pub fn blend(mut self, b: &DirBlendRegion) -> Self {
+        self.misc[3] = 2.0;
+        self.outline[2] = b.anchor_a_px[0];
+        self.outline[3] = b.anchor_a_px[1];
+        self.uv_b = b.uv_b;
+        self.content_b = [b.trim_b[0], b.trim_b[1], b.content_b[0], b.content_b[1]];
+        self.interp = [b.anchor_b_px[0], b.anchor_b_px[1], b.dtheta_a, b.dtheta_b];
+        self.quad = b.quad;
+        self
+    }
+
+    /// Whether this instance is a direction blend.
+    pub fn is_blend(&self) -> bool {
+        self.misc[3] > 1.5
     }
 
     /// The instance's ghost group.
     pub fn ghost_group(&self) -> u32 {
         self.misc[1] as u32
     }
+}
+
+/// The direction-B half of a direction-blend instance
+/// ([`IsoSpriteInstance::blend`]).  Pixel values are in each frame's source
+/// cell; angles are tile-space radians (drawn heading minus the frame's).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DirBlendRegion {
+    pub uv_b: [f32; 4],
+    pub trim_b: [f32; 2],
+    pub content_b: [f32; 2],
+    pub anchor_a_px: [f32; 2],
+    pub anchor_b_px: [f32; 2],
+    pub dtheta_a: f32,
+    pub dtheta_b: f32,
+    /// The drawn quad `x0, y0, w, h` in pixels from the anchor (y down).
+    pub quad: [f32; 4],
 }
 
 /// A region as instance data: `(uv, content, source, grid)`.
@@ -263,6 +322,17 @@ pub struct SpriteBatch {
     /// The batch's stencil ghost group on the stencil fallback (`None` when
     /// the ghost ids carry the groups).
     pub ghost_group: Option<u32>,
+    /// Direction-blend batches: direction B's textures (the `#INTERP`
+    /// programs bind them on [`BLEND_UNITS`]).
+    pub blend: Option<BlendTextures>,
+}
+
+/// Direction B's textures of a direction-blend batch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BlendTextures {
+    pub texture: String,
+    pub depth_map: Option<String>,
+    pub normal_map: Option<String>,
 }
 
 /// A GPU instance buffer with its VAO (quad attributes + the instance
@@ -547,6 +617,16 @@ impl Gfx {
             }
             None => s.uniform_1f(gl, "use_normal_map", 0.0),
         }
+        if let Some(bt) = &b.blend {
+            self.texture(&bt.texture).bind(gl, BLEND_UNITS[0]);
+            if let Some(dt) = bt.depth_map.as_deref().and_then(|d| self.textures.get(d)) {
+                dt.bind(gl, BLEND_UNITS[1]);
+            }
+            if let Some(nt) = bt.normal_map.as_deref().and_then(|n| self.textures.get(n)) {
+                nt.bind(gl, BLEND_UNITS[2]);
+            }
+            unsafe { gl.active_texture(glow::TEXTURE0) };
+        }
     }
 
     /// Start the ghost-id pass: blit the scene depth into the id target and
@@ -634,19 +714,20 @@ impl Gfx {
         let mut draws = 0;
         if let Some(gpu) = self.sprite_batch.sprites.as_ref() {
             let gl = &self.gl;
-            let s = self.shader("spriteGhostIds");
-            s.bind(gl);
-            self.bind_instanced_view(s, camera, world_matrix, settings);
             unsafe {
                 gl.disable(glow::BLEND);
                 gl.enable(glow::DEPTH_TEST);
                 gl.depth_func(glow::LEQUAL);
                 gl.disable(glow::STENCIL_TEST);
             }
+            let mut programs = ProgramPair::new("spriteGhostIds", "spriteGhostIdsInterp");
             for b in batches {
                 if b.count == 0 {
                     continue;
                 }
+                let s = programs.select(self, b.blend.is_some(), |s| {
+                    self.bind_instanced_view(s, camera, world_matrix, settings);
+                });
                 self.bind_sprite_batch_textures(s, b);
                 unsafe { gl.depth_mask(b.depth_map.is_some()) };
                 gpu.bind_range(gl, b.first);
@@ -687,9 +768,47 @@ impl Gfx {
         s.uniform_mat4(gl, "camera_matrix", camera);
         s.uniform_mat4(gl, "world_matrix", world_matrix);
         s.uniform_1f(gl, "ppm", settings.ppm);
+        s.uniform_vec2(gl, "depth_span", &settings.depth_span);
         s.uniform_1i(gl, "tex_sampler", 0);
         s.uniform_1i(gl, "depth_sampler", 1);
         s.uniform_1i(gl, "normal_sampler", 2);
+        s.uniform_1i(gl, "tex_sampler_b", BLEND_UNITS[0] as i32);
+        s.uniform_1i(gl, "depth_sampler_b", BLEND_UNITS[1] as i32);
+        s.uniform_1i(gl, "normal_sampler_b", BLEND_UNITS[2] as i32);
+    }
+
+    /// The pass state of the instanced sheet program `s` (lighting, shadow,
+    /// light grid, ghost ids, ghost alpha).
+    #[allow(clippy::too_many_arguments)]
+    fn bind_sheet_pass(
+        &self,
+        s: &crate::Shader,
+        camera: &Mat4,
+        world_matrix: &Mat4,
+        settings: &RenderSettings,
+        pass: &IsoSpritePass,
+        selection_color: &[f32; 3],
+        ids: bool,
+    ) {
+        let gl = &self.gl;
+        self.bind_instanced_view(s, camera, world_matrix, settings);
+        s.uniform_vec3(gl, "ambient_color", glam::Vec3::from_array(settings.ambient));
+        s.uniform_vec3(gl, "light_direction", glam::Vec3::from_array(settings.light_dir));
+        s.uniform_vec3(gl, "light_color", glam::Vec3::from_array(settings.light_color));
+        s.uniform_1f(gl, "use_lighting", 1.0);
+        s.uniform_vec3(gl, "selection_color", glam::Vec3::from_array(*selection_color));
+        self.bind_shadow(s, settings);
+        self.bind_light_grid(s, Some((camera, world_matrix, settings.ppm)));
+        s.uniform_1i(gl, "ghost_ids", GHOST_ID_UNIT as i32);
+        s.uniform_1f(gl, "use_ghost_ids", if ids { 1.0 } else { 0.0 });
+        s.uniform_1f(
+            gl,
+            "ghost_alpha",
+            match pass {
+                IsoSpritePass::Normal => 0.0,
+                IsoSpritePass::Ghost => GHOST_ALPHA,
+            },
+        );
     }
 
     /// Draw one pass of sprite batches (all normals, or all ghosts).  Returns
@@ -705,16 +824,6 @@ impl Gfx {
     ) -> u32 {
         let Some(gpu) = self.sprite_batch.sprites.as_ref() else { return 0 };
         let gl = &self.gl;
-        let s = self.shader("imageSheetInst");
-        s.bind(gl);
-        self.bind_instanced_view(s, camera, world_matrix, settings);
-        s.uniform_vec3(gl, "ambient_color", glam::Vec3::from_array(settings.ambient));
-        s.uniform_vec3(gl, "light_direction", glam::Vec3::from_array(settings.light_dir));
-        s.uniform_vec3(gl, "light_color", glam::Vec3::from_array(settings.light_color));
-        s.uniform_1f(gl, "use_lighting", 1.0);
-        s.uniform_vec3(gl, "selection_color", glam::Vec3::from_array(*selection_color));
-        self.bind_shadow(s, settings);
-        self.bind_light_grid(s, Some((camera, world_matrix, settings.ppm)));
         let ids = matches!(pass, IsoSpritePass::Ghost)
             && self.sprite_batch.ids_valid.get()
             && self.sprite_batch.ids.is_some();
@@ -725,16 +834,6 @@ impl Gfx {
                 gl.active_texture(glow::TEXTURE0);
             }
         }
-        s.uniform_1i(gl, "ghost_ids", GHOST_ID_UNIT as i32);
-        s.uniform_1f(gl, "use_ghost_ids", if ids { 1.0 } else { 0.0 });
-        s.uniform_1f(
-            gl,
-            "ghost_alpha",
-            match pass {
-                IsoSpritePass::Normal => 0.0,
-                IsoSpritePass::Ghost => GHOST_ALPHA,
-            },
-        );
         unsafe {
             gl.enable(glow::DEPTH_TEST);
             gl.enable(glow::STENCIL_TEST);
@@ -752,11 +851,23 @@ impl Gfx {
                 }
             }
         }
+        let mut programs = ProgramPair::new("imageSheetInst", "imageSheetInterp");
         let mut draws = 0;
         for b in batches {
             if b.count == 0 {
                 continue;
             }
+            let s = programs.select(self, b.blend.is_some(), |s| {
+                self.bind_sheet_pass(
+                    s,
+                    camera,
+                    world_matrix,
+                    settings,
+                    &pass,
+                    selection_color,
+                    ids,
+                );
+            });
             self.bind_sprite_batch_textures(s, b);
             // The stencil reference: the batch's group on the stencil
             // fallback, else a constant (0: the ids carry the groups, and the
@@ -801,6 +912,39 @@ impl Gfx {
     }
 }
 
+/// The plain and the direction-blend variant of one instanced program: binds
+/// the one a batch needs, setting its pass uniforms the first time (GL keeps
+/// uniforms per program).
+struct ProgramPair {
+    names: [&'static str; 2],
+    ready: [bool; 2],
+    current: Option<usize>,
+}
+
+impl ProgramPair {
+    fn new(plain: &'static str, blend: &'static str) -> Self {
+        Self { names: [plain, blend], ready: [false; 2], current: None }
+    }
+
+    fn select<'g>(
+        &mut self,
+        gfx: &'g Gfx,
+        blend: bool,
+        prepare: impl FnOnce(&crate::Shader),
+    ) -> &'g crate::Shader {
+        let i = blend as usize;
+        let s = gfx.shader(self.names[i]);
+        if self.current != Some(i) {
+            s.bind(&gfx.gl);
+            self.current = Some(i);
+        }
+        if !self.ready[i] {
+            prepare(s);
+            self.ready[i] = true;
+        }
+        s
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,8 +958,8 @@ mod tests {
     }
 
     #[test]
-    fn instance_is_ten_vec4s() {
-        assert_eq!(SPRITE_INSTANCE_BYTES, 160);
+    fn instance_is_thirteen_vec4s() {
+        assert_eq!(SPRITE_INSTANCE_BYTES, 208);
         assert_eq!(SPRITE_INSTANCE_ATTRS.len() as u32, FIRST_INSTANCE_LOC + INSTANCE_VEC4S);
     }
 
