@@ -103,6 +103,63 @@ pub struct SpriteSheetEntry {
     /// 1 = farthest).
     #[serde(default)]
     pub depth: Option<String>,
+    /// How the depth companion's gray values are scaled (sheet v2).  `Global`
+    /// (the default, and every v1 sheet) spans the engine's whole depth
+    /// window; `Anchor` spans `±depth_range_m` metres around each frame's
+    /// ground anchor.  See [`crate::vehicle_def`].
+    #[serde(default, skip_serializing_if = "DepthMode::is_global")]
+    pub depth_mode: DepthMode,
+    /// The `±R` metres an `Anchor` depth companion spans (`0` = unset: the
+    /// layer's / vehicle's `depth_range_m` applies).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub depth_range_m: f32,
+    /// The normal companion's alpha carries the team mask (sheet v2; weight
+    /// [`crate::vehicle_def::team_mask_weight`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub team_mask: bool,
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// How a depth companion sheet's gray values are scaled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DepthMode {
+    /// Legacy: `gray − 0.5` is a window-space offset over the engine's whole
+    /// `DEPTH_NEAR..DEPTH_FAR` window (~1.7 m per 8-bit step).
+    #[default]
+    Global,
+    /// `gray − 0.5` times `2 · depth_range_m` is a view-depth offset in metres
+    /// from the frame's ground anchor (positive = farther).
+    Anchor,
+}
+
+impl DepthMode {
+    pub fn is_global(&self) -> bool {
+        *self == DepthMode::Global
+    }
+}
+
+impl SpriteSheetEntry {
+    /// The anchor-relative range this sheet's depth companion spans, if it is
+    /// anchor-relative: its own `depth_range_m`, else `fallback_m` (the
+    /// layer's or vehicle's).  `None` for a legacy global sheet, or an anchor
+    /// sheet with no range anywhere.
+    pub fn anchor_depth_range(&self, fallback_m: Option<f32>) -> Option<f32> {
+        match self.depth_mode {
+            DepthMode::Global => None,
+            DepthMode::Anchor if self.depth_range_m > 0.0 => Some(self.depth_range_m),
+            DepthMode::Anchor => fallback_m.filter(|r| *r > 0.0),
+        }
+    }
+
+    /// Window-space units per `(gray − 0.5)` of this sheet's depth companion
+    /// ([`crate::vehicle_def::depth_scale`]).
+    pub fn depth_scale(&self, fallback_m: Option<f32>) -> f32 {
+        crate::vehicle_def::depth_scale(self.anchor_depth_range(fallback_m))
+    }
 }
 
 /// A single frame inside a packed sprite atlas.
@@ -136,6 +193,11 @@ pub struct FrameTable {
     pub sheets: Vec<SpriteSheetEntry>,
     /// Name-keyed frames.
     pub frames: std::collections::BTreeMap<String, AtlasFrame>,
+    /// Opt this texture into direction interpolation (sheet v2): the engine
+    /// warps the two baked directions straddling a continuous heading instead
+    /// of snapping to the nearest.  Needs an `Anchor` depth companion.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dir_interp: bool,
     /// Precomputed per-sheet companion GL texture names, indexed by sheet.
     /// Each entry is `(normal_tex_name, depth_tex_name)`; `None` when the
     /// sheet has no companion.  Built once at load via
@@ -175,7 +237,45 @@ impl FrameTable {
             })
             .collect();
     }
+
+    /// Check the sheet-v2 rules: an anchor-relative sheet has a range (its own
+    /// or `fallback_m`), and a `dir_interp` table has an anchor-relative depth
+    /// companion on every sheet.
+    pub fn validate(&self, fallback_m: Option<f32>) -> Result<(), Vec<String>> {
+        let mut errs = Vec::new();
+        if self.version > FRAME_TABLE_VERSION {
+            errs.push(format!(
+                "frames.json version {} is newer than this engine supports ({FRAME_TABLE_VERSION})",
+                self.version
+            ));
+        }
+        for s in &self.sheets {
+            if s.depth_mode == DepthMode::Anchor && s.anchor_depth_range(fallback_m).is_none() {
+                errs.push(format!("sheet '{}': anchor depth needs depth_range_m > 0", s.name));
+            }
+            if !(s.depth_range_m >= 0.0 && s.depth_range_m.is_finite()) {
+                errs.push(format!("sheet '{}': depth_range_m must be >= 0", s.name));
+            }
+            if self.dir_interp && (s.depth.is_none() || s.depth_mode != DepthMode::Anchor) {
+                errs.push(format!(
+                    "sheet '{}': dir_interp needs an anchor-relative depth companion",
+                    s.name
+                ));
+            }
+        }
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(errs)
+        }
+    }
 }
+
+/// The newest `frames.json` version this engine reads (`2` = sheet v2:
+/// `depth_mode`/`depth_range_m`/`team_mask` per sheet, `dir_interp` per
+/// table).  Version 1 tables are v2 tables with every new field at its
+/// default.
+pub const FRAME_TABLE_VERSION: u32 = 2;
 
 /// A manifest entry for an SDF font.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -299,6 +399,9 @@ pub struct VehicleDef {
     /// yaw is about the axle's vertical axis, so the anchor is steer-invariant).
     #[serde(default)]
     pub tires: Vec<VehiclePartDef>,
+    /// v1 parts: the body then the four wheels `[fl, fr, rl, rr]`.  Empty in a
+    /// v2 def (which uses `layers`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<VehiclePartDef>,
     /// Effect each wheel kicks up while driving (resolved against the loaded
     /// effect libraries).  Per wheel, its spawn rate and launch speed scale
@@ -310,6 +413,112 @@ pub struct VehicleDef {
     /// airborne, scaled by the impact speed.  `None` = no touchdown puff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub touchdown_effect: Option<String>,
+    /// Definition version: `1` (the default: 8 directions, 5 `parts`) or `2`
+    /// (`layers`).  See [`crate::vehicle_def`].
+    #[serde(default = "default_vehicle_def_version", skip_serializing_if = "is_v1")]
+    pub version: u32,
+    /// Sprite pixels per metre the sheets were baked at (`0` = the engine's
+    /// `PPM_TARGET`).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub px_per_m: f32,
+    /// v2 sprite layers (empty for a v1 def; see [`VehicleDef::effective_layers`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<crate::vehicle_def::VehicleLayerDef>,
+    /// Named attachment points (emitters, lights, muzzles), keyed by name.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sockets: std::collections::BTreeMap<String, crate::vehicle_def::SocketDef>,
+    /// How the spawned layers share a ghost group.
+    #[serde(default, skip_serializing_if = "is_instance_ghost")]
+    pub ghost_group: crate::vehicle_def::GhostGroupMode,
+    /// Default anchor-relative depth range (metres) for every layer whose
+    /// sheet and layer leave it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_range_m: Option<f32>,
+    /// Tracked vehicle: turn in place (zero turning radius) instead of
+    /// arcing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pivot_turn: bool,
+}
+
+fn default_vehicle_def_version() -> u32 {
+    1
+}
+
+fn is_v1(v: &u32) -> bool {
+    *v == 1
+}
+
+fn is_instance_ghost(m: &crate::vehicle_def::GhostGroupMode) -> bool {
+    *m == crate::vehicle_def::GhostGroupMode::Instance
+}
+
+impl Default for VehicleDef {
+    /// An empty v1 def (what serde fills for absent keys), for tests and
+    /// struct-update syntax.
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            directions: 8,
+            anchors: String::new(),
+            columns: 0,
+            rows: 0,
+            cell: [0.0; 2],
+            pitch_levels: 0,
+            pitch_max_deg: 0.0,
+            roll_levels: 0,
+            roll_max_deg: 0.0,
+            path_footprint: None,
+            turn_rate_deg_per_sec: 0.0,
+            safe_fall_m: 0.0,
+            steer_levels: 0,
+            steer_max_deg: 0.0,
+            steer_rate_deg_per_sec: 0.0,
+            reverse_speed: 0.0,
+            turn_cost: 0.0,
+            tires: Vec::new(),
+            parts: Vec::new(),
+            dust_effect: None,
+            touchdown_effect: None,
+            version: 1,
+            px_per_m: 0.0,
+            layers: Vec::new(),
+            sockets: Default::default(),
+            ghost_group: Default::default(),
+            depth_range_m: None,
+            pivot_turn: false,
+        }
+    }
+}
+
+impl VehicleDef {
+    /// Whether this is a v2 (layered) definition.
+    pub fn is_v2(&self) -> bool {
+        self.version >= 2 || !self.layers.is_empty()
+    }
+
+    /// Pixels per metre of the sheets (`px_per_m`, or `PPM_TARGET` when unset).
+    pub fn px_per_m(&self) -> f32 {
+        if self.px_per_m > 0.0 {
+            self.px_per_m
+        } else {
+            crate::tilemap::PPM_TARGET
+        }
+    }
+
+    /// The layers to spawn: the v2 `layers`, or the v1 `parts`/`tires` mapped
+    /// onto layers ([`crate::vehicle_def::legacy_layers`]).
+    pub fn effective_layers(&self) -> Vec<crate::vehicle_def::VehicleLayerDef> {
+        if self.is_v2() {
+            self.layers.clone()
+        } else {
+            crate::vehicle_def::legacy_layers(self)
+        }
+    }
+
+    /// Check the def against its version's contract.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        crate::vehicle_def::validate(self)
+    }
 }
 
 /// One part (body or wheel) of a [`VehicleDef`].  The part's per-direction
@@ -724,6 +933,7 @@ mod tests {
             parts: vec![],
             dust_effect: None,
             touchdown_effect: None,
+            ..Default::default()
         };
         ov.apply_to(&mut def);
         assert_eq!(def.turn_rate_deg_per_sec, 55.0);

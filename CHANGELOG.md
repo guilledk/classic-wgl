@@ -37,6 +37,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   through the crate's own normalized readers.  Positions dequantize
   through the mesh node's TRS, as the encoder folds them; the mesh is
   still uploaded as `f32` (#153).
+- Vehicle definition v2 and sprite sheet v2 contracts
+  (`classic_core::vehicle_def`), with no behaviour change yet.  A v2
+  `VehicleDef` (`version: 2`) lists `layers` (`hull` / `wheel` /
+  `gear_side` / `turret` / `tool` / `legs` / `cargo` / `lift`, each with
+  its frame axes, a mixed-radix `{texture}_{index}` frame index, parent
+  and offset), `sockets`, `px_per_m`, `ghost_group`, `depth_range_m` and
+  `pivot_turn`, at 8, 16 or 24 directions; a v1 def keeps loading and
+  maps onto layers with identical frame indices.  `frames.json` version
+  2 adds per-sheet `depth_mode: "anchor"` + `depth_range_m`
+  (anchor-relative depth), `team_mask` (team weight in the normal
+  sheet's alpha) and per-table `dir_interp`; v1 tables read and write
+  unchanged.  Boot logs contract violations (#154).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,

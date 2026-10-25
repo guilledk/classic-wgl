@@ -310,6 +310,7 @@ fn spawn_vehicle_creates_body_and_wheels() {
         ],
         dust_effect: None,
         touchdown_effect: None,
+        ..Default::default()
     };
     let anchors = vehicle_anchors(
         vec![
@@ -417,8 +418,13 @@ fn spawn_vehicle_sets_frame_name_when_table_exists() {
 
     // An empty frame table is enough: `frame_name` only keys off the
     // texture name, so the frame resolves to `{texture}_{frame}`.
-    let empty =
-        FrameTable { version: 1, sheets: vec![], frames: Default::default(), companions: vec![] };
+    let empty = FrameTable {
+        version: 1,
+        sheets: vec![],
+        frames: Default::default(),
+        dir_interp: false,
+        companions: vec![],
+    };
     for texture in ["lrvBody", "lrvWheelFl", "lrvWheelFr", "lrvWheelRl", "lrvWheelRr"] {
         engine.frame_tables.insert(texture.into(), empty.clone());
     }
@@ -486,6 +492,7 @@ fn spawn_vehicle_sizes_body_sheet_by_pitch_levels() {
         ],
         dust_effect: None,
         touchdown_effect: None,
+        ..Default::default()
     };
     let anchors = vehicle_anchors(
         vec![
@@ -564,6 +571,7 @@ fn goto_rejected_while_airborne() {
         ],
         dust_effect: None,
         touchdown_effect: None,
+        ..Default::default()
     };
     let anchors = vehicle_anchors(
         vec![
@@ -748,6 +756,7 @@ fn lrv_def(turn_rate_deg: f32) -> (VehicleDef, VehicleAnchors) {
             .collect(),
         dust_effect: None,
         touchdown_effect: None,
+        ..Default::default()
     };
     let anchors = vehicle_anchors(spec.iter().map(|(n, _t, a)| (*n, vec![*a])).collect(), vec![]);
     (def, anchors)
@@ -957,6 +966,7 @@ fn lrv_def_real() -> (VehicleDef, VehicleAnchors) {
         parts,
         dust_effect: None,
         touchdown_effect: None,
+        ..Default::default()
     };
     let anchors = vehicle_anchors(anchors_parts, vec![]);
     (def, anchors)
