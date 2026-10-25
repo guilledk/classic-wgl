@@ -535,7 +535,9 @@ Custom footprints (e.g. for rectangular buildings) can have more vertices.
 ### Vehicle body pitch/roll frames
 
 The `IsoVehicle` body is a single `IsoSprite` whose sheet carries **more than
-8 directions**: it stacks `pitch_levels` × `roll_levels` direction blocks
+one block of directions** (`IsoVehicle.directions` = the def's `directions`,
+8 / 16 / 24; every per-direction array — anchors, wheel offsets — has that
+many entries and the heading quantizes to it): it stacks `pitch_levels` × `roll_levels` direction blocks
 vertically (the exporter renders the body tilted about its ground origin on a
 `yaw → pitch → roll` rig; wheels stay flat at 8 directions).
 
@@ -569,7 +571,7 @@ split into a static **suspension arm** (the wheel `IsoSprite`) plus a rotating
 **steering tire** `IsoSprite` (`tire_entities`, matched by index).  The tire
 sheet stacks `steer_levels` direction blocks vertically, so its
 `tile_set_size = [columns, rows · steer_levels]` and the frame is
-`steer_index · 8 + direction` (`steer_index 0..steer_levels`: 0 = full-right,
+`steer_index · directions + direction` (`steer_index 0..steer_levels`: 0 = full-right,
 centre = straight, top = full-left — the exporter's steer-major order).
 
 `steer_index` is quantized from the *integrated* steering **state**

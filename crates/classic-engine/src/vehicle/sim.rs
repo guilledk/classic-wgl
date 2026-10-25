@@ -9,13 +9,13 @@ use glam::{Vec2, Vec3};
 use crate::Engine;
 
 use super::kinematics::{
-    advance_suspension, anchors8, derive_wheel_offsets, heading_to_dir, lerp_dir2, lookahead,
+    advance_suspension, anchors_n, derive_wheel_offsets, heading_to_dir, lerp_dir2, lookahead,
     pitch_index, should_reverse, soft_deadzone, steer_index, step_spring, step_steer,
     straight_steer, wrap_pi,
 };
 use super::{
-    TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DIRECTIONS, DUST_CONTACT_M,
-    GOAL_TOLERANCE, MOON_GRAVITY, WHEEL_SUFFIXES,
+    TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DUST_CONTACT_M, GOAL_TOLERANCE,
+    MOON_GRAVITY, WHEEL_SUFFIXES,
 };
 
 impl Engine {
@@ -85,24 +85,23 @@ impl Engine {
         // Resolve each part's per-direction anchors from the vehicle's anchors
         // data artifact (referenced by `def.anchors`); absent parts fall back to
         // the neutral 0.5/0.5 anchor.
-        let anchors_map: std::collections::HashMap<String, [[f32; 2]; 8]> = self
+        let dirs = def.directions.max(1);
+        let anchors_map: std::collections::HashMap<String, Vec<[f32; 2]>> = self
             .vehicle_anchors
             .get(&def.anchors)
             .map(|a| {
                 a.parts
                     .iter()
                     .chain(a.tires.iter())
-                    .map(|(name, anchors)| (name.clone(), anchors8(anchors)))
+                    .map(|(name, anchors)| (name.clone(), anchors_n(anchors, dirs)))
                     .collect()
             })
             .unwrap_or_default();
-        let body_anchors =
-            anchors_map.get(&body_part.name).copied().unwrap_or([[0.5f32, 0.5f32]; 8]);
-        let mut wheel_anchors = [[[0.5f32, 0.5f32]; 8]; 4];
-        for (i, wheel_anchors) in wheel_anchors.iter_mut().enumerate() {
-            *wheel_anchors =
-                anchors_map.get(&def.parts[i + 1].name).copied().unwrap_or([[0.5f32, 0.5f32]; 8]);
-        }
+        let neutral = || anchors_n(&[], dirs);
+        let body_anchors = anchors_map.get(&body_part.name).cloned().unwrap_or_else(neutral);
+        let wheel_anchors: [Vec<[f32; 2]>; 4] = std::array::from_fn(|i| {
+            anchors_map.get(&def.parts[i + 1].name).cloned().unwrap_or_else(neutral)
+        });
         let tile_set_size = Vec2::new(def.columns as f32, def.rows as f32);
         let body_tile_set_size = Vec2::new(
             def.columns as f32,
@@ -268,6 +267,7 @@ impl Engine {
                 wheel_names[3].clone(),
             ],
             tire_entities,
+            directions: dirs,
             body_anchors,
             wheel_anchors,
             speed: 2.6,
@@ -401,7 +401,7 @@ impl Engine {
 
             // Quantize the continuous heading for the 8-way sprite sheets; the
             // tires follow the integrated steering angle, not the raw error.
-            v.direction = heading_to_dir(v.heading);
+            v.direction = heading_to_dir(v.heading, v.directions);
             v.steer_index = steer_index(v.steer, v.steer_max, v.steer_levels);
 
             // -- wheel ground contacts --------------------------------------
@@ -515,8 +515,8 @@ impl Engine {
                 *a = lerp_dir2(&v.wheel_anchors[i], v.heading);
             }
 
-            let body_frame =
-                ((v.pitch_index * v.roll_levels + v.roll_index) * DIRECTIONS + v.direction) as f32;
+            let body_frame = ((v.pitch_index * v.roll_levels + v.roll_index) * v.directions
+                + v.direction) as f32;
 
             // Dust drivers: ground speed (m/s), its change since last frame,
             // and which wheels touch the ground.
@@ -530,8 +530,7 @@ impl Engine {
 
             VehicleWrite {
                 body: [x, y, v.altitude],
-                body_anchors8: v.body_anchors,
-                wheel_anchors8: v.wheel_anchors,
+                directions: v.directions,
                 body_altitude,
                 body_anchor: lerp_dir2(&v.body_anchors, v.heading),
                 direction: v.direction,
@@ -567,19 +566,20 @@ impl Engine {
             tf.position.y = write.body[1];
             tf.position.z = write.body[2];
         }
+        // The per-direction anchors (read only when a part interpolates).
+        let vehicle = self.world.get::<&IsoVehicle>(ve).ok();
+        let no_anchors: [Vec<[f32; 2]>; 4] = Default::default();
+        let (body_anchors, wheel_anchors): (&[[f32; 2]], &[Vec<[f32; 2]>; 4]) = match &vehicle {
+            Some(v) => (&v.body_anchors, &v.wheel_anchors),
+            None => (&[], &no_anchors),
+        };
         if let Ok(mut s) = self.world.get::<&mut IsoSprite>(ve) {
             s.frame = write.body_frame;
             s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, write.body_frame);
             s.frame_offset.z = write.body_altitude;
             s.anchor = Vec2::from(write.body_anchor);
             let base = write.body_frame as u32 - write.direction;
-            Self::apply_dir_frame(
-                &self.frame_tables,
-                &mut s,
-                base,
-                write.heading,
-                &write.body_anchors8,
-            );
+            Self::apply_dir_frame(&self.frame_tables, &mut s, base, write.heading, body_anchors);
         }
 
         for (i, handle) in wheel_handles.iter().enumerate() {
@@ -594,13 +594,13 @@ impl Engine {
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, s.frame);
                 s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
-                let anchors = &write.wheel_anchors8[i];
+                let anchors = &wheel_anchors[i];
                 Self::apply_dir_frame(&self.frame_tables, &mut s, 0, write.heading, anchors);
             }
         }
 
         // Steering tires ride the same axle/vertical offset as their wheel but
-        // select a frame by steer-major order (`steer_index · 8 + direction`).
+        // select a frame by steer-major order (`steer_index · dirs + direction`).
         for (i, handle) in tire_handles.iter().enumerate() {
             let Some(te) = handle else { continue };
             if let Ok(mut tf) = self.world.get::<&mut Transform>(*te) {
@@ -609,13 +609,13 @@ impl Engine {
                 tf.position.z = write.wheel_z[i];
             }
             if let Ok(mut s) = self.world.get::<&mut IsoSprite>(*te) {
-                let frame = (write.steer_index * DIRECTIONS + write.direction) as f32;
+                let frame = (write.steer_index * write.directions + write.direction) as f32;
                 s.frame = frame;
                 s.frame_name = Self::frame_name(&self.frame_tables, &s.texture, frame);
                 s.frame_offset.z = write.wheel_altitude[i];
                 s.anchor = Vec2::from(write.wheel_anchors[i]);
-                let base = write.steer_index * DIRECTIONS;
-                let anchors = &write.wheel_anchors8[i];
+                let base = write.steer_index * write.directions;
+                let anchors = &wheel_anchors[i];
                 Self::apply_dir_frame(&self.frame_tables, &mut s, base, write.heading, anchors);
             }
         }
@@ -624,20 +624,22 @@ impl Engine {
     /// Direction interpolation for one part: when its texture opts in
     /// (`dir_interp`), draw the two baked directions straddling the
     /// continuous `heading` (frames `base + dir`, each at its own anchor)
-    /// instead of the quantized one; otherwise clear any blend.
+    /// instead of the quantized one; otherwise clear any blend.  The
+    /// direction count is `anchors.len()`.
     fn apply_dir_frame(
         tables: &std::collections::HashMap<String, classic_core::types::FrameTable>,
         s: &mut IsoSprite,
         base: u32,
         heading: f32,
-        anchors: &[[f32; 2]; 8],
+        anchors: &[[f32; 2]],
     ) {
-        if !tables.get(&s.texture).is_some_and(|t| t.dir_interp) {
+        if anchors.is_empty() || !tables.get(&s.texture).is_some_and(|t| t.dir_interp) {
             s.dir_blend = None;
             return;
         }
-        let (a, b, t) = classic_core::vehicle_def::heading_neighbours(heading, DIRECTIONS);
-        let step = std::f32::consts::TAU / DIRECTIONS as f32;
+        let n = anchors.len() as u32;
+        let (a, b, t) = classic_core::vehicle_def::heading_neighbours(heading, n);
+        let step = std::f32::consts::TAU / n as f32;
         s.frame = (base + a) as f32;
         s.frame_name = Self::frame_name(tables, &s.texture, s.frame);
         s.anchor = Vec2::from(anchors[a as usize]);

@@ -60,10 +60,6 @@ const TOUCHDOWN_REF_IMPACT: f32 = 1.0;
 /// vehicle-definition part order emitted by the exporter).
 const WHEEL_SUFFIXES: [&str; 4] = ["Fl", "Fr", "Rl", "Rr"];
 
-/// Sprite-sheet direction count (matches the `[[f32; 2]; 8]` anchor arrays and
-/// `dir_index`).
-const DIRECTIONS: u32 = 8;
-
 /// Body pitch/roll spring stiffness (rad/s² per rad of error).  Kept
 /// underdamped (with `SPRING_DAMPING`) so the body bobs with momentum rather
 /// than snapping to the terrain.
@@ -146,10 +142,8 @@ impl TerrainSnapshot {
 /// The values pushed into the body + wheel sprites each frame.
 struct VehicleWrite {
     body: [f32; 3],
-    /// Per-direction anchors (body, then the four wheels), for direction
-    /// interpolation (`apply_dir_frame`).
-    body_anchors8: [[f32; 2]; 8],
-    wheel_anchors8: [[[f32; 2]; 8]; 4],
+    /// The vehicle's direction count.
+    directions: u32,
     /// Body lift above its own terrain in **world metres** (`frame_offset.z`).
     body_altitude: f32,
     body_anchor: [f32; 2],

@@ -254,7 +254,7 @@ fn derived_offsets_round_trip_through_iso() {
     let body = [[0.5f32, 0.7352f32]; 8];
     // A synthetic front-left wheel anchor per direction; exact values don't
     // matter, only that the round-trip reproduces the anchor delta.
-    let mut wheels = [[[0.5f32, 0.5f32]; 8]; 4];
+    let mut wheels: [Vec<[f32; 2]>; 4] = std::array::from_fn(|_| vec![[0.5f32, 0.5f32]; 8]);
     wheels[0][0] = [0.566155, 0.618458];
     wheels[1][0] = [0.73363, 0.702169];
     wheels[2][0] = [0.211113, 0.795979];
@@ -649,13 +649,17 @@ fn goto_rejected_while_airborne() {
 
 #[test]
 fn heading_and_dir_round_trip() {
-    for d in 0..8u32 {
-        assert_eq!(heading_to_dir(dir_to_heading(d)), d, "direction {d} round-trips");
+    for n in [8u32, 16, 24] {
+        for d in 0..n {
+            assert_eq!(heading_to_dir(dir_to_heading(d, n), n), d, "direction {d}/{n} round-trips");
+        }
     }
     // Negative and wrapped headings quantize to the expected frames.
-    assert_eq!(heading_to_dir(-std::f32::consts::FRAC_PI_4), 7);
-    assert_eq!(heading_to_dir(std::f32::consts::TAU), 0);
-    assert_eq!(heading_to_dir(std::f32::consts::FRAC_PI_2), 2);
+    assert_eq!(heading_to_dir(-std::f32::consts::FRAC_PI_4, 8), 7);
+    assert_eq!(heading_to_dir(std::f32::consts::TAU, 8), 0);
+    assert_eq!(heading_to_dir(std::f32::consts::FRAC_PI_2, 8), 2);
+    assert_eq!(heading_to_dir(std::f32::consts::FRAC_PI_2, 16), 4);
+    assert_eq!(heading_to_dir(-std::f32::consts::FRAC_PI_8, 16), 15);
 }
 
 #[test]
@@ -1577,4 +1581,54 @@ fn dir_interp_parts_blend_the_straddling_directions() {
     let w = engine.world.get::<&IsoSprite>(wheel).unwrap();
     assert!(w.dir_blend.is_none(), "a part without dir_interp keeps one frame");
     assert_eq!(w.frame, 2.0, "quantized to the nearer direction");
+}
+
+/// `directions` sizes every per-direction array and drives the heading
+/// quantization and the frame stride of a non-interpolated sheet.
+#[test]
+fn sixteen_direction_vehicles_quantize_to_sixteen_frames() {
+    let mut engine = Engine::new_for_test();
+    let tm = engine.world.spawn((test_tilemap(), Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), tm);
+    let (mut def, mut anchors) = lrv_def(720.0);
+    def.directions = 16;
+    def.pitch_levels = 3;
+    def.pitch_max_deg = 12.0;
+    // Distinct body anchors per direction, to see which one is used.
+    anchors.parts.insert("body".into(), (0..16).map(|d| [0.5, 0.6 + 0.01 * d as f32]).collect());
+    insert_lrv(&mut engine, (def, anchors));
+    let empty = FrameTable {
+        version: 2,
+        sheets: vec![],
+        frames: Default::default(),
+        dir_interp: false,
+        companions: vec![],
+    };
+    engine.frame_tables.insert("lrvBody".into(), empty.clone());
+    engine.frame_tables.insert("lrvWheelFl".into(), empty);
+    assert!(engine.spawn_vehicle("lrv", "lrv", 4.0, 4.0));
+    let body = *engine.names.get("lrv").unwrap();
+    {
+        let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+        assert_eq!(v.directions, 16);
+        assert_eq!(v.body_anchors.len(), 16);
+        assert!(v.wheel_anchors.iter().all(|a| a.len() == 16));
+        assert!(v.wheel_tile_offsets.iter().all(|a| a.len() == 16));
+    }
+    // 5.2 sixteenths of a turn -> direction 5.
+    let step = std::f32::consts::TAU / 16.0;
+    engine.world.get::<&mut IsoVehicle>(body).unwrap().heading = 5.2 * step;
+    engine.time.delta = 1.0 / 60.0;
+    engine.update_vehicles();
+    let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+    assert_eq!(v.direction, 5);
+    let s = engine.world.get::<&IsoSprite>(body).unwrap();
+    // Level pitch is index 1 of 3: frame = 1 * 16 + 5.
+    assert_eq!(s.frame_name.as_deref(), Some("lrvBody_21"));
+    assert!((s.anchor.y - (0.6 + 0.01 * 5.2)).abs() < 1e-4, "anchor lerps by heading");
+    let wheel = *engine.names.get("lrvWheelFl").unwrap();
+    assert_eq!(
+        engine.world.get::<&IsoSprite>(wheel).unwrap().frame_name.as_deref(),
+        Some("lrvWheelFl_5")
+    );
 }
