@@ -655,6 +655,18 @@ mod tests {
         assert_eq!(alpha.replacen("#define ALPHA_TEST\n", "", 1), r.resolve_fragment("mesh.frag"));
     }
 
+    /// `sheet.frag` decodes the team mask exactly as the sheet-v2 contract
+    /// (`classic_core::vehicle_def::team_mask_weight`).
+    #[test]
+    fn sheet_team_weight_matches_the_contract() {
+        let src = shaders::SHEET_FRAG;
+        assert!(src.contains("clamp((1.0 - teamAlpha) * 2.0, 0.0, 1.0)"));
+        for a in [1.0f32, 0.75, 0.5, 0.0] {
+            let shader = ((1.0 - a) * 2.0).clamp(0.0, 1.0);
+            assert_eq!(shader, classic_core::vehicle_def::team_mask_weight(a));
+        }
+    }
+
     /// The opaque `mesh` program must not contain a reachable `discard` (it
     /// would turn early-Z off for the whole model pass); only the
     /// `meshAlphaTest` variant cuts.

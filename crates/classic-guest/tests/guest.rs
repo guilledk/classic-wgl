@@ -123,6 +123,8 @@ fn guest_can_set_sprite_frame_and_color() {
                         color: [1.0, 1.0, 1.0, 1.0],
                         dir_blend: None,
                         no_ghost: false,
+                        team_tint: None,
+                        emissive: None,
                     },
                 )
                 .unwrap();
@@ -170,6 +172,8 @@ fn guest_can_spawn_sprite_clone() {
                         color: [0.55, 0.65, 0.95, 1.0],
                         dir_blend: None,
                         no_ghost: false,
+                        team_tint: None,
+                        emissive: None,
                     },
                 )
                 .unwrap();
@@ -455,6 +459,8 @@ fn guest_get_sprite_frame_and_inventory_capacity_wired() {
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
                 no_ghost: false,
+                team_tint: None,
+                emissive: None,
             };
 
             engine.spawn_named("unit");
@@ -1656,6 +1662,32 @@ fn guest_vehicle_layer_imports_drive_layers() {
             assert_eq!((c.clip.as_str(), c.speed, c.repeat), ("swing", -1.0, 2));
             drop(v);
             assert!(engine.is_disabled(engine.names["tank.crane"]));
+        },
+    );
+}
+
+#[test]
+fn guest_vehicle_team_and_emissive_reach_every_part() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_team" (func $team (param i32 i32 f64 f64 f64) (result i32)))
+            (import "env" "vehicle_emissive" (func $em (param i32 i32 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "tank")
+            (func (export "update") (param f64)
+                (drop (call $team (i32.const 0) (i32.const 4) (f64.const 0.2) (f64.const 0.4) (f64.const 1.0)))
+                (drop (call $em (i32.const 0) (i32.const 4) (f64.const 2.5)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            spawn_test_tank(&mut engine);
+            rt.update(&mut engine, 0.016).unwrap();
+            for part in ["tank", "tank.turret", "tank.crane"] {
+                let s = engine.world.get::<&IsoSprite>(engine.names[part]).unwrap();
+                assert_eq!(s.team_tint, Some([0.2, 0.4, 1.0]), "{part}");
+                assert_eq!(s.emissive, Some(2.5), "{part}");
+                assert_eq!(s.color, [1.0; 4], "team is separate from color");
+            }
         },
     );
 }

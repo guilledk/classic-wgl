@@ -720,6 +720,10 @@ impl Engine {
                 color: iso_sprite.color,
                 selected: visual_selected.contains(entity),
                 no_ghost: iso_sprite.no_ghost,
+                team: iso_sprite
+                    .team_tint
+                    .filter(|_| frame_ref.as_ref().is_some_and(|fr| fr.team_mask)),
+                emissive: iso_sprite.emissive.unwrap_or(1.0),
                 world_matrix,
                 blend,
                 shadow_caster,
@@ -1033,6 +1037,8 @@ impl Engine {
         let has_models = model_draws.iter().any(|d| !d.instances.is_empty());
         // A glowing model also needs the bloom pass (below).
         let models_emissive = model_draws.iter().any(|d| d.has_emissive());
+        // So does a sprite whose emissive pixels are pushed past 1.
+        let sprites_emissive = iso_draws.iter().any(|d| d.emissive > 1.0);
         if has_models {
             gfx.begin_model_pass(self.camera.scale.x);
         }
@@ -1199,7 +1205,7 @@ impl Engine {
         classic_gfx::perf::phase("bloom");
         // Bloom (before the UI): only on frames with something emissive on
         // screen, so scenes without effects stay pixel-identical.
-        if self.particles.has_emissive() || models_emissive {
+        if self.particles.has_emissive() || models_emissive || sprites_emissive {
             if let Some(ref mut t) = self.trace {
                 t.push(golden::TraceItemParams {
                     order: 0.0,

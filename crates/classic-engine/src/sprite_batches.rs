@@ -98,6 +98,7 @@ pub(crate) fn plan_sprite_frame(
             Some((b, _)) => base.blend(b),
             None => base,
         };
+        let inst = inst.with_team(d.team, d.emissive);
         all.push(if d.no_ghost { inst.without_ghost() } else { inst });
         shadow_all.push(shadow_instance);
         any_ghost_group |= d.ghost_group != 0;

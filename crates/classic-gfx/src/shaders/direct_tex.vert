@@ -18,11 +18,13 @@ in highp vec4 i_content;
 in vec4 i_tint;
 in highp vec4 i_misc;
 in highp vec4 i_outline;
+in vec4 i_team;
 flat out highp vec4 vUvRect;
 flat out highp vec4 vContent;
 flat out vec4 vTint;
 flat out highp vec4 vMisc;
 flat out highp vec4 vOutline;
+flat out vec4 vTeam;
 #ifdef INTERP
 // Direction blend (`sheet.frag#INTERP`): direction B's region, the anchors
 // and rotations, and the drawn quad.
@@ -62,6 +64,7 @@ void main(void ) {
     vTint = i_tint;
     vMisc = i_misc;
     vOutline = i_outline;
+    vTeam = i_team;
 #ifdef INTERP
     vUvB = i_uv_b;
     vContentB = i_content_b;

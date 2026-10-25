@@ -207,6 +207,8 @@ impl Engine {
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
                 no_ghost: false,
+                team_tint: None,
+                emissive: None,
             };
             let we = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
             let _ = self.world.insert_one(we, DebugName(wheel_names[i].clone()));
@@ -239,6 +241,8 @@ impl Engine {
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
                 no_ghost: false,
+                team_tint: None,
+                emissive: None,
             };
             let te = self.world.spawn((sprite, Transform::new(Vec3::new(x, y, 0.0), Vec3::ONE)));
             let _ = self.world.insert_one(te, DebugName(name.clone()));
@@ -263,6 +267,8 @@ impl Engine {
             color: [1.0, 1.0, 1.0, 1.0],
             dir_blend: None,
             no_ghost: false,
+            team_tint: None,
+            emissive: None,
         };
         let vehicle = IsoVehicle {
             tilemap: tilemap_name,

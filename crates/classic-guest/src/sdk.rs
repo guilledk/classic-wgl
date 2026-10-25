@@ -456,6 +456,18 @@ impl GuestHost {
         self.engine_mut().vehicle_layer_color(&name, layer, rgba) as i32
     }
 
+    /// Set a vehicle's team colour (the team-masked texels of every part).
+    pub fn vehicle_team(&mut self, name: &str, r: f64, g: f64, b: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_team(&name, [r as f32, g as f32, b as f32]) as i32
+    }
+
+    /// Set a vehicle's emissive strength (1 = as baked, > 1 blooms).
+    pub fn vehicle_emissive(&mut self, name: &str, strength: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_emissive(&name, strength as f32) as i32
+    }
+
     /// Non-mutating vehicle reachability probe: run the vehicle's A* to
     /// `(tx, ty)` without driving it.  Returns `1` reachable, `-1` no path,
     /// `0` pending (call again), `-2` unknown vehicle.  On success the waypoints

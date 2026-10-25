@@ -92,6 +92,12 @@ pub struct SpawnVehicles {
     pub heading_step_deg: f32,
     #[serde(default)]
     pub spin_deg_per_sec: f32,
+    /// Team colour for every spawned vehicle (`vehicle_team`).
+    #[serde(default)]
+    pub team: Option<[f32; 3]>,
+    /// Emissive strength for every spawned vehicle (`vehicle_emissive`).
+    #[serde(default)]
+    pub emissive: Option<f32>,
 }
 
 fn default_cols() -> u32 {
@@ -788,6 +794,12 @@ fn spawn_vehicles(engine: &mut Engine, sv: &SpawnVehicles) -> Vec<String> {
             if let Ok(mut v) = engine.world.get::<&mut IsoVehicle>(e) {
                 v.heading = (i as f32 * sv.heading_step_deg).to_radians();
             }
+        }
+        if let Some(t) = sv.team {
+            engine.vehicle_team(&name, t);
+        }
+        if let Some(s) = sv.emissive {
+            engine.vehicle_emissive(&name, s);
         }
         names.push(name);
     }

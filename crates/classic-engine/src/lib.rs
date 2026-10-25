@@ -133,6 +133,10 @@ struct IsoDraw {
     selected: bool,
     /// Skip the ghost pass (`IsoSprite::no_ghost`).
     no_ghost: bool,
+    /// Team tint, when the sprite sets one and its sheet has a `team_mask`.
+    team: Option<[f32; 3]>,
+    /// Emissive strength (`IsoSprite::emissive`, default 1).
+    emissive: f32,
     /// World -> camera view space (metres): `iso_camera_matrix`.
     world_matrix: Mat4,
     /// A direction blend: direction B's half and textures (`model` is then
@@ -192,6 +196,8 @@ pub(crate) struct ResolvedFrame {
     pub(crate) anchor_depth: bool,
     /// The frame table opts into direction interpolation (`dir_interp`).
     pub(crate) dir_interp: bool,
+    /// The sheet's normal companion carries the team mask in its alpha.
+    pub(crate) team_mask: bool,
 }
 
 /// The namespace-resolvable resource categories, mirroring the guest SDK's
@@ -545,6 +551,7 @@ mod tests {
             depth_scale: 1.0,
             anchor_depth: false,
             dir_interp: false,
+            team_mask: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &full);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
@@ -563,6 +570,7 @@ mod tests {
             depth_scale: 1.0,
             anchor_depth: false,
             dir_interp: false,
+            team_mask: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &trimmed);
         assert!((a.x - (0.5 * 512.0 - 8.0) / 466.0).abs() < 1e-6, "got {a:?}");
@@ -581,6 +589,7 @@ mod tests {
             depth_scale: 1.0,
             anchor_depth: false,
             dir_interp: false,
+            team_mask: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &packed);
         assert!((a.x - 0.25).abs() < 1e-6 && (a.y - 0.75).abs() < 1e-6, "got {a:?}");
@@ -598,6 +607,7 @@ mod tests {
             depth_scale: 1.0,
             anchor_depth: false,
             dir_interp: false,
+            team_mask: false,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &unknown);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
@@ -711,6 +721,8 @@ mod tests {
             color: [1.0, 1.0, 1.0, 1.0],
             dir_blend: None,
             no_ghost: false,
+            team_tint: None,
+            emissive: None,
         };
         let sprite_tf = Transform::new(iso_sprite.position, iso_sprite.scale);
         let tex_dim = (48.0, 96.0);
@@ -1000,6 +1012,8 @@ mod tests {
                 color: [1.0, 1.0, 1.0, 1.0],
                 dir_blend: None,
                 no_ghost: false,
+                team_tint: None,
+                emissive: None,
                 frame_offset,
             },
         ));

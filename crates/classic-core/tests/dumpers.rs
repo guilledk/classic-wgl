@@ -117,6 +117,8 @@ fn isoagent_subsume_skips_transform_and_isosprite() {
             color: [1.0, 1.0, 1.0, 1.0],
             dir_blend: None,
             no_ghost: false,
+            team_tint: None,
+            emissive: None,
         },
         agent.clone(),
     ));

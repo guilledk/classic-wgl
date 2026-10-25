@@ -39,7 +39,7 @@ use crate::{Gfx, IsoSpritePass, RenderSettings, SpriteRegion};
 
 /// Attribute locations of the per-instance `vec4`s (after `vertex_pos` = 0
 /// and `tex_coord` = 1), shared by every instanced sprite program.
-pub const SPRITE_INSTANCE_ATTRS: [&str; 15] = [
+pub const SPRITE_INSTANCE_ATTRS: [&str; 16] = [
     "vertex_pos",
     "tex_coord",
     "i_m0",
@@ -55,10 +55,11 @@ pub const SPRITE_INSTANCE_ATTRS: [&str; 15] = [
     "i_content_b",
     "i_interp",
     "i_quad",
+    "i_team",
 ];
 
 /// Number of per-instance `vec4` attributes.
-const INSTANCE_VEC4S: u32 = 13;
+const INSTANCE_VEC4S: u32 = 14;
 /// First per-instance attribute location.
 const FIRST_INSTANCE_LOC: u32 = 2;
 
@@ -77,7 +78,7 @@ pub const BLEND_UNITS: [u32; 3] = [13, 14, 15];
 /// The ghost-pass alpha (`classic-gfx` §14).
 pub const GHOST_ALPHA: f32 = 0.4;
 
-/// One iso sprite's per-instance data (13 `vec4`s, std430-like packing).
+/// One iso sprite's per-instance data (14 `vec4`s, std430-like packing).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IsoSpriteInstance {
@@ -96,7 +97,7 @@ pub struct IsoSpriteInstance {
     /// `tint.rgb, depth_scale` (window units per `gray − 0.5` of the depth
     /// map: `1` legacy global, `2R / (near − far)` anchor-relative).
     pub tint: [f32; 4],
-    /// `depth_base, ghost_group, flags` (1 selected + 2 no ghost pass),
+    /// `depth_base, ghost_group, flags` (1 selected + 2 no ghost pass + 4 team),
     /// region mode` (0 packed, 1
     /// grid, 2 direction blend).
     pub misc: [f32; 4],
@@ -113,6 +114,8 @@ pub struct IsoSpriteInstance {
     /// Direction blend only: the drawn quad `x0, y0, w, h` in pixels from the
     /// anchor (x right, y down).
     pub quad: [f32; 4],
+    /// `team_tint.rgb` (with flag 4 in `misc.z`), `emissive strength`.
+    pub team: [f32; 4],
 }
 
 impl IsoSpriteInstance {
@@ -172,6 +175,18 @@ impl IsoSpriteInstance {
     /// Whether this instance is a direction blend.
     pub fn is_blend(&self) -> bool {
         self.misc[3] > 1.5
+    }
+
+    /// Set the team tint (`misc.z` bit 2: the sheet's normal alpha is the
+    /// team mask) and the emissive strength.
+    pub fn with_team(mut self, team: Option<[f32; 3]>, emissive: f32) -> Self {
+        if let Some(t) = team {
+            self.misc[2] += 4.0;
+            self.team = [t[0], t[1], t[2], emissive];
+        } else {
+            self.team = [1.0, 1.0, 1.0, emissive];
+        }
+        self
     }
 
     /// Leave this instance out of the ghost pass (`misc.z` bit 1).
@@ -965,8 +980,8 @@ mod tests {
     }
 
     #[test]
-    fn instance_is_thirteen_vec4s() {
-        assert_eq!(SPRITE_INSTANCE_BYTES, 208);
+    fn instance_is_fourteen_vec4s() {
+        assert_eq!(SPRITE_INSTANCE_BYTES, 224);
         assert_eq!(SPRITE_INSTANCE_ATTRS.len() as u32, FIRST_INSTANCE_LOC + INSTANCE_VEC4S);
     }
 

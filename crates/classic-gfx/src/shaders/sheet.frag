@@ -34,6 +34,8 @@ flat in highp vec4 vContent;
 flat in vec4 vTint;
 flat in highp vec4 vMisc;
 flat in highp vec4 vOutline;
+// `team_tint.rgb` (when `vMisc.z` has flag 4), emissive strength.
+flat in vec4 vTeam;
 #define depth_base vMisc.x
 #define depth_scale vTint.w
 #define selected mod(vMisc.z, 2.0)
@@ -447,7 +449,7 @@ WarpTexel blendDirections() {
 void main(void ) {
 #if defined(INSTANCED) && !defined(ID_PASS)
     // Ghost-group test first: it rejects without a texture fetch.
-    if (ghost_alpha > 0.0 && vMisc.z > 1.5) {
+    if (ghost_alpha > 0.0 && mod(floor(vMisc.z * 0.5), 2.0) > 0.5) {
         discard;
     }
     if (use_ghost_ids > 0.5 && vMisc.y > 0.5) {
@@ -531,13 +533,26 @@ void main(void ) {
     // Those now shade off a flat +Z normal like a decal on the ground.
     vec3 rawNormal = vec3(0.0);
     bool emissive = false;
+    // The normal sheet's alpha: the team mask on a `team_mask` sheet (sheet v2).
+    float teamAlpha = 1.0;
 #ifdef INTERP
     rawNormal = blended.normal;
+    teamAlpha = blended.team;
     emissive = use_normal_map > 0.5 && dot(rawNormal, rawNormal) <= 0.001;
 #else
     if (use_normal_map > 0.5) {
-        rawNormal = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).rgb * 2.0 - 1.0;
+        vec4 normalSample = texture(normal_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y)));
+        rawNormal = normalSample.rgb * 2.0 - 1.0;
+        teamAlpha = normalSample.a;
         emissive = dot(rawNormal, rawNormal) <= 0.001;
+    }
+#endif
+#ifdef INSTANCED
+    // Team colour: weight `clamp((1 - a) * 2, 0, 1)` of the normal alpha
+    // (`classic_core::vehicle_def::team_mask_weight`), separate from `tint`.
+    if (vMisc.z >= 3.5) {
+        float teamWeight = clamp((1.0 - teamAlpha) * 2.0, 0.0, 1.0);
+        color.rgb *= mix(vec3(1.0), vTeam.rgb, teamWeight);
     }
 #endif
     // Normal-offset bias needs a direction even where the sprite is emissive or
@@ -566,6 +581,13 @@ void main(void ) {
         // which is what made it read as a glowing decal rather than as light.
         color.rgb *= ambient_color + diff * light_color + evaluateLightsTiled(n, vLightPos);
     }
+#ifdef INSTANCED
+    // Emissive strength (`IsoSprite::emissive`): the marker pixels stay unlit
+    // and scale; above 1 they brighten into the bloom pass.
+    if (emissive) {
+        color.rgb *= vTeam.w;
+    }
+#endif
     if (ghost_alpha > 0.0) {
         color.a = ghost_alpha;
     }
