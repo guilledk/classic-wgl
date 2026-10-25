@@ -584,15 +584,19 @@ pub struct IsoVehicle {
     /// wheel's static suspension arm).  Empty entries = no tire for that wheel.
     #[serde(default)]
     pub tire_entities: [String; 2],
+    /// Sprite-sheet direction count (the vehicle def's `directions`: 8, 16
+    /// or 24); every per-direction array below has this many entries.
+    #[serde(default = "default_vehicle_directions", skip_serializing_if = "is_eight")]
+    pub directions: u32,
     /// Body ground-origin anchor per direction, `[ax, ay]` normalized to the
     /// sprite frame (x from left, y from top).
-    pub body_anchors: [[f32; 2]; 8],
-    /// Per-wheel ground-origin anchor per direction (`[4 wheels][8 dirs][ax, ay]`).
-    pub wheel_anchors: [[[f32; 2]; 8]; 4],
+    pub body_anchors: Vec<[f32; 2]>,
+    /// Per-wheel ground-origin anchor per direction (`[4 wheels][dirs][ax, ay]`).
+    pub wheel_anchors: [Vec<[f32; 2]>; 4],
     /// Speed in tiles per second.
     #[serde(default = "default_vehicle_speed")]
     pub speed: f32,
-    /// Current sprite-sheet direction frame (0..7).
+    /// Current sprite-sheet direction frame (`0..directions`).
     #[serde(default)]
     pub direction: u32,
     /// Continuous body pitch angle (radians), signed nose-up positive.  Driven
@@ -705,9 +709,9 @@ pub struct IsoVehicle {
 
     // -- transient simulation state (not serialized) ----------------------
     /// Per-wheel, per-direction tile-space offset from the body, derived from
-    /// the anchors at spawn time (`[4 wheels][8 dirs][tx, ty]`).
+    /// the anchors at spawn time (`[4 wheels][dirs][tx, ty]`).
     #[serde(skip)]
-    pub wheel_tile_offsets: [[[f32; 2]; 8]; 4],
+    pub wheel_tile_offsets: [Vec<[f32; 2]>; 4],
     /// Body height above the supporting terrain, in world metres (same units as
     /// `Engine::height_at`).
     #[serde(skip)]
@@ -757,14 +761,23 @@ fn default_vehicle_speed() -> f32 {
     2.6
 }
 
+fn is_eight(v: &u32) -> bool {
+    *v == 8
+}
+
+fn default_vehicle_directions() -> u32 {
+    8
+}
+
 impl Default for IsoVehicle {
     fn default() -> Self {
         Self {
             tilemap: String::new(),
             wheel_entities: [String::new(), String::new(), String::new(), String::new()],
             tire_entities: [String::new(), String::new()],
-            body_anchors: [[0.5, 0.5]; 8],
-            wheel_anchors: [[[0.5, 0.5]; 8]; 4],
+            directions: 8,
+            body_anchors: vec![[0.5, 0.5]; 8],
+            wheel_anchors: std::array::from_fn(|_| vec![[0.5, 0.5]; 8]),
             speed: 2.6,
             direction: 0,
             pitch: 0.0,
@@ -793,7 +806,7 @@ impl Default for IsoVehicle {
             turn_cost: 0.0,
             dust_effect: None,
             touchdown_effect: None,
-            wheel_tile_offsets: [[[0.0, 0.0]; 8]; 4],
+            wheel_tile_offsets: std::array::from_fn(|_| vec![[0.0, 0.0]; 8]),
             altitude: 0.0,
             vel_z: 0.0,
             wheel_h: [0.0; 4],

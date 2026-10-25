@@ -25,17 +25,18 @@ pub fn dir_index(dx: i32, dy: i32) -> usize {
     }
 }
 
-/// The heading angle (tile-space radians, `atan2(dy, dx)`) for a direction
-/// frame.  `0` = East (frame 0), `FRAC_PI_2` = South (frame 2), etc.
-pub(super) fn dir_to_heading(dir: u32) -> f32 {
-    (dir % 8) as f32 * std::f32::consts::FRAC_PI_4
+/// The heading angle (tile-space radians, `atan2(dy, dx)`) for direction
+/// frame `dir` of `n`.  `0` = East (frame 0), then clockwise on screen (for
+/// 8 directions `FRAC_PI_2` = South = frame 2).
+pub(super) fn dir_to_heading(dir: u32, n: u32) -> f32 {
+    let n = n.max(1);
+    (dir % n) as f32 * std::f32::consts::TAU / n as f32
 }
 
-/// Quantize a continuous heading angle to the nearest of the 8 direction
-/// frames (0..7), wrapping at `2π`.
-pub(super) fn heading_to_dir(heading: f32) -> u32 {
-    let theta = heading.rem_euclid(std::f32::consts::TAU);
-    (theta / std::f32::consts::FRAC_PI_4).round() as u32 % 8
+/// Quantize a continuous heading angle to the nearest of `n` direction
+/// frames, wrapping at `2π`.
+pub(super) fn heading_to_dir(heading: f32, n: u32) -> u32 {
+    classic_core::vehicle_def::heading_to_dir_n(heading, n)
 }
 
 /// Wrap an angle to `[-π, π]`.
@@ -51,13 +52,14 @@ pub(super) fn wrap_pi(a: f32) -> f32 {
 }
 
 /// Lerp a per-direction `[f32; 2]` value (wheel offset or anchor) between the
-/// two direction frames straddling a continuous heading.
-pub(super) fn lerp_dir2(vals: &[[f32; 2]; 8], heading: f32) -> [f32; 2] {
-    let theta = heading.rem_euclid(std::f32::consts::TAU);
-    let dir_f = theta / std::f32::consts::FRAC_PI_4;
-    let a = dir_f.floor() as usize % 8;
-    let b = (a + 1) % 8;
-    let t = dir_f - dir_f.floor();
+/// two direction frames straddling a continuous heading (`vals.len()`
+/// directions).
+pub(super) fn lerp_dir2(vals: &[[f32; 2]], heading: f32) -> [f32; 2] {
+    if vals.is_empty() {
+        return [0.0, 0.0];
+    }
+    let (a, b, t) = classic_core::vehicle_def::heading_neighbours(heading, vals.len() as u32);
+    let (a, b) = (a as usize, b as usize);
     [vals[a][0] * (1.0 - t) + vals[b][0] * t, vals[a][1] * (1.0 - t) + vals[b][1] * t]
 }
 
@@ -245,10 +247,12 @@ pub(super) fn should_reverse(err: f32, reversing: bool) -> bool {
     }
 }
 
-/// A part's anchors as a fixed 8-slot array (padded/truncated to 8 directions).
-pub(super) fn anchors8(anchors: &[[f32; 2]]) -> [[f32; 2]; 8] {
-    let mut out = [[0.5f32, 0.5f32]; 8];
-    for (i, a) in anchors.iter().take(8).enumerate() {
+/// A part's anchors for `n` directions (padded with the neutral `0.5, 0.5`,
+/// or truncated).
+pub(super) fn anchors_n(anchors: &[[f32; 2]], n: u32) -> Vec<[f32; 2]> {
+    let n = n.max(1) as usize;
+    let mut out = vec![[0.5f32, 0.5f32]; n];
+    for (i, a) in anchors.iter().take(n).enumerate() {
         out[i] = *a;
     }
     out
@@ -262,14 +266,15 @@ pub(super) fn anchors8(anchors: &[[f32; 2]]) -> [[f32; 2]; 8] {
 /// 30° `iso_basis` camera at `PPM_TARGET` px/m) yields the tile offset that
 /// reproduces that displacement exactly.
 pub(super) fn derive_wheel_offsets(
-    body_anchors: &[[f32; 2]; 8],
-    wheel_anchors: &[[[f32; 2]; 8]; 4],
+    body_anchors: &[[f32; 2]],
+    wheel_anchors: &[Vec<[f32; 2]>; 4],
     cell: [f32; 2],
     _tile_scale: f32,
-) -> [[[f32; 2]; 8]; 4] {
-    let mut offsets = [[[0.0f32; 2]; 8]; 4];
+) -> [Vec<[f32; 2]>; 4] {
+    let n = body_anchors.len();
+    let mut offsets: [Vec<[f32; 2]>; 4] = std::array::from_fn(|_| vec![[0.0f32; 2]; n]);
     for (i, anchors) in wheel_anchors.iter().enumerate() {
-        for d in 0..8 {
+        for d in 0..n.min(anchors.len()) {
             let dx = (anchors[d][0] - body_anchors[d][0]) * cell[0];
             let dy = (anchors[d][1] - body_anchors[d][1]) * cell[1];
             let world = iso_camera_px_inverse(Vec2::new(dx, dy));

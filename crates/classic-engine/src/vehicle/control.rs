@@ -9,8 +9,7 @@ use crate::Engine;
 
 use super::kinematics::{dir_to_heading, pitch_index, straight_steer};
 use super::{
-    PreviewProbe, PreviewProbeState, VehicleGotoPoll, VehicleGotoSubmit, VehicleWrite, DIRECTIONS,
-    JUMP_COST,
+    PreviewProbe, PreviewProbeState, VehicleGotoPoll, VehicleGotoSubmit, VehicleWrite, JUMP_COST,
 };
 
 impl Engine {
@@ -27,7 +26,7 @@ impl Engine {
             let direction = v.direction as usize;
             v.vel_z = 0.0;
             v.airborne = false;
-            v.heading = dir_to_heading(v.direction);
+            v.heading = dir_to_heading(v.direction, v.directions);
             v.path.clear();
             v.path_idx = 0;
             v.steer_index = straight_steer(v.steer_levels);
@@ -69,13 +68,12 @@ impl Engine {
             for (i, a) in wheel_anchors.iter_mut().enumerate() {
                 *a = v.wheel_anchors[i][direction];
             }
-            let body_frame =
-                ((v.pitch_index * v.roll_levels + v.roll_index) * DIRECTIONS + v.direction) as f32;
+            let body_frame = ((v.pitch_index * v.roll_levels + v.roll_index) * v.directions
+                + v.direction) as f32;
 
             VehicleWrite {
                 body: [x, y, v.altitude],
-                body_anchors8: v.body_anchors,
-                wheel_anchors8: v.wheel_anchors,
+                directions: v.directions,
                 body_altitude: v.altitude - terrain.height(x, y),
                 body_anchor: v.body_anchors[direction],
                 direction: v.direction,

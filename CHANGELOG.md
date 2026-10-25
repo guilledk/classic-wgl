@@ -69,6 +69,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   shadow casters draw the nearer direction.  The instance grows to 13
   `vec4`s (the model's unused z column dropped) and direction B binds on
   units 13-15 (#157).
+- Vehicles bake 8, 16 or 24 directions: `IsoVehicle.directions` (from the
+  def; serialized only when not 8) sizes the per-direction anchor and
+  wheel-offset arrays (now `Vec`s) and drives the heading quantization
+  and frame stride of non-interpolated sheets and the direction count of
+  interpolated ones.  The LRV stays at 8 (#158).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
