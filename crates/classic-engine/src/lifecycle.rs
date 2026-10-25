@@ -21,8 +21,7 @@ use glow::HasContext;
 
 use crate::{
     env_config, fields, golden, inventory_ui, light, particles, selection, shadow, DrawKind,
-    Engine, GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, OUTLINE_RADIUS_PX, RTS_DRAG_THRESHOLD_PX,
-    SELECTION_COLOR,
+    Engine, GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, RTS_DRAG_THRESHOLD_PX, SELECTION_COLOR,
 };
 
 impl Engine {
@@ -720,6 +719,16 @@ impl Engine {
         classic_gfx::perf::phase("light_ubo");
         gfx.upload_lights(&lights);
         let cam = self.camera.matrix();
+        // Instanced sprite batches (one instance per iso draw), planned so the
+        // batched draws reproduce the render-list order (`sprite_batches`).
+        classic_gfx::perf::phase("sprite_plan");
+        let mut sprite_frame = crate::sprite_batches::plan_sprite_frame(
+            &iso_draws,
+            gfx,
+            &cam,
+            !gfx.ghost_ids_supported(),
+        );
+        let mut sprite_draws = 0u32;
         // Bin them into screen tiles for this camera, so a lit fragment loops
         // over the lights near it only (terrain, models and iso sprites all
         // rasterise through `cam` · `iso_camera_matrix` at `PPM_TARGET`).
@@ -777,14 +786,9 @@ impl Engine {
                     // Billboards are their own receivers, so they need a
                     // slope-scaled offset the terrain does not.
                     gfx.set_shadow_sprite_offset();
-                    for draw in &iso_draws {
-                        gfx.draw_shadow_sprite(
-                            &draw.model,
-                            &m.view_proj,
-                            &draw.texture,
-                            draw.region(),
-                        );
-                    }
+                    gfx.upload_shadow_sprite_instances(&sprite_frame.shadow_instances);
+                    sprite_draws +=
+                        gfx.draw_shadow_sprite_batches(&m.view_proj, &sprite_frame.shadow_batches);
                     gfx.end_shadow_pass();
                     let texel = 1.0 / classic_gfx::SHADOW_MAP_SIZE as f32;
                     Some(classic_gfx::ShadowSettings {
@@ -1071,48 +1075,54 @@ impl Engine {
                     screen: Some(golden::project_rect(&cam, &draw.model, false)),
                 });
             }
-            gfx.draw_iso_sprite(
-                &draw.model,
+        }
+        let world_matrix = iso_camera_matrix();
+        if !iso_draws.is_empty() {
+            gfx.upload_sprite_instances(&sprite_frame.instances);
+            // The ghost groups: each instance writes its group id where it
+            // passes the normal pass's depth test, for the ghost pass to read.
+            // Without the depth blit, re-plan with the groups in the stencil.
+            if sprite_frame.any_ghost_group && !sprite_frame.stencil_groups {
+                classic_gfx::perf::phase("sprite_ids");
+                if gfx.begin_ghost_ids(sprite_frame.group_bounds) {
+                    classic_gfx::perf::phase("sprite_ids_draw");
+                    sprite_draws += gfx.draw_ghost_id_batches(
+                        &cam,
+                        &world_matrix,
+                        &sprite_settings,
+                        &sprite_frame.batches,
+                    );
+                } else {
+                    sprite_frame =
+                        crate::sprite_batches::plan_sprite_frame(&iso_draws, gfx, &cam, true);
+                    gfx.upload_sprite_instances(&sprite_frame.instances);
+                }
+            }
+            classic_gfx::perf::phase("sprites");
+            sprite_draws += gfx.draw_iso_sprite_batches(
                 &cam,
-                &draw.world_matrix,
-                &draw.texture,
-                draw.region(),
-                &draw.depth_corners,
-                draw.depth_base,
-                draw.depth_map.as_deref(),
-                draw.normal_map.as_deref(),
-                &[draw.color[0], draw.color[1], draw.color[2]],
+                &world_matrix,
                 &sprite_settings,
-                draw.ghost_group,
+                &sprite_frame.batches,
                 IsoSpritePass::Normal,
-                draw.selected,
                 &SELECTION_COLOR,
-                OUTLINE_RADIUS_PX,
             );
-        }
-
-        // Phase 3: isometric ghost passes — 40% alpha where behind the depth
-        // buffer, skipping pixels the sprite's own ghost group already occludes.
-        for draw in &iso_draws {
-            gfx.draw_iso_sprite(
-                &draw.model,
+            classic_gfx::perf::phase("sprite_ghosts");
+            // Phase 3: isometric ghost passes — 40% alpha where behind the
+            // depth buffer, skipping pixels the sprite's own ghost group
+            // already occludes.
+            sprite_draws += gfx.draw_iso_sprite_batches(
                 &cam,
-                &draw.world_matrix,
-                &draw.texture,
-                draw.region(),
-                &draw.depth_corners,
-                draw.depth_base,
-                draw.depth_map.as_deref(),
-                draw.normal_map.as_deref(),
-                &[draw.color[0], draw.color[1], draw.color[2]],
+                &world_matrix,
                 &sprite_settings,
-                draw.ghost_group,
+                &sprite_frame.batches,
                 IsoSpritePass::Ghost,
-                draw.selected,
                 &SELECTION_COLOR,
-                OUTLINE_RADIUS_PX,
             );
         }
+        classic_gfx::perf::count("sprite_instances", iso_draws.len() as u64);
+        classic_gfx::perf::count("sprite_batches", sprite_frame.batches.len() as u64);
+        classic_gfx::perf::count("sprite_draws", sprite_draws as u64);
         classic_gfx::perf::phase("model_ghost");
         // Phase 3b: model ghost — 40% alpha wherever a model is behind sprites or
         // terrain, skipping pixels its own composite covers (like sprites).

@@ -67,7 +67,7 @@ impl Gfx {
     /// world_matrix, ppm)`; the grid is used only when it rasterises with the
     /// transform the grid was binned for, else (and for `None`: screen-space
     /// draws) the shader runs the full light loop.
-    fn bind_light_grid(&self, s: &Shader, view: Option<(&Mat4, &Mat4, f32)>) {
+    pub(crate) fn bind_light_grid(&self, s: &Shader, view: Option<(&Mat4, &Mat4, f32)>) {
         let gl = &self.gl;
         let map = view.and_then(|(camera, world_matrix, ppm)| {
             let clip = crate::clip_from_world(&self.projection(), camera, world_matrix, ppm);
@@ -86,7 +86,7 @@ impl Gfx {
     /// Bind the directional shadow map and set the sampling uniforms on a lit
     /// shader (`isoTilemap` / `imageSheet`).  When `settings.shadow` is `None`,
     /// `use_shadow` is cleared to 0 (the shaders skip the term).
-    fn bind_shadow(&self, s: &Shader, settings: &RenderSettings) {
+    pub(crate) fn bind_shadow(&self, s: &Shader, settings: &RenderSettings) {
         let gl = &self.gl;
         match &settings.shadow {
             Some(shadow) => {

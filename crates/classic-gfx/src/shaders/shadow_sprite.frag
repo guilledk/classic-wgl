@@ -5,6 +5,13 @@ precision mediump float;
 in highp vec2 vTexCoord;
 
 uniform sampler2D tex_sampler;
+#ifdef INSTANCED
+flat in highp vec4 vUvRect;
+flat in highp vec4 vContent;
+flat in highp vec2 vSource;
+flat in float vGrid;
+#define tile_set_size vUvRect.yz
+#else
 uniform vec2 tile_set_size;
 uniform float tile_id_flat;
 uniform float use_uv_rect;
@@ -12,6 +19,7 @@ uniform highp vec4 uv_rect;
 uniform highp vec2 trim_offset;
 uniform highp vec2 source_size;
 uniform highp vec2 content_size;
+#endif
 
 out vec4 fragColor;
 
@@ -29,6 +37,22 @@ vec2 tileUv(float tile_id_flat, vec2 tex_coord) {
 // Same sprite-sheet UV mapping as `sheet.frag`, so the shadow silhouette lines
 // up with the sprite's colour frame (packed-atlas rect or uniform-grid frame).
 vec2 sheetUv(vec2 tex_coord) {
+#ifdef INSTANCED
+    if (vGrid > 0.5) {
+        // A uniform-grid frame: `vUvRect` = (frame, tile_set_size).
+        return tileUv(vUvRect.x, tex_coord);
+    }
+    // `vContent` = trim offset + content size, `vSource` = source size (the
+    // per-draw path's exact expression).
+    highp vec2 content_min = vContent.xy / vSource;
+    highp vec2 content_ext = vContent.zw / vSource;
+    highp vec2 content_uv = (tex_coord - content_min) / content_ext;
+    if (content_uv.x < 0.0 || content_uv.x > 1.0
+        || content_uv.y < 0.0 || content_uv.y > 1.0) {
+        discard;
+    }
+    return mix(vUvRect.xy, vUvRect.zw, content_uv);
+#else
     if (use_uv_rect > 0.5) {
         highp vec2 content_min = trim_offset / source_size;
         highp vec2 content_ext = content_size / source_size;
@@ -40,6 +64,7 @@ vec2 sheetUv(vec2 tex_coord) {
         return mix(uv_rect.xy, uv_rect.zw, content_uv);
     }
     return tileUv(tile_id_flat, tex_coord);
+#endif
 }
 
 // Depth-only pass: keep the sprite's alpha silhouette (discard transparent

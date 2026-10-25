@@ -115,6 +115,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Iso sprites draw as instanced batches (`classic_gfx::sprite_batch`):
+  one 160-byte instance per sprite, and runs on one atlas page share a
+  `drawElementsInstanced` in the normal, ghost and shadow passes
+  (`plan_batches` only reorders sprites whose screen rects overlap
+  nothing drawn in between, so the result matches one-by-one).  The
+  ghost-group test moved into the shader: a ghost-id pass writes each
+  sprite's group where it passes the normal pass's depth test and the
+  ghost pass discards over its own group, so groups no longer split
+  draws (the stencil per group stays as the fallback when the depth
+  blit is unavailable).  200 mules in `unittest` at 4K: 4230 sprite
+  draws -> 17.  New perf phases `sprite_plan` / `sprite_ids` /
+  `sprite_ids_draw` / `sprite_ghosts` and counters `sprite_instances` /
+  `sprite_batches` / `sprite_draws`; a `spawnVehicles` test action for
+  stress scenes (#155).
 - Model textures are shared by content.  An embedded glb image whose
   encoded bytes match an already loaded one is neither decoded nor
   uploaded again: its `"{model}::image::{i}"` name aliases the existing

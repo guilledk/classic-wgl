@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use classic_core::components::{Tilemap, Transform, UiNode};
+use classic_core::components::{IsoVehicle, Tilemap, Transform, UiNode};
 use classic_core::instrument::Chan;
 use classic_engine::env_config::EnvConfig;
 use classic_engine::Engine;
@@ -63,6 +63,43 @@ pub enum TestAction {
     /// guest frames its own view, and a followed entity moves).
     #[serde(rename = "camera")]
     Camera(CameraPin),
+    /// Spawn a grid of vehicles (stress and review scenes).
+    #[serde(rename = "spawnVehicles")]
+    SpawnVehicles(SpawnVehicles),
+}
+
+/// A `spawnVehicles` step: `count` copies of the vehicle def `vehicle` (a
+/// registered name, or the bare part of an `ns::name`) on a `cols`-wide grid
+/// from tile `origin`, `spacing` tiles apart, named `{prefix}{i}`.  Each
+/// starts at heading `i · heading_step_deg`; a nonzero `spin_deg_per_sec`
+/// turns them all in place every frame from then on.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SpawnVehicles {
+    pub vehicle: String,
+    pub count: u32,
+    pub origin: (f32, f32),
+    #[serde(default = "default_cols")]
+    pub cols: u32,
+    #[serde(default = "default_spacing")]
+    pub spacing: f32,
+    #[serde(default = "default_prefix")]
+    pub prefix: String,
+    #[serde(default)]
+    pub heading_step_deg: f32,
+    #[serde(default)]
+    pub spin_deg_per_sec: f32,
+}
+
+fn default_cols() -> u32 {
+    16
+}
+
+fn default_spacing() -> f32 {
+    3.0
+}
+
+fn default_prefix() -> String {
+    "stress".into()
 }
 
 /// A `camera` step: follow a named entity (`follow`) or hold an iso tile
@@ -146,6 +183,8 @@ struct TestRunner {
     frame_override: Option<(String, f32)>,
     /// The active `camera` pin and whether its target has resolved yet.
     camera: Option<(CameraPin, bool)>,
+    /// Vehicles a `spawnVehicles` step turns every frame, and the rate (rad/s).
+    spin: Option<(Vec<String>, f32)>,
 }
 
 /// Register the CLASSIC_TEST runner on the engine's test hook (no-op unless
@@ -251,6 +290,16 @@ fn run_frame(
     }
     if let Some((ref name, frame)) = runner.frame_override {
         engine.set_sprite_frame(name, frame);
+    }
+    if let Some((names, rate)) = runner.spin.as_ref() {
+        let dt = engine.time.delta;
+        for name in names {
+            if let Some(&e) = engine.names.get(name) {
+                if let Ok(mut v) = engine.world.get::<&mut IsoVehicle>(e) {
+                    v.heading += rate * dt;
+                }
+            }
+        }
     }
     // Re-apply the `camera` pin over the guest's own framing.
     if let Some((pin, found)) = runner.camera.as_mut() {
@@ -378,6 +427,19 @@ fn run_frame(
                 TestAction::SetSpriteFrame { name, frame } => {
                     runner.frame_override = Some((name.clone(), *frame));
                     engine.set_sprite_frame(name, *frame);
+                }
+                TestAction::SpawnVehicles(sv) => {
+                    let names = spawn_vehicles(engine, sv);
+                    classic_core::cl_info!(
+                        Chan::Test,
+                        "  [spawnVehicles] {} of {} '{}'",
+                        names.len(),
+                        sv.count,
+                        sv.vehicle
+                    );
+                    if sv.spin_deg_per_sec != 0.0 {
+                        runner.spin = Some((names, sv.spin_deg_per_sec.to_radians()));
+                    }
                 }
                 TestAction::Camera(pin) => {
                     let active = pin.follow.is_some() || pin.tile.is_some();
@@ -685,6 +747,42 @@ fn assert_ui_text_centered(engine: &Engine, state: &DemoStateRef, tolerance: f32
         }
     }
     true
+}
+
+/// Resolve a vehicle def name: exact, else the def whose bare (post-`::`)
+/// name matches.
+fn resolve_vehicle_def(engine: &Engine, name: &str) -> Option<String> {
+    if engine.vehicles.contains_key(name) {
+        return Some(name.to_string());
+    }
+    let mut keys: Vec<&String> = engine.vehicles.keys().collect();
+    keys.sort();
+    keys.into_iter().find(|k| k.rsplit("::").next() == Some(name)).cloned()
+}
+
+/// Run a `spawnVehicles` step; returns the names that spawned.
+fn spawn_vehicles(engine: &mut Engine, sv: &SpawnVehicles) -> Vec<String> {
+    let Some(def) = resolve_vehicle_def(engine, &sv.vehicle) else {
+        classic_core::cl_info!(Chan::Test, "  [spawnVehicles] no vehicle def '{}'", sv.vehicle);
+        return Vec::new();
+    };
+    let cols = sv.cols.max(1);
+    let mut names = Vec::new();
+    for i in 0..sv.count {
+        let (cx, cy) = ((i % cols) as f32, (i / cols) as f32);
+        let (x, y) = (sv.origin.0 + cx * sv.spacing, sv.origin.1 + cy * sv.spacing);
+        let name = format!("{}{i}", sv.prefix);
+        if !engine.spawn_vehicle(&def, &name, x, y) {
+            continue;
+        }
+        if let Some(&e) = engine.names.get(&name) {
+            if let Ok(mut v) = engine.world.get::<&mut IsoVehicle>(e) {
+                v.heading = (i as f32 * sv.heading_step_deg).to_radians();
+            }
+        }
+        names.push(name);
+    }
+    names
 }
 
 #[cfg(test)]

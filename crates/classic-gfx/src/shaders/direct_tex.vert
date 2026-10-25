@@ -3,20 +3,54 @@
 in vec4 vertex_pos;
 in vec2 tex_coord;
 
+#ifdef INSTANCED
+// Instanced iso sprites (`sprite_batch.rs`): the per-sprite uniforms of the
+// one-draw-per-sprite path arrive as per-instance attributes instead, and
+// the fragment values travel as flat varyings.  The maths below is the same
+// source as the uniform path (the names are macros), so the two paths
+// rasterise the same quad.
+in vec4 i_m0;
+in vec4 i_m1;
+in vec4 i_m2;
+in vec4 i_m3;
+in vec4 i_corners;
+in highp vec4 i_uv;
+in highp vec4 i_content;
+in vec4 i_tint;
+in highp vec4 i_misc;
+in highp vec4 i_outline;
+flat out highp vec4 vUvRect;
+flat out highp vec4 vContent;
+flat out vec4 vTint;
+flat out highp vec4 vMisc;
+flat out highp vec4 vOutline;
+#define model_matrix mat4(i_m0, i_m1, i_m2, i_m3)
+#define iso_depth_corners i_corners
+#define use_iso_depth 1.0
+#else
 uniform mat4 model_matrix;
+uniform float use_iso_depth;
+uniform vec4 iso_depth_corners;
+#endif
+
 uniform mat4 camera_matrix;
 uniform mat4 projection_matrix;
 // World metres -> camera view space (metres): `iso_camera_matrix`.
 uniform mat4 world_matrix;
 uniform float ppm;
-uniform float use_iso_depth;
-uniform vec4 iso_depth_corners;
 
 out highp vec2 vTexCoord;
 out highp vec3 vLightPos;
 
 void main(void ) {
     vTexCoord = tex_coord;
+#ifdef INSTANCED
+    vUvRect = i_uv;
+    vContent = i_content;
+    vTint = i_tint;
+    vMisc = i_misc;
+    vOutline = i_outline;
+#endif
     if (use_iso_depth > 0.5) {
         // Iso sprites are authored in Blender-world metres and share the
         // tilemap's world matrix, so sprites and terrain live in one screen

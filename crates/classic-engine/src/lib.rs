@@ -39,6 +39,7 @@ mod hooks;
 mod lifecycle;
 mod model;
 mod render;
+mod sprite_batches;
 
 pub use classic_core::fields;
 
