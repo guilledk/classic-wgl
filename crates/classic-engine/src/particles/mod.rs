@@ -677,6 +677,10 @@ impl Engine {
         }
         let tf = self.world.get::<&Transform>(pe).ok()?;
         if let Some(node) = node {
+            // On a vehicle parent the node names a socket.
+            if let Some((origin, basis)) = self.vehicle_socket_frame_of(pe, node) {
+                return Some((origin + basis * position, basis, basis * dir));
+            }
             if let Ok(m) = self.world.get::<&Model>(pe) {
                 if let Some(world) = self.model_node_world(&tf, &m, node) {
                     return Some(node_frame(world, position, dir));

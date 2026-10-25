@@ -648,12 +648,24 @@ lift clip frames from `vehicle_play`.  A layer with no anchors-artifact entry
 over 30° stops the vehicle and turns it in place.  Turret layers may set
 `pitch_pivot` (metres, turret frame) for sockets.
 
+**Sockets** (`vehicle/sockets.rs`, `Engine::vehicle_socket_frame`): a socket's
+world origin (metres, +Z up, the lights' and effects' space) and axes (`x`
+forward, `y` left, `z` up): its offset in the layer frame (a turret pitches
+it about `pitch_pivot` by the gun pitch), turned by the layer's composed yaw,
+placed at the layer's chassis position, tilted by the body pitch / roll and
+rotated by the heading.  A `Light` or `Emitter` with `parent: <vehicle>` and
+`node` (JSON alias `socket`) rides it, offset and direction in its frame
+(`attachment_frame`), so vehicle lamps cast real light.
+
 **ABI** (`abi_manifest`): `vehicle_aim(name, x, y)` (tile point; elevation to
 the terrain there), `vehicle_aim_angles(name, yaw_deg, pitch_deg)` (yaw
 relative to the hull), `vehicle_play(name, layer, clip, speed, repeat)`
 (`speed` multiplies fps, negative plays backward; `repeat` 0 loops, n holds
 the end frame; `fire` on a turret), `vehicle_layer_visible(name, layer,
-visible)`, `vehicle_layer_color(name, layer, r, g, b, a)`; all return 1 / 0.
+visible)`, `vehicle_layer_color(name, layer, r, g, b, a)`, `vehicle_team(name, r, g, b)`,
+`vehicle_emissive(name, strength)`, `vehicle_socket_pos(name, socket)`
+(`triple_opt`, world metres), `vehicle_socket_fx(name, socket, effect)` (one
+shot along the socket's forward axis); the rest return 1 / 0.
 
 ---
 

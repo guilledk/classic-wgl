@@ -1589,6 +1589,11 @@ fn guest_bench_imports_wired() {
 /// frames, and a crane tool with a clip.
 fn spawn_test_tank(engine: &mut Engine) {
     install_test_tilemap(engine);
+    let tm = engine.names["tilemap"];
+    engine
+        .world
+        .insert_one(tm, classic_core::components::Transform::new(Vec3::ZERO, Vec3::ONE))
+        .unwrap();
     let def: classic_core::types::VehicleDef = serde_json::from_value(serde_json::json!({
         "version": 2, "name": "tank", "directions": 16,
         "layers": [
@@ -1688,6 +1693,46 @@ fn guest_vehicle_team_and_emissive_reach_every_part() {
                 assert_eq!(s.emissive, Some(2.5), "{part}");
                 assert_eq!(s.color, [1.0; 4], "team is separate from color");
             }
+        },
+    );
+}
+
+#[test]
+fn guest_vehicle_socket_imports_wired() {
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_socket_pos" (func $sp (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "vehicle_socket_fx" (func $fx (param i32 i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "tank")
+            (data (i32.const 16) "lamp")
+            (data (i32.const 32) "spark")
+            (data (i32.const 48) "ok")
+            (func (export "update") (param f64)
+                (drop (call $fx (i32.const 0) (i32.const 4) (i32.const 16) (i32.const 4)
+                    (i32.const 32) (i32.const 5)))
+                (if (call $sp (i32.const 0) (i32.const 4) (i32.const 16) (i32.const 4) (i32.const 64))
+                    (then (drop (call $set (i32.const 48) (i32.const 2)
+                        (f64.load (i32.const 64)) (f64.load (i32.const 72))
+                        (f64.load (i32.const 80))))))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            spawn_test_tank(&mut engine);
+            let tank = engine.vehicles.get_mut("tank").unwrap();
+            tank.sockets.insert(
+                "lamp".into(),
+                classic_core::vehicle_def::SocketDef {
+                    layer: "hull".into(),
+                    offset: [1.0, 0.0, 0.5],
+                },
+            );
+            engine.spawn_named("ok");
+            rt.update(&mut engine, 0.016).unwrap();
+            let expect = engine.vehicle_socket_pos("tank", "lamp").expect("socket resolves");
+            let got = engine.get_pos("ok").expect("the guest wrote the socket position");
+            assert!((glam::Vec3::new(got.0, got.1, got.2) - expect).length() < 1e-4);
         },
     );
 }

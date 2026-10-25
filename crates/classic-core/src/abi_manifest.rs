@@ -114,6 +114,8 @@ macro_rules! for_each_host_import {
                 [native web worker];
             vehicle_team(name: str, r: f64, g: f64, b: f64) -> i32 [native web worker];
             vehicle_emissive(name: str, strength: f64) -> i32 [native web worker];
+            vehicle_socket_pos(name: str, socket: str) -> triple_opt [native web worker];
+            vehicle_socket_fx(name: str, socket: str, effect: str) -> i32 [native web worker];
 
             // ---- Selection + inventory -----------------------------------
             selected_names() -> json [native web worker];
@@ -971,9 +973,9 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 125);
-        assert_eq!(imports_for(Backend::Web).count(), 125);
-        assert_eq!(imports_for(Backend::Worker).count(), 125);
+        assert_eq!(imports_for(Backend::Native).count(), 127);
+        assert_eq!(imports_for(Backend::Web).count(), 127);
+        assert_eq!(imports_for(Backend::Worker).count(), 127);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
         assert_eq!(imports_for(Backend::Tier3Trap).count(), 28);
     }
