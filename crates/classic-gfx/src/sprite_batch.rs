@@ -85,7 +85,8 @@ pub struct IsoSpriteInstance {
     /// = `source_size`: the shader divides them exactly as the per-draw path
     /// does, so both sample the same texels).
     pub content: [f32; 4],
-    /// `tint.rgb, reserved`.
+    /// `tint.rgb, depth_scale` (window units per `gray − 0.5` of the depth
+    /// map: `1` legacy global, `2R / (near − far)` anchor-relative).
     pub tint: [f32; 4],
     /// `depth_base, ghost_group, selected (0/1), grid region (0/1)`.
     pub misc: [f32; 4],
@@ -103,6 +104,7 @@ impl IsoSpriteInstance {
         tex_size: (u32, u32),
         corners: &[f32; 4],
         depth_base: f32,
+        depth_scale: f32,
         ghost_group: u32,
         tint: &[f32; 3],
         selected: bool,
@@ -114,7 +116,7 @@ impl IsoSpriteInstance {
             corners: *corners,
             uv,
             content,
-            tint: [tint[0], tint[1], tint[2], 0.0],
+            tint: [tint[0], tint[1], tint[2], depth_scale],
             misc: [
                 depth_base,
                 ghost_group as f32,

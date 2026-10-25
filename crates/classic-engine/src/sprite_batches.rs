@@ -72,6 +72,7 @@ pub(crate) fn plan_sprite_frame(
             tex_size,
             &d.depth_corners,
             d.depth_base,
+            d.depth_scale,
             d.ghost_group,
             &[d.color[0], d.color[1], d.color[2]],
             d.selected,

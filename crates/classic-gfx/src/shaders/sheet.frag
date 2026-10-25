@@ -35,6 +35,7 @@ flat in vec4 vTint;
 flat in highp vec4 vMisc;
 flat in highp vec4 vOutline;
 #define depth_base vMisc.x
+#define depth_scale vTint.w
 #define selected vMisc.z
 #define tint vTint.rgb
 #define outline_delta vOutline.xy
@@ -59,6 +60,9 @@ uniform highp vec2 content_size;
 /// The sprite's ground-anchor window depth `[0, 1]` (see the `gl_FragDepth`
 /// re-anchor below).
 uniform float depth_base;
+// Window units per `gray − 0.5` of the depth map: 1 for a legacy global sheet,
+// `2R / (DEPTH_NEAR − DEPTH_FAR)` for an anchor-relative one.
+uniform float depth_scale;
 // Per-sprite tint (multiplied onto the albedo before the Lambertian term).
 // Defaults to (1,1,1) — a no-op for every existing asset.  Tintable sprites
 // ship a grayscale albedo and set this at runtime (see IsoSprite.color).
@@ -332,18 +336,17 @@ void main(void ) {
 
     color.rgb *= tint;
     if (use_depth_map > 0.5) {
-        // The depth sheet stores the camera view depth relative to the Blender
-        // bake origin (`gray ≈ 0.5` at the asset's ground anchor), so offset it
-        // by the sprite's absolute ground-anchor depth to land on its real map
-        // depth.  `depth_base` is the sprite's window-space anchor depth (the
-        // model translation re-projected through the camera).
-        //
-        // TODO(classic-assets): bake the depth sheet *relative to the ground
-        // anchor* (`0.5` at the anchor, no implicit Blender-origin offset), so
-        // this `- 0.5` is a clean relative-centering rather than an assumed
-        // origin shift.
+        // The depth sheet stores view depth relative to the frame's ground
+        // anchor (`gray = 0.5` at the anchor), so offset it by the sprite's
+        // absolute ground-anchor depth to land on its real map depth.
+        // `depth_base` is that anchor's window depth (the model translation
+        // re-projected through the camera); `depth_scale` turns `gray − 0.5`
+        // into window units: 1 for a legacy sheet baked over the whole window,
+        // `2R / (DEPTH_NEAR − DEPTH_FAR)` for a sheet v2 anchor-relative one
+        // over `±R` metres (`classic_core::vehicle_def`).
         gl_FragDepth = depth_base
-            + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5);
+            + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5)
+                * depth_scale;
     }
 #ifdef ID_PASS
     // The ghost-id pass (`Gfx::draw_ghost_id_batches`): the same coverage and

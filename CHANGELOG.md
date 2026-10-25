@@ -49,6 +49,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   (anchor-relative depth), `team_mask` (team weight in the normal
   sheet's alpha) and per-table `dir_interp`; v1 tables read and write
   unchanged.  Boot logs contract violations (#154).
+- Anchor-relative sprite depth (sheet v2): `gl_FragDepth = depth_base +
+  (gray - 0.5) * depth_scale`, where a `depth_mode: "anchor"` sheet over
+  `±R` m scales by `2R / (DEPTH_NEAR - DEPTH_FAR)` (legacy sheets keep
+  1), carried per instance.  Boot fills an anchor sheet's missing range
+  from its vehicle layer's (else the def's) `depth_range_m`, and v2
+  layer textures are namespace-qualified like v1 parts.  8-bit depth is
+  now ~2.4 cm a step at R = 3 m instead of ~1.7 m, which fixes the mule's
+  near rail sorting against its container.  A `spawnEntities` test
+  action loads hand-placed entities for review scenes (#156).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,

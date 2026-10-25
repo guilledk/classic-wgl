@@ -66,6 +66,10 @@ pub enum TestAction {
     /// Spawn a grid of vehicles (stress and review scenes).
     #[serde(rename = "spawnVehicles")]
     SpawnVehicles(SpawnVehicles),
+    /// Load extra entities: a `state.json`-shaped `{"entities": {...}}`
+    /// object (review scenes: static sprites placed by hand).
+    #[serde(rename = "spawnEntities")]
+    SpawnEntities(serde_json::Value),
 }
 
 /// A `spawnVehicles` step: `count` copies of the vehicle def `vehicle` (a
@@ -427,6 +431,11 @@ fn run_frame(
                 TestAction::SetSpriteFrame { name, frame } => {
                     runner.frame_override = Some((name.clone(), *frame));
                     engine.set_sprite_frame(name, *frame);
+                }
+                TestAction::SpawnEntities(state) => {
+                    if let Err(e) = engine.load_state(&state.to_string()) {
+                        classic_core::cl_info!(Chan::Test, "  [spawnEntities] {e}");
+                    }
                 }
                 TestAction::SpawnVehicles(sv) => {
                     let names = spawn_vehicles(engine, sv);

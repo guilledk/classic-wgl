@@ -243,13 +243,16 @@ per-fragment `gl_Position.z`; when the sprite has a depth map the fragment
 shader (`sheet.frag`) instead writes `gl_FragDepth` from the grayscale map:
 
 ```glsl
-gl_FragDepth = depth_base + (gray - 0.5);
+gl_FragDepth = depth_base + (gray - 0.5) * depth_scale;
 ```
 
 `depth_base` is the sprite's window-space anchor depth (its ground anchor
 re-projected through the camera), so the depth map and terrain share one
-consistent view-depth space.  The `gray − 0.5` re-anchors the origin-relative
-bake (see `classic-iso` §14).
+consistent view-depth space.  `depth_scale` is the frame's sheet scale
+(`ResolvedFrame::depth_scale`, per-instance `tint.w`): 1 for a legacy sheet
+baked over the whole window, `2R / (DEPTH_NEAR − DEPTH_FAR)` for a sheet v2
+anchor-relative one over `±R` m (below).  The one-sprite `draw_iso_sprite`
+pins it to 1.
 
 When `normal_map` is `Some(name)`, the sprite is shaded with a runtime
 Lambertian term in `sheet.frag` (matching `iso_tilemap.frag`): the normal map
@@ -296,8 +299,10 @@ table reads and writes byte-identically:
   per-instance engine state.
 
 `FrameTable::validate` checks these; boot logs violations (`cl_warn`) and
-still loads the table.  Until the engine side lands, every sheet renders as
-legacy global depth with no team mask or interpolation.
+still loads the table.  Anchor-relative depth is live: `resolve_frame` reads
+the sheet's scale, and at boot `fill_anchor_depth_ranges` gives an anchor
+sheet with no range of its own the vehicle layer's (else the def's)
+`depth_range_m`.  Team mask and interpolation are not wired yet.
 
 Two **separate** passes (driven by two engine loops, all normals then all
 ghosts):

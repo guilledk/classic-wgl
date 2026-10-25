@@ -400,10 +400,14 @@ impl Engine {
                     for part in def.parts.iter_mut().chain(def.tires.iter_mut()) {
                         part.texture = self.entity_key(&part.texture);
                     }
+                    for layer in &mut def.layers {
+                        layer.texture = self.entity_key(&layer.texture);
+                    }
                     // The anchors data-artifact name is namespace-qualified the
                     // same way `vehicle_anchors` keys are, so `spawn_vehicle`
                     // resolves the right artifact under the ROM's namespace.
                     def.anchors = self.entity_key(&def.anchors);
+                    Self::fill_anchor_depth_ranges(&mut self.frame_tables, &def);
                     self.vehicles.insert(self.entity_key(name), def);
                 }
                 Err(e) => {
@@ -1704,4 +1708,27 @@ fn encode_f32(vals: &[f32]) -> Vec<u8> {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out
+}
+
+impl Engine {
+    /// Give the anchor-relative depth sheets of a vehicle's layer textures
+    /// that carry no `depth_range_m` of their own the layer's (else the
+    /// def's) range (sheet v2: the sheet's range wins, the layer's / def's is
+    /// the fallback).  Frame tables load before vehicle defs.
+    pub(crate) fn fill_anchor_depth_ranges(
+        tables: &mut HashMap<String, FrameTable>,
+        def: &classic_core::types::VehicleDef,
+    ) {
+        for layer in def.effective_layers() {
+            let Some(range) = layer.depth_range_m.or(def.depth_range_m) else { continue };
+            let Some(table) = tables.get_mut(&layer.texture) else { continue };
+            for sheet in &mut table.sheets {
+                if sheet.depth_mode == classic_core::types::DepthMode::Anchor
+                    && sheet.depth_range_m <= 0.0
+                {
+                    sheet.depth_range_m = range;
+                }
+            }
+        }
+    }
 }
