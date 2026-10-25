@@ -580,6 +580,55 @@ drives backward along `heading` while the tires steer into the same turn; the
 tire anchor is steer-invariant (the yaw is about the axle's vertical axis), so
 the tire reuses the wheel's ground-origin anchor.
 
+### Vehicle definition v2 (the content contract)
+
+`classic_core::vehicle_def` (rustdoc is the reference; tests in
+`classic-core/tests/vehicle_def.rs`) defines the layered unit format the
+content pipeline emits.  A v1 def (8 directions, exactly 5 `parts`, optional
+steering `tires`) keeps loading unchanged; `VehicleDef::effective_layers`
+maps it onto layers (`legacy_layers`) without changing a single frame index.
+`VehicleDef::validate` checks either version; boot logs a `cl_warn` naming
+every violation and still loads the def.
+
+- **Top level** (all serde-defaulted, none serialized when default):
+  `version` (1 | 2), `directions` (8 | 16 | 24, `SUPPORTED_DIRECTIONS`),
+  `px_per_m` (0 = `PPM_TARGET`), `layers[]`, `sockets{}`, `ghost_group`
+  (`"instance"` default: one stencil group per spawned vehicle, shared by
+  all its layers; `"none"`: group 0), `depth_range_m` (fallback for
+  anchor-relative sheets), `pivot_turn` (tracks turn in place).  A v2 def
+  uses `layers`, never `parts`/`tires`.
+- **Direction `k`** = tile-space heading `k · 2π / N` (`atan2(dy, dx)`, 0 =
+  East, toward +y = South): the v1 order, generalized (`heading_to_dir_n`,
+  `heading_neighbours`).
+- **Layer** (`VehicleLayerDef`): `name` (unique; keys the anchors artifact's
+  `parts` map and sockets), `kind`, `texture`, optional own `directions`,
+  `parent` (default: the hull), `offset` (metres in the parent's frame: x
+  forward, y left, z up; absent = derive from anchors like v1), `ghost`
+  (draws a ghost pass, default true), `visible` (default true),
+  `depth_range_m`.  Axes by kind (`LayerKind::allows`):
+
+  | kind | axes | extra keys |
+  |---|---|---|
+  | `hull` (exactly one) | dir × pitch × roll | |
+  | `wheel` | dir × spin (× steer) | `spin_frames`, `radius_m` |
+  | `gear_side` | dir × spin | `side` (`left`/`right`), `spin_frames`, `radius_m` |
+  | `turret` | own dir × pitch (gun) × fire | `fire_frames` (frame 0 idle), `yaw_rate_deg_per_sec` |
+  | `tool` / `legs` / `cargo` / `lift` | dir × clip | `clips{name: {start, frames, fps=12}}` |
+
+  `pitch`/`roll`/`steer` are `AngleAxis {levels, max_deg, min_deg = -max}`,
+  index 0 at `min_deg`; signs as v1 (nose-up, left-up, turn-left positive).
+- **Frame index** — frames are `{texture}_{index}`, `index` mixed radix over
+  `FrameAxis::ORDER`, minor to major: **dir, spin, fire, roll, steer, pitch,
+  clip** (an absent axis has count 1).  This reproduces v1 exactly: body
+  `(pitch · roll_levels + roll) · dirs + dir`, tire `steer · dirs + dir`.
+  `VehicleLayerDef::frame_index` / `frame_count` are the reference.
+- **Sockets** `{name: {layer, offset[3]}}`: metres in the layer's frame,
+  origin at its ground anchor; a hull socket turns with heading, pitch and
+  roll, a turret socket with turret yaw then gun pitch.
+
+Until the layer runtime lands, `spawn_vehicle` still spawns only v1 defs (a
+v2 def loads and validates but does not spawn).
+
 ---
 
 ## 8b. 3D models (`Model`)

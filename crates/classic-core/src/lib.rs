@@ -16,6 +16,7 @@ pub mod sdf_builder;
 pub mod terrain;
 pub mod tilemap;
 pub mod types;
+pub mod vehicle_def;
 
 pub mod gjk;
 pub mod quadtree;

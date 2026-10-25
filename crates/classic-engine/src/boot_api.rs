@@ -351,6 +351,13 @@ impl Engine {
         for (name, bytes) in resources.frames() {
             match serde_json::from_slice::<FrameTable>(bytes) {
                 Ok(mut table) => {
+                    if let Err(errs) = table.validate(None) {
+                        classic_core::cl_warn!(
+                            Chan::Guest,
+                            "frame table '{name}': {}",
+                            errs.join("; ")
+                        );
+                    }
                     for sheet in &mut table.sheets {
                         sheet.name = self.entity_key(&sheet.name);
                     }
@@ -381,6 +388,15 @@ impl Engine {
         for (name, bytes) in resources.vehicles() {
             match serde_json::from_slice::<classic_core::types::VehicleDef>(bytes) {
                 Ok(mut def) => {
+                    // A def that breaks its version's contract still loads (the
+                    // spawn path decides what it can use); the log names why.
+                    if let Err(errs) = def.validate() {
+                        classic_core::cl_warn!(
+                            Chan::Guest,
+                            "vehicle '{name}': {}",
+                            errs.join("; ")
+                        );
+                    }
                     for part in def.parts.iter_mut().chain(def.tires.iter_mut()) {
                         part.texture = self.entity_key(&part.texture);
                     }

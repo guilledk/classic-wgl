@@ -270,6 +270,32 @@ classic-roms) and binds them per-frame, falling back to the per-texture
 `depth_map`/`normal_map` args remain `Option<(&str, f32)>` / `Option<&str>`
 resolved GL texture names.
 
+**Sheet format v2 (`frames.json` version 2, `classic_core::vehicle_def`).**
+New keys, all defaulted and omitted from serialization when default, so a v1
+table reads and writes byte-identically:
+
+- per sheet `depth_mode`: `"global"` (default, legacy: `gray − 0.5` is a
+  window offset over the whole `DEPTH_NEAR..DEPTH_FAR` window, ~1.7 m per
+  8-bit step) or `"anchor"` with `depth_range_m: R`: `(gray − 0.5) · 2R`
+  metres of view depth from the frame's ground anchor, positive = farther
+  (`anchor_depth_offset_m` / `anchor_depth_gray`; ±3 m recommended, 2.4 cm a
+  step).  The fragment depth is `depth_base + (gray − 0.5) · depth_scale`,
+  `depth_scale = 1` (global) or `2R / (DEPTH_NEAR − DEPTH_FAR)`
+  (`SpriteSheetEntry::depth_scale`).  The sheet's range wins over the
+  layer's / def's `depth_range_m` fallback.
+- per sheet `team_mask: true`: the normal companion's alpha is the team
+  mask, weight `clamp((1 − a) · 2, 0, 1)` (`team_mask_weight`; `a = 1` none,
+  `a <= 0.5` full), never alpha 0 so RGB survives encoders.
+- per table `dir_interp: true`: opt into direction interpolation; needs an
+  anchor-relative depth companion on every sheet, and the bake must yaw the
+  unit about its ground anchor's vertical axis.
+- Emissive stays the `(0.5, 0.5, 0.5)` marker normal; strength is
+  per-instance engine state.
+
+`FrameTable::validate` checks these; boot logs violations (`cl_warn`) and
+still loads the table.  Until the engine side lands, every sheet renders as
+legacy global depth with no team mask or interpolation.
+
 Two **separate** passes (driven by two engine loops, all normals then all
 ghosts):
 
