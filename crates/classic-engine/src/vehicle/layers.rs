@@ -236,6 +236,8 @@ impl Engine {
                 color: [1.0; 4],
                 dir_blend: None,
                 no_ghost: !l.ghost,
+                team_tint: None,
+                emissive: None,
             };
             if i == hull_index {
                 body_sprite = Some(sprite);
@@ -572,5 +574,47 @@ impl Engine {
         let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) else { return false };
         v.layers[i].color = rgba;
         true
+    }
+}
+
+impl Engine {
+    /// Every sprite entity of a vehicle: the body, its v1 wheels and tires,
+    /// and its v2 layers.
+    pub fn vehicle_part_entities(&self, name: &str) -> Vec<hecs::Entity> {
+        let Some(&ve) = self.names.get(name) else { return Vec::new() };
+        let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return Vec::new() };
+        let mut out = vec![ve];
+        let names = v.wheel_entities.iter().chain(v.tire_entities.iter());
+        for n in names.chain(v.layers.iter().map(|s| &s.entity)) {
+            if let Some(&e) = self.names.get(n) {
+                if !out.contains(&e) {
+                    out.push(e);
+                }
+            }
+        }
+        out
+    }
+
+    /// Set a vehicle's team colour: every part whose sheet carries a team
+    /// mask multiplies its masked texels by `rgb` (separate from `color`).
+    pub fn vehicle_team(&mut self, name: &str, rgb: [f32; 3]) -> bool {
+        self.for_vehicle_sprites(name, |s| s.team_tint = Some(rgb))
+    }
+
+    /// Set a vehicle's emissive strength: the marker-normal (unlit) pixels
+    /// scale by it; above 1 they brighten into the bloom pass.
+    pub fn vehicle_emissive(&mut self, name: &str, strength: f32) -> bool {
+        let strength = if strength.is_finite() { strength.max(0.0) } else { 1.0 };
+        self.for_vehicle_sprites(name, |s| s.emissive = Some(strength))
+    }
+
+    fn for_vehicle_sprites(&mut self, name: &str, mut f: impl FnMut(&mut IsoSprite)) -> bool {
+        let parts = self.vehicle_part_entities(name);
+        for e in &parts {
+            if let Ok(mut s) = self.world.get::<&mut IsoSprite>(*e) {
+                f(&mut s);
+            }
+        }
+        !parts.is_empty()
     }
 }

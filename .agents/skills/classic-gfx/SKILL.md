@@ -302,7 +302,7 @@ table reads and writes byte-identically:
 still loads the table.  Anchor-relative depth is live: `resolve_frame` reads
 the sheet's scale, and at boot `fill_anchor_depth_ranges` gives an anchor
 sheet with no range of its own the vehicle layer's (else the def's)
-`depth_range_m`.  Interpolation: §5c.  The team mask is not wired yet.
+`depth_range_m`.  Interpolation: §5c.  Team mask and emissive strength: below.
 
 Two **separate** passes (driven by two engine loops, all normals then all
 ghosts):
@@ -365,6 +365,21 @@ as the one-sprite reference the instanced path mirrors.
   lrvtest, buildtest bit-identical under llvmpipe; a few dozen pixels in
   lunar / lighttest).  Perf counters: `sprite_instances`,
   `sprite_batches`, `sprite_draws`.
+
+## 5b2. Team colour and emissive strength (instanced sprites)
+
+- `IsoSprite.team_tint: Option<[f32; 3]>`: when the frame's sheet has
+  `team_mask`, the albedo is multiplied by `mix(1, team_tint, w)` with `w =
+  clamp((1 − a) · 2, 0, 1)` of the normal sheet's alpha (pinned to
+  `team_mask_weight` by `sheet_team_weight_matches_the_contract`), before
+  lighting and separately from `color`.  Interpolated sprites carry the
+  alpha with the chosen texel.
+- `IsoSprite.emissive: Option<f32>` (default 1): the marker-normal (unlit)
+  pixels are multiplied by it; any drawn sprite above 1 turns the bloom pass
+  on (RGBA8: they saturate toward white and cross the bright-pass).
+- Instance: `team = rgb, emissive` (the 14th `vec4`, 16 attributes total),
+  flag 4 in `misc.z` = team on.  ABI: `vehicle_team(name, r, g, b)`,
+  `vehicle_emissive(name, strength)` (every part of the vehicle).
 
 ## 5c. Direction interpolation (`sheet.frag#INTERP`)
 

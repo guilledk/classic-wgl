@@ -361,6 +361,14 @@ pub struct IsoSprite {
     /// Skip the ghost pass (a vehicle layer with `ghost: false`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_ghost: bool,
+    /// Team colour (sheet v2 `team_mask`): multiplies the albedo by the team
+    /// mask weight in the normal sheet's alpha, separately from `color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_tint: Option<[f32; 3]>,
+    /// Emissive strength: scales the marker-normal (unlit) pixels; `None` = 1
+    /// (today's look), above 1 they brighten into the bloom pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive: Option<f32>,
 }
 
 /// The second baked direction of a direction-interpolated [`IsoSprite`]

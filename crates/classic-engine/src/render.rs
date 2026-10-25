@@ -377,6 +377,7 @@ impl Engine {
             depth_scale: sheet.depth_scale(None),
             anchor_depth: sheet.anchor_depth_range(None).is_some(),
             dir_interp: table.dir_interp,
+            team_mask: sheet.team_mask,
         })
     }
 

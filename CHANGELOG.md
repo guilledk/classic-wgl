@@ -85,6 +85,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   pass.  New ABI rows `vehicle_aim`, `vehicle_aim_angles`,
   `vehicle_play`, `vehicle_layer_visible`, `vehicle_layer_color`; the
   contract gains turret `pitch_pivot` (#159).
+- Sprite team colour and emissive strength.  `IsoSprite.team_tint`
+  multiplies the team-masked texels of a `team_mask` sheet (weight
+  `clamp((1 - a) · 2, 0, 1)` of the normal alpha), separately from
+  `color`; `IsoSprite.emissive` scales the marker-normal pixels, and a
+  sprite above 1 turns bloom on.  ABI rows `vehicle_team` and
+  `vehicle_emissive` (every part of a vehicle); `spawnVehicles` takes
+  `team` / `emissive` (#160).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
