@@ -664,6 +664,7 @@ impl Engine {
                 uv,
                 depth_corners,
                 depth_base,
+                depth_scale: frame_ref.as_ref().map_or(1.0, |fr| fr.depth_scale),
                 depth_map,
                 normal_map,
                 ghost_group: iso_sprite.ghost_group,

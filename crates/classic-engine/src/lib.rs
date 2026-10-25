@@ -39,6 +39,8 @@ mod hooks;
 mod lifecycle;
 mod model;
 mod render;
+#[cfg(test)]
+mod render_tests;
 mod sprite_batches;
 
 pub use classic_core::fields;
@@ -120,6 +122,8 @@ struct IsoDraw {
     /// The sprite's ground-anchor window depth `[0, 1]` (the depth-map gray is
     /// baked origin-relative, so the fragment offsets it by this anchor depth).
     depth_base: f32,
+    /// Window units per `(gray − 0.5)` of the depth map (`ResolvedFrame::depth_scale`).
+    depth_scale: f32,
     depth_map: Option<String>,
     normal_map: Option<String>,
     ghost_group: u32,
@@ -170,6 +174,10 @@ pub(crate) struct ResolvedFrame {
     /// Per-sheet depth-map GL texture name, set when the frame's sheet declares
     /// a `depth` companion (stores camera view depth directly).
     pub(crate) depth_tex: Option<String>,
+    /// Window units per `(gray − 0.5)` of the depth companion (`1` for a
+    /// legacy global sheet, `2R / (DEPTH_NEAR − DEPTH_FAR)` for an
+    /// anchor-relative one; `SpriteSheetEntry::depth_scale`).
+    pub(crate) depth_scale: f32,
 }
 
 /// The namespace-resolvable resource categories, mirroring the guest SDK's
@@ -520,6 +528,7 @@ mod tests {
             anchor: None,
             normal_tex: None,
             depth_tex: None,
+            depth_scale: 1.0,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &full);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");
@@ -535,6 +544,7 @@ mod tests {
             anchor: None,
             normal_tex: None,
             depth_tex: None,
+            depth_scale: 1.0,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &trimmed);
         assert!((a.x - (0.5 * 512.0 - 8.0) / 466.0).abs() < 1e-6, "got {a:?}");
@@ -550,6 +560,7 @@ mod tests {
             anchor: Some([0.25, 0.75]),
             normal_tex: None,
             depth_tex: None,
+            depth_scale: 1.0,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &packed);
         assert!((a.x - 0.25).abs() < 1e-6 && (a.y - 0.75).abs() < 1e-6, "got {a:?}");
@@ -564,6 +575,7 @@ mod tests {
             anchor: None,
             normal_tex: None,
             depth_tex: None,
+            depth_scale: 1.0,
         };
         let a = Engine::effective_anchor(Vec2::new(0.5, 0.5), &unknown);
         assert!((a.x - 0.5).abs() < 1e-6 && (a.y - 0.5).abs() < 1e-6, "got {a:?}");

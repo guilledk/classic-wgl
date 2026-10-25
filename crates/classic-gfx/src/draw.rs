@@ -340,6 +340,8 @@ impl Gfx {
         s.uniform_1f(gl, "use_iso_depth", 1.0);
         s.uniform_vec4(gl, "iso_depth_corners", iso_depth_corners);
         s.uniform_1f(gl, "depth_base", depth_base);
+        // The one-sprite path draws legacy (global-window) depth maps only.
+        s.uniform_1f(gl, "depth_scale", 1.0);
         s.uniform_1f(gl, "ghost_alpha", ghost_alpha);
         s.uniform_1f(gl, "selected", if selected { 1.0 } else { 0.0 });
         s.uniform_vec3(gl, "selection_color", Vec3::from_array(*selection_color));

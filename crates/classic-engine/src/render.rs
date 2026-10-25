@@ -374,6 +374,7 @@ impl Engine {
             anchor: frame.anchor,
             normal_tex,
             depth_tex,
+            depth_scale: sheet.depth_scale(None),
         })
     }
 
