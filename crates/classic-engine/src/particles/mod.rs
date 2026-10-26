@@ -371,6 +371,22 @@ impl ParticleSystem {
 
     /// Start a one-shot instance of `effect` at a world position.
     pub fn emit(&mut self, effect: &str, pos: Vec3, dir: Vec3, scale: f32, tint: [f32; 3]) -> bool {
+        let dir = dir.try_normalize().unwrap_or(Vec3::Z);
+        self.emit_framed(effect, pos, Mat3::IDENTITY, dir, scale, tint)
+    }
+
+    /// Fire a one-shot effect in a frame: `basis` orients everything the
+    /// effect authors in its local frame (ribbon `end`, light `offset`, spawn
+    /// shapes) and `dir` is the emission axis (velocity cones).
+    pub fn emit_framed(
+        &mut self,
+        effect: &str,
+        pos: Vec3,
+        basis: Mat3,
+        dir: Vec3,
+        scale: f32,
+        tint: [f32; 3],
+    ) -> bool {
         let Some(fx) = self.resolve(effect) else {
             classic_core::cl_warn!(
                 classic_core::instrument::Chan::Render,
@@ -382,7 +398,7 @@ impl ParticleSystem {
         self.next_seq += 1;
         let frame = SpawnFrame {
             pos,
-            basis: Mat3::IDENTITY,
+            basis,
             dir: dir.try_normalize().unwrap_or(Vec3::Z),
             vel: Vec3::ZERO,
             scale,
@@ -640,6 +656,15 @@ impl Engine {
     /// `dir`.  Returns `false` when the effect is unknown.
     pub fn fx_emit(&mut self, effect: &str, pos: Vec3, dir: Vec3, scale: f32) -> bool {
         self.fx_emit_tinted(effect, pos, dir, scale, [1.0; 3])
+    }
+
+    /// Fire a one-shot effect oriented by a full frame: `basis` columns are
+    /// the effect's local `x` (forward), `y`, `z` in world space, so
+    /// ribbon ends, light offsets and spawn shapes rotate with it and
+    /// particles emit along `basis.x_axis`.  [`Engine::fx_emit`] keeps the
+    /// world-axis frame.
+    pub fn fx_emit_oriented(&mut self, effect: &str, pos: Vec3, basis: Mat3, scale: f32) -> bool {
+        self.particles.emit_framed(effect, pos, basis, basis.x_axis, scale, [1.0; 3])
     }
 
     fn fx_emit_tinted(

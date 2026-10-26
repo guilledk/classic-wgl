@@ -1167,7 +1167,9 @@ form.  No transform feedback, no per-frame CPU simulation.
   (`frame` = live count), one `Ribbons` item, one `Bloom` item.
 - **Data**: effect libraries are `{"effects": [...]}` `data[]` artifacts
   (`classic_core::effects`), registered under the ROM namespace; an
-  `Emitter` component (or `Engine::fx_emit`) instantiates one, driven by
+  `Emitter` component (or `Engine::fx_emit`, world-axis frame; or
+  `Engine::fx_emit_oriented`, a full `Mat3` frame whose `+x` is the effect's
+  forward, used by `vehicle_socket_fx`) instantiates one, driven by
   `emitter.*` animation channels (`rate`, `speed`, `scale`, `color`,
   `intensity`, cumulative `burst`, `enabled`, `position`, `dir`).  Guests
   reach the same system through `fx_emit` and the handle-based
