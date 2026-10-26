@@ -90,8 +90,16 @@ impl Engine {
         }
         let (_, anchor_a_px, _) = packed_geometry(fa, sprite.anchor);
         let (_, anchor_b_px, _) = packed_geometry(&fb, blend.anchor_b);
-        let ra = content_rect(fa, anchor_a_px);
-        let rb = content_rect(&fb, anchor_b_px);
+        let mut ra = content_rect(fa, anchor_a_px);
+        let mut rb = content_rect(&fb, anchor_b_px);
+        // A tilt residual moves texels well outside their own content rect
+        // (a pure yaw keeps them within the union + margin): bound the quad by
+        // each neighbour's rect, over its depth range, through its full
+        // rotation.  Untilted blends keep the plain union.
+        if blend.tilt != [0.0; 3] {
+            ra = warped_rect(ra, -blend.dtheta_a, blend.tilt, fa.depth_scale);
+            rb = warped_rect(rb, -blend.dtheta_b, blend.tilt, fb.depth_scale);
+        }
         let m = BLEND_QUAD_MARGIN_PX;
         let x0 = (ra[0].min(rb[0]) - m).floor();
         let y0 = (ra[1].min(rb[1]) - m).floor();
@@ -118,5 +126,68 @@ impl Engine {
             },
             nearest_b: b_nearer.then_some((fb, blend.anchor_b)),
         })
+    }
+}
+
+/// The pixel bounds (from the anchor, y down) of `rect`'s texels after the
+/// warp `R = Q · Rz(phi)` (`sheet.frag` `residual()`): every texel lies in
+/// `rect × [−range, range]` metres of anchor depth, so its 8 corners,
+/// unprojected, rotated and reprojected, bound it.  `depth_scale` is the
+/// sheet's window units per `gray − 0.5` (the shader's `rangeM` source).
+pub(crate) fn warped_rect(rect: [f32; 4], phi: f32, tilt: [f32; 3], depth_scale: f32) -> [f32; 4] {
+    use classic_core::math::{iso_basis, DEPTH_FAR, DEPTH_NEAR};
+    use classic_core::tilemap::PPM_TARGET;
+    let (r, u, b) = iso_basis();
+    let range = depth_scale * (DEPTH_NEAR - DEPTH_FAR) * 0.5;
+    let t = glam::Vec3::from(tilt);
+    let w = (1.0 - t.length_squared()).max(0.0).sqrt();
+    let rot = glam::Quat::from_xyzw(t.x, t.y, t.z, w) * glam::Quat::from_rotation_z(phi);
+    let mut out = rect;
+    for x in [rect[0], rect[2]] {
+        for y in [rect[1], rect[3]] {
+            for d in [-range, range] {
+                let p = rot * ((r * x - u * y) / PPM_TARGET - b * d);
+                let (qx, qy) = (p.dot(r) * PPM_TARGET, -p.dot(u) * PPM_TARGET);
+                out = [out[0].min(qx), out[1].min(qy), out[2].max(qx), out[3].max(qy)];
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::warped_rect;
+    use classic_core::math::{iso_basis, DEPTH_FAR, DEPTH_NEAR};
+    use classic_core::tilemap::PPM_TARGET;
+
+    #[test]
+    fn warped_rect_bounds_every_rotated_texel() {
+        let rect = [-120.0, -260.0, 110.0, 40.0];
+        let range = 3.2f32;
+        let scale = 2.0 * range / (DEPTH_NEAR - DEPTH_FAR);
+        let tilt = classic_core::vehicle_def::tilt_residual(0.4, 0.17, -0.12, 0.35, 0.0);
+        let phi = -0.2f32;
+        let out = warped_rect(rect, phi, tilt, scale);
+        assert!(out[0] <= rect[0] && out[1] <= rect[1] && out[2] >= rect[2] && out[3] >= rect[3]);
+        // Sample texels inside rect × depth range: each lands inside `out`.
+        let (r, u, b) = iso_basis();
+        let t = glam::Vec3::from(tilt);
+        let q = glam::Quat::from_xyzw(t.x, t.y, t.z, (1.0 - t.length_squared()).sqrt())
+            * glam::Quat::from_rotation_z(phi);
+        for i in 0..=10 {
+            for j in 0..=10 {
+                for d in [-range, 0.0, range] {
+                    let x = rect[0] + (rect[2] - rect[0]) * i as f32 / 10.0;
+                    let y = rect[1] + (rect[3] - rect[1]) * j as f32 / 10.0;
+                    let p = q * ((r * x - u * y) / PPM_TARGET - b * d);
+                    let (px, py) = (p.dot(r) * PPM_TARGET, -p.dot(u) * PPM_TARGET);
+                    assert!(px >= out[0] - 1e-3 && px <= out[2] + 1e-3, "{px} {out:?}");
+                    assert!(py >= out[1] - 1e-3 && py <= out[3] + 1e-3, "{py} {out:?}");
+                }
+            }
+        }
+        // A tilt widens the bound beyond the source rect.
+        assert!(out[1] < rect[1] - 1.0 || out[3] > rect[3] + 1.0);
     }
 }
