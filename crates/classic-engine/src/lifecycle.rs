@@ -1149,6 +1149,7 @@ impl Engine {
         let world_matrix = iso_camera_matrix();
         if !iso_draws.is_empty() {
             gfx.upload_sprite_instances(&sprite_frame.instances);
+            gfx.upload_blend_thirds(&sprite_frame.thirds);
             // The ghost groups: each instance writes its group id where it
             // passes the normal pass's depth test, for the ghost pass to read.
             // Without the depth blit, re-plan with the groups in the stencil.
@@ -1166,6 +1167,7 @@ impl Engine {
                     sprite_frame =
                         crate::sprite_batches::plan_sprite_frame(&iso_draws, gfx, &cam, true);
                     gfx.upload_sprite_instances(&sprite_frame.instances);
+                    gfx.upload_blend_thirds(&sprite_frame.thirds);
                 }
             }
             classic_gfx::perf::phase("sprites");

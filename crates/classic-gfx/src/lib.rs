@@ -28,8 +28,9 @@ pub use shadow::ShadowModels;
 mod sprite_batch;
 pub use sprite_batch::{
     outline_delta, plan_batches, plan_shadow_batches, region_uv, BlendTextures, DirBlendRegion,
-    GhostIdTarget, IsoSpriteInstance, PlannedBatch, ScreenRect, SpriteBatch, BLEND_UNITS,
-    GHOST_ALPHA, GHOST_ID_UNIT, PLAN_LOOKBACK, SPRITE_INSTANCE_ATTRS, SPRITE_INSTANCE_BYTES,
+    GhostIdTarget, IsoSpriteInstance, PlannedBatch, ScreenRect, SpriteBatch, ThirdRegion,
+    BLEND_THIRD_UNIT, BLEND_UNITS, GHOST_ALPHA, GHOST_ID_UNIT, PLAN_LOOKBACK,
+    SPRITE_INSTANCE_ATTRS, SPRITE_INSTANCE_BYTES,
 };
 mod texture;
 

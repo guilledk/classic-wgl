@@ -549,3 +549,39 @@ fn pick_tilt_snaps_or_warps_within_the_baked_range() {
     let n = pick_tilt(ax, ax, 0.0, f32::NAN, 0.0, true);
     assert_eq!(n.drawn.0, 0.0, "a non-finite tilt draws level");
 }
+
+#[test]
+fn third_tilt_steps_toward_a_far_drawn_tilt() {
+    use classic_core::vehicle_def::{pick_tilt, third_tilt, tilt_residual};
+    let deg = std::f32::consts::PI / 180.0;
+    let ax = Some(AngleAxis::symmetric(3, 20.0));
+    let third = |pa: Option<AngleAxis>, ra: Option<AngleAxis>, p: f32, r: f32| {
+        let pick = pick_tilt(pa, ra, 0.7, p * deg, r * deg, true);
+        third_tilt(pa, ra, 0.7, &pick).map(|t| {
+            // The residual takes the third level to the same drawn tilt.
+            let angle = |a: Option<AngleAxis>, i: u32| a.map_or(0.0, |a| a.angle(i));
+            let want = tilt_residual(
+                0.7,
+                pick.drawn.0,
+                pick.drawn.1,
+                angle(pa, t.pitch),
+                angle(ra, t.roll),
+            );
+            assert_eq!(t.residual, want);
+            (t.pitch, t.roll)
+        })
+    };
+    // 3 levels over ±20°: a 20° step, large past 5°.
+    assert_eq!(third(ax, ax, 4.0, -3.0), None, "both residuals small");
+    assert_eq!(third(ax, ax, 8.0, 0.0), Some((2, 1)), "pitch up one level");
+    assert_eq!(third(ax, ax, 8.0, -3.0), Some((2, 1)), "roll residual small: pitch only");
+    assert_eq!(third(ax, ax, 8.0, -7.0), Some((2, 0)), "both large: the diagonal");
+    assert_eq!(third(ax, ax, 3.0, 13.0), Some((1, 1)), "roll back down toward level");
+    assert_eq!(third(ax, ax, -20.0, 20.0), None, "exactly on a level");
+    // An axis the sheet lacks never steps; the baked axis still does.
+    assert_eq!(third(None, ax, 15.0, 8.0), Some((0, 2)));
+    assert_eq!(third(None, ax, 15.0, 2.0), None);
+    // Snapping draws the level itself: never a third source.
+    let snap = pick_tilt(ax, ax, 0.7, 8.0 * deg, -7.0 * deg, false);
+    assert_eq!(third_tilt(ax, ax, 0.7, &snap), None);
+}

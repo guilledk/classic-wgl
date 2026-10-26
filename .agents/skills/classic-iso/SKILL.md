@@ -734,6 +734,11 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
   - The drawn tilt clamps to the baked range; an axis the sheet lacks warps
     up to ±`TILT_WARP_MAX_DEG` (20°). The shadow card stays on the nearest
     frame.
+  - A residual past a quarter of its axis' step (5° at 3 levels over ±20°)
+    also sets `DirBlend.third`: the adjacent level's frame of the nearer yaw
+    neighbour (`vehicle_def::third_tilt`: the diagonal level when both
+    residuals pass, else the larger axis), with its own residual. The shader
+    searches it only on holes (`classic-gfx` §5c "Holes").
   - Prototype (toy unit + lunar container, 40 random poses): the full warp
     at **3 pitch × 3 roll** (±max, 0) scores 26.4–26.7 dB / IoU 0.92–0.95,
     against 17.7–18.1 dB / 0.88–0.91 for the snapped 5 × 3 it replaces.

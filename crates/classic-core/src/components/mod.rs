@@ -391,6 +391,26 @@ pub struct DirBlend {
     /// unless the sheet opts into `tilt_interp`.
     #[serde(default, skip_serializing_if = "is_zero3")]
     pub tilt: [f32; 3],
+    /// A third source for pixels neither neighbour covers at a large tilt
+    /// residual ([`third_tilt`](crate::vehicle_def::third_tilt)): the nearer
+    /// yaw neighbour's direction at an adjacent tilt level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub third: Option<DirThird>,
+}
+
+/// [`DirBlend::third`]: a frame of the nearer yaw neighbour's direction at
+/// an adjacent tilt level, warped by its own tilt residual and that
+/// neighbour's yaw.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DirThird {
+    /// Frame index (`{texture}_{frame}`).
+    pub frame: f32,
+    /// Its anchor, `[0..1]` of its source cell.
+    pub anchor: Vec2,
+    /// The residual quaternion `xyz` (`w >= 0`) from its tilt level.
+    pub tilt: [f32; 3],
+    /// Paired with direction B (else A): its yaw residual and textures.
+    pub from_b: bool,
 }
 
 fn is_zero3(v: &[f32; 3]) -> bool {
@@ -400,7 +420,7 @@ fn is_zero3(v: &[f32; 3]) -> bool {
 impl DirBlend {
     /// A pure-yaw blend (no tilt residual).
     pub fn yaw(frame_b: f32, anchor_b: Vec2, dtheta_a: f32, dtheta_b: f32) -> Self {
-        Self { frame_b, anchor_b, dtheta_a, dtheta_b, tilt: [0.0; 3] }
+        Self { frame_b, anchor_b, dtheta_a, dtheta_b, tilt: [0.0; 3], third: None }
     }
 }
 

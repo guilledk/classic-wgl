@@ -308,6 +308,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Fewer holes in the tilt warp.  A pixel neither direction neighbour
+  covers now tries a third source: at a large tilt residual (past a
+  quarter of a level step) the adjacent tilt level's frame of the nearer
+  yaw neighbour, warped by its own residual (`vehicle_def::third_tilt`,
+  `DirBlend.third`, a per-frame `blend_thirds` row texture).  It is
+  searched only on holes near content.  Failing that, `best2` takes the
+  opaque search end that reprojects within 2 px.  On the container
+  sheet's eval poses, holes go from 2291 to 13 and IoU from 0.978 to
+  0.990.  Sprite passes cost 36% more GPU time when every sprite triggers,
+  paid only by triggered pixels (#168).
 - No more dark band over a sprite's lower faces.  The sun-shadow receiver
   was the flat card through the ground anchor, whose lower part sits
   under sloped terrain and read the terrain's shadow.  Anchor-depth

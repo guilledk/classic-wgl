@@ -606,6 +606,74 @@ pub fn pick_tilt(
     TiltPick { pitch: pi, roll: ri, drawn, residual }
 }
 
+/// A tilt residual (on an axis) counts as large past this fraction of the
+/// axis' level step: 5° on a 3-level ±20° axis.
+pub const THIRD_SOURCE_STEP_FRACTION: f32 = 0.25;
+
+/// The third warp source for a large tilt residual ([`third_tilt`]): an
+/// adjacent tilt level and the residual from it to the drawn tilt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThirdTilt {
+    pub pitch: u32,
+    pub roll: u32,
+    pub residual: [f32; 3],
+}
+
+/// The adjacent tilt level whose frames cover surface the nearest level
+/// does not see, when the drawn tilt is far from it (an extreme pose shows a
+/// roof the nearest level hides).  With `dp`, `dr` the residuals as
+/// fractions of each axis' level step and `TH` =
+/// [`THIRD_SOURCE_STEP_FRACTION`]:
+///
+/// - none unless `max(|dp|, |dr|) > TH`;
+/// - the diagonal (one level toward the pose on both axes) when
+///   `min(|dp|, |dr|) > TH` and both steps stay on their axes;
+/// - else one step on the larger-residual axis, or failing that (off the
+///   axis) on the other axis if its residual is past `TH` too.
+pub fn third_tilt(
+    pitch_axis: Option<AngleAxis>,
+    roll_axis: Option<AngleAxis>,
+    heading: f32,
+    pick: &TiltPick,
+) -> Option<ThirdTilt> {
+    // (normalized residual, the level one step toward the pose, if on the axis)
+    let axis = |ax: Option<AngleAxis>, level: u32, drawn: f32| -> (f32, Option<u32>) {
+        let Some(ax) = ax.filter(|a| a.count() > 1) else { return (0.0, None) };
+        let step = (ax.max_deg - ax.min()).to_radians() / (ax.count() - 1) as f32;
+        let d = drawn - ax.angle(level);
+        let next = if d > 0.0 { level.checked_add(1) } else { level.checked_sub(1) };
+        ((d / step).abs(), next.filter(|&n| d != 0.0 && n < ax.count()))
+    };
+    let (up, sp) = axis(pitch_axis, pick.pitch, pick.drawn.0);
+    let (ur, sr) = axis(roll_axis, pick.roll, pick.drawn.1);
+    let th = THIRD_SOURCE_STEP_FRACTION;
+    if up.max(ur) <= th {
+        return None;
+    }
+    let (p, r) = match (sp, sr) {
+        (Some(p), Some(r)) if up.min(ur) > th => (p, r),
+        _ if up >= ur => match (sp, sr) {
+            (Some(p), _) => (p, pick.roll),
+            (None, Some(r)) if ur > th => (pick.pitch, r),
+            _ => return None,
+        },
+        _ => match (sp, sr) {
+            (_, Some(r)) => (pick.pitch, r),
+            (Some(p), None) if up > th => (p, pick.roll),
+            _ => return None,
+        },
+    };
+    let angle = |ax: Option<AngleAxis>, i: u32| ax.map_or(0.0, |a| a.angle(i));
+    let residual = tilt_residual(
+        heading,
+        pick.drawn.0,
+        pick.drawn.1,
+        angle(pitch_axis, p),
+        angle(roll_axis, r),
+    );
+    Some(ThirdTilt { pitch: p, roll: r, residual })
+}
+
 /// The pose axes of a standalone posed sprite sheet (a frame table's
 /// `axes`): `directions` × optional `pitch` × `roll`, the same mixed radix
 /// as a cargo layer with those axes (`dir` minor, then `roll`, then

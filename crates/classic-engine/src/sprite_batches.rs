@@ -22,6 +22,9 @@ pub(crate) struct SpriteFrame {
     pub batches: Vec<SpriteBatch>,
     pub shadow_instances: Vec<IsoSpriteInstance>,
     pub shadow_batches: Vec<SpriteBatch>,
+    /// The direction blends' third-source rows (`Gfx::upload_blend_thirds`),
+    /// indexed by the instances' `with_third_row`.
+    pub thirds: Vec<[f32; 16]>,
     /// Whether any instance has a nonzero ghost group (else the ghost-id pass
     /// is skipped: nothing would read it).
     pub any_ghost_group: bool,
@@ -46,6 +49,10 @@ pub(crate) fn iso_screen_rect(model: &Mat4, world_matrix: &Mat4, camera: &Mat4) 
     [r[0] - 1.0, r[1] - 1.0, r[2] + 1.0, r[3] + 1.0]
 }
 
+/// `blend_thirds` rows per frame: its texture height, within the 2048 every
+/// GLES 3.0 / WebGL 2 target supports.
+const MAX_THIRD_ROWS: usize = 2048;
+
 type Key = (String, Option<String>, Option<String>, u32, Option<BlendTextures>);
 
 /// Plan this frame's sprite batches.  `stencil_groups` splits batches by
@@ -62,6 +69,7 @@ pub(crate) fn plan_sprite_frame(
     let mut rects = Vec::with_capacity(draws.len());
     let mut all: Vec<IsoSpriteInstance> = Vec::with_capacity(draws.len());
     let mut shadow_all: Vec<IsoSpriteInstance> = Vec::with_capacity(draws.len());
+    let mut thirds: Vec<[f32; 16]> = Vec::new();
     let mut shadow_keys: Vec<u32> = Vec::with_capacity(draws.len());
     let mut shadow_key_table: Vec<String> = Vec::new();
     let mut shadow_key_index: HashMap<String, u32> = HashMap::new();
@@ -95,7 +103,15 @@ pub(crate) fn plan_sprite_frame(
             None => (base, d.texture.clone()),
         };
         let inst = match &d.blend {
-            Some((b, _)) => base.blend(b),
+            Some((b, _)) => match b.third {
+                // Rows past the texture height a GLES 3.0 target guarantees draw
+                // without a third source.
+                Some(th) if thirds.len() < MAX_THIRD_ROWS => {
+                    thirds.push(th.row());
+                    base.blend(b).with_third_row(thirds.len() - 1)
+                }
+                _ => base.blend(b),
+            },
             None => base,
         };
         let inst = inst.with_team(d.team, d.emissive);
@@ -134,7 +150,7 @@ pub(crate) fn plan_sprite_frame(
     }
 
     let mut frame =
-        SpriteFrame { any_ghost_group, group_bounds, stencil_groups, ..Default::default() };
+        SpriteFrame { any_ghost_group, group_bounds, stencil_groups, thirds, ..Default::default() };
     for p in plan_batches(&keys, &rects) {
         let (texture, depth_map, normal_map, group, blend) = key_table[p.key as usize].clone();
         frame.batches.push(SpriteBatch {
