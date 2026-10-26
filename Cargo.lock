@@ -402,6 +402,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "wat",
 ]
 
 [[package]]
