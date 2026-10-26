@@ -275,6 +275,55 @@ impl Engine {
         self.models.contains_key(name)
     }
 
+    /// The world position (metres, +Z up: the lights' and effects' space) of
+    /// glTF node `node` of the named `Model` entity at its current pose, or
+    /// `None` for an unknown entity, model resource or node.  The guest
+    /// counterpart of [`Engine::vehicle_socket_pos`]; the tile under it is
+    /// `(x / TILE_M, -y / TILE_M)` (the inverse of `iso_world_pos`).
+    ///
+    /// The pose is this frame's: the model system's `on_update` re-samples
+    /// it before the guests' (registered after it), and `start_model_clip`
+    /// re-samples immediately.
+    pub fn model_node_pos(&self, name: &str, node: &str) -> Option<Vec3> {
+        let &entity = self.names.get(name)?;
+        let tf = self.world.get::<&Transform>(entity).ok()?;
+        let m = self.world.get::<&Model>(entity).ok()?;
+        Some(self.model_node_world(&tf, &m, node)?.w_axis.truncate())
+    }
+
+    /// Set a named `Model` entity's team colour (`Model.tint`, RGB in the
+    /// texture's stored space).  `false` when it is not a model.
+    pub fn model_tint(&mut self, name: &str, rgb: [f32; 3]) -> bool {
+        self.with_model(name, |m| m.tint = Some(rgb))
+    }
+
+    /// Set a named `Model` entity's emissive multiplier (`Model.emissive`:
+    /// `0` off, `1` as baked, above 1 blooms; negative clamps to 0 and a
+    /// non-finite value resets to 1).  `false` when it is not a model.
+    pub fn model_emissive(&mut self, name: &str, strength: f32) -> bool {
+        let strength = if strength.is_finite() { strength.max(0.0) } else { 1.0 };
+        self.with_model(name, |m| m.emissive = Some(strength))
+    }
+
+    /// A named `Model` entity's clip time in seconds, `-1` when it is not a
+    /// model or plays no clip its glb carries (bind pose).
+    pub fn model_clip_time(&self, name: &str) -> f32 {
+        let Some(&entity) = self.names.get(name) else { return -1.0 };
+        let Ok(m) = self.world.get::<&Model>(entity) else { return -1.0 };
+        let asset = self.models.get(&m.model);
+        match m.clip.as_deref().zip(asset).and_then(|(c, a)| a.clip_index(c)) {
+            Some(_) => m.time,
+            None => -1.0,
+        }
+    }
+
+    fn with_model(&mut self, name: &str, f: impl FnOnce(&mut Model)) -> bool {
+        let Some(&entity) = self.names.get(name) else { return false };
+        let Ok(mut m) = self.world.get::<&mut Model>(entity) else { return false };
+        f(&mut m);
+        true
+    }
+
     /// Advance every `Model`'s clip by `delta` seconds and re-sample its pose
     /// into `Model.node_world` + `Model.frame_offset`.  A model with no clip
     /// (or an unknown one) holds its bind pose; a finished one-shot clip holds
@@ -1097,5 +1146,96 @@ mod tests {
         // Untinted: the field is omitted, so existing dumps are unchanged.
         world.get::<&mut Model>(ent).unwrap().tint = None;
         assert!(reg.dump_value(&world, ent).unwrap().get("tint").is_none());
+    }
+
+    #[test]
+    fn model_node_pos_tracks_an_animated_node_mid_clip() {
+        let mut e = Engine::new_for_test();
+        flat_tilemap(&mut e);
+        // `nozzle` hangs 1 m below the animated rig (glTF -Y = world -Z).
+        let nozzle = r#",{"name":"nozzle","translation":[0,-1,0]}"#;
+        e.load_model_glb("landing", &tiny_glb_with_nodes("landing", nozzle)).unwrap();
+        let tile = Vec3::new(3.0, 2.0, 0.0);
+        let rocket =
+            e.world.spawn((Transform::new(tile, Vec3::ONE), Model::new("landing", "tilemap")));
+        e.names.insert("rocket".into(), rocket);
+        assert!(e.start_model_clip("rocket", "landing", false));
+        e.update_models(0.5);
+
+        let pos = e.model_node_pos("rocket", "nozzle").expect("node resolves");
+        let world = {
+            let tf = e.world.get::<&Transform>(rocket).unwrap();
+            let m = e.world.get::<&Model>(rocket).unwrap();
+            e.model_node_world(&tf, &m, "nozzle").unwrap()
+        };
+        assert_eq!(pos, world.w_axis.truncate(), "wraps model_node_world");
+        // Mid-clip the rig sits at world (-2, 2, 6) off the tile's ground point.
+        let ground = iso_world_pos(tile.x, tile.y, 0.0);
+        assert!((pos - (ground + Vec3::new(-2.0, 2.0, 5.0))).length() < 1e-4, "{pos}");
+        // At the clip's end the rig has no drift: the tile is (x/TILE_M, -y/TILE_M).
+        e.update_models(10.0);
+        let p = e.model_node_pos("rocket", "nozzle").unwrap();
+        let tm = classic_core::tilemap::TILE_M;
+        assert!((Vec3::new(p.x / tm, -p.y / tm, p.z) - Vec3::new(3.0, 2.0, 1.0)).length() < 1e-4);
+
+        assert!(e.model_node_pos("rocket", "nope").is_none(), "unknown node");
+        assert!(e.model_node_pos("ghost", "nozzle").is_none(), "unknown entity");
+        e.world.get::<&mut Model>(rocket).unwrap().model = "missing".into();
+        assert!(e.model_node_pos("rocket", "nozzle").is_none(), "unknown model resource");
+    }
+
+    #[test]
+    fn model_tint_and_emissive_setters_reach_the_draw() {
+        let mut e = Engine::new_for_test();
+        flat_tilemap(&mut e);
+        let extras = r#","extras":{"classic_team_rect":[0,0,1,0.25],
+            "classic_emissive":[{"rect":[0.5,0.5,1,1],"strength":2}]}"#;
+        e.load_model_glb("kit", &textured_glb_extras(&png_2x2([230, 230, 230, 255]), extras))
+            .unwrap();
+        let kit = e.world.spawn((
+            Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE),
+            Model::new("kit", "tilemap"),
+        ));
+        e.names.insert("kit".into(), kit);
+        e.update_models(0.0);
+        let draw = |e: &Engine| e.model_draws(&[(0.0, kit, DrawKind::Model)], &HashMap::new());
+        assert!(draw(&e)[0].instances[0].team.is_none(), "untinted by default");
+
+        assert!(e.model_tint("kit", [0.2, 0.4, 1.0]));
+        assert!(e.model_emissive("kit", 1.5));
+        let inst = &draw(&e)[0].instances[0];
+        assert_eq!(inst.team.map(|t| t.tint), Some([0.2, 0.4, 1.0]));
+        assert_eq!(inst.emissive[0].strength, 3.0);
+        assert!(e.model_emissive("kit", -1.0));
+        assert!(!draw(&e)[0].has_emissive(), "negative clamps to off");
+        assert!(e.model_emissive("kit", f32::NAN));
+        assert_eq!(e.world.get::<&Model>(kit).unwrap().emissive, Some(1.0), "NaN resets");
+
+        assert!(!e.model_tint("ghost", [1.0; 3]) && !e.model_emissive("ghost", 1.0));
+        e.spawn_named("plain");
+        assert!(!e.model_tint("plain", [1.0; 3]), "not a model");
+    }
+
+    #[test]
+    fn model_clip_time_advances_and_is_negative_without_a_clip() {
+        let mut e = Engine::new_for_test();
+        e.load_model_glb("landing", &tiny_glb("landing")).unwrap();
+        let rocket = e.world.spawn((
+            Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE),
+            Model::new("landing", "tilemap"),
+        ));
+        e.names.insert("rocket".into(), rocket);
+        assert_eq!(e.model_clip_time("rocket"), -1.0, "bind pose");
+        assert_eq!(e.model_clip_time("ghost"), -1.0, "unknown entity");
+        assert!(e.start_model_clip("rocket", "landing", false));
+        assert_eq!(e.model_clip_time("rocket"), 0.0);
+        e.update_models(0.25);
+        assert_eq!(e.model_clip_time("rocket"), 0.25);
+        e.update_models(0.5);
+        assert_eq!(e.model_clip_time("rocket"), 0.75);
+        e.update_models(10.0);
+        assert_eq!(e.model_clip_time("rocket"), 1.0, "a finished one-shot holds its end");
+        e.world.get::<&mut Model>(rocket).unwrap().clip = Some("nope".into());
+        assert_eq!(e.model_clip_time("rocket"), -1.0, "a clip the glb lacks");
     }
 }

@@ -104,6 +104,10 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `set_anim` | `(name_ptr, name_len, anim_ptr, anim_len) -> i32` | set the entity's `Animator` to play a looping animation |
 | `start_anim` | `(name_ptr, name_len, anim_ptr, anim_len, repeat: i32) -> i32` | reset the `Animator` from frame zero and play (one-shot if `repeat == 0`) |
 | `start_model_clip` | `(name_ptr, name_len, model_ptr, model_len, repeat: i32) -> i32` | restart a `Model` entity on a model resource from time zero (clip = the model's own, one-shot if `repeat == 0`) |
+| `model_node_pos` | `(name_ptr, name_len, node_ptr, node_len, out_ptr) -> i32` | a `Model` entity's glTF node world position at this frame's pose: writes `[x, y, z]` (three f64, metres, +Z up; tile = `(x / TILE_M, -y / TILE_M)`); `0` for an unknown entity, model or node |
+| `model_tint` | `(name_ptr, name_len, r: f64, g: f64, b: f64) -> i32` | set a `Model` entity's team colour (`Model.tint`); `0` if not a model |
+| `model_emissive` | `(name_ptr, name_len, strength: f64) -> i32` | set a `Model` entity's emissive multiplier (`0` off, `1` as baked, `> 1` blooms; negative clamps to 0) |
+| `model_clip_time` | `(name_ptr, name_len) -> f64` | a `Model` entity's clip time in seconds, `-1` when it plays no clip its glb carries |
 | `agent_selected` | `() -> i32` | editor agent-tool flag |
 | `ui_consumed_click` | `() -> i32` | whether a UI element consumed this frame's click |
 | `delta` / `elapsed` | `() -> f64` | frame time |

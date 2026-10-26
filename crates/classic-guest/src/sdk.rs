@@ -475,6 +475,32 @@ impl GuestHost {
         Some((p.x as f64, p.y as f64, p.z as f64))
     }
 
+    /// A `Model` entity's glTF node world position (metres, +Z up; tile =
+    /// `(x / TILE_M, -y / TILE_M)`), or `None`.
+    pub fn model_node_pos(&mut self, name: &str, node: &str) -> Option<(f64, f64, f64)> {
+        let name = self.resolve(name);
+        let p = self.engine().model_node_pos(&name, node)?;
+        Some((p.x as f64, p.y as f64, p.z as f64))
+    }
+
+    /// Set a `Model` entity's team colour (RGB).
+    pub fn model_tint(&mut self, name: &str, r: f64, g: f64, b: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().model_tint(&name, [r as f32, g as f32, b as f32]) as i32
+    }
+
+    /// Set a `Model` entity's emissive multiplier (0 off, 1 as baked).
+    pub fn model_emissive(&mut self, name: &str, strength: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().model_emissive(&name, strength as f32) as i32
+    }
+
+    /// A `Model` entity's clip time in seconds, `-1` when it plays no clip.
+    pub fn model_clip_time(&mut self, name: &str) -> f64 {
+        let name = self.resolve(name);
+        self.engine().model_clip_time(&name) as f64
+    }
+
     /// Fire a one-shot effect at a vehicle socket (along its forward axis).
     pub fn vehicle_socket_fx(&mut self, name: &str, socket: &str, effect: &str) -> i32 {
         let name = self.resolve(name);
