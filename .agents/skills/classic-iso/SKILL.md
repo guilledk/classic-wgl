@@ -667,7 +667,9 @@ the end frame; `fire` on a turret), `vehicle_layer_visible(name, layer,
 visible)`, `vehicle_layer_color(name, layer, r, g, b, a)`, `vehicle_team(name, r, g, b)`,
 `vehicle_emissive(name, strength)`, `vehicle_socket_pos(name, socket)`
 (`triple_opt`, world metres), `vehicle_socket_fx(name, socket, effect)` (one
-shot along the socket's forward axis); the rest return 1 / 0.
+shot oriented by the full socket frame: the effect's local `+x` is the
+socket's forward, so ribbon `end`s, light `offset`s, spawn shapes and the
+velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 / 0.
 
 ---
 

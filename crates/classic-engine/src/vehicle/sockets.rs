@@ -87,12 +87,13 @@ impl Engine {
         self.vehicle_socket_frame(vehicle, socket).map(|f| f.0)
     }
 
-    /// Fire a one-shot effect at a vehicle socket, pointed along its forward
-    /// axis.
+    /// Fire a one-shot effect at a vehicle socket, oriented by its full frame
+    /// (heading, pitch / roll, turret yaw, gun pitch): the effect's local `+x`
+    /// is the socket's forward axis.
     pub fn vehicle_socket_fx(&mut self, vehicle: &str, socket: &str, effect: &str) -> bool {
         let Some((pos, basis)) = self.vehicle_socket_frame(vehicle, socket) else {
             return false;
         };
-        self.fx_emit(effect, pos, basis.x_axis, 1.0)
+        self.fx_emit_oriented(effect, pos, basis, 1.0)
     }
 }

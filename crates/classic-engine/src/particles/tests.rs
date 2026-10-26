@@ -772,3 +772,90 @@ fn no_tilemap_no_map_fade() {
     e.update_particles(1.0 / 60.0);
     assert!(e.particles.map.is_none());
 }
+
+/// A vehicle socket one-shot (`vehicle_socket_fx`) is oriented by the full
+/// socket frame: the ribbon tracer, the particle velocities and the light
+/// offset all follow the turret yaw and gun pitch (they used to keep the
+/// world axes: the EMRLV rail always fired East).
+#[test]
+fn socket_fx_follows_turret_yaw_and_gun_pitch() {
+    let mut e = engine();
+    e.register_effects(
+        "fx",
+        EffectLibrary::from_json(
+            br#"{"effects":[{"name":"rail","layers":[
+              {"type":"ribbon","name":"tracer","mode":"arc","duration":1.0,"end":[9,0,0],
+               "depth":4,"jitter":0.06,"branches":0},
+              {"type":"particles","name":"sparks","max":64,"spawn":{"burst":8},
+               "velocity":{"speed":[5,5],"cone":0.0},"motion":{"gravity":0.0},"life":[1,1]},
+              {"type":"light","name":"flash","duration":1.0,"peak":2,"offset":[0.3,0,0]}]}]}"#,
+        )
+        .unwrap(),
+    );
+    let def: classic_core::types::VehicleDef = serde_json::from_value(serde_json::json!({
+        "version": 2, "name": "tank", "directions": 16,
+        "layers": [
+            { "name": "hull", "kind": "hull", "texture": "tankHull" },
+            { "name": "turret", "kind": "turret", "texture": "tankTurret",
+              "offset": [0.0, 0.0, 1.2], "pitch_pivot": [0.5, 0.0, 0.6],
+              "pitch": { "levels": 4, "min_deg": -5.0, "max_deg": 25.0 } }
+        ],
+        "sockets": { "fx_muzzle_0": { "layer": "turret", "offset": [2.5, 0.0, 0.6] } }
+    }))
+    .unwrap();
+    e.vehicles.insert("tank".into(), def);
+    assert!(e.spawn_vehicle("tank", "tank", 16.0, 16.0));
+
+    for yaw in [0.0f32, 90.0, 180.0, 270.0] {
+        for pitch in [0.0f32, 15.0] {
+            assert!(e.vehicle_aim_angles("tank", yaw, pitch));
+            e.time.delta = 1.0 / 60.0;
+            e.update_vehicles();
+            // Heading 0: a tile-space (clockwise-on-screen) turret yaw is a
+            // negative world turn about +Z; the gun pitch lifts it.
+            let (y, p) = (-yaw.to_radians(), pitch.to_radians());
+            let fwd = Vec3::new(y.cos() * p.cos(), y.sin() * p.cos(), p.sin());
+            let (origin, basis) = e.vehicle_socket_frame("tank", "fx_muzzle_0").unwrap();
+            assert!((basis.x_axis - fwd).length() < 1e-4, "yaw {yaw} pitch {pitch}");
+
+            e.particles.instances.clear();
+            assert!(e.vehicle_socket_fx("tank", "fx_muzzle_0", "fx::rail"));
+            e.update_particles(1.0 / 60.0);
+            let inst = e.particles.instances.last().expect("the one-shot instance");
+            assert!((inst.frame.basis.x_axis - fwd).length() < 1e-4);
+            let mut checked = 0;
+            for l in &inst.layers {
+                match l {
+                    LayerRt::Ribbon(r) => {
+                        let pts = &r.strands[0].points;
+                        let span = *pts.last().unwrap() - pts[0];
+                        assert!((pts[0] - origin).length() < 1e-4);
+                        assert!((span.normalize() - fwd).length() < 1e-3, "tracer {span:?}");
+                        assert!((span.length() - 9.0).abs() < 1e-3);
+                        checked += 1;
+                    }
+                    LayerRt::Particles(pr) => {
+                        for r in pr.ring.records().iter().filter(|r| r.life > 0.0) {
+                            let v = Vec3::from_array(r.v0);
+                            assert!((v.normalize() - fwd).length() < 1e-3, "spark {v:?}");
+                            checked += 1;
+                        }
+                    }
+                    LayerRt::Light(_) => {}
+                }
+            }
+            assert!(checked >= 2, "tracer and sparks checked");
+            // The light layer's offset turns with the frame.
+            let flash = e
+                .gather_lights()
+                .into_iter()
+                .min_by(|a, b| {
+                    let da = (a.position - origin).length();
+                    let db = (b.position - origin).length();
+                    da.total_cmp(&db)
+                })
+                .expect("the flash light");
+            assert!((flash.position - (origin + fwd * 0.3)).length() < 1e-3, "flash");
+        }
+    }
+}

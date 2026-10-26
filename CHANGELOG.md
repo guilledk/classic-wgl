@@ -287,6 +287,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- `vehicle_socket_fx` orients the one-shot effect by the full socket
+  frame (heading, pitch / roll, turret yaw, gun pitch) through the new
+  `Engine::fx_emit_oriented`.  It used to go through `fx_emit`, whose
+  frame is the world axes: only the particle velocity cone followed the
+  socket, while ribbon `end`s, light `offset`s and spawn shapes stayed
+  world-aligned, so the EMRLV's rail tracer always fired East.
+  `fx_emit` itself is unchanged (#163).
 - Layered (v2) vehicles: `vehicle_teleport` read the v1 wheel and anchor
   tables at the quantized direction, which a 16-direction v2 vehicle
   sized at 8, panicking past direction 7 (the mule's scripted reverse
