@@ -183,6 +183,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   wall/CPU/GPU mean/median/p95/p99/max, per-phase means, counters);
   `cargo xtask bench-compare a.json b.json` prints per-section deltas
   against a noise floor (#146).
+- A lockstep test for model clips and guest timers: a WAT guest times
+  itself while `Engine::frame` drives the demo's model system and guest
+  closure for 150 fixed frames, swapping clips mid-run, and its timer
+  must match `model_clip_time` every frame (`classic-demo`, test only)
+  (#169).
 
 ### Changed
 
