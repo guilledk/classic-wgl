@@ -689,7 +689,18 @@ impl Engine {
                     0.0,
                 )))
             } else {
-                Self::world_depth(model.w_axis.truncate())
+                // The legacy bake was tuned to the top-left corner of the quad
+                // as it stood before sprites drew at their true height (at
+                // cos30 of it above the anchor): keep that reference so a
+                // legacy depth map lands exactly where it did.
+                let anchor = model.transform_point3(Vec3::new(
+                    anchor_px.x / tex_dim.0.max(f32::EPSILON),
+                    anchor_px.y / tex_dim.1.max(f32::EPSILON),
+                    0.0,
+                ));
+                let t = model.w_axis.truncate();
+                let z = anchor.z + (t.z - anchor.z) * 0.866_025_4;
+                Self::world_depth(Vec3::new(t.x, t.y, z))
             };
             let world_matrix = iso_camera_matrix();
             let depth_corners = Self::compute_iso_depth_corners(tf.position, &iso_sprite.footprint);
