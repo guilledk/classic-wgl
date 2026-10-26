@@ -23,6 +23,21 @@ uniform float use_normal_map;
 // the terrain normals live in — so they are used as-is, with no normal matrix.
 uniform vec3 ambient_color;
 uniform vec3 light_direction;
+// `[DEPTH_NEAR, DEPTH_FAR]` (metres): the window span of a depth offset.
+uniform highp vec2 depth_span;
+// The iso camera `back` axis (`classic_core::math::iso_basis`): view depth
+// is `dot(SPRITE_BACK, world)`, larger = nearer.
+const highp vec3 SPRITE_BACK = vec3(-0.61237244, -0.61237244, 0.5);
+
+// How far (metres, along `SPRITE_BACK`) the world point this fragment shows,
+// at window depth `fd`, lies from the card point `vLightPos` on the same view
+// ray.  The card is a flat vertical quad through the ground anchor, so its
+// lower part can sit under sloped terrain (in the terrain's shadow) while the
+// surface the pixel shows rests on it: see the shadow lookup in `main`.
+highp float shownDelta(highp float fd) {
+    highp float viewT = depth_span.x - fd * (depth_span.x - depth_span.y);
+    return viewT - dot(SPRITE_BACK, vLightPos);
+}
 uniform vec3 light_color;
 uniform vec3 selection_color;
 
@@ -322,8 +337,6 @@ uniform sampler2D depth_sampler_b;
 uniform sampler2D normal_sampler_b;
 // Sheet pixels per metre (shared with the vertex stage).
 uniform highp float ppm;
-// `[DEPTH_NEAR, DEPTH_FAR]` (metres): the window span of an anchor offset.
-uniform highp vec2 depth_span;
 
 #define WARP_STEPS 4
 #define WARP_ACCEPT_PX 0.75
@@ -587,9 +600,16 @@ void main(void ) {
 #endif
 
     color.rgb *= tint;
+    // An anchor-depth sheet knows the surface point the pixel shows: it lies
+    // `shown` metres along `SPRITE_BACK` from the card point (`shownDelta`).
+    bool hasShown = false;
+    highp float shown = 0.0;
 #ifdef INTERP
     // The warped texel's view-depth offset (metres) from the anchor.
-    gl_FragDepth = depth_base + blended.depth / (depth_span.x - depth_span.y);
+    highp float fragDepth = depth_base + blended.depth / (depth_span.x - depth_span.y);
+    gl_FragDepth = fragDepth;
+    hasShown = true;
+    shown = shownDelta(fragDepth);
 #else
     if (use_depth_map > 0.5) {
         // The depth sheet stores view depth relative to the frame's ground
@@ -600,9 +620,16 @@ void main(void ) {
         // into window units: 1 for a legacy sheet baked over the whole window,
         // `2R / (DEPTH_NEAR − DEPTH_FAR)` for a sheet v2 anchor-relative one
         // over `±R` metres (`classic_core::vehicle_def`).
-        gl_FragDepth = depth_base
+        highp float fragDepth = depth_base
             + (texture(depth_sampler, sheetUv(vec2(vTexCoord.x, vTexCoord.y))).r - 0.5)
                 * depth_scale;
+        gl_FragDepth = fragDepth;
+        // Anchor-relative sheets only: a legacy global sheet's ~1.7 m depth
+        // steps cannot place a surface point.
+        if (depth_scale < 0.5) {
+            hasShown = true;
+            shown = shownDelta(fragDepth);
+        }
     }
 #endif
 #ifdef ID_PASS
@@ -651,11 +678,32 @@ void main(void ) {
         ? normalize(rawNormal)
         : vec3(0.0, 0.0, 1.0);
 
+    // The sun-shadow lookup point.  The receiver the shadow map knows is the
+    // flat card, whose lower part can sit under sloped terrain and so read
+    // the terrain's shadow (a dark band over a sprite's lower faces).  An
+    // anchor-depth sprite looks up at the surface point it shows instead,
+    // when that point is on the sun side of its own card (its sun ray then
+    // leaves the card and cannot be self-occluded).  A point behind the card
+    // keeps the card point, offset along the card normal turned to the sun
+    // (offsetting along the face normal could cross the card into its own
+    // shadow); those points sit high on the view ray, above the terrain.
+    highp vec3 shadowPos = vLightPos;
+    vec3 shadowN = n;
+    if (hasShown) {
+        vec3 cardCam = vec3(-0.70710678, -0.70710678, 0.0);
+        float camSun = dot(cardCam, light_direction);
+        if (shown * camSun >= 0.0) {
+            shadowPos = vLightPos + SPRITE_BACK * shown;
+        } else {
+            shadowN = camSun >= 0.0 ? cardCam : -cardCam;
+        }
+    }
+
     // Bring-up diagnostic (CLASSIC_SHADOW_DEBUG): sun visibility only.  The
     // alpha silhouette and iso depth are kept so the sprite still occludes
     // correctly and its outline stays readable against the terrain.
     if (shadow_debug > 0.5) {
-        float vis = use_shadow > 0.5 ? shadowFactor(vLightPos, n) : 1.0;
+        float vis = use_shadow > 0.5 ? shadowFactor(shadowPos, shadowN) : 1.0;
         fragColor = vec4(vec3(vis), color.a);
         return;
     }
@@ -663,7 +711,7 @@ void main(void ) {
     if (use_lighting > 0.5 && !emissive) {
         float diff = max(dot(n, light_direction), 0.0);
         if (use_shadow > 0.5) {
-            diff *= shadowFactor(vLightPos, n);
+            diff *= shadowFactor(shadowPos, shadowN);
         }
         // Point lights are modulated by albedo, exactly like the sun.  They
         // used to be added *after* the albedo multiply, so a point light

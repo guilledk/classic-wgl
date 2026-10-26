@@ -738,9 +738,10 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
     at **3 pitch × 3 roll** (±max, 0) scores 26.4–26.7 dB / IoU 0.92–0.95,
     against 17.7–18.1 dB / 0.88–0.91 for the snapped 5 × 3 it replaces.
   - Found while measuring #165: sprites drew at cos30 of their sheet height
-    (fixed in #166, see §8 "Model matrix"), and the sun-shadow card of an
-    anchor-depth sprite shades a band of its own lower faces (visible on the
-    shipped container v2 on flat ground too).
+    (fixed in #166, see §8 "Model matrix"), and a dark band over a sprite's
+    lower faces: the terrain's shadow on the part of the flat card that sits
+    under sloped ground (fixed in #167: anchor-depth sprites look shadows up
+    at the surface they show, `classic-gfx` "Sprite receivers").
 
 ---
 
