@@ -684,6 +684,18 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
   chassis tilt when the hull sheet warps tilt), turned into the layer's own
   yaw (`tilt_for_yaw`), so a carried box leans exactly as far as its
   carrier.  Wheels and turrets do not ride the tilt.
+- **Layer placement**: a layer's chassis offset is rotated by the full body
+  tilt about the body's ground point (`rot_pitch · rot_roll · pos`, then
+  the heading), exactly as `vehicle_socket_frame` does. A layer origin and
+  a zero-offset socket on it are the same point (a 1.2 m turret on an 8°
+  slope sits ~17 cm back, which the old `z += x·sin p` lift missed).
+- **Cargo / layer sheets need a ground anchor the engine can find**: a
+  layer with no anchors-artifact entry places its frames' **packer
+  `anchor`**, else the **cell centre (0.5, 0.5)**, on its chassis point. So
+  a sheet whose ground origin is not at the cell centre must emit per-frame
+  `anchor`s, or the box drifts (a 0.62 origin read as 0.5 put the mule's
+  cargo 47 px low / to its right). The container v2 bake pins the origin at
+  the cell centre.
 - **Hull roll**: nothing assumes one roll level.  `roll_levels` comes from
   the hull axis, and the tilt dead zone is the finer half-step of the hull's
   pitch and roll axes.
@@ -718,6 +730,11 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
   - Prototype (toy unit + lunar container, 40 random poses): the full warp
     at **3 pitch × 3 roll** (±max, 0) scores 26.4–26.7 dB / IoU 0.92–0.95,
     against 17.7–18.1 dB / 0.88–0.91 for the snapped 5 × 3 it replaces.
+  - Known engine-wide limits found while measuring #165 (not tilt): sprites
+    draw at **cos30 = 0.866** of their sheet height (the quad runs down world
+    −Z, which the camera foreshortens again; sheets are camera images), and
+    the sun-shadow card of an anchor-depth sprite shades a band of its own
+    lower faces (visible on the shipped container v2 on flat ground too).
 
 ---
 

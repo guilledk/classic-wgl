@@ -115,8 +115,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   Opt-in `tilt_interp` (per frame table, with `dir_interp`) makes tilt
   continuous: the direction warp also rotates each neighbour from its
   baked tilt level to the exact tilt (`tilt_residual`, about the ground
-  anchor), carried in the instance model's w row.  A v2 hull's tilt dead
-  zone now uses the finer of its pitch / roll half-steps (#165).
+  anchor), carried in the instance model's w row; on tilted blends the
+  warp search takes an adaptive Newton step and retries just outside the
+  silhouette, and the quad is bounded by the warped content.  v2 layers
+  are placed by the full body tilt, matching sockets.  A v2 hull's tilt
+  dead zone now uses the finer of its pitch / roll half-steps (#165).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,

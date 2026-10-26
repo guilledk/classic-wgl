@@ -391,13 +391,16 @@ impl Engine {
             let Some(&e) = self.names.get(&s.entity) else { continue };
             let pose = poses[s.def_index];
             let layer_heading = heading + pose.yaw;
-            // Position: rotate the chassis offset, lift it on the body plane.
-            let t = chassis_to_tile([pose.pos.x, pose.pos.y], heading);
+            // Position: the chassis offset tilted by the body pitch / roll
+            // about the body's ground point (as `vehicle_socket_frame` does,
+            // so a layer origin and a zero-offset socket on it agree), then
+            // turned by the heading.
+            let tilted = super::sockets::rot_pitch(v_state.pitch)
+                * super::sockets::rot_roll(v_state.roll)
+                * pose.pos;
+            let t = chassis_to_tile([tilted.x, tilted.y], heading);
             let (lx, ly) = (bx + t[0], by + t[1]);
-            let lz = write.body[2]
-                + pose.pos.z
-                + pose.pos.x * v_state.pitch.sin()
-                + pose.pos.y * v_state.roll.sin();
+            let lz = write.body[2] + tilted.z;
             if let Ok(mut tf) = self.world.get::<&mut Transform>(e) {
                 tf.position = Vec3::new(lx, ly, lz);
             }

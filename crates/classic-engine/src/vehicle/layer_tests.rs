@@ -482,3 +482,33 @@ fn tilt_interp_draws_the_exact_chassis_tilt_on_hull_and_cargo() {
     let got = blend(&engine, "tank.crate").tilt;
     assert!(got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{got:?} vs {want:?}");
 }
+
+#[test]
+fn layer_origins_ride_the_full_body_tilt_like_sockets() {
+    // On the ~8° slope facing uphill, a layer 1.2 m up (the turret) sits back
+    // by ~z·sin(p) along the heading; its sprite anchor and a zero-offset
+    // socket on it are the same world point.
+    let mut engine = spawn_tilting_tank_on_slope(0.1);
+    let tm = engine.names["tilemap"];
+    engine.world.insert_one(tm, Transform::new(glam::Vec3::ZERO, glam::Vec3::ONE)).unwrap();
+    for (layer, socket) in [("turret", "t0"), ("crate", "c0"), ("track_l", "l0")] {
+        let tank = engine.vehicles.get_mut("tank").unwrap();
+        tank.sockets.insert(
+            socket.into(),
+            classic_core::vehicle_def::SocketDef { layer: layer.into(), offset: [0.0; 3] },
+        );
+    }
+    for dir in [0, 4, 6] {
+        face(&mut engine, dir);
+        for (entity, socket) in
+            [("tank.turret", "t0"), ("tank.crate", "c0"), ("tank.track_l", "l0")]
+        {
+            let e = engine.names[entity];
+            let p = engine.world.get::<&Transform>(e).unwrap().position;
+            let alt = engine.world.get::<&IsoSprite>(e).unwrap().frame_offset.z;
+            let anchor = engine.iso_to_world(p.x, p.y, alt).unwrap();
+            let sock = engine.vehicle_socket_pos("tank", socket).unwrap();
+            assert!((anchor - sock).length() < 1e-3, "dir {dir} {entity}: {anchor} vs {sock}");
+        }
+    }
+}
