@@ -97,6 +97,8 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `set_sprite_frame` | `(name_ptr, name_len, frame: f64) -> i32` | set a named entity's `IsoSprite` frame index (resolves `frame_name` for packed-atlas textures) |
 | `set_sprite_color` | `(name_ptr, name_len, r: f64, g: f64, b: f64, a: f64) -> i32` | set a named entity's `IsoSprite` tint colour (RGBA `0..=1`) |
 | `spawn_sprite_clone` | `(template_ptr, template_len, name_ptr, name_len) -> i32` | spawn a new `IsoSprite` entity cloned from a template entity's `IsoSprite` + `Transform` |
+| `sprite_pose` | `(name_ptr, name_len, heading_deg: f64, pitch_deg: f64, roll_deg: f64) -> i32` | pose a posed-sheet `IsoSprite` (frame table `axes`) by tile heading (0 = East, 90 = South) and tilt (pitch nose-up, roll left-up): nearest tilt level, direction warp on `dir_interp`, exact tilt on `tilt_interp`; `0` without a sprite / table |
+| `sprite_fit_terrain` | `(name_ptr, name_len, heading_deg: f64, footprint_m: f64) -> i32` | `sprite_pose` facing `heading_deg` with the terrain tilt under a `footprint_m` square at the sprite, resting its lowest corner on the ground (`frame_offset.z`) |
 | `mouse` | `(out_ptr) -> i32` | screen mouse pos `[x, y]` |
 | `mouse_iso` | `(out_ptr) -> i32` | iso tile coords under cursor `[x, y]` |
 | `iso_to_screen` | `(x: f64, y: f64, out_ptr) -> i32` | project an iso tile coord to screen space `[sx, sy]` (two f64; `0` if no Tilemap) |

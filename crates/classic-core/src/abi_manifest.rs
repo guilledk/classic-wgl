@@ -70,6 +70,10 @@ macro_rules! for_each_host_import {
             set_sprite_color(name: str, r: f64, g: f64, b: f64, a: f64) -> i32 [native web worker];
             set_sprite_offset(name: str, dx: f64, dy: f64, dz: f64) -> i32 [native web worker];
             spawn_sprite_clone(template: str, name: str) -> i32 [native web worker];
+            sprite_pose(name: str, heading_deg: f64, pitch_deg: f64, roll_deg: f64) -> i32
+                [native web worker];
+            sprite_fit_terrain(name: str, heading_deg: f64, footprint_m: f64) -> i32
+                [native web worker];
             mouse() -> pair [native web worker];
             mouse_iso() -> pair_opt [native web worker];
             iso_to_screen(x: f64, y: f64) -> pair_opt [native web worker];
@@ -979,9 +983,9 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 131);
-        assert_eq!(imports_for(Backend::Web).count(), 131);
-        assert_eq!(imports_for(Backend::Worker).count(), 131);
+        assert_eq!(imports_for(Backend::Native).count(), 133);
+        assert_eq!(imports_for(Backend::Web).count(), 133);
+        assert_eq!(imports_for(Backend::Worker).count(), 133);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
         assert_eq!(imports_for(Backend::Tier3Trap).count(), 28);
     }

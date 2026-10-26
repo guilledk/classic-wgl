@@ -83,7 +83,9 @@ pub const GHOST_ALPHA: f32 = 0.4;
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IsoSpriteInstance {
     /// Model matrix columns x, y and w (`compute_iso_sprite_model`); the
-    /// quad has `z = 0`, so its z column never contributes.
+    /// quad has `z = 0`, so its z column never contributes.  The model is
+    /// affine, so the shaders rebuild its w row (`0, 0, 0, 1`) and a
+    /// direction blend stores its tilt residual `xyz` in `m[0..3][3]`.
     pub m: [[f32; 4]; 3],
     /// Window-space depth corners `[bottom-left, bottom-right, top-left,
     /// top-right]` (`compute_iso_depth_corners`).
@@ -168,6 +170,11 @@ impl IsoSpriteInstance {
         self.uv_b = b.uv_b;
         self.content_b = [b.trim_b[0], b.trim_b[1], b.content_b[0], b.content_b[1]];
         self.interp = [b.anchor_b_px[0], b.anchor_b_px[1], b.dtheta_a, b.dtheta_b];
+        // The model is affine (its w row is `0, 0, 0, 1`, rebuilt by the
+        // shaders), so a blend carries the tilt residual there.
+        self.m[0][3] = b.tilt[0];
+        self.m[1][3] = b.tilt[1];
+        self.m[2][3] = b.tilt[2];
         self.quad = b.quad;
         self
     }
@@ -213,6 +220,10 @@ pub struct DirBlendRegion {
     pub anchor_b_px: [f32; 2],
     pub dtheta_a: f32,
     pub dtheta_b: f32,
+    /// The world-frame tilt residual quaternion `xyz` (`w >= 0`) both
+    /// directions are rotated by after their yaw (`DirBlend::tilt`); zero =
+    /// a pure yaw warp.
+    pub tilt: [f32; 3],
     /// The drawn quad `x0, y0, w, h` in pixels from the anchor (y down).
     pub quad: [f32; 4],
 }

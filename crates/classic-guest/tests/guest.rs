@@ -1850,3 +1850,77 @@ fn guest_model_imports_wired() {
         },
     );
 }
+
+#[test]
+fn guest_sprite_pose_imports_wired() {
+    // `a` is posed by heading + tilt, `b` fitted to the (flat) terrain.
+    with_each_runtime(
+        r#"(module
+            (import "env" "sprite_pose" (func $pose (param i32 i32 f64 f64 f64) (result i32)))
+            (import "env" "sprite_fit_terrain" (func $fit (param i32 i32 f64 f64) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "a")
+            (data (i32.const 8) "b")
+            (data (i32.const 16) "ok")
+            (func (export "update") (param f64)
+                (drop (call $set (i32.const 16) (i32.const 2)
+                    (f64.convert_i32_s (call $pose (i32.const 0) (i32.const 1)
+                        (f64.const 100) (f64.const 10) (f64.const -20)))
+                    (f64.convert_i32_s (call $fit (i32.const 8) (i32.const 1)
+                        (f64.const 180) (f64.const 2.44)))
+                    (f64.const 0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            let frames: serde_json::Map<String, serde_json::Value> = (0..240)
+                .map(|i| {
+                    (format!("box_{i}"), serde_json::json!({"sheet": 0, "rect": [0, 0, 1, 1]}))
+                })
+                .collect();
+            let table: classic_core::types::FrameTable =
+                serde_json::from_value(serde_json::json!({
+                    "version": 2, "frames": frames,
+                    "axes": { "directions": 16, "pitch": { "levels": 5, "max_deg": 20 },
+                              "roll": { "levels": 3, "max_deg": 20 } },
+                    "sheets": [{ "name": "s", "src": "/s.png", "size": [4, 4] }]
+                }))
+                .unwrap();
+            engine.frame_tables.insert("box".into(), table);
+            for n in ["a", "b", "ok"] {
+                engine.spawn_named(n);
+            }
+            for n in ["a", "b"] {
+                let e = engine.names[n];
+                let sprite = IsoSprite {
+                    position: Vec3::new(1.5, 1.5, 0.0),
+                    scale: Vec3::ONE,
+                    texture: "box".into(),
+                    tilemap: "tilemap".into(),
+                    frame: 0.0,
+                    frame_name: None,
+                    tile_set_size: glam::Vec2::ONE,
+                    anchor: glam::Vec2::new(0.5, 0.5),
+                    frame_offset: Vec3::ZERO,
+                    footprint: vec![],
+                    ghost_group: 0,
+                    color: [1.0; 4],
+                    dir_blend: None,
+                    no_ghost: false,
+                    team_tint: None,
+                    emissive: None,
+                };
+                engine.world.insert_one(e, sprite).unwrap();
+                engine.set_pos(n, 1.5, 1.5, 0.0);
+            }
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("ok").unwrap(), (1.0, 1.0, 0.0), "both imports succeed");
+            let frame = |n: &str| engine.world.get::<&IsoSprite>(engine.names[n]).unwrap().frame;
+            // 100° -> dir 4; pitch 10° -> level 3; roll -20° -> level 0.
+            assert_eq!(frame("a"), ((3 * 3) * 16 + 4) as f32);
+            // Flat ground, facing West (dir 8): the level frame.
+            assert_eq!(frame("b"), ((2 * 3 + 1) * 16 + 8) as f32);
+        },
+    );
+}

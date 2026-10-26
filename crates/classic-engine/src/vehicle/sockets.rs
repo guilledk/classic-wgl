@@ -10,14 +10,14 @@ use crate::Engine;
 
 /// Rotation about the chassis `y` axis by `a` (nose-up positive: `x` toward
 /// `z`).
-fn rot_pitch(a: f32) -> Mat3 {
+pub(super) fn rot_pitch(a: f32) -> Mat3 {
     let (s, c) = a.sin_cos();
     Mat3::from_cols(Vec3::new(c, 0.0, s), Vec3::Y, Vec3::new(-s, 0.0, c))
 }
 
 /// Rotation about the chassis `x` axis by `a` (left-up positive: `y` toward
 /// `z`).
-fn rot_roll(a: f32) -> Mat3 {
+pub(super) fn rot_roll(a: f32) -> Mat3 {
     let (s, c) = a.sin_cos();
     Mat3::from_cols(Vec3::X, Vec3::new(0.0, c, s), Vec3::new(0.0, -s, c))
 }

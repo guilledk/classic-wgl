@@ -43,6 +43,14 @@
 //! positive, steer turn-left positive.  A turret's `pitch` is its gun
 //! elevation.
 //!
+//! ## Riding the hull's tilt
+//!
+//! A tool, legs, cargo or lift layer may declare `pitch` / `roll` too.  It
+//! then shows its carrier's **drawn** tilt: the angle of the hull frame the
+//! hull picked (`0` on an axis the hull lacks), turned into the layer's own
+//! yaw by [`tilt_for_yaw`] and quantized to the layer's levels.  A carried
+//! box therefore leans exactly as far as the hull it sits on.
+//!
 //! # Sprite sheet v2 (`frames.json`)
 //!
 //! Per sheet ([`SpriteSheetEntry`](crate::types::SpriteSheetEntry)):
@@ -67,6 +75,22 @@
 //! anchor-relative depth companion, and the bake must yaw the unit about its
 //! ground anchor's vertical axis.  Its depth companion keeps gray 0 for transparent
 //! texels (real depth uses 1..255): the warp reads it as background.
+//!
+//! Per frame table: `axes` ([`SpriteAxes`]) describes a **standalone** posed
+//! sprite (a grounded container): `directions` × optional `pitch` × `roll`,
+//! laid out like a cargo layer (`(pitch · roll_levels + roll) · dirs + dir`),
+//! so one sheet serves both the carried layer and the grounded sprite.  The
+//! guest drives it by heading + tilt (`sprite_pose`), not by frame index;
+//! without `axes` the table is a direction-only sheet of `frames.len()`
+//! directions ([`FrameTable::sprite_axes`](crate::types::FrameTable::sprite_axes)).
+//!
+//! Tilt frames must be baked **yaw ∘ tilt about the ground anchor** (the
+//! body pitches and rolls in its own frame, then yaws about the anchor's
+//! vertical), as the container rig is (`ContainerYaw` → `Pitch` → `Roll`).
+//! Then two neighbouring directions *within one tilt frame* differ by a pure
+//! yaw about that vertical, so `dir_interp`'s yaw warp between them is as
+//! exact as it is untilted; only the tilt itself is quantized (nearest
+//! level).
 
 use std::collections::BTreeMap;
 
@@ -99,13 +123,16 @@ pub enum LayerKind {
     GearSide,
     /// A turret with its own slewed yaw: own `dir × pitch (gun) × fire`.
     Turret,
-    /// A tool (crane arm, drill, ...): `dir × clip`.
+    /// A tool (crane arm, drill, ...): `dir × clip`, optionally `× pitch ×
+    /// roll` riding the hull's tilt (see [`tilt_for_yaw`]).
     Tool,
-    /// Walker legs: `dir × clip`.
+    /// Walker legs: `dir × clip`, optionally `× pitch × roll` (hull tilt).
     Legs,
-    /// Carried cargo: `dir × clip`.
+    /// Carried cargo: `dir × clip`, optionally `× pitch × roll` (hull tilt),
+    /// so a carried box leans with its carrier.
     Cargo,
-    /// A lift (fork, platform, ...): `dir × clip`.
+    /// A lift (fork, platform, ...): `dir × clip`, optionally `× pitch ×
+    /// roll` (hull tilt).
     Lift,
 }
 
@@ -119,7 +146,7 @@ impl LayerKind {
             LayerKind::GearSide => matches!(axis, Dir | Spin),
             LayerKind::Turret => matches!(axis, Dir | Pitch | Fire),
             LayerKind::Tool | LayerKind::Legs | LayerKind::Cargo | LayerKind::Lift => {
-                matches!(axis, Dir | Clip)
+                matches!(axis, Dir | Pitch | Roll | Clip)
             }
         }
     }
@@ -306,10 +333,12 @@ pub struct VehicleLayerDef {
     /// Required for [`LayerKind::GearSide`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub side: Option<GearSide>,
-    /// Hull body pitch, or a turret's gun pitch.
+    /// Hull body pitch, a turret's gun pitch, or (tool / legs / cargo /
+    /// lift) the hull's drawn pitch carried into this layer's frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pitch: Option<AngleAxis>,
-    /// Hull body roll.
+    /// Hull body roll, or (tool / legs / cargo / lift) the hull's drawn roll
+    /// carried into this layer's frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roll: Option<AngleAxis>,
     /// Wheel steering.
@@ -473,6 +502,154 @@ pub fn heading_neighbours(heading: f32, n: u32) -> (u32, u32, f32) {
     let t = f - a;
     let a = a as u32 % n;
     (a, (a + 1) % n, t)
+}
+
+/// A body tilt (`pitch` nose-up, `roll` left-up, radians) seen from a layer
+/// yawed by `yaw` (tile radians, relative to the body) on it: the slope
+/// gradient `(tan pitch, tan roll)` along the body's forward / left, taken
+/// along the layer's forward `(cos yaw, −sin yaw)` and left `(sin yaw,
+/// cos yaw)`.  Identity at `yaw = 0`; a quarter turn right makes the body's
+/// roll the layer's (negated) pitch and its pitch the layer's roll.
+pub fn tilt_for_yaw(pitch: f32, roll: f32, yaw: f32) -> (f32, f32) {
+    if yaw == 0.0 {
+        return (pitch, roll);
+    }
+    let (s, c) = yaw.sin_cos();
+    let (gp, gr) = (pitch.tan(), roll.tan());
+    ((gp * c - gr * s).atan(), (gp * s + gr * c).atan())
+}
+
+/// The body orientation of tilt `(pitch, roll)` (body frame: `x` forward, `y`
+/// left, `z` up): `Ry(−pitch) · Rx(roll)`, pitch nose-up about the left axis
+/// after roll left-up about the forward axis — the bake rig's
+/// `Pitch` → `Roll` order under its `Yaw`.
+pub fn tilt_rotation(pitch: f32, roll: f32) -> glam::Quat {
+    glam::Quat::from_rotation_y(-pitch) * glam::Quat::from_rotation_x(roll)
+}
+
+/// The world-frame (+Z up, metres) rotation taking a frame baked at tilt
+/// `(level_pitch, level_roll)` to the drawn tilt `(pitch, roll)`, both at
+/// tile heading `heading` (world yaw `−heading`):
+/// `Q = Rz(ψ) · T(p, r) · T(pₗ, rₗ)ᵀ · Rz(−ψ)`.
+///
+/// A frame baked yaw ∘ tilt at heading `ψₐ` reaches the drawn pose by
+/// `Rz(ψ) T(p, r) T(pₗ, rₗ)ᵀ Rz(−ψₐ) = Q · Rz(ψ − ψₐ)`, so both
+/// direction-blend neighbours share `Q` and keep their own yaw residual
+/// (`DirBlend::tilt`).  Returned as `xyz` of the unit quaternion with
+/// `w ≥ 0`.
+pub fn tilt_residual(
+    heading: f32,
+    pitch: f32,
+    roll: f32,
+    level_pitch: f32,
+    level_roll: f32,
+) -> [f32; 3] {
+    let yaw = glam::Quat::from_rotation_z(-heading);
+    let q = yaw
+        * tilt_rotation(pitch, roll)
+        * tilt_rotation(level_pitch, level_roll).inverse()
+        * yaw.inverse();
+    let q = if q.w < 0.0 { -q } else { q }.normalize();
+    [q.x, q.y, q.z]
+}
+
+/// How far (degrees) tilt interpolation warps an axis a sheet does not bake
+/// (a hull with no roll frames still leans sideways through the warp).
+pub const TILT_WARP_MAX_DEG: f32 = 20.0;
+
+/// The frames and warp residual drawing a tilt on a sheet with these axes
+/// ([`pick_tilt`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TiltPick {
+    /// Nearest pitch / roll levels (the frame's tilt axes).
+    pub pitch: u32,
+    pub roll: u32,
+    /// The tilt actually drawn (radians): the level angles when snapping,
+    /// else the requested tilt clamped to the axes' range.
+    pub drawn: (f32, f32),
+    /// `DirBlend::tilt`: the residual from the levels to `drawn` (zero when
+    /// snapping).
+    pub residual: [f32; 3],
+}
+
+/// Pick the frames for drawing tilt `(pitch, roll)` (radians) at tile
+/// heading `heading` on a sheet with `pitch_axis` / `roll_axis`: the nearest
+/// levels, and with `interp` (the sheet's `tilt_interp`) the residual that
+/// warps them to the exact tilt, clamped to each axis' baked range (an axis
+/// the sheet lacks warps up to ±[`TILT_WARP_MAX_DEG`]).
+pub fn pick_tilt(
+    pitch_axis: Option<AngleAxis>,
+    roll_axis: Option<AngleAxis>,
+    heading: f32,
+    pitch: f32,
+    roll: f32,
+    interp: bool,
+) -> TiltPick {
+    let level = |ax: Option<AngleAxis>, a: f32| ax.map_or(0, |ax| ax.index(a));
+    let (pi, ri) = (level(pitch_axis, pitch), level(roll_axis, roll));
+    let angle = |ax: Option<AngleAxis>, i: u32| ax.map_or(0.0, |ax| ax.angle(i));
+    let baked = (angle(pitch_axis, pi), angle(roll_axis, ri));
+    if !interp {
+        return TiltPick { pitch: pi, roll: ri, drawn: baked, residual: [0.0; 3] };
+    }
+    let clamp = |ax: Option<AngleAxis>, a: f32| {
+        let (lo, hi) =
+            ax.map_or((-TILT_WARP_MAX_DEG, TILT_WARP_MAX_DEG), |ax| (ax.min(), ax.max_deg));
+        if a.is_finite() {
+            a.clamp(lo.to_radians(), hi.to_radians())
+        } else {
+            0.0
+        }
+    };
+    let drawn = (clamp(pitch_axis, pitch), clamp(roll_axis, roll));
+    let residual = tilt_residual(heading, drawn.0, drawn.1, baked.0, baked.1);
+    TiltPick { pitch: pi, roll: ri, drawn, residual }
+}
+
+/// The pose axes of a standalone posed sprite sheet (a frame table's
+/// `axes`): `directions` × optional `pitch` × `roll`, the same mixed radix
+/// as a cargo layer with those axes (`dir` minor, then `roll`, then
+/// `pitch`).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct SpriteAxes {
+    pub directions: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<AngleAxis>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roll: Option<AngleAxis>,
+}
+
+impl SpriteAxes {
+    /// A direction-only sheet.
+    pub fn directions(directions: u32) -> Self {
+        Self { directions, pitch: None, roll: None }
+    }
+
+    /// The `{texture}_{index}` index of direction `dir` at tilt levels
+    /// `(pitch, roll)` (`dir` wraps, the levels clamp).
+    pub fn frame_index(&self, dir: u32, pitch: u32, roll: u32) -> u32 {
+        let d = self.directions.max(1);
+        let r = self.roll.map_or(1, |a| a.count());
+        let p = self.pitch.map_or(1, |a| a.count());
+        (pitch.min(p - 1) * r + roll.min(r - 1)) * d + dir % d
+    }
+
+    /// Frames the sheet must hold.
+    pub fn frame_count(&self) -> u32 {
+        let r = self.roll.map_or(1, |a| a.count());
+        let p = self.pitch.map_or(1, |a| a.count());
+        self.directions.max(1) * r * p
+    }
+
+    /// The nearest tilt levels `(pitch, roll)` for a tilt in radians.
+    pub fn tilt_levels(&self, pitch: f32, roll: f32) -> (u32, u32) {
+        (self.pitch.map_or(0, |a| a.index(pitch)), self.roll.map_or(0, |a| a.index(roll)))
+    }
+
+    /// The tilt (radians) levels `(pitch, roll)` were baked at.
+    pub fn tilt_angles(&self, pitch: u32, roll: u32) -> (f32, f32) {
+        (self.pitch.map_or(0.0, |a| a.angle(pitch)), self.roll.map_or(0.0, |a| a.angle(roll)))
+    }
 }
 
 /// Window-space depth units per unit of `(gray − 0.5)` for a depth sheet.

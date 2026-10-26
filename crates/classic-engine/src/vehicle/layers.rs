@@ -11,7 +11,9 @@
 //! - wheel / gear side: direction × spin (from the odometer and the turn
 //!   differential, `distance / (2π · radius_m)` revolutions) × steer;
 //! - turret: its own slewed yaw over its own directions × gun pitch × fire;
-//! - tool / legs / cargo / lift: direction × the playing clip frame.
+//! - tool / legs / cargo / lift: direction × the playing clip frame, and
+//!   (when the layer declares them) the hull's drawn pitch / roll turned
+//!   into the layer's yaw, so carried cargo leans with its carrier.
 //!
 //! Direction interpolation (`dir_interp` sheets) applies to every layer.
 
@@ -22,8 +24,8 @@ use classic_core::components::{
 use classic_core::tilemap::{PPM_TARGET, TILE_M};
 use classic_core::types::{FrameTable, VehicleDef};
 use classic_core::vehicle_def::{
-    heading_neighbours, heading_to_dir_n, ClipDef, FrameSelect, GhostGroupMode, LayerKind,
-    VehicleLayerDef, DEFAULT_CLIP_FPS,
+    heading_neighbours, heading_to_dir_n, pick_tilt, tilt_for_yaw, ClipDef, FrameSelect,
+    GhostGroupMode, LayerKind, VehicleLayerDef, DEFAULT_CLIP_FPS,
 };
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
@@ -203,8 +205,14 @@ impl Engine {
             steer.map_or((1, 30f32.to_radians()), |a| (a.count(), a.max_deg.to_radians()));
         let tilt_reach = 0.5 * wheelbase_m.max(track_m) * pitch_max.max(roll_max).tan();
         let wheel_travel_down = tilt_reach.max(1.0 / PPM_TARGET);
+        // Half a tilt step: the finer of the hull's pitch and roll axes (a
+        // hull may bake either, or both at different levels).
+        let half_step = |levels: u32, max: f32| (levels > 1).then(|| max / (levels - 1) as f32);
         let tilt_dead_zone =
-            if pitch_levels > 1 { pitch_max / (pitch_levels - 1) as f32 } else { 0.0 };
+            match (half_step(pitch_levels, pitch_max), half_step(roll_levels, roll_max)) {
+                (Some(p), Some(r)) => p.min(r),
+                (p, r) => p.or(r).unwrap_or(0.0),
+            };
         let footprint: Vec<(i32, i32)> = match &def.path_footprint {
             Some(fp) => fp.clone(),
             None => {
@@ -366,28 +374,50 @@ impl Engine {
             }
         }
         let poses = layer_poses(&def, &v_state.layers.iter().map(|s| s.yaw).collect::<Vec<_>>());
+        // Whether a layer's sheet warps its tilt (`tilt_interp`).
+        let tilt_interp =
+            |l: &VehicleLayerDef| self.frame_tables.get(&l.texture).is_some_and(|t| t.tilt_interp);
+        // The hull's drawn tilt: its baked level angles (`0` on an axis it
+        // lacks), or the exact chassis tilt when its sheet warps tilt.  What a
+        // layer riding it (cargo, a tool) leans by.
+        let hull_tilt =
+            def.layers.iter().find(|l| l.kind == LayerKind::Hull).map_or((0.0, 0.0), |h| {
+                let interp = tilt_interp(h);
+                pick_tilt(h.pitch, h.roll, heading, v_state.pitch, v_state.roll, interp).drawn
+            });
 
         for s in &v_state.layers {
             let Some(l) = def.layers.get(s.def_index) else { continue };
             let Some(&e) = self.names.get(&s.entity) else { continue };
             let pose = poses[s.def_index];
             let layer_heading = heading + pose.yaw;
-            // Position: rotate the chassis offset, lift it on the body plane.
-            let t = chassis_to_tile([pose.pos.x, pose.pos.y], heading);
+            // Position: the chassis offset tilted by the body pitch / roll
+            // about the body's ground point (as `vehicle_socket_frame` does,
+            // so a layer origin and a zero-offset socket on it agree), then
+            // turned by the heading.
+            let tilted = super::sockets::rot_pitch(v_state.pitch)
+                * super::sockets::rot_roll(v_state.roll)
+                * pose.pos;
+            let t = chassis_to_tile([tilted.x, tilted.y], heading);
             let (lx, ly) = (bx + t[0], by + t[1]);
-            let lz = write.body[2]
-                + pose.pos.z
-                + pose.pos.x * v_state.pitch.sin()
-                + pose.pos.y * v_state.roll.sin();
+            let lz = write.body[2] + tilted.z;
             if let Ok(mut tf) = self.world.get::<&mut Transform>(e) {
                 tf.position = Vec3::new(lx, ly, lz);
             }
             let dirs = l.dirs(def.directions);
             let mut sel = FrameSelect::default();
+            let mut tilt = [0.0; 3];
             match l.kind {
                 LayerKind::Hull => {
-                    sel.pitch = l.pitch.map_or(0, |a| a.index(v_state.pitch));
-                    sel.roll = l.roll.map_or(0, |a| a.index(v_state.roll));
+                    let pick = pick_tilt(
+                        l.pitch,
+                        l.roll,
+                        layer_heading,
+                        v_state.pitch,
+                        v_state.roll,
+                        tilt_interp(l),
+                    );
+                    (sel.pitch, sel.roll, tilt) = (pick.pitch, pick.roll, pick.residual);
                 }
                 LayerKind::Wheel | LayerKind::GearSide => {
                     if l.spin_frames > 1 && l.radius_m > 0.0 {
@@ -408,6 +438,12 @@ impl Engine {
                     }
                 }
                 LayerKind::Tool | LayerKind::Legs | LayerKind::Cargo | LayerKind::Lift => {
+                    let interp = tilt_interp(l);
+                    if l.pitch.is_some() || l.roll.is_some() || interp {
+                        let (p, r) = tilt_for_yaw(hull_tilt.0, hull_tilt.1, pose.yaw);
+                        let pick = pick_tilt(l.pitch, l.roll, layer_heading, p, r, interp);
+                        (sel.pitch, sel.roll, tilt) = (pick.pitch, pick.roll, pick.residual);
+                    }
                     if let Some(c) = &s.clip {
                         if let Some(cd) = layer_clip(l, &c.clip) {
                             sel.clip = clip_frame(&cd, c).0;
@@ -436,6 +472,7 @@ impl Engine {
                     dirs,
                     &layer_anchors,
                     frame_index,
+                    tilt,
                 );
             }
         }
@@ -448,13 +485,14 @@ impl Engine {
 
     /// Frame one layer sprite for a heading: the quantized direction, or the
     /// two straddling directions when its texture opts into interpolation.
-    fn set_layer_frame(
+    pub(crate) fn set_layer_frame(
         tables: &HashMap<String, FrameTable>,
         s: &mut IsoSprite,
         heading: f32,
         dirs: u32,
         anchors: &[[f32; 2]],
         frame_index: impl Fn(u32) -> u32,
+        tilt: [f32; 3],
     ) {
         let name = |s: &IsoSprite, f: u32| {
             tables.contains_key(&s.texture).then(|| format!("{}_{f}", s.texture))
@@ -472,6 +510,7 @@ impl Engine {
                 anchor_b: anchor(b),
                 dtheta_a: t * step,
                 dtheta_b: (t - 1.0) * step,
+                tilt,
             });
         } else {
             let d = heading_to_dir_n(heading, dirs);

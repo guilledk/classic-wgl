@@ -412,6 +412,29 @@ anchor, and the drawn heading minus each neighbour's, in tile radians).
   attributes).  Programs `imageSheetInterp` / `spriteGhostIdsInterp`;
   direction B's colour / depth / normal bind on `BLEND_UNITS` = 13-15, and
   a batch key includes them.
+- **Tilt** (`tilt_interp` tables, see `classic-iso` "Tilt"): each neighbour's
+  rotation is `R = Q · Rz(φ)`, with `Q` (`DirBlend.tilt`, a unit
+  quaternion's xyz) the shared world-frame residual from the baked tilt
+  level to the drawn tilt.  It rides in the model columns' w (`i_m0.w`,
+  `i_m1.w`, `i_m3.w` → `vTilt`); `direct_tex.vert` and `shadow_sprite.vert`
+  rebuild the affine w row.  `residual()` applies it to the warp columns and
+  the normal; `Q = 1` returns the pure yaw (no cost on untilted blends).
+  Three tilted-only additions to the search (`warpSearch` / `warpAccept`):
+  - **Adaptive Newton step.** A residual makes `md` large, and on faces seen
+    near edge-on (a steep depth gradient) the plain step `s += q − f(s)`
+    diverges (`|I − J| > 1`, `J = [mx my] + md ∇d`). Once a pixel's residual
+    stops halving, it switches to `s += J⁻¹ r`, with `∇d` from two fetches
+    2 px out.
+  - **Second start.** Just outside the source silhouette the first search,
+    which takes background at the anchor depth, settles on a background
+    fixed point. It retries from background at `−R/2` (nearer the camera),
+    but only if it ended within `WARP_RETRY_PX` (16) of the content.
+  - **Quad bound** (`dir_blend.rs` `warped_rect`): the content rect ×
+    depth ±R pushed through each neighbour's full rotation.
+  Measured against Blender truth (`scratchpad/tilt165`, 8 headings on a
+  10.5° ramp): IoU 0.909 → 0.974, PSNR 22.7 → 29.0. What is left is
+  undersampling of faces seen edge-on in both sources, and corrugation
+  grooves.
 - **Cost**: about 3x a plain sprite per covered pixel (both warps run even
   on pixels that end transparent); see the PR for numbers.
 - **Depth base**: anchor-relative sheets now re-anchor against the frame's

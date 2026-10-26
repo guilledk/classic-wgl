@@ -49,6 +49,7 @@ flat in highp vec4 vUvB;
 flat in highp vec4 vContentB;
 flat in highp vec4 vInterp;
 flat in highp vec4 vQuad;
+flat in highp vec3 vTilt;
 #endif
 #ifndef ID_PASS
 // The ghost pass's group test: the id of the sprite group that last passed
@@ -327,6 +328,8 @@ uniform highp vec2 depth_span;
 #define WARP_STEPS 4
 #define WARP_ACCEPT_PX 0.75
 #define WARP_MERGE_M 0.06
+// Tilted retry: only first searches that ended this close to the content.
+#define WARP_RETRY_PX 16.0
 // Depth grays at or below this are background (half an 8-bit step).
 #define WARP_BACKGROUND_GRAY 0.002
 
@@ -355,6 +358,22 @@ highp vec3 rotZ(highp vec3 p, highp float a) {
     return vec3(c * p.x - s * p.y, s * p.x + c * p.y, p.z);
 }
 
+// A neighbour's full residual rotation `R = Q · Rz(phi)`: its yaw to the
+// drawn heading, then the shared world-frame tilt residual `Q` (`vTilt` =
+// the unit quaternion's xyz, w >= 0; zero = identity) from its baked tilt
+// level to the drawn tilt (`classic_core::vehicle_def::tilt_residual`).
+// Both pivot on the ground anchor, the bake rig's origin.
+highp vec3 residual(highp vec3 p, highp float phi) {
+    highp vec3 v = rotZ(p, phi);
+    highp vec3 u = vTilt;
+    // A pure yaw blend (flat per instance, so the branch is coherent).
+    if (u == vec3(0.0)) {
+        return v;
+    }
+    highp float w = sqrt(max(1.0 - dot(u, u), 0.0));
+    return v + 2.0 * cross(u, cross(u, v) + w * v);
+}
+
 // Sheet UV of a source-cell pixel position; false outside the trimmed
 // content (`tc` = trim offset, content size).
 bool cellUv(highp vec2 cell, highp vec4 uvr, highp vec4 tc, out highp vec2 uv) {
@@ -363,46 +382,117 @@ bool cellUv(highp vec2 cell, highp vec4 uvr, highp vec4 tc, out highp vec2 uv) {
     return c.x >= 0.0 && c.y >= 0.0 && c.x < 1.0 && c.y < 1.0;
 }
 
+// Anchor-relative depth (metres, + farther) at source-cell pixel `cell`;
+// background (gray 0, or outside the content) is the anchor's depth, 0.
+highp float warpDepth(sampler2D dep, highp vec4 uvr, highp vec4 tc, highp vec2 cell,
+                      highp float rangeM, out bool solid) {
+    highp vec2 uv;
+    highp float g = 0.0;
+    if (cellUv(cell, uvr, tc, uv)) {
+        g = textureLod(dep, uv, 0.0).r;
+    }
+    solid = g > WARP_BACKGROUND_GRAY;
+    return solid ? (g - 0.5) * 2.0 * rangeM : 0.0;
+}
+
+// The fixed-point search for the source pixel of output pixel `q` (`mx`,
+// `my`, `md`: the linear unproject -> rotate -> project columns).  Source
+// background is taken at depth `bg` (a `dir_interp` sheet keeps gray 0 for
+// transparent texels).  A tilt residual makes `md` large enough that on faces
+// seen near edge-on (a steep depth gradient) the plain step `s += q - f(s)`
+// diverges (`|I - J| > 1`, `J = [mx my] + md ∇d`); with `newton` (tilted
+// blends) a step whose residual stopped halving switches to a Newton step,
+// `∇d` from two fetches 2 px out.  A pure yaw keeps the plain step (one
+// fetch).
+highp vec2 warpSearch(sampler2D dep, highp vec4 uvr, highp vec4 tc, highp vec2 anchor,
+                      highp vec3 mx, highp vec3 my, highp vec3 md, highp float rangeM,
+                      highp vec2 q, bool newton, highp float bg) {
+    highp vec2 s = q;
+    // Newton only once the plain step stops converging (its residual no
+    // longer halves): well-conditioned faces never pay the gradient fetches.
+    bool diverging = false;
+    highp float prev = 1e9;
+    for (int i = 0; i < WARP_STEPS; i++) {
+        bool solid;
+        highp float d = warpDepth(dep, uvr, tc, anchor + s, rangeM, solid);
+        d = solid ? d : bg;
+        highp vec2 r = q - (mx.xy * s.x + my.xy * s.y + md.xy * d);
+        highp float rl = length(r);
+        diverging = diverging || rl > 0.5 * prev;
+        prev = rl;
+        if (newton && diverging && solid) {
+            bool sx;
+            bool sy;
+            highp float dx = warpDepth(dep, uvr, tc, anchor + s + vec2(2.0, 0.0), rangeM, sx);
+            highp float dy = warpDepth(dep, uvr, tc, anchor + s + vec2(0.0, 2.0), rangeM, sy);
+            highp vec2 g = vec2(sx ? (dx - d) * 0.5 : 0.0, sy ? (dy - d) * 0.5 : 0.0);
+            highp mat2 j = mat2(mx.xy + md.xy * g.x, my.xy + md.xy * g.y);
+            highp float det = determinant(j);
+            if (abs(det) > 0.05) {
+                r = inverse(j) * r;
+            }
+        }
+        s += r;
+    }
+    return s;
+}
+
+// Whether source pixel `s` is an opaque texel that projects onto `q`; sets
+// `uv` (its sheet UV) and `f` (its projected pixel and depth).
+bool warpAccept(sampler2D col, sampler2D dep, highp vec4 uvr, highp vec4 tc, highp vec2 anchor,
+                highp vec3 mx, highp vec3 my, highp vec3 md, highp float rangeM, highp vec2 q,
+                highp vec2 s, out highp vec2 uv, out vec4 color, out highp vec3 f) {
+    color = vec4(0.0);
+    f = vec3(0.0);
+    if (!cellUv(anchor + s, uvr, tc, uv)) {
+        return false;
+    }
+    color = textureLod(col, uv, 0.0);
+    if (color.a <= 0.02) {
+        return false;
+    }
+    highp float d = (textureLod(dep, uv, 0.0).r - 0.5) * 2.0 * rangeM;
+    f = mx * s.x + my * s.y + md * d;
+    return length(f.xy - q) < WARP_ACCEPT_PX;
+}
+
 WarpTexel warpDirection(sampler2D col, sampler2D dep, sampler2D nrm, highp vec4 uvr,
                         highp vec4 tc, highp vec2 anchor, highp float phi,
                         highp float rangeM, highp vec2 q) {
     WarpTexel w;
     w.ok = false;
     // unproject -> rotate -> project is linear in (s, d): precompute its
-    // columns once (one sin/cos pair), so a step is two fused vec3 terms.
-    highp vec3 mx = projectPx(rotZ(CAM_R / ppm, phi));
-    highp vec3 my = projectPx(rotZ(-CAM_U / ppm, phi));
-    highp vec3 md = projectPx(rotZ(-CAM_B, phi));
-    highp vec2 s = q;
+    // columns once (one sin/cos pair and the tilt quaternion), so a step is
+    // two fused vec3 terms.
+    highp vec3 mx = projectPx(residual(CAM_R / ppm, phi));
+    highp vec3 my = projectPx(residual(-CAM_U / ppm, phi));
+    highp vec3 md = projectPx(residual(-CAM_B, phi));
+    bool tilted = vTilt != vec3(0.0);
     highp vec2 uv;
-    for (int i = 0; i < WARP_STEPS; i++) {
-        // Background (gray 0, or outside the frame) is taken at the anchor's
-        // depth: one fetch per step, no alpha (a `dir_interp` sheet keeps
-        // gray 0 for transparent texels).
-        highp float d = 0.0;
-        if (cellUv(anchor + s, uvr, tc, uv)) {
-            highp float g = textureLod(dep, uv, 0.0).r;
-            d = g > WARP_BACKGROUND_GRAY ? (g - 0.5) * 2.0 * rangeM : 0.0;
-        }
-        s += q - (mx.xy * s.x + my.xy * s.y + md.xy * d);
+    highp vec3 f;
+    highp vec2 s = warpSearch(dep, uvr, tc, anchor, mx, my, md, rangeM, q, tilted, 0.0);
+    bool ok = warpAccept(col, dep, uvr, tc, anchor, mx, my, md, rangeM, q, s, uv, w.color, f);
+    // Just outside the source silhouette a tilt can pull in surface that the
+    // search, starting on background at the anchor depth, converges past
+    // (onto a background fixed point).  Retry those from a nearer background
+    // (half the depth range toward the camera) -- only where the first search
+    // ended within `WARP_RETRY_PX` of the source content, which skips the
+    // quad's far background.
+    highp vec2 c = anchor + s - tc.xy;
+    bool nearContent = all(greaterThan(c, vec2(-WARP_RETRY_PX)))
+        && all(lessThan(c, tc.zw + WARP_RETRY_PX));
+    if (!ok && tilted && nearContent) {
+        s = warpSearch(dep, uvr, tc, anchor, mx, my, md, rangeM, q, true, -0.5 * rangeM);
+        ok = warpAccept(col, dep, uvr, tc, anchor, mx, my, md, rangeM, q, s, uv, w.color, f);
     }
-    if (!cellUv(anchor + s, uvr, tc, uv)) {
-        return w;
-    }
-    w.color = textureLod(col, uv, 0.0);
-    if (w.color.a <= 0.02) {
-        return w;
-    }
-    highp float d = (textureLod(dep, uv, 0.0).r - 0.5) * 2.0 * rangeM;
-    highp vec3 f = mx * s.x + my * s.y + md * d;
-    if (length(f.xy - q) >= WARP_ACCEPT_PX) {
+    if (!ok) {
         return w;
     }
     w.normal = vec3(0.0);
     w.team = 1.0;
     if (use_normal_map > 0.5) {
         vec4 ns = textureLod(nrm, uv, 0.0);
-        w.normal = rotZ(ns.rgb * 2.0 - 1.0, phi);
+        w.normal = residual(ns.rgb * 2.0 - 1.0, phi);
         w.team = ns.a;
     }
     w.depth = f.z;

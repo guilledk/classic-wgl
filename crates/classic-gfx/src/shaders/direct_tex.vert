@@ -36,9 +36,14 @@ flat out highp vec4 vUvB;
 flat out highp vec4 vContentB;
 flat out highp vec4 vInterp;
 flat out highp vec4 vQuad;
+// The world-frame tilt residual quaternion `xyz` (`w >= 0`), from the
+// model columns' w.
+flat out highp vec3 vTilt;
 #endif
 // The quad has z = 0, so the model's z column never contributes.
-#define model_matrix mat4(i_m0, i_m1, vec4(0.0), i_m3)
+// The model is affine: its w row is rebuilt (a direction blend carries its
+// tilt residual in the columns' w, see `IsoSpriteInstance::m`).
+#define model_matrix mat4(vec4(i_m0.xyz, 0.0), vec4(i_m1.xyz, 0.0), vec4(0.0), vec4(i_m3.xyz, 1.0))
 #define iso_depth_corners i_corners
 #define use_iso_depth 1.0
 #else
@@ -70,6 +75,7 @@ void main(void ) {
     vContentB = i_content_b;
     vInterp = i_interp;
     vQuad = i_quad;
+    vTilt = vec3(i_m0.w, i_m1.w, i_m3.w);
 #endif
 #endif
     if (use_iso_depth > 0.5) {
