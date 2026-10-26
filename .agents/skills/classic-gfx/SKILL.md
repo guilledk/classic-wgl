@@ -435,6 +435,33 @@ anchor, and the drawn heading minus each neighbour's, in tile radians).
   10.5° ramp): IoU 0.909 → 0.974, PSNR 22.7 → 29.0. What is left is
   undersampling of faces seen edge-on in both sources, and corrugation
   grooves.
+- **Holes** (a pixel neither neighbour accepts), in order:
+  - **Third source.** At a large tilt residual the nearest level hides
+    surface the drawn tilt shows (a roof). `third_tilt` picks one adjacent
+    level when a residual passes `THIRD_SOURCE_STEP_FRACTION` (0.25) of its
+    axis step: the diagonal when both do, else the larger axis. That level's
+    frame of the nearer yaw neighbour (`DirBlend.third`, `t ≥ 0.5` → B)
+    warps by its own residual and that neighbour's `φ`, on that
+    neighbour's samplers (`dir_choice` drops it when the frame is on
+    another sheet). It is searched only on hole pixels where a first search
+    ended near content (`WarpTexel.near`, `WARP_RETRY_PX`). Its region rides
+    a per-frame `blend_thirds` RGBA32F texture, 4 texels a row
+    (`ThirdRegion::row`), on `BLEND_THIRD_UNIT` = 9. The instance's
+    `outline.x` holds the row (−1 = none, at most 2048 a frame). The rows
+    upload through a pixel unpack buffer into a ring of 3 textures:
+    glthread syncs on a client-memory texture upload, which cost 0.25 ms of
+    CPU. The quad is unchanged: the pair's warped rects already bound
+    every body point.
+  - **best2.** Otherwise the opaque search end (of A, B, the third) that
+    reprojects nearest the pixel, if within `WARP_BEST2_PX` (2); else
+    discard. `warpDirection` shades any opaque search end for this.
+  On the proxy-B container sheet (`scratchpad/tilt165/e168`, same 8 poses),
+  holes went 2291 → 1631 (best2) → 13 (third), and IoU 0.978 → 0.990,
+  matching the `replica3` prediction (0.991). GPU cost on that scene
+  (every container triggers) was +6% per sprite pass for best2, and +36%
+  with the third over #167. The third's cost is paid only by waves with a
+  triggered pixel: the same code present but never taken costs +6% over
+  best2.
 - **Cost**: about 3x a plain sprite per covered pixel (both warps run even
   on pixels that end transparent); see the PR for numbers.
 - **Depth base**: anchor-relative sheets now re-anchor against the frame's

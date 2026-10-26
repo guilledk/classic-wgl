@@ -21,6 +21,7 @@ use classic_core::components::{IsoSprite, Transform};
 use classic_core::tilemap::TILE_M;
 use classic_core::vehicle_def::{pick_tilt, SpriteAxes, TiltPick};
 
+use crate::vehicle::layers::LayerTilt;
 use crate::Engine;
 
 /// The tile-space unit vectors `(forward, left)` of tile heading `heading`
@@ -49,7 +50,12 @@ impl Engine {
         let (axes, pick) = Self::sprite_tilt(table, heading, pitch, roll);
         let dirs = axes.directions.max(1);
         let anchors = vec![s.anchor.to_array(); dirs as usize];
-        let frame = |d| axes.frame_index(d, pick.pitch, pick.roll);
+        let frame = |d, levels: Option<(u32, u32)>| {
+            let (p, r) = levels.unwrap_or((pick.pitch, pick.roll));
+            axes.frame_index(d, p, r)
+        };
+        let interp = table.tilt_interp && table.dir_interp;
+        let tilt = LayerTilt { pick, pitch: axes.pitch, roll: axes.roll, interp };
         Self::set_layer_frame(
             &self.frame_tables,
             &mut s,
@@ -57,7 +63,7 @@ impl Engine {
             dirs,
             &anchors,
             frame,
-            pick.residual,
+            Some(tilt),
         );
         true
     }
@@ -355,10 +361,30 @@ mod tests {
         let want = classic_core::vehicle_def::tilt_residual(h, p, r, 0.0, -20.0 * DEG);
         assert_eq!(b.tilt, want);
         assert!(b.tilt.iter().any(|v| v.abs() > 1e-3));
-        // Without the opt-in the same pose snaps (no residual).
+        // Both residuals (8°) pass a quarter step (5°): the diagonal level
+        // (pitch 2 at 20°, roll 1 at 0°) is the third source, on the nearer
+        // yaw neighbour (A: direction 1, a third of a step away).
+        let th = b.third.expect("large residual: a third source");
+        assert_eq!(th.frame, ((2 * 3 + 1) * 16 + 1) as f32);
+        assert!(!th.from_b);
+        assert_eq!(th.anchor, s.anchor);
+        let want = classic_core::vehicle_def::tilt_residual(h, p, r, 20.0 * DEG, 0.0);
+        assert_eq!(th.tilt, want);
+        // Near a level: no third source.
+        assert!(e.sprite_pose("box", 40.0 * DEG, 3.0 * DEG, -18.0 * DEG));
+        let b = sprite(&e).dir_blend.unwrap();
+        assert!(b.third.is_none());
+        // Past the midpoint the third rides B's direction.
+        assert!(e.sprite_pose("box", 40.0 * DEG, 8.0 * DEG, -18.0 * DEG));
+        let th = sprite(&e).dir_blend.unwrap().third.unwrap();
+        assert_eq!(th.frame, ((2 * 3) * 16 + 2) as f32);
+        assert!(th.from_b);
+        // Without the opt-in the same pose snaps (no residual, no third).
         e.frame_tables.get_mut("box").unwrap().tilt_interp = false;
         assert!(e.sprite_pose("box", h, p, r));
-        assert_eq!(sprite(&e).dir_blend.unwrap().tilt, [0.0; 3]);
+        let b = sprite(&e).dir_blend.unwrap();
+        assert_eq!(b.tilt, [0.0; 3]);
+        assert!(b.third.is_none());
     }
 
     #[test]

@@ -357,6 +357,11 @@ struct WarpTexel {
     float team;
     highp float depth;
     bool ok;
+    // The search ended on an opaque texel (accepted or not) `err` pixels from
+    // `q` (`best2`), and within `WARP_RETRY_PX` of the content (`near`).
+    bool opaque;
+    highp float err;
+    bool near;
 };
 
 // World offset -> pixel offset (y down) and view-depth offset (+ farther).
@@ -372,13 +377,13 @@ highp vec3 rotZ(highp vec3 p, highp float a) {
 }
 
 // A neighbour's full residual rotation `R = Q · Rz(phi)`: its yaw to the
-// drawn heading, then the shared world-frame tilt residual `Q` (`vTilt` =
-// the unit quaternion's xyz, w >= 0; zero = identity) from its baked tilt
-// level to the drawn tilt (`classic_core::vehicle_def::tilt_residual`).
-// Both pivot on the ground anchor, the bake rig's origin.
-highp vec3 residual(highp vec3 p, highp float phi) {
+// drawn heading, then the world-frame tilt residual `Q` (`u` = the unit
+// quaternion's xyz, w >= 0; zero = identity; `vTilt` for both neighbours, a
+// third source's own) from its baked tilt level to the drawn tilt
+// (`classic_core::vehicle_def::tilt_residual`).  Both pivot on the ground
+// anchor, the bake rig's origin.
+highp vec3 residual(highp vec3 p, highp float phi, highp vec3 u) {
     highp vec3 v = rotZ(p, phi);
-    highp vec3 u = vTilt;
     // A pure yaw blend (flat per instance, so the branch is coherent).
     if (u == vec3(0.0)) {
         return v;
@@ -451,12 +456,16 @@ highp vec2 warpSearch(sampler2D dep, highp vec4 uvr, highp vec4 tc, highp vec2 a
 }
 
 // Whether source pixel `s` is an opaque texel that projects onto `q`; sets
-// `uv` (its sheet UV) and `f` (its projected pixel and depth).
+// `uv` (its sheet UV), `f` (its projected pixel and depth), `opaque` and
+// `err` (its reprojection distance, for `best2` when it is not accepted).
 bool warpAccept(sampler2D col, sampler2D dep, highp vec4 uvr, highp vec4 tc, highp vec2 anchor,
                 highp vec3 mx, highp vec3 my, highp vec3 md, highp float rangeM, highp vec2 q,
-                highp vec2 s, out highp vec2 uv, out vec4 color, out highp vec3 f) {
+                highp vec2 s, out highp vec2 uv, out vec4 color, out highp vec3 f,
+                out bool opaque, out highp float err) {
     color = vec4(0.0);
     f = vec3(0.0);
+    opaque = false;
+    err = 1e9;
     if (!cellUv(anchor + s, uvr, tc, uv)) {
         return false;
     }
@@ -464,27 +473,30 @@ bool warpAccept(sampler2D col, sampler2D dep, highp vec4 uvr, highp vec4 tc, hig
     if (color.a <= 0.02) {
         return false;
     }
+    opaque = true;
     highp float d = (textureLod(dep, uv, 0.0).r - 0.5) * 2.0 * rangeM;
     f = mx * s.x + my * s.y + md * d;
-    return length(f.xy - q) < WARP_ACCEPT_PX;
+    err = length(f.xy - q);
+    return err < WARP_ACCEPT_PX;
 }
 
 WarpTexel warpDirection(sampler2D col, sampler2D dep, sampler2D nrm, highp vec4 uvr,
                         highp vec4 tc, highp vec2 anchor, highp float phi,
-                        highp float rangeM, highp vec2 q) {
+                        highp vec3 tilt, highp float rangeM, highp vec2 q) {
     WarpTexel w;
     w.ok = false;
     // unproject -> rotate -> project is linear in (s, d): precompute its
     // columns once (one sin/cos pair and the tilt quaternion), so a step is
     // two fused vec3 terms.
-    highp vec3 mx = projectPx(residual(CAM_R / ppm, phi));
-    highp vec3 my = projectPx(residual(-CAM_U / ppm, phi));
-    highp vec3 md = projectPx(residual(-CAM_B, phi));
-    bool tilted = vTilt != vec3(0.0);
+    highp vec3 mx = projectPx(residual(CAM_R / ppm, phi, tilt));
+    highp vec3 my = projectPx(residual(-CAM_U / ppm, phi, tilt));
+    highp vec3 md = projectPx(residual(-CAM_B, phi, tilt));
+    bool tilted = tilt != vec3(0.0);
     highp vec2 uv;
     highp vec3 f;
     highp vec2 s = warpSearch(dep, uvr, tc, anchor, mx, my, md, rangeM, q, tilted, 0.0);
-    bool ok = warpAccept(col, dep, uvr, tc, anchor, mx, my, md, rangeM, q, s, uv, w.color, f);
+    bool ok = warpAccept(col, dep, uvr, tc, anchor, mx, my, md, rangeM, q, s, uv, w.color, f,
+                         w.opaque, w.err);
     // Just outside the source silhouette a tilt can pull in surface that the
     // search, starting on background at the anchor depth, converges past
     // (onto a background fixed point).  Retry those from a nearer background
@@ -494,24 +506,48 @@ WarpTexel warpDirection(sampler2D col, sampler2D dep, sampler2D nrm, highp vec4 
     highp vec2 c = anchor + s - tc.xy;
     bool nearContent = all(greaterThan(c, vec2(-WARP_RETRY_PX)))
         && all(lessThan(c, tc.zw + WARP_RETRY_PX));
+    w.near = nearContent;
     if (!ok && tilted && nearContent) {
         s = warpSearch(dep, uvr, tc, anchor, mx, my, md, rangeM, q, true, -0.5 * rangeM);
-        ok = warpAccept(col, dep, uvr, tc, anchor, mx, my, md, rangeM, q, s, uv, w.color, f);
+        ok = warpAccept(col, dep, uvr, tc, anchor, mx, my, md, rangeM, q, s, uv, w.color, f,
+                        w.opaque, w.err);
     }
-    if (!ok) {
+    w.depth = f.z;
+    if (!w.opaque) {
         return w;
     }
+    // An opaque search end shades even when not accepted: `best2` may fill
+    // a hole with it.
     w.normal = vec3(0.0);
     w.team = 1.0;
     if (use_normal_map > 0.5) {
         vec4 ns = textureLod(nrm, uv, 0.0);
-        w.normal = residual(ns.rgb * 2.0 - 1.0, phi);
+        w.normal = residual(ns.rgb * 2.0 - 1.0, phi, tilt);
         w.team = ns.a;
     }
-    w.depth = f.z;
-    w.ok = true;
+    w.ok = ok;
     return w;
 }
+
+// `best2`: of the opaque search ends, the one whose texel reprojects nearest
+// `q`, when within 2 px (a near-miss the 0.75 px accept rejected: the second
+// candidate source of colour for a pixel no source covers).
+#define WARP_BEST2_PX 2.0
+
+WarpTexel best2(WarpTexel x, WarpTexel y) {
+    bool xs = x.opaque && x.err < WARP_BEST2_PX;
+    bool ys = y.opaque && y.err < WARP_BEST2_PX;
+    if (ys && (!xs || y.err < x.err)) {
+        return y;
+    }
+    return x;
+}
+
+// The third source's region, from the per-frame `blend_thirds` rows (one per
+// blend instance with a third source, its row in `vOutline.x`; -1 = none):
+// `[uv rect] [trim.xy, content.xy] [anchor.xy, tilt.xy] [tilt.z, from_b]`.
+uniform highp sampler2D blend_thirds;
+
 
 // The merged direction blend at this fragment (discards where neither
 // neighbour covers it).  `vOutline.zw` / `vInterp.xy` are the anchors,
@@ -521,11 +557,37 @@ WarpTexel blendDirections() {
     highp vec2 q = vQuad.xy + vTexCoord * vQuad.zw;
     highp float rangeM = depth_scale * (depth_span.x - depth_span.y) * 0.5;
     WarpTexel a = warpDirection(tex_sampler, depth_sampler, normal_sampler, vUvRect, vContent,
-                                vOutline.zw, -vInterp.z, rangeM, q);
+                                vOutline.zw, -vInterp.z, vTilt, rangeM, q);
     WarpTexel b = warpDirection(tex_sampler_b, depth_sampler_b, normal_sampler_b, vUvB, vContentB,
-                                vInterp.xy, -vInterp.w, rangeM, q);
+                                vInterp.xy, -vInterp.w, vTilt, rangeM, q);
     if (!a.ok && !b.ok) {
-        discard;
+        // A hole.  A large tilt residual carries a third source (the nearer
+        // yaw neighbour at an adjacent tilt level) for surface neither level
+        // frame shows; it is searched only here, and only where a first
+        // search ended near content.  Failing that, `best2` over every
+        // source's opaque near-miss.
+        WarpTexel best = best2(a, b);
+        int row = int(vOutline.x);
+        if (row >= 0 && (a.near || b.near)) {
+            highp vec4 r0 = texelFetch(blend_thirds, ivec2(0, row), 0);
+            highp vec4 r1 = texelFetch(blend_thirds, ivec2(1, row), 0);
+            highp vec4 r2 = texelFetch(blend_thirds, ivec2(2, row), 0);
+            highp vec4 r3 = texelFetch(blend_thirds, ivec2(3, row), 0);
+            highp vec3 tilt = vec3(r2.zw, r3.x);
+            WarpTexel c = r3.y > 0.5
+                ? warpDirection(tex_sampler_b, depth_sampler_b, normal_sampler_b, r0, r1, r2.xy,
+                                -vInterp.w, tilt, rangeM, q)
+                : warpDirection(tex_sampler, depth_sampler, normal_sampler, r0, r1, r2.xy,
+                                -vInterp.z, tilt, rangeM, q);
+            if (c.ok) {
+                return c;
+            }
+            best = best2(best, c);
+        }
+        if (!(best.opaque && best.err < WARP_BEST2_PX)) {
+            discard;
+        }
+        return best;
     }
     if (!b.ok) {
         return a;

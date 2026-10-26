@@ -75,6 +75,15 @@ pub const GHOST_ID_UNIT: u32 = 12;
 /// sheets (A uses 0-2; 13-15 are clear of every other binding).
 pub const BLEND_UNITS: [u32; 3] = [13, 14, 15];
 
+/// The texture unit of the direction blends' third-source rows
+/// (`sheet.frag` `blend_thirds`).  Every unit is spoken for, so it shares the
+/// particle noise's and each instanced sheet draw rebinds it.
+pub const BLEND_THIRD_UNIT: u32 = 9;
+
+/// `blend_thirds` textures in rotation: a frame's upload never rewrites one
+/// a frame still in flight samples (an implicit sync measured at 0.2 ms CPU).
+const BLEND_THIRD_RING: usize = 3;
+
 /// The ghost-pass alpha (`classic-gfx` §14).
 pub const GHOST_ALPHA: f32 = 0.4;
 
@@ -165,6 +174,10 @@ impl IsoSpriteInstance {
     /// `b`'s direction B to the drawn heading (`sheet.frag#INTERP`).
     pub fn blend(mut self, b: &DirBlendRegion) -> Self {
         self.misc[3] = 2.0;
+        // `outline.xy` (the selection outline) is unused by a blend (a selected
+        // sprite never blends): `outline.x` holds its `blend_thirds` row, -1 =
+        // none ([`IsoSpriteInstance::with_third_row`]).
+        self.outline[0] = -1.0;
         self.outline[2] = b.anchor_a_px[0];
         self.outline[3] = b.anchor_a_px[1];
         self.uv_b = b.uv_b;
@@ -176,6 +189,12 @@ impl IsoSpriteInstance {
         self.m[1][3] = b.tilt[1];
         self.m[2][3] = b.tilt[2];
         self.quad = b.quad;
+        self
+    }
+
+    /// Point a direction blend at its third source's `blend_thirds` row.
+    pub fn with_third_row(mut self, row: usize) -> Self {
+        self.outline[0] = row as f32;
         self
     }
 
@@ -226,6 +245,47 @@ pub struct DirBlendRegion {
     pub tilt: [f32; 3],
     /// The drawn quad `x0, y0, w, h` in pixels from the anchor (y down).
     pub quad: [f32; 4],
+    /// The third source for holes (`DirBlend::third`), on its neighbour's
+    /// textures; carried in the per-frame `blend_thirds` rows.
+    pub third: Option<ThirdRegion>,
+}
+
+/// A direction blend's third source ([`DirBlendRegion::third`]): its sheet
+/// UV rect, trim offset and content size, anchor (px of its source cell),
+/// tilt residual, and whether it pairs with direction B.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ThirdRegion {
+    pub uv: [f32; 4],
+    pub trim: [f32; 2],
+    pub content: [f32; 2],
+    pub anchor_px: [f32; 2],
+    pub tilt: [f32; 3],
+    pub from_b: bool,
+}
+
+impl ThirdRegion {
+    /// Its `blend_thirds` row (four RGBA32F texels).
+    pub fn row(&self) -> [f32; 16] {
+        let [u0, v0, u1, v1] = self.uv;
+        [
+            u0,
+            v0,
+            u1,
+            v1,
+            self.trim[0],
+            self.trim[1],
+            self.content[0],
+            self.content[1],
+            self.anchor_px[0],
+            self.anchor_px[1],
+            self.tilt[0],
+            self.tilt[1],
+            self.tilt[2],
+            if self.from_b { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
+        ]
+    }
 }
 
 /// A region as instance data: `(uv, content, source, grid)`.
@@ -532,6 +592,13 @@ impl GhostIdTarget {
 pub(crate) struct SpriteBatchState {
     sprites: Option<SpriteInstanceGpu>,
     shadows: Option<SpriteInstanceGpu>,
+    /// The direction blends' third sources (`blend_thirds`, RGBA32F, 4 x rows)
+    /// with their row capacities, a [`BLEND_THIRD_RING`]; `thirds_at` is this
+    /// frame's.
+    thirds: [Option<(glow::Texture, usize)>; BLEND_THIRD_RING],
+    thirds_at: usize,
+    /// Their rows' pixel unpack buffer.
+    thirds_pbo: Option<glow::Buffer>,
     ids: Option<GhostIdTarget>,
     /// The ghost-id pass cannot run here (sticky).
     ids_unsupported: Cell<bool>,
@@ -585,6 +652,74 @@ impl Gfx {
         gpu.upload(gl, instances);
         unsafe { gl.bind_vertex_array(Some(self.vao)) };
         self.sprite_batch.ids_valid.set(false);
+    }
+
+    /// Upload this frame's direction-blend third-source rows (see
+    /// [`ThirdRegion::row`]; an instance points at its row with
+    /// [`IsoSpriteInstance::with_third_row`]) into the ring's next texture;
+    /// each instanced sheet draw binds it on [`BLEND_THIRD_UNIT`].  A frame
+    /// with none keeps a 1-row texture, so the sampler is always complete.
+    pub fn upload_blend_thirds(&mut self, rows: &[[f32; 16]]) {
+        let gl = &self.gl;
+        let n = rows.len().max(1);
+        let at = (self.sprite_batch.thirds_at + 1) % BLEND_THIRD_RING;
+        self.sprite_batch.thirds_at = at;
+        unsafe {
+            gl.active_texture(glow::TEXTURE0 + BLEND_THIRD_UNIT);
+            match self.sprite_batch.thirds[at] {
+                Some((t, cap)) if cap >= n => {
+                    gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                }
+                old => {
+                    if let Some((t, _)) = old {
+                        gl.delete_texture(t);
+                    }
+                    let cap = n.next_power_of_two();
+                    let t = gl.create_texture().expect("blend_thirds texture");
+                    gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                    for (p, v) in [
+                        (glow::TEXTURE_MIN_FILTER, glow::NEAREST),
+                        (glow::TEXTURE_MAG_FILTER, glow::NEAREST),
+                        (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+                        (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+                    ] {
+                        gl.tex_parameter_i32(glow::TEXTURE_2D, p, v as i32);
+                    }
+                    gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA32F, 4, cap as i32);
+                    self.sprite_batch.thirds[at] = Some((t, cap));
+                }
+            }
+            if !rows.is_empty() {
+                // Through a pixel unpack buffer: Mesa's glthread copies a buffer
+                // upload, but syncs the driver thread on a texture upload from
+                // client memory (measured at 0.25 ms CPU).
+                let pbo = *self
+                    .sprite_batch
+                    .thirds_pbo
+                    .get_or_insert_with(|| gl.create_buffer().expect("blend_thirds unpack buffer"));
+                let bytes: &[u8] = bytemuck::cast_slice(rows);
+                gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(pbo));
+                gl.buffer_data_size(
+                    glow::PIXEL_UNPACK_BUFFER,
+                    bytes.len() as i32,
+                    glow::STREAM_DRAW,
+                );
+                gl.buffer_sub_data_u8_slice(glow::PIXEL_UNPACK_BUFFER, 0, bytes);
+                gl.tex_sub_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    4,
+                    rows.len() as i32,
+                    glow::RGBA,
+                    glow::FLOAT,
+                    glow::PixelUnpackData::BufferOffset(0),
+                );
+                gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+            }
+            gl.active_texture(glow::TEXTURE0);
+        }
     }
 
     /// Upload this frame's shadow-caster instances (in shadow batch order).
@@ -808,6 +943,15 @@ impl Gfx {
         s.uniform_1i(gl, "tex_sampler_b", BLEND_UNITS[0] as i32);
         s.uniform_1i(gl, "depth_sampler_b", BLEND_UNITS[1] as i32);
         s.uniform_1i(gl, "normal_sampler_b", BLEND_UNITS[2] as i32);
+        s.uniform_1i(gl, "blend_thirds", BLEND_THIRD_UNIT as i32);
+        // Rebound per draw: the particle noise shares the unit.
+        if let Some((t, _)) = self.sprite_batch.thirds[self.sprite_batch.thirds_at] {
+            unsafe {
+                gl.active_texture(glow::TEXTURE0 + BLEND_THIRD_UNIT);
+                gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                gl.active_texture(glow::TEXTURE0);
+            }
+        }
     }
 
     /// The pass state of the instanced sheet program `s` (lighting, shadow,
@@ -988,6 +1132,30 @@ mod tests {
 
     fn members(b: &[PlannedBatch]) -> Vec<(u32, Vec<u32>)> {
         b.iter().map(|b| (b.key, b.instances.clone())).collect()
+    }
+
+    #[test]
+    fn third_rows_match_the_shader_layout() {
+        // `sheet.frag`: r0 = uv rect, r1 = trim.xy content.xy, r2 = anchor.xy
+        // tilt.xy, r3 = tilt.z from_b.
+        let t = ThirdRegion {
+            uv: [0.1, 0.2, 0.3, 0.4],
+            trim: [5.0, 6.0],
+            content: [40.0, 60.0],
+            anchor_px: [20.0, 48.0],
+            tilt: [0.01, -0.02, 0.03],
+            from_b: true,
+        };
+        assert_eq!(
+            t.row(),
+            [
+                0.1, 0.2, 0.3, 0.4, 5.0, 6.0, 40.0, 60.0, 20.0, 48.0, 0.01, -0.02, 0.03, 1.0, 0.0,
+                0.0
+            ]
+        );
+        let i = IsoSpriteInstance::default().blend(&DirBlendRegion::default());
+        assert_eq!(i.outline[0], -1.0, "a blend has no third row until pointed at one");
+        assert_eq!(i.with_third_row(7).outline[0], 7.0);
     }
 
     #[test]

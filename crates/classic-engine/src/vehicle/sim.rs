@@ -681,6 +681,7 @@ impl Engine {
             dtheta_a: t * step,
             dtheta_b: (t - 1.0) * step,
             tilt: [0.0; 3],
+            third: None,
         });
     }
 }

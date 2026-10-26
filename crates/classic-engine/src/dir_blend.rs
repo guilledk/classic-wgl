@@ -4,7 +4,7 @@
 
 use classic_core::components::IsoSprite;
 use classic_core::types::FrameTable;
-use classic_gfx::{BlendTextures, DirBlendRegion};
+use classic_gfx::{BlendTextures, DirBlendRegion, ThirdRegion};
 use glam::Vec2;
 use std::collections::HashMap;
 
@@ -15,6 +15,9 @@ use crate::{Engine, IsoUv, ResolvedFrame};
 pub(crate) const BLEND_QUAD_MARGIN_PX: f32 = 4.0;
 
 /// How one direction-interpolated sprite draws this frame.
+// Matched as soon as it is returned, once per sprite a frame: boxing the blend
+// would allocate per blended sprite.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum DirChoice {
     /// No `dir_blend` (or nothing resolvable): draw `frame` as usual.
     Plain,
@@ -100,6 +103,32 @@ impl Engine {
             ra = warped_rect(ra, -blend.dtheta_a, blend.tilt, fa.depth_scale);
             rb = warped_rect(rb, -blend.dtheta_b, blend.tilt, fb.depth_scale);
         }
+        // The third source (holes at a large tilt residual): its frame must sit on
+        // its neighbour's sheet and companions (the shader samples it there).
+        // It never widens the quad: every point of the body, seen by a
+        // neighbour or not, projects inside that neighbour's silhouette within
+        // its anchor depth range, which `warped_rect` already bounds.
+        let third = blend.third.and_then(|th| {
+            let name = format!("{}_{}", sprite.texture, th.frame as u32);
+            let fc = Self::resolve_frame(tables, &sprite.texture, &name)?;
+            let pair = if th.from_b { &fb } else { fa };
+            let same = fc.sheet_name == pair.sheet_name
+                && fc.depth_tex == pair.depth_tex
+                && fc.normal_tex == pair.normal_tex
+                && fc.anchor_depth;
+            if !same {
+                return None;
+            }
+            let (_, anchor_px, _) = packed_geometry(&fc, th.anchor);
+            Some(ThirdRegion {
+                uv: fc.uv_rect,
+                trim: [fc.trim_offset[0] as f32, fc.trim_offset[1] as f32],
+                content: fc.size,
+                anchor_px: anchor_px.to_array(),
+                tilt: th.tilt,
+                from_b: th.from_b,
+            })
+        });
         let m = BLEND_QUAD_MARGIN_PX;
         let x0 = (ra[0].min(rb[0]) - m).floor();
         let y0 = (ra[1].min(rb[1]) - m).floor();
@@ -118,6 +147,7 @@ impl Engine {
                 dtheta_b: blend.dtheta_b,
                 tilt: blend.tilt,
                 quad: [x0, y0, x1 - x0, y1 - y0],
+                third,
             },
             textures: BlendTextures {
                 texture: fb.sheet_name.clone(),
@@ -189,5 +219,83 @@ mod tests {
         }
         // A tilt widens the bound beyond the source rect.
         assert!(out[1] < rect[1] - 1.0 || out[3] > rect[3] + 1.0);
+    }
+
+    /// A `dir_interp` anchor-depth table: frames `tex_0..2` on sheet 0
+    /// (`tex_2` twice the size) and `tex_3` on sheet 1 (a different sheet and
+    /// depth companion).
+    fn table() -> std::collections::HashMap<String, classic_core::types::FrameTable> {
+        let sheet = |n: &str| {
+            serde_json::json!({ "name": n, "src": format!("/res/{n}.png"), "size": [256, 256],
+                "depth": format!("/res/{n}_depth.png"), "depth_mode": "anchor",
+                "depth_range_m": 3.0 })
+        };
+        let frame = |s: u32, x: u32| serde_json::json!({ "sheet": s, "rect": [x, 0, 40, 60] });
+        let mut t: classic_core::types::FrameTable = serde_json::from_value(serde_json::json!({
+            "version": 2, "dir_interp": true, "sheets": [sheet("a"), sheet("b")],
+            "frames": { "tex_0": frame(0, 0), "tex_1": frame(0, 50),
+                        "tex_2": { "sheet": 0, "rect": [100, 0, 80, 120] },
+                        "tex_3": frame(1, 0) }
+        }))
+        .unwrap();
+        t.precompute_companions();
+        std::collections::HashMap::from([("tex".to_string(), t)])
+    }
+
+    #[test]
+    fn third_source_rides_its_neighbours_sheet_inside_the_pairs_quad() {
+        use crate::dir_blend::DirChoice;
+        use crate::Engine;
+        use classic_core::components::{DirBlend, DirThird, IsoSprite};
+        use glam::{Vec2, Vec3};
+        let tables = table();
+        let tilt = classic_core::vehicle_def::tilt_residual(0.3, 0.14, -0.2, 0.0, -0.35);
+        let third_tilt = classic_core::vehicle_def::tilt_residual(0.3, 0.14, -0.2, 0.35, -0.35);
+        let blend = |frame: f32, from_b: bool| DirBlend {
+            tilt,
+            third: Some(DirThird { frame, anchor: Vec2::new(0.5, 0.8), tilt: third_tilt, from_b }),
+            ..DirBlend::yaw(1.0, Vec2::new(0.5, 0.8), 0.1, -0.29)
+        };
+        let sprite = |b: Option<DirBlend>| IsoSprite {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            texture: "tex".into(),
+            tilemap: "tm".into(),
+            frame: 0.0,
+            frame_name: None,
+            tile_set_size: Vec2::ONE,
+            anchor: Vec2::new(0.5, 0.8),
+            frame_offset: Vec3::ZERO,
+            footprint: vec![],
+            ghost_group: 0,
+            color: [1.0; 4],
+            dir_blend: b,
+            no_ghost: false,
+            team_tint: None,
+            emissive: None,
+        };
+        let fa = Engine::resolve_frame(&tables, "tex", "tex_0").unwrap();
+        let geom =
+            |b: DirBlend| match Engine::dir_choice(&tables, &sprite(Some(b)), Some(&fa), false) {
+                DirChoice::Blend(g) => g,
+                _ => panic!("blends"),
+            };
+        // On A's sheet: the third region is set, from frame 2's rect.
+        let g = geom(blend(2.0, false));
+        let th = g.region.third.expect("third on A's sheet");
+        let f2 = Engine::resolve_frame(&tables, "tex", "tex_2").unwrap();
+        assert_eq!(th.uv, f2.uv_rect);
+        assert_eq!((th.content, th.trim), ([80.0, 120.0], [0.0, 0.0]));
+        assert_eq!((th.tilt, th.from_b), (third_tilt, false));
+        assert_eq!(th.anchor_px, [40.0, 96.0]);
+        // The quad stays the pair's (their warped rects bound the whole body).
+        let mut no_third = blend(2.0, false);
+        no_third.third = None;
+        assert_eq!(g.region.quad, geom(no_third).region.quad);
+        // A frame on another sheet / depth companion than its pair, or a
+        // missing frame: no third source (the shader samples the pair's).
+        assert!(geom(blend(3.0, false)).region.third.is_none());
+        assert!(geom(blend(9.0, true)).region.third.is_none());
+        assert!(geom(blend(2.0, true)).region.third.is_some(), "B shares sheet a");
     }
 }

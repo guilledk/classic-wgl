@@ -18,14 +18,14 @@
 //! Direction interpolation (`dir_interp` sheets) applies to every layer.
 
 use classic_core::components::{
-    ClipPlay, DebugName, DirBlend, IsoSprite, IsoVehicle, RoleKind, Selectable, Transform,
-    VehicleLayerState,
+    ClipPlay, DebugName, DirBlend, DirThird, IsoSprite, IsoVehicle, RoleKind, Selectable,
+    Transform, VehicleLayerState,
 };
 use classic_core::tilemap::{PPM_TARGET, TILE_M};
 use classic_core::types::{FrameTable, VehicleDef};
 use classic_core::vehicle_def::{
-    heading_neighbours, heading_to_dir_n, pick_tilt, tilt_for_yaw, ClipDef, FrameSelect,
-    GhostGroupMode, LayerKind, VehicleLayerDef, DEFAULT_CLIP_FPS,
+    heading_neighbours, heading_to_dir_n, pick_tilt, third_tilt, tilt_for_yaw, AngleAxis, ClipDef,
+    FrameSelect, GhostGroupMode, LayerKind, TiltPick, VehicleLayerDef, DEFAULT_CLIP_FPS,
 };
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
@@ -36,6 +36,17 @@ use crate::Engine;
 
 /// The clip name that plays a turret's fire frames (`vehicle_play`).
 pub const FIRE_CLIP: &str = "fire";
+
+/// A layer's tilt framing for [`Engine::set_layer_frame`]: the levels and
+/// residual picked ([`pick_tilt`]), its axes, and whether its sheet warps
+/// tilt (`tilt_interp`, which also enables the third source).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LayerTilt {
+    pub(crate) pick: TiltPick,
+    pub(crate) pitch: Option<AngleAxis>,
+    pub(crate) roll: Option<AngleAxis>,
+    pub(crate) interp: bool,
+}
 
 /// A layer's pose in the vehicle frame: position (metres, `x` forward, `y`
 /// left, `z` up) and yaw relative to the hull (tile radians).
@@ -406,18 +417,20 @@ impl Engine {
             }
             let dirs = l.dirs(def.directions);
             let mut sel = FrameSelect::default();
-            let mut tilt = [0.0; 3];
+            let mut tilt: Option<LayerTilt> = None;
             match l.kind {
                 LayerKind::Hull => {
+                    let interp = tilt_interp(l);
                     let pick = pick_tilt(
                         l.pitch,
                         l.roll,
                         layer_heading,
                         v_state.pitch,
                         v_state.roll,
-                        tilt_interp(l),
+                        interp,
                     );
-                    (sel.pitch, sel.roll, tilt) = (pick.pitch, pick.roll, pick.residual);
+                    (sel.pitch, sel.roll) = (pick.pitch, pick.roll);
+                    tilt = Some(LayerTilt { pick, pitch: l.pitch, roll: l.roll, interp });
                 }
                 LayerKind::Wheel | LayerKind::GearSide => {
                     if l.spin_frames > 1 && l.radius_m > 0.0 {
@@ -442,7 +455,8 @@ impl Engine {
                     if l.pitch.is_some() || l.roll.is_some() || interp {
                         let (p, r) = tilt_for_yaw(hull_tilt.0, hull_tilt.1, pose.yaw);
                         let pick = pick_tilt(l.pitch, l.roll, layer_heading, p, r, interp);
-                        (sel.pitch, sel.roll, tilt) = (pick.pitch, pick.roll, pick.residual);
+                        (sel.pitch, sel.roll) = (pick.pitch, pick.roll);
+                        tilt = Some(LayerTilt { pick, pitch: l.pitch, roll: l.roll, interp });
                     }
                     if let Some(c) = &s.clip {
                         if let Some(cd) = layer_clip(l, &c.clip) {
@@ -456,9 +470,12 @@ impl Engine {
                     Some(a) => anchors_n(a, dirs),
                     None => vec![[0.5, 0.5]; dirs as usize],
                 };
-            let frame_index = |dir: u32| {
+            let frame_index = |dir: u32, levels: Option<(u32, u32)>| {
                 let mut s2 = sel;
                 s2.dir = dir;
+                if let Some((p, r)) = levels {
+                    (s2.pitch, s2.roll) = (p, r);
+                }
                 l.frame_index(def.directions, &s2)
             };
             let altitude = lz - terrain.height(lx, ly);
@@ -491,8 +508,8 @@ impl Engine {
         heading: f32,
         dirs: u32,
         anchors: &[[f32; 2]],
-        frame_index: impl Fn(u32) -> u32,
-        tilt: [f32; 3],
+        frame_index: impl Fn(u32, Option<(u32, u32)>) -> u32,
+        tilt: Option<LayerTilt>,
     ) {
         let name = |s: &IsoSprite, f: u32| {
             tables.contains_key(&s.texture).then(|| format!("{}_{f}", s.texture))
@@ -501,20 +518,36 @@ impl Engine {
         if tables.get(&s.texture).is_some_and(|t| t.dir_interp) {
             let (a, b, t) = heading_neighbours(heading, dirs);
             let step = std::f32::consts::TAU / dirs.max(1) as f32;
-            let fa = frame_index(a);
+            let fa = frame_index(a, None);
             s.frame = fa as f32;
             s.frame_name = name(s, fa);
             s.anchor = anchor(a);
+            // The third source: the nearer yaw neighbour at an adjacent tilt
+            // level, for a large residual on a tilt-warping sheet.
+            let third = tilt
+                .filter(|lt| lt.interp)
+                .and_then(|lt| third_tilt(lt.pitch, lt.roll, heading, &lt.pick))
+                .map(|th| {
+                    let from_b = t >= 0.5;
+                    let d = if from_b { b } else { a };
+                    DirThird {
+                        frame: frame_index(d, Some((th.pitch, th.roll))) as f32,
+                        anchor: anchor(d),
+                        tilt: th.residual,
+                        from_b,
+                    }
+                });
             s.dir_blend = Some(DirBlend {
-                frame_b: frame_index(b) as f32,
+                frame_b: frame_index(b, None) as f32,
                 anchor_b: anchor(b),
                 dtheta_a: t * step,
                 dtheta_b: (t - 1.0) * step,
-                tilt,
+                tilt: tilt.map_or([0.0; 3], |lt| lt.pick.residual),
+                third,
             });
         } else {
             let d = heading_to_dir_n(heading, dirs);
-            let f = frame_index(d);
+            let f = frame_index(d, None);
             s.frame = f as f32;
             s.frame_name = name(s, f);
             s.anchor = anchor(d);

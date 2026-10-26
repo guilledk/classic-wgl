@@ -16,7 +16,7 @@ mod dust;
 mod kinematics;
 #[cfg(test)]
 mod layer_tests;
-mod layers;
+pub(crate) mod layers;
 mod sim;
 mod sockets;
 #[cfg(test)]
