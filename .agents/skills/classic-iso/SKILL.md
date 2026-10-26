@@ -422,7 +422,7 @@ fn compute_iso_sprite_model(...) -> Mat4 {
 
     // Quad size in metres (source-cell px → metres at PPM_TARGET).
     let w  = tex_dim.0 * scale.x / PPM_TARGET;
-    let hh = tex_dim.1 * scale.y / PPM_TARGET;
+    let hh = tex_dim.1 * scale.y * SPRITE_HEIGHT_M_PER_PX; // 1 / (PPM · cos30)
 
     // Anchor in normalized [0,1] quad space.
     let ua = anchor_px.x / tex_dim.0;
@@ -451,8 +451,15 @@ Key pieces:
   `right` axis `(1/√2, −1/√2, 0)`, height down world `−Z` (so the sheet's `v=0`
   top is at higher `z` and the feet at the anchor).  The screen camera then
   projects this standing quad.
-- `tex_dim` is the source-cell pixel size; `w/hh` scale it to metres via
-  `PPM_TARGET`.  The `-ua/-wa` translation shifts the quad so the anchor point
+- `tex_dim` is the source-cell pixel size; `w` scales it to metres via
+  `PPM_TARGET`, `hh` via `SPRITE_HEIGHT_M_PER_PX = 1 / (PPM_TARGET · cos30)`.
+  A sheet is a camera image whose vertical pixels are already foreshortened
+  by the 30° view; the camera's `up.z = cos30` maps one quad-height pixel
+  back to one screen pixel, so a sheet draws 1:1 and the card stands the
+  object's true height (true-length sun shadows).  Until #166 the height used
+  `/ PPM_TARGET`, drawing every sprite at 0.866 of its sheet height.  Legacy
+  (global-depth) sheets keep their depth reference at that old top-left
+  corner (`lifecycle.rs`), so their per-pixel depth is unchanged.  The `-ua/-wa` translation shifts the quad so the anchor point
   (e.g. `[0.5, 0.98]` = bottom-centre) sits at the world origin.
 
 ### Depth corners (`compute_iso_depth_corners`)
@@ -730,11 +737,10 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
   - Prototype (toy unit + lunar container, 40 random poses): the full warp
     at **3 pitch × 3 roll** (±max, 0) scores 26.4–26.7 dB / IoU 0.92–0.95,
     against 17.7–18.1 dB / 0.88–0.91 for the snapped 5 × 3 it replaces.
-  - Known engine-wide limits found while measuring #165 (not tilt): sprites
-    draw at **cos30 = 0.866** of their sheet height (the quad runs down world
-    −Z, which the camera foreshortens again; sheets are camera images), and
-    the sun-shadow card of an anchor-depth sprite shades a band of its own
-    lower faces (visible on the shipped container v2 on flat ground too).
+  - Found while measuring #165: sprites drew at cos30 of their sheet height
+    (fixed in #166, see §8 "Model matrix"), and the sun-shadow card of an
+    anchor-depth sprite shades a band of its own lower faces (visible on the
+    shipped container v2 on flat ground too).
 
 ---
 

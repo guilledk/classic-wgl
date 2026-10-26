@@ -442,7 +442,7 @@ mod tests {
         Animator, IsoSprite, Light, LightKind, NavMesh, Role, SdfTextRender, Tilemap,
     };
     use classic_core::math::{iso_view_depth, iso_world_pos, DEPTH_FAR, DEPTH_NEAR};
-    use classic_core::tilemap::sample_height_mesh;
+    use classic_core::tilemap::{sample_height_mesh, PPM_TARGET};
     use classic_core::{RoleKind, SpriteRender, Transform};
     use glam::Vec3;
 
@@ -760,6 +760,29 @@ mod tests {
             (anchor_world - expected_anchor).length() < 1e-3,
             "anchor {anchor_world:?} != expected {expected_anchor:?}"
         );
+
+        // A sheet is a camera image: the quad rasterises 1:1 to its (scaled) pixels
+        // in both screen axes (no second cos30 on the height), and it stands the
+        // object's true height (`tex_dim.1 / (PPM · cos30)` metres).
+        let cam = classic_core::math::iso_camera_matrix();
+        let screen = |u: f32, v: f32| {
+            let p = cam.transform_point3(model.transform_point3(Vec3::new(u, v, 0.0)));
+            glam::Vec2::new(p.x * PPM_TARGET, -p.y * PPM_TARGET)
+        };
+        let (tl, br) = (screen(0.0, 0.0), screen(1.0, 1.0));
+        assert!(
+            ((br.x - tl.x) - tex_dim.0 * sprite_tf.scale.x).abs() < 1e-3,
+            "width {}",
+            br.x - tl.x
+        );
+        assert!(
+            ((br.y - tl.y) - tex_dim.1 * sprite_tf.scale.y).abs() < 1e-3,
+            "height {}",
+            br.y - tl.y
+        );
+        let top = model.transform_point3(Vec3::new(ua, 0.0, 0.0));
+        let true_h = anchor_px.y * sprite_tf.scale.y / (PPM_TARGET * 0.866_025_4);
+        assert!(((top.z - anchor_world.z) - true_h).abs() < 1e-4);
     }
 
     fn push_channel(v: &mut Vec<u8>, name: &str, component: u8, keys: &[(u32, &[f32])]) {

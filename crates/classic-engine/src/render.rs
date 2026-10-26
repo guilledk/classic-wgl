@@ -18,6 +18,11 @@ use glow::HasContext;
 
 use crate::{Engine, ResolvedFrame, TilemapGpu};
 
+/// World metres of quad height per sheet pixel: `1 / (PPM_TARGET · cos30)`.
+/// The iso camera's `up` has `z = cos30`, so a world-vertical span of this
+/// length rasterises to exactly one screen pixel, as the sheet was baked.
+pub(crate) const SPRITE_HEIGHT_M_PER_PX: f32 = 1.0 / (PPM_TARGET * 0.866_025_4);
+
 impl Engine {
     /// Pre-measure all UI-managed SDF text labels so their UiNode.size
     /// is correct from the first frame. Call once after all UI init is complete.
@@ -406,10 +411,13 @@ impl Engine {
     ///
     /// The quad is authored in **Blender-world metres**: its width runs along
     /// the isometric "right" direction `(1/√2, −1/√2, 0)` and its height runs
-    /// down world −Z, so under the orthographic camera it rasterises to the
-    /// same screen-aligned rectangle the old billboard drew.  Lighting and
-    /// shadowing operate on true standing geometry (no `sprite_anchor`
-    /// unproject).
+    /// down world −Z.  A sheet is a camera image (the bake looks down 30°), so
+    /// its vertical pixels are already foreshortened: the quad stands
+    /// [`SPRITE_HEIGHT_M_PER_PX`] metres per pixel tall (`1 / (PPM · cos30)`),
+    /// which the camera's `up.z = cos30` maps back to exactly one screen
+    /// pixel per sheet pixel.  The card is then the object's true height, so
+    /// lighting and shadowing operate on true standing geometry (no
+    /// `sprite_anchor` unproject).
     ///
     /// `tex_dim` is the source-cell quad size in pixels; `anchor_px` is the
     /// ground-contact point in that same pixel space (the quad is shifted so it
@@ -439,10 +447,11 @@ impl Engine {
             + drift
             + tilemap_tf.position;
 
-        // Quad dimensions in metres: source-cell pixels map to metres at
-        // `PPM_TARGET` px/m along both screen axes.
+        // Quad dimensions in metres: a sheet pixel is `1 / PPM_TARGET` m of
+        // screen right, and `1 / (PPM_TARGET · cos30)` m of world height (the
+        // camera foreshortens it back to one pixel).
         let w = tex_dim.0 * sprite_tf.scale.x / PPM_TARGET;
-        let hh = tex_dim.1 * sprite_tf.scale.y / PPM_TARGET;
+        let hh = tex_dim.1 * sprite_tf.scale.y * SPRITE_HEIGHT_M_PER_PX;
 
         // Anchor in normalized `[0,1]` quad space.
         let ua = anchor_px.x / tex_dim.0.max(f32::EPSILON);

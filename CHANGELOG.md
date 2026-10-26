@@ -308,6 +308,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Iso sprites draw at their true sheet height.  `compute_iso_sprite_model`
+  ran the quad down world −Z at `1 / PPM_TARGET` m per pixel, which the
+  30° camera foreshortened a second time (sheets are already camera
+  images): every sprite drew at 0.866 of its height.  The quad now stands
+  `1 / (PPM_TARGET · cos30)` m per pixel, so a sheet maps 1:1 to the
+  screen and the shadow card is the object's true height (sun shadows
+  ~15% longer).  Legacy global-depth sheets keep their old depth
+  reference.  The demo, lighttest and lunar trace goldens change only in
+  IsoSprite model heights (#166).
 - `vehicle_socket_fx` orients the one-shot effect by the full socket
   frame (heading, pitch / roll, turret yaw, gun pitch) through the new
   `Engine::fx_emit_oriented`.  It used to go through `fx_emit`, whose
