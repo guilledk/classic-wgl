@@ -427,6 +427,8 @@ fn spawn_vehicle_sets_frame_name_when_table_exists() {
         sheets: vec![],
         frames: Default::default(),
         dir_interp: false,
+        axes: None,
+        tilt_interp: false,
         companions: vec![],
     };
     for texture in ["lrvBody", "lrvWheelFl", "lrvWheelFr", "lrvWheelRl", "lrvWheelRr"] {
@@ -1562,6 +1564,8 @@ fn dir_interp_parts_blend_the_straddling_directions() {
         sheets: vec![],
         frames: Default::default(),
         dir_interp: interp,
+        axes: None,
+        tilt_interp: false,
         companions: vec![],
     };
     engine.frame_tables.insert("lrvBody".into(), table(true));
@@ -1606,6 +1610,8 @@ fn sixteen_direction_vehicles_quantize_to_sixteen_frames() {
         sheets: vec![],
         frames: Default::default(),
         dir_interp: false,
+        axes: None,
+        tilt_interp: false,
         companions: vec![],
     };
     engine.frame_tables.insert("lrvBody".into(), empty.clone());

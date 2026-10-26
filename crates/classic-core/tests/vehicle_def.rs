@@ -6,8 +6,8 @@ use classic_core::math::{DEPTH_FAR, DEPTH_NEAR};
 use classic_core::types::{DepthMode, FrameTable, VehicleDef, FRAME_TABLE_VERSION};
 use classic_core::vehicle_def::{
     anchor_depth_gray, anchor_depth_offset_m, depth_scale, heading_neighbours, heading_to_dir_n,
-    team_mask_alpha, team_mask_weight, AngleAxis, FrameAxis, FrameSelect, GearSide, GhostGroupMode,
-    LayerKind, VehicleLayerDef,
+    team_mask_alpha, team_mask_weight, tilt_for_yaw, AngleAxis, FrameAxis, FrameSelect, GearSide,
+    GhostGroupMode, LayerKind, SpriteAxes, VehicleLayerDef,
 };
 use std::f32::consts::{FRAC_PI_4, TAU};
 
@@ -393,4 +393,159 @@ fn layer_builder_defaults() {
     assert!(l.ghost && l.visible);
     assert_eq!(l.frame_count(16), 16);
     assert_eq!(l.axes(24), [FrameAxis::Dir]);
+}
+
+#[test]
+fn clip_layers_may_ride_the_hull_tilt() {
+    for kind in [LayerKind::Cargo, LayerKind::Tool, LayerKind::Lift, LayerKind::Legs] {
+        assert!(kind.allows(FrameAxis::Pitch) && kind.allows(FrameAxis::Roll), "{kind:?}");
+        assert!(!kind.allows(FrameAxis::Spin) && !kind.allows(FrameAxis::Fire), "{kind:?}");
+    }
+    assert!(!LayerKind::Wheel.allows(FrameAxis::Roll));
+    assert!(!LayerKind::Turret.allows(FrameAxis::Roll));
+}
+
+#[test]
+fn sprite_axes_share_the_cargo_layer_radix() {
+    let axes = SpriteAxes {
+        directions: 16,
+        pitch: Some(AngleAxis::symmetric(5, 20.0)),
+        roll: Some(AngleAxis::symmetric(3, 20.0)),
+    };
+    let mut layer = VehicleLayerDef::new("cargo", LayerKind::Cargo, "box");
+    layer.pitch = axes.pitch;
+    layer.roll = axes.roll;
+    assert_eq!(axes.frame_count(), layer.frame_count(16));
+    assert_eq!(axes.frame_count(), 240);
+    for (dir, pitch, roll) in [(0, 0, 0), (5, 2, 1), (15, 4, 2), (17, 9, 9)] {
+        let sel = FrameSelect { dir, pitch, roll, ..Default::default() };
+        assert_eq!(axes.frame_index(dir, pitch, roll), layer.frame_index(16, &sel));
+    }
+    // The v1 container layout, `(pitch · roll_levels + roll) · dirs + dir`.
+    assert_eq!(axes.frame_index(3, 2, 1), (2 * 3 + 1) * 16 + 3);
+    let deg = std::f32::consts::PI / 180.0;
+    assert_eq!(axes.tilt_levels(9.0 * deg, -11.0 * deg), (3, 0));
+    let (p, r) = axes.tilt_angles(3, 0);
+    assert!((p - 10.0 * deg).abs() < 1e-6 && (r + 20.0 * deg).abs() < 1e-6);
+    let flat = SpriteAxes::directions(16);
+    assert_eq!((flat.frame_count(), flat.frame_index(7, 3, 1)), (16, 7));
+    assert_eq!(flat.tilt_levels(0.3, 0.3), (0, 0));
+}
+
+#[test]
+fn tilt_turns_into_a_yawed_layer_frame() {
+    let (p, r) = (0.2f32, -0.1f32);
+    assert_eq!(tilt_for_yaw(p, r, 0.0), (p, r));
+    // A quarter turn right (tile yaw +π/2): the layer faces the body's right,
+    // so the body's left-up roll is the layer's nose-down pitch and the
+    // body's nose-up pitch is the layer's left-up roll.
+    let (lp, lr) = tilt_for_yaw(p, r, std::f32::consts::FRAC_PI_2);
+    assert!((lp - -r).abs() < 1e-6 && (lr - p).abs() < 1e-6, "{lp} {lr}");
+    // Half a turn mirrors both.
+    let (lp, lr) = tilt_for_yaw(p, r, std::f32::consts::PI);
+    assert!((lp + p).abs() < 1e-6 && (lr + r).abs() < 1e-6);
+    // The slope gradient's magnitude is kept at any yaw.
+    let (lp, lr) = tilt_for_yaw(p, r, 0.7);
+    let g = |a: f32, b: f32| (a.tan().powi(2) + b.tan().powi(2)).sqrt();
+    assert!((g(lp, lr) - g(p, r)).abs() < 1e-6);
+}
+
+#[test]
+fn frame_table_axes_parse_and_validate() {
+    let frames: serde_json::Map<String, serde_json::Value> = (0..240)
+        .map(|i| (format!("box_{i}"), serde_json::json!({ "sheet": 0, "rect": [0, 0, 1, 1] })))
+        .collect();
+    let table = |axes: serde_json::Value, n: usize| -> FrameTable {
+        let frames: serde_json::Map<_, _> = frames.clone().into_iter().take(n).collect();
+        serde_json::from_value(serde_json::json!({
+            "version": 2, "axes": axes, "frames": frames,
+            "sheets": [{ "name": "s", "src": "/s.png", "size": [4, 4] }]
+        }))
+        .unwrap()
+    };
+    let axes = serde_json::json!({ "directions": 16, "pitch": { "levels": 5, "max_deg": 20 },
+                                   "roll": { "levels": 3, "max_deg": 20 } });
+    let t = table(axes.clone(), 240);
+    t.validate(None).unwrap();
+    assert_eq!(t.sprite_axes().frame_count(), 240);
+    let errs = table(axes, 16).validate(None).unwrap_err().join("\n");
+    assert!(errs.contains("axes need 240 frames, the table has 16"), "{errs}");
+    let errs = table(serde_json::json!({ "directions": 12 }), 16).validate(None).unwrap_err();
+    assert!(errs.join("\n").contains("directions 12 not supported"), "{errs:?}");
+    // No `axes`: a direction-only sheet of every frame (today's container v2).
+    let t: FrameTable = serde_json::from_value(serde_json::json!({
+        "version": 2, "frames": frames.clone().into_iter().take(16).collect::<serde_json::Map<_, _>>(),
+        "sheets": [{ "name": "s", "src": "/s.png", "size": [4, 4] }]
+    }))
+    .unwrap();
+    assert_eq!(t.sprite_axes(), SpriteAxes::directions(16));
+    assert!(serde_json::to_value(&t).unwrap().get("axes").is_none(), "omitted when absent");
+}
+
+/// The bake pose of a frame: yaw (tile heading, world yaw `−heading`) after
+/// the body tilt, about the ground origin (`make_rigs`: Yaw → Pitch → Roll).
+fn bake_pose(heading: f32, pitch: f32, roll: f32) -> glam::Quat {
+    glam::Quat::from_rotation_z(-heading) * classic_core::vehicle_def::tilt_rotation(pitch, roll)
+}
+
+/// `sheet.frag`'s `residual(p, phi)`: the quaternion rebuilt from its xyz
+/// (`w ≥ 0`) applied after `Rz(phi)`.
+fn shader_residual(tilt: [f32; 3], p: glam::Vec3, phi: f32) -> glam::Vec3 {
+    let v = glam::Quat::from_rotation_z(phi) * p;
+    let u = glam::Vec3::from(tilt);
+    let w = (1.0 - u.dot(u)).max(0.0).sqrt();
+    v + 2.0 * u.cross(u.cross(v) + w * v)
+}
+
+#[test]
+fn tilt_residual_takes_each_neighbour_to_the_drawn_pose() {
+    use classic_core::vehicle_def::tilt_residual;
+    let deg = std::f32::consts::PI / 180.0;
+    let pts = [glam::Vec3::new(1.3, -0.4, 2.1), glam::Vec3::new(-0.7, 1.1, 0.2)];
+    // (drawn heading, pitch, roll), (level pitch, roll), the two neighbours.
+    for (h, p, r, lp, lr) in [
+        (0.3, 7.0, -12.0, 0.0, -20.0),
+        (2.0, -18.0, 4.0, -20.0, 0.0),
+        (4.4, 11.0, 19.0, 20.0, 20.0),
+        (5.9, 0.0, 0.0, 0.0, 0.0),
+    ] {
+        let (p, r, lp, lr) = (p * deg, r * deg, lp * deg, lr * deg);
+        let tilt = tilt_residual(h, p, r, lp, lr);
+        let step = TAU / 16.0;
+        let (a, b, _) = heading_neighbours(h, 16);
+        for d in [a, b] {
+            let src = d as f32 * step;
+            // Engine convention: phi = −(drawn heading − neighbour heading).
+            let phi = -(h - src);
+            let want = bake_pose(h, p, r) * bake_pose(src, lp, lr).inverse();
+            for pt in pts {
+                let got = shader_residual(tilt, pt, phi);
+                assert!((got - want * pt).length() < 1e-5, "h {h} d {d}: {got} vs {}", want * pt);
+            }
+        }
+    }
+    // At the level itself the residual is the identity (a pure yaw warp).
+    assert_eq!(tilt_residual(1.0, 0.2, -0.1, 0.2, -0.1).map(|v| (v * 1e6).round()), [0.0; 3]);
+}
+
+#[test]
+fn pick_tilt_snaps_or_warps_within_the_baked_range() {
+    use classic_core::vehicle_def::pick_tilt;
+    let deg = std::f32::consts::PI / 180.0;
+    let ax = Some(AngleAxis::symmetric(3, 20.0));
+    // Snap: nearest levels, drawn = the level angles, no residual.
+    let s = pick_tilt(ax, ax, 0.5, 8.0 * deg, -12.0 * deg, false);
+    assert_eq!((s.pitch, s.roll, s.residual), (1, 0, [0.0; 3]));
+    assert!((s.drawn.0).abs() < 1e-6 && (s.drawn.1 + 20.0 * deg).abs() < 1e-6);
+    // Warp: same levels, drawn = the exact tilt, a non-zero residual.
+    let w = pick_tilt(ax, ax, 0.5, 8.0 * deg, -12.0 * deg, true);
+    assert_eq!((w.pitch, w.roll), (1, 0));
+    assert!((w.drawn.0 - 8.0 * deg).abs() < 1e-6 && (w.drawn.1 + 12.0 * deg).abs() < 1e-6);
+    assert!(w.residual.iter().any(|v| v.abs() > 1e-3));
+    // Beyond the baked range it clamps; an axis the sheet lacks warps to ±20°.
+    let c = pick_tilt(ax, None, 0.0, 35.0 * deg, 30.0 * deg, true);
+    assert_eq!((c.pitch, c.roll), (2, 0));
+    assert!((c.drawn.0 - 20.0 * deg).abs() < 1e-6 && (c.drawn.1 - 20.0 * deg).abs() < 1e-6);
+    let n = pick_tilt(ax, ax, 0.0, f32::NAN, 0.0, true);
+    assert_eq!(n.drawn.0, 0.0, "a non-finite tilt draws level");
 }

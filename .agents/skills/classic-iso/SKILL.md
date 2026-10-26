@@ -615,7 +615,7 @@ every violation and still loads the def.
   | `wheel` | dir × spin (× steer) | `spin_frames`, `radius_m` |
   | `gear_side` | dir × spin | `side` (`left`/`right`), `spin_frames`, `radius_m` |
   | `turret` | own dir × pitch (gun) × fire | `fire_frames` (frame 0 idle), `yaw_rate_deg_per_sec` |
-  | `tool` / `legs` / `cargo` / `lift` | dir × clip | `clips{name: {start, frames, fps=12}}` |
+  | `tool` / `legs` / `cargo` / `lift` | dir × (pitch × roll, riding the hull) × clip | `clips{name: {start, frames, fps=12}}` |
 
   `pitch`/`roll`/`steer` are `AngleAxis {levels, max_deg, min_deg = -max}`,
   index 0 at `min_deg`; signs as v1 (nose-up, left-up, turn-left positive).
@@ -670,6 +670,54 @@ visible)`, `vehicle_layer_color(name, layer, r, g, b, a)`, `vehicle_team(name, r
 shot oriented by the full socket frame: the effect's local `+x` is the
 socket's forward, so ribbon `end`s, light `offset`s, spawn shapes and the
 velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 / 0.
+
+### Tilt: riding layers, posed sprites, tilt interpolation
+
+- **Bake convention** (the contract the warp relies on): yaw ∘ pitch ∘ roll
+  about the **ground anchor**, i.e. body pitch nose-up about its left axis
+  after roll left-up about its forward axis, then yaw about the anchor's
+  vertical (the container rig `ContainerYaw` → `Pitch` → `Roll`;
+  `vehicle_def::tilt_rotation` = `Ry(−pitch) · Rx(roll)`).  Frame index
+  `(pitch · roll_levels + roll) · dirs + dir` (× clip for a layer).
+- **Riding layers**: a tool / legs / cargo / lift layer may declare `pitch` /
+  `roll`.  It shows the hull's **drawn** tilt (its level angles, or the exact
+  chassis tilt when the hull sheet warps tilt), turned into the layer's own
+  yaw (`tilt_for_yaw`), so a carried box leans exactly as far as its
+  carrier.  Wheels and turrets do not ride the tilt.
+- **Hull roll**: nothing assumes one roll level.  `roll_levels` comes from
+  the hull axis, and the tilt dead zone is the finer half-step of the hull's
+  pitch and roll axes.
+- **Posed sprites** (`sprite_pose.rs`): a frame table may carry `axes`
+  (`SpriteAxes {directions, pitch, roll}`; without it the sheet has
+  `frames.len()` directions).
+  - `Engine::sprite_pose(name, heading, pitch, roll)` frames a plain
+    `IsoSprite` like a layer: the nearest level, plus the direction warp on a
+    `dir_interp` sheet.
+  - `Engine::sprite_fit_terrain(name, heading, footprint_m)` fits it to the
+    terrain. `terrain_tilt` measures the front − rear and left − right
+    edge-midpoint heights over the footprint, along the heading.
+    `frame_offset.z` is then set so the lowest corner of the drawn tilt
+    touches the ground.
+  - The tile-heading convention throughout: 0 = East, 90° = South; left is
+    forward turned anticlockwise on screen.
+- **Tilt interpolation** (`tilt_interp: true` per frame table, needs
+  `dir_interp`; `vehicle_def::pick_tilt`):
+  - The frame is the nearest tilt level. The warp then rotates each of the
+    two direction neighbours by `R = Q · Rz(φ)`. `Q =
+    tilt_residual(heading, p, r, pₗ, rₗ)` is the world-frame rotation from
+    the baked level to the exact tilt; both neighbours share it, since the
+    bake is yaw ∘ tilt.
+  - `DirBlend.tilt` / `DirBlendRegion.tilt` carry `Q`'s xyz (`w ≥ 0`) to the
+    shader in the instance model columns' w (the model is affine: the
+    shaders rebuild its w row).
+  - `sheet.frag#INTERP` `residual()` rotates the unprojected texel and its
+    normal. A pure-yaw blend (`Q = 1`) skips it.
+  - The drawn tilt clamps to the baked range; an axis the sheet lacks warps
+    up to ±`TILT_WARP_MAX_DEG` (20°). The shadow card stays on the nearest
+    frame.
+  - Prototype (toy unit + lunar container, 40 random poses): the full warp
+    at **3 pitch × 3 roll** (±max, 0) scores 26.4–26.7 dB / IoU 0.92–0.95,
+    against 17.7–18.1 dB / 0.88–0.91 for the snapped 5 × 3 it replaces.
 
 ---
 

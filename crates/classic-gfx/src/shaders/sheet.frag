@@ -49,6 +49,7 @@ flat in highp vec4 vUvB;
 flat in highp vec4 vContentB;
 flat in highp vec4 vInterp;
 flat in highp vec4 vQuad;
+flat in highp vec3 vTilt;
 #endif
 #ifndef ID_PASS
 // The ghost pass's group test: the id of the sprite group that last passed
@@ -355,6 +356,22 @@ highp vec3 rotZ(highp vec3 p, highp float a) {
     return vec3(c * p.x - s * p.y, s * p.x + c * p.y, p.z);
 }
 
+// A neighbour's full residual rotation `R = Q · Rz(phi)`: its yaw to the
+// drawn heading, then the shared world-frame tilt residual `Q` (`vTilt` =
+// the unit quaternion's xyz, w >= 0; zero = identity) from its baked tilt
+// level to the drawn tilt (`classic_core::vehicle_def::tilt_residual`).
+// Both pivot on the ground anchor, the bake rig's origin.
+highp vec3 residual(highp vec3 p, highp float phi) {
+    highp vec3 v = rotZ(p, phi);
+    highp vec3 u = vTilt;
+    // A pure yaw blend (flat per instance, so the branch is coherent).
+    if (u == vec3(0.0)) {
+        return v;
+    }
+    highp float w = sqrt(max(1.0 - dot(u, u), 0.0));
+    return v + 2.0 * cross(u, cross(u, v) + w * v);
+}
+
 // Sheet UV of a source-cell pixel position; false outside the trimmed
 // content (`tc` = trim offset, content size).
 bool cellUv(highp vec2 cell, highp vec4 uvr, highp vec4 tc, out highp vec2 uv) {
@@ -369,10 +386,11 @@ WarpTexel warpDirection(sampler2D col, sampler2D dep, sampler2D nrm, highp vec4 
     WarpTexel w;
     w.ok = false;
     // unproject -> rotate -> project is linear in (s, d): precompute its
-    // columns once (one sin/cos pair), so a step is two fused vec3 terms.
-    highp vec3 mx = projectPx(rotZ(CAM_R / ppm, phi));
-    highp vec3 my = projectPx(rotZ(-CAM_U / ppm, phi));
-    highp vec3 md = projectPx(rotZ(-CAM_B, phi));
+    // columns once (one sin/cos pair and the tilt quaternion), so a step is
+    // two fused vec3 terms.
+    highp vec3 mx = projectPx(residual(CAM_R / ppm, phi));
+    highp vec3 my = projectPx(residual(-CAM_U / ppm, phi));
+    highp vec3 md = projectPx(residual(-CAM_B, phi));
     highp vec2 s = q;
     highp vec2 uv;
     for (int i = 0; i < WARP_STEPS; i++) {
@@ -402,7 +420,7 @@ WarpTexel warpDirection(sampler2D col, sampler2D dep, sampler2D nrm, highp vec4 
     w.team = 1.0;
     if (use_normal_map > 0.5) {
         vec4 ns = textureLod(nrm, uv, 0.0);
-        w.normal = rotZ(ns.rgb * 2.0 - 1.0, phi);
+        w.normal = residual(ns.rgb * 2.0 - 1.0, phi);
         w.team = ns.a;
     }
     w.depth = f.z;

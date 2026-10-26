@@ -680,6 +680,7 @@ impl Engine {
             anchor_b: Vec2::from(anchors[b as usize]),
             dtheta_a: t * step,
             dtheta_b: (t - 1.0) * step,
+            tilt: [0.0; 3],
         });
     }
 }

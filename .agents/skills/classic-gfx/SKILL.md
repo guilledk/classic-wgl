@@ -412,6 +412,13 @@ anchor, and the drawn heading minus each neighbour's, in tile radians).
   attributes).  Programs `imageSheetInterp` / `spriteGhostIdsInterp`;
   direction B's colour / depth / normal bind on `BLEND_UNITS` = 13-15, and
   a batch key includes them.
+- **Tilt** (`tilt_interp` tables, see `classic-iso` "Tilt"): each neighbour's
+  rotation is `R = Q · Rz(φ)`, with `Q` (`DirBlend.tilt`, a unit
+  quaternion's xyz) the shared world-frame residual from the baked tilt
+  level to the drawn tilt.  It rides in the model columns' w (`i_m0.w`,
+  `i_m1.w`, `i_m3.w` → `vTilt`); `direct_tex.vert` and `shadow_sprite.vert`
+  rebuild the affine w row.  `residual()` applies it to the warp columns and
+  the normal; `Q = 1` returns the pure yaw (no cost on untilted blends).
 - **Cost**: about 3x a plain sprite per covered pixel (both warps run even
   on pixels that end transparent); see the PR for numbers.
 - **Depth base**: anchor-relative sheets now re-anchor against the frame's

@@ -108,6 +108,7 @@ impl Engine {
                 anchor_b_px: anchor_b_px.to_array(),
                 dtheta_a: blend.dtheta_a,
                 dtheta_b: blend.dtheta_b,
+                tilt: blend.tilt,
                 quad: [x0, y0, x1 - x0, y1 - y0],
             },
             textures: BlendTextures {

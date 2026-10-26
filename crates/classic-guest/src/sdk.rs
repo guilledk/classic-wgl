@@ -217,6 +217,22 @@ impl GuestHost {
         self.engine_mut().spawn_sprite_clone(&template, &name) as i32
     }
 
+    /// Pose a posed-sheet `IsoSprite` by tile heading and tilt (degrees:
+    /// heading `0` = East, `90` = South; pitch nose-up, roll left-up).
+    pub fn sprite_pose(&mut self, name: &str, heading: f64, pitch: f64, roll: f64) -> i32 {
+        let name = self.resolve(name);
+        let [h, p, r] = [heading, pitch, roll].map(|d| d.to_radians() as f32);
+        self.engine_mut().sprite_pose(&name, h, p, r) as i32
+    }
+
+    /// Pose a posed-sheet `IsoSprite` facing `heading` (degrees) with the
+    /// terrain tilt under a `footprint_m` square, resting on the terrain.
+    pub fn sprite_fit_terrain(&mut self, name: &str, heading: f64, footprint_m: f64) -> i32 {
+        let name = self.resolve(name);
+        let h = heading.to_radians() as f32;
+        self.engine_mut().sprite_fit_terrain(&name, h, footprint_m as f32).is_some() as i32
+    }
+
     pub fn mouse(&mut self) -> (f64, f64) {
         let p = self.engine().input.mouse_pos;
         (p.x as f64, p.y as f64)

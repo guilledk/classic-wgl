@@ -383,6 +383,25 @@ pub struct DirBlend {
     pub dtheta_a: f32,
     /// Drawn heading minus direction B's heading (tile-space radians, `<= 0`).
     pub dtheta_b: f32,
+    /// The world-frame tilt residual both neighbours are warped by after
+    /// their yaw (`sheet.frag#INTERP`: `R = Q · Rz(φ)`), as a unit
+    /// quaternion's `xyz` (`w = √(1 − |xyz|²) ≥ 0`): the drawn pitch / roll
+    /// against the baked tilt level's, from
+    /// [`tilt_residual`](crate::vehicle_def::tilt_residual).  Zero (identity)
+    /// unless the sheet opts into `tilt_interp`.
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub tilt: [f32; 3],
+}
+
+fn is_zero3(v: &[f32; 3]) -> bool {
+    *v == [0.0; 3]
+}
+
+impl DirBlend {
+    /// A pure-yaw blend (no tilt residual).
+    pub fn yaw(frame_b: f32, anchor_b: Vec2, dtheta_a: f32, dtheta_b: f32) -> Self {
+        Self { frame_b, anchor_b, dtheta_a, dtheta_b, tilt: [0.0; 3] }
+    }
 }
 
 fn is_zero(v: &u32) -> bool {

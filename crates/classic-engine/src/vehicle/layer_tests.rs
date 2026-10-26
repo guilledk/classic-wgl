@@ -42,6 +42,8 @@ fn tables(engine: &mut Engine) {
                 sheets: vec![],
                 frames: Default::default(),
                 dir_interp: false,
+                axes: None,
+                tilt_interp: false,
                 companions: vec![],
             },
         );
@@ -362,4 +364,121 @@ fn socket_spot_lights_turn_with_the_vehicle() {
     engine.world.get::<&mut IsoVehicle>(tank).unwrap().heading = std::f32::consts::FRAC_PI_2;
     let d = beam(&engine);
     assert!((d - glam::Vec3::new(0.0, -1.0, -0.25).normalize()).length() < 1e-4, "{d:?}");
+}
+
+/// The tank with a rolling hull (pitch and roll 3 × ±12°) and a crate cargo
+/// layer baked like the tilted container (pitch 5 × roll 3, ±20°), on a
+/// heightfield rising `rise` m per tile toward East.
+fn spawn_tilting_tank_on_slope(rise: f32) -> Engine {
+    let mut engine = Engine::new_for_test();
+    let mut tm = super::tests::flat_tilemap_pub(24, 24);
+    tm.height_data = (0..25 * 25).map(|i| (i % 25) as f32 * rise).collect();
+    let tm = engine.world.spawn((tm, Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), tm);
+    let mut def = tank_def();
+    let hull = def.layers.iter_mut().find(|l| l.name == "hull").unwrap();
+    hull.roll = Some(classic_core::vehicle_def::AngleAxis::symmetric(3, 12.0));
+    let crate_layer = def.layers.iter_mut().find(|l| l.name == "crate").unwrap();
+    crate_layer.pitch = Some(classic_core::vehicle_def::AngleAxis::symmetric(5, 20.0));
+    crate_layer.roll = Some(classic_core::vehicle_def::AngleAxis::symmetric(3, 20.0));
+    classic_core::vehicle_def::validate(&def).expect("cargo may carry pitch / roll");
+    engine.vehicles.insert("tank".into(), def);
+    tables(&mut engine);
+    assert!(engine.spawn_vehicle("tank", "tank", 12.0, 12.0));
+    engine
+}
+
+fn face(engine: &mut Engine, dir: u32) {
+    engine.world.get::<&mut IsoVehicle>(engine.names["tank"]).unwrap().direction = dir;
+    assert!(engine.vehicle_teleport("tank", 12.0, 12.0));
+}
+
+#[test]
+fn cargo_tilt_follows_the_carriers_drawn_frame() {
+    // ~8° slope: the hull draws its 12° level, the crate its nearest (10°,
+    // then 20° on its roll axis, which has no 10° level).
+    let mut engine = spawn_tilting_tank_on_slope(0.1);
+    let slope = (0.1 / TILE_M).atan();
+    assert!((slope.to_degrees() - 8.1).abs() < 0.1);
+    // Facing East (uphill): hull pitch level 2 (+12°), roll level 1.
+    face(&mut engine, 0);
+    let v = IsoVehicle::clone(&engine.world.get::<&IsoVehicle>(engine.names["tank"]).unwrap());
+    assert!((v.pitch - slope).abs() < 1e-3 && v.roll.abs() < 1e-3);
+    assert_eq!(frame_name(&engine, "tank"), format!("tankHull_{}", (2 * 3 + 1) * 16));
+    // Crate: hull 12° -> its pitch level 3 (10°) of 5, roll level 1.
+    assert_eq!(frame_name(&engine, "tank.crate"), format!("tankCrate_{}", (3 * 3 + 1) * 16));
+    // Facing South (dir 4): East is left, so the hull rolls left-up.
+    face(&mut engine, 4);
+    let v = IsoVehicle::clone(&engine.world.get::<&IsoVehicle>(engine.names["tank"]).unwrap());
+    assert!(v.pitch.abs() < 1e-3 && (v.roll - slope).abs() < 1e-3, "{} {}", v.pitch, v.roll);
+    assert_eq!(v.roll_levels, 3, "a v2 hull's roll axis reaches the chassis");
+    assert_eq!(frame_name(&engine, "tank"), format!("tankHull_{}", (3 + 2) * 16 + 4));
+    // Crate: hull roll 12° -> its roll level 2 (20°), pitch level 2 (0°).
+    assert_eq!(frame_name(&engine, "tank.crate"), format!("tankCrate_{}", (2 * 3 + 2) * 16 + 4));
+    // Facing West (downhill, dir 8): nose down.
+    face(&mut engine, 8);
+    assert_eq!(frame_name(&engine, "tank"), format!("tankHull_{}", 16 + 8));
+    assert_eq!(frame_name(&engine, "tank.crate"), format!("tankCrate_{}", (3 + 1) * 16 + 8));
+    // Flat ground: every level frame.
+    let mut flat = spawn_tilting_tank_on_slope(0.0);
+    face(&mut flat, 2);
+    assert_eq!(frame_name(&flat, "tank"), format!("tankHull_{}", (3 + 1) * 16 + 2));
+    assert_eq!(frame_name(&flat, "tank.crate"), format!("tankCrate_{}", (2 * 3 + 1) * 16 + 2));
+}
+
+#[test]
+fn a_rolling_hull_takes_its_dead_zone_from_its_finest_axis() {
+    // Pitch 3 × ±12° (half-step 6°) and roll 5 × ±12° (half-step 3°).
+    let mut engine = Engine::new_for_test();
+    let tm =
+        engine.world.spawn((super::tests::flat_tilemap_pub(24, 24), Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), tm);
+    let mut def = tank_def();
+    def.layers[0].roll = Some(classic_core::vehicle_def::AngleAxis::symmetric(5, 12.0));
+    engine.vehicles.insert("tank".into(), def);
+    tables(&mut engine);
+    assert!(engine.spawn_vehicle("tank", "tank", 12.0, 12.0));
+    let v = engine.world.get::<&IsoVehicle>(engine.names["tank"]).unwrap();
+    assert_eq!((v.pitch_levels, v.roll_levels), (3, 5));
+    assert!((v.tilt_dead_zone - 3f32.to_radians()).abs() < 1e-6);
+    // Roll only: its own half-step (a pitch-less hull used to get 0).
+    let mut engine = Engine::new_for_test();
+    let tm =
+        engine.world.spawn((super::tests::flat_tilemap_pub(24, 24), Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), tm);
+    let mut def = tank_def();
+    def.layers[0].pitch = None;
+    def.layers[0].roll = Some(classic_core::vehicle_def::AngleAxis::symmetric(3, 12.0));
+    engine.vehicles.insert("tank".into(), def);
+    tables(&mut engine);
+    assert!(engine.spawn_vehicle("tank", "tank", 12.0, 12.0));
+    let v = engine.world.get::<&IsoVehicle>(engine.names["tank"]).unwrap();
+    assert!((v.tilt_dead_zone - 6f32.to_radians()).abs() < 1e-6);
+}
+
+#[test]
+fn tilt_interp_draws_the_exact_chassis_tilt_on_hull_and_cargo() {
+    // ~8.1° slope: the hull's 3 × ±12° levels snap to 12°, the warp draws 8.1°.
+    let mut engine = spawn_tilting_tank_on_slope(0.1);
+    for t in ["tankHull", "tankCrate"] {
+        let table = engine.frame_tables.get_mut(t).unwrap();
+        table.dir_interp = true;
+        table.tilt_interp = true;
+    }
+    face(&mut engine, 0);
+    let slope = (0.1 / TILE_M).atan();
+    let blend = |e: &Engine, n: &str| {
+        e.world.get::<&IsoSprite>(e.names[n]).unwrap().dir_blend.expect("dir_interp blends")
+    };
+    // Hull: level frame pitch 2 (+12°), warped down to the slope.
+    assert_eq!(frame_name(&engine, "tank"), format!("tankHull_{}", (2 * 3 + 1) * 16));
+    let want = classic_core::vehicle_def::tilt_residual(0.0, slope, 0.0, 12f32.to_radians(), 0.0);
+    let got = blend(&engine, "tank").tilt;
+    assert!(got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{got:?} vs {want:?}");
+    // The crate rides the exact (warped) hull tilt: level 3 (10°), warped to
+    // 8.1°, not the hull's 12° level.
+    assert_eq!(frame_name(&engine, "tank.crate"), format!("tankCrate_{}", (3 * 3 + 1) * 16));
+    let want = classic_core::vehicle_def::tilt_residual(0.0, slope, 0.0, 10f32.to_radians(), 0.0);
+    let got = blend(&engine, "tank.crate").tilt;
+    assert!(got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-5), "{got:?} vs {want:?}");
 }

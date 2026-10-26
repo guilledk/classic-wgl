@@ -106,6 +106,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `model_clip_time` (seconds, `-1` without a clip), so a guest can track
   a rocket's or crane's node and light or tint a model at runtime
   (#164).
+- Sprite tilt for v2 units.  Tool / legs / cargo / lift layers may carry
+  `pitch` / `roll` and ride the hull's drawn tilt (turned into their own
+  yaw), so carried cargo leans with its carrier; a frames.json `axes`
+  (`SpriteAxes`: directions × pitch × roll) lets a plain `IsoSprite` be
+  posed by heading + tilt, ABI rows `sprite_pose` and `sprite_fit_terrain`
+  (fit to the terrain under a footprint, resting on its lowest corner).
+  Opt-in `tilt_interp` (per frame table, with `dir_interp`) makes tilt
+  continuous: the direction warp also rotates each neighbour from its
+  baked tilt level to the exact tilt (`tilt_residual`, about the ground
+  anchor), carried in the instance model's w row.  A v2 hull's tilt dead
+  zone now uses the finer of its pitch / roll half-steps (#165).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,

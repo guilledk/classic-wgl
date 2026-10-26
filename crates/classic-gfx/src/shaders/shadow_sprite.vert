@@ -19,7 +19,9 @@ flat out highp vec4 vUvRect;
 flat out highp vec4 vContent;
 flat out highp vec2 vSource;
 flat out float vGrid;
-#define model_matrix mat4(i_m0, i_m1, vec4(0.0), i_m3)
+// The model is affine: its w row is rebuilt (a direction blend carries its
+// tilt residual in the columns' w, see `IsoSpriteInstance::m`).
+#define model_matrix mat4(vec4(i_m0.xyz, 0.0), vec4(i_m1.xyz, 0.0), vec4(0.0), vec4(i_m3.xyz, 1.0))
 #else
 uniform mat4 model_matrix;
 #endif

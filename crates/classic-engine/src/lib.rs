@@ -43,6 +43,7 @@ mod render;
 #[cfg(test)]
 mod render_tests;
 mod sprite_batches;
+mod sprite_pose;
 
 pub use classic_core::fields;
 

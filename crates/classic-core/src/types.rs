@@ -198,6 +198,19 @@ pub struct FrameTable {
     /// of snapping to the nearest.  Needs an `Anchor` depth companion.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dir_interp: bool,
+    /// Opt this texture into tilt interpolation (sheet v2, needs
+    /// `dir_interp`): the direction warp also rotates each neighbour from its
+    /// baked pitch / roll level to the drawn tilt (a world-frame residual
+    /// rotation about the ground anchor), so tilt is continuous instead of
+    /// snapping to the nearest level.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tilt_interp: bool,
+    /// A standalone posed sprite's axes (sheet v2): directions × optional
+    /// pitch × roll, driven by heading + tilt (`sprite_pose`).  `None` = a
+    /// direction-only sheet of `frames.len()` directions (see
+    /// [`FrameTable::sprite_axes`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axes: Option<crate::vehicle_def::SpriteAxes>,
     /// Precomputed per-sheet companion GL texture names, indexed by sheet.
     /// Each entry is `(normal_tex_name, depth_tex_name)`; `None` when the
     /// sheet has no companion.  Built once at load via
@@ -238,6 +251,14 @@ impl FrameTable {
             .collect();
     }
 
+    /// The axes a posed sprite of this texture is framed by: the declared
+    /// `axes`, else a direction-only sheet of `frames.len()` directions.
+    pub fn sprite_axes(&self) -> crate::vehicle_def::SpriteAxes {
+        self.axes.unwrap_or_else(|| {
+            crate::vehicle_def::SpriteAxes::directions(self.frames.len().max(1) as u32)
+        })
+    }
+
     /// Check the sheet-v2 rules: an anchor-relative sheet has a range (its own
     /// or `fallback_m`), and a `dir_interp` table has an anchor-relative depth
     /// companion on every sheet.
@@ -261,6 +282,18 @@ impl FrameTable {
                     "sheet '{}': dir_interp needs an anchor-relative depth companion",
                     s.name
                 ));
+            }
+        }
+        if self.tilt_interp && !self.dir_interp {
+            errs.push("tilt_interp needs dir_interp".into());
+        }
+        if let Some(axes) = &self.axes {
+            if !crate::vehicle_def::SUPPORTED_DIRECTIONS.contains(&axes.directions) {
+                errs.push(format!("axes: directions {} not supported", axes.directions));
+            }
+            let (need, have) = (axes.frame_count() as usize, self.frames.len());
+            if have < need {
+                errs.push(format!("axes need {need} frames, the table has {have}"));
             }
         }
         if errs.is_empty() {
