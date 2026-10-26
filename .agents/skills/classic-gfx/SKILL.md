@@ -916,6 +916,25 @@ Three places must agree exactly, or a sprite falls in its own shadow:
   sprite stipples itself ~50%; normal-offset cannot help because the offset
   stays inside the billboard's own footprint.  Slope-scaled offset is correct
   here precisely because the error *is* proportional to the depth slope.
+- **Sprite receivers look up the shown surface** (`sheet.frag`
+  `shownDelta`, #167). The receiver the map knows is the flat card through
+  the ground anchor. On sloped or uneven ground its lower part sits under
+  the terrain, so it read the *terrain's* shadow, a dark band over a box's
+  lower faces. (Probe: skipping terrain casters removed it; skipping
+  sprite casters did not.)
+  - An anchor-depth sprite slides `vLightPos` along its view ray to the
+    surface the pixel shows: `T = vLightPos + back · (viewT − viewC)`,
+    `viewT` from the fragment's own depth. It does this only when `T` is on
+    the sun side of its card, because its sun ray then leaves the card and
+    cannot be self-occluded.
+  - A point behind the card keeps the card point and offsets along the card
+    normal turned to the sun. The face normal could push it through the
+    card into its own shadow. Those points sit high on the view ray, above
+    the terrain.
+  - Legacy global-depth sheets (~1.7 m depth steps) and sprites without a
+    depth map keep the card point and the face normal.
+  - Residual: with the sun below the camera's 30° elevation, a far-side point
+    could still cross its own card's silhouette.
 
 ### Engine side (`classic-engine/src/shadow.rs`)
 

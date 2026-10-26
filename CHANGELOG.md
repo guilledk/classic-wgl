@@ -308,6 +308,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- No more dark band over a sprite's lower faces.  The sun-shadow receiver
+  was the flat card through the ground anchor, whose lower part sits
+  under sloped terrain and read the terrain's shadow.  Anchor-depth
+  sprites now look shadows up at the surface point the pixel shows (slid
+  along the view ray to the fragment's depth) when it is on the sun side
+  of the card, else at the card point offset along the card normal; other
+  sprites are unchanged, and sprite-on-sprite and model shadows still
+  land (#167).
 - Iso sprites draw at their true sheet height.  `compute_iso_sprite_model`
   ran the quad down world −Z at `1 / PPM_TARGET` m per pixel, which the
   30° camera foreshortened a second time (sheets are already camera

@@ -302,6 +302,7 @@ impl Gfx {
         self.bind_view(s, camera, model, false);
         s.uniform_mat4(gl, "world_matrix", world_matrix);
         s.uniform_1f(gl, "ppm", settings.ppm);
+        s.uniform_vec2(gl, "depth_span", &settings.depth_span);
 
         // Silhouette outline: the sheet-UV offset of `outline_radius` content
         // pixels, so a selected sprite's transparent edge samples its own cell's

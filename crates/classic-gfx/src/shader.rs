@@ -359,6 +359,7 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
                 "projection_matrix",
                 "world_matrix",
                 "ppm",
+                "depth_span",
                 "tex_sampler",
                 "tile_id_flat",
                 "tile_set_size",
