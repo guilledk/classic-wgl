@@ -1736,3 +1736,117 @@ fn guest_vehicle_socket_imports_wired() {
         },
     );
 }
+
+/// A two-node model asset: a `rig` root a clip named `fly` lifts from glTF
+/// `(0, 0, 0)` to `(0, 10, 0)` (world +Z) over 1 s, with a `nozzle` child 1 m
+/// below it.
+fn flying_model_asset() -> classic_core::model::ModelAsset {
+    use classic_core::model::{
+        Interpolation, ModelAsset, ModelChannel, ModelClip, ModelNode, TrsProperty,
+    };
+    use glam::{Quat, Vec4};
+    let node = |name: &str, parent, children, translation| ModelNode {
+        name: name.into(),
+        parent,
+        children,
+        translation,
+        rotation: Quat::IDENTITY,
+        scale: Vec3::ONE,
+        mesh: None,
+    };
+    ModelAsset {
+        nodes: vec![
+            node("rig", None, vec![1], Vec3::ZERO),
+            node("nozzle", Some(0), vec![], Vec3::new(0.0, -1.0, 0.0)),
+        ],
+        meshes: vec![],
+        clips: vec![ModelClip {
+            name: "fly".into(),
+            duration: 1.0,
+            channels: vec![ModelChannel {
+                node: 0,
+                property: TrsProperty::Translation,
+                interpolation: Interpolation::Linear,
+                times: vec![0.0, 1.0],
+                values: vec![Vec4::ZERO, Vec4::new(0.0, 10.0, 0.0, 0.0)],
+            }],
+            node_channels: vec![],
+        }],
+        images: vec![],
+        root: Some(0),
+    }
+}
+
+#[test]
+fn guest_model_imports_wired() {
+    // Writes the nozzle position to `np`, the clip time to `ct.x`, and the
+    // unknown-node result to `miss.x`; tints and powers the rocket up.
+    with_each_runtime(
+        r#"(module
+            (import "env" "model_node_pos" (func $np (param i32 i32 i32 i32 i32) (result i32)))
+            (import "env" "model_tint" (func $tint (param i32 i32 f64 f64 f64) (result i32)))
+            (import "env" "model_emissive" (func $em (param i32 i32 f64) (result i32)))
+            (import "env" "model_clip_time" (func $ct (param i32 i32) (result f64)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "rocket")
+            (data (i32.const 16) "nozzle")
+            (data (i32.const 32) "np")
+            (data (i32.const 40) "ct")
+            (data (i32.const 48) "miss")
+            (data (i32.const 56) "nope")
+            (func (export "update") (param f64)
+                (drop (call $tint (i32.const 0) (i32.const 6)
+                    (f64.const 0.25) (f64.const 0.5) (f64.const 1)))
+                (drop (call $em (i32.const 0) (i32.const 6) (f64.const 2.5)))
+                (drop (call $set (i32.const 40) (i32.const 2)
+                    (call $ct (i32.const 0) (i32.const 6)) (f64.const 0) (f64.const 0)))
+                (drop (call $set (i32.const 48) (i32.const 4)
+                    (f64.convert_i32_s (call $np (i32.const 0) (i32.const 6)
+                        (i32.const 56) (i32.const 4) (i32.const 64)))
+                    (f64.const 0) (f64.const 0)))
+                (if (call $np (i32.const 0) (i32.const 6) (i32.const 16) (i32.const 6) (i32.const 64))
+                    (then (drop (call $set (i32.const 32) (i32.const 2)
+                        (f64.load (i32.const 64)) (f64.load (i32.const 72))
+                        (f64.load (i32.const 80))))))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            let tm = engine.names["tilemap"];
+            engine
+                .world
+                .insert_one(tm, classic_core::components::Transform::new(Vec3::ZERO, Vec3::ONE))
+                .unwrap();
+            engine.models.insert("fly".into(), flying_model_asset());
+            engine.spawn_named("rocket");
+            let rocket = engine.names["rocket"];
+            engine
+                .world
+                .insert_one(
+                    rocket,
+                    classic_core::components::Transform::new(Vec3::new(1.0, 1.0, 0.0), Vec3::ONE),
+                )
+                .unwrap();
+            engine.world.insert_one(rocket, Model::new("fly", "tilemap")).unwrap();
+            for n in ["np", "ct", "miss"] {
+                engine.spawn_named(n);
+            }
+            assert!(engine.start_model_clip("rocket", "fly", false));
+            // Mid-clip, as the model system would have advanced it this frame.
+            engine.update_models(0.5);
+            rt.update(&mut engine, 0.016).unwrap();
+
+            let expect = engine.model_node_pos("rocket", "nozzle").expect("node resolves");
+            let got = engine.get_pos("np").expect("the guest wrote the node position");
+            assert!((Vec3::new(got.0, got.1, got.2) - expect).length() < 1e-4);
+            // Rig lifted 5 m, nozzle 1 m below it, over the tile's ground point.
+            assert!((expect.z - (1.0 + 4.0)).abs() < 1e-4, "{expect}");
+            assert_eq!(engine.get_pos("ct").unwrap().0, 0.5);
+            assert_eq!(engine.get_pos("miss").unwrap().0, 0.0, "unknown node is none");
+            let m = engine.world.get::<&Model>(rocket).unwrap();
+            assert_eq!(m.tint, Some([0.25, 0.5, 1.0]));
+            assert_eq!(m.emissive, Some(2.5));
+        },
+    );
+}

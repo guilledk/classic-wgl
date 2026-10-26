@@ -698,6 +698,17 @@ instance  = placement · node_world[node]
   `CLASSIC_ROCKET_GLB_DIR`) measure the rig origin and lowest vertex through
   this exact path.
 
+**ABI** (`abi_manifest`, `[native web worker]`): `model_node_pos(name, node)`
+(`triple_opt`: `placement · node_world[node]`'s translation, world metres, +Z
+up, the lights' and effects' space; none for an unknown entity, model or
+node; the tile under it is `(x / TILE_M, −y / TILE_M)`, the inverse of
+`iso_world_pos`), `model_tint(name, r, g, b)` (`Model.tint`),
+`model_emissive(name, strength)` (`Model.emissive`; negative clamps to 0,
+non-finite resets to 1) and `model_clip_time(name)` (`f64` seconds, `-1` when
+no clip of the glb plays).  The pose a guest reads is this frame's: the demo's
+model system (`init_model_system`) registers its `on_update` before the
+guests', and `start_model_clip` re-samples on the spot.
+
 ## 9. IsoAgent
 
 `IsoAgent` is a pathfinding-capable `IsoSprite` subtype (its registry spawner

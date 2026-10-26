@@ -99,6 +99,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `node` (JSON alias `socket`) rides it, so vehicle lamps cast real light.
   ABI rows `vehicle_socket_pos` (world metres) and `vehicle_socket_fx`
   (a one-shot effect along the socket's forward axis) (#161).
+- Model guest ABI.  ABI rows `model_node_pos` (a `Model` entity's glTF
+  node world position at this frame's pose, `triple_opt`, world metres,
+  +Z up), `model_tint` and `model_emissive` (`Model.tint` /
+  `Model.emissive`, until now settable only in `state.json`) and
+  `model_clip_time` (seconds, `-1` without a clip), so a guest can track
+  a rocket's or crane's node and light or tint a model at runtime
+  (#164).
 - Model team tint.  A glb material's `extras` may carry
   `"classic_team_rect": [u0, v0, u1, v1]`: a region of its
   `baseColorTexture` in TEXCOORD_0 space (origin top-left, `0..1`,
