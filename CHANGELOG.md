@@ -10,6 +10,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- Riding layers without tilt axes lean with the hull.  The mule's robot
+  arm (its `tool` layer, baked level to save sheet pages) turned with the
+  heading but never pitched or rolled; the engine only tilted layers that
+  declared `pitch` / `roll`.  Now a tool / legs / cargo / lift layer with
+  neither, on a sheet that can warp (`dir_interp`, anchor-relative depth),
+  warps its level frame by the full residual to the hull's drawn tilt (up
+  to ±20°), normals rotated, on the existing tilt-warp path (no third
+  source: there is no other level).  `tilt_warp: false` on the layer def
+  opts out.  A `vehiclePlay {name, layer, clip, speed, repeat}` scenario
+  action plays layer clips from a test (#187).
+
 - Vehicle defs declare lights and emitters: `lights[]` / `emitters[]`,
   scene `Light` / `Emitter` components with a `socket` (checked against
   the def's `sockets` by `vehicle_def::validate`).  `spawn_vehicle`, so

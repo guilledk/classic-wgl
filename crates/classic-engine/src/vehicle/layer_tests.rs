@@ -886,3 +886,165 @@ fn a_def_light_on_an_unknown_socket_is_refused() {
     assert!(errs.iter().any(|e| e.contains("light 0: unknown socket 'nope'")), "{errs:?}");
     assert!(errs.iter().any(|e| e.contains("emitter 0: needs a `socket`")), "{errs:?}");
 }
+
+/// A sheet entry with an anchor-relative depth companion (`global`: a
+/// legacy whole-window one instead).
+fn depth_sheet(global: bool) -> classic_core::types::SpriteSheetEntry {
+    serde_json::from_value(serde_json::json!({
+        "name": "s", "src": "/res/s.png", "size": [64, 64], "depth": "/res/s_depth.png",
+        "depth_mode": if global { "global" } else { "anchor" }, "depth_range_m": 1.0
+    }))
+    .unwrap()
+}
+
+/// The tilting tank on the ~8° slope with a tilt-warping hull, its crate
+/// either baked on pitch / roll axes (`tilt_interp`) or flat (no axes, a
+/// `dir_interp` anchor-depth sheet), and the turret's crane flat.
+fn tank_with_flat_riders(crate_axes: bool) -> Engine {
+    let mut engine = spawn_tilting_tank_on_slope(0.1);
+    let def = engine.vehicles.get_mut("tank").unwrap();
+    if !crate_axes {
+        let c = def.layers.iter_mut().find(|l| l.name == "crate").unwrap();
+        (c.pitch, c.roll) = (None, None);
+    }
+    for (t, tilt) in
+        [("tankHull", true), ("tankCrate", crate_axes), ("tankCrane", false), ("tankTurret", false)]
+    {
+        let table = engine.frame_tables.get_mut(t).unwrap();
+        table.dir_interp = true;
+        table.tilt_interp = tilt;
+        table.sheets = vec![depth_sheet(false)];
+    }
+    engine
+}
+
+fn blend(engine: &Engine, entity: &str) -> classic_core::components::DirBlend {
+    engine.world.get::<&IsoSprite>(engine.names[entity]).unwrap().dir_blend.expect("blends")
+}
+
+/// The bake pose of a frame (yaw after the body tilt), as the kit renders.
+fn bake_pose(heading: f32, pitch: f32, roll: f32) -> glam::Quat {
+    glam::Quat::from_rotation_z(-heading) * classic_core::vehicle_def::tilt_rotation(pitch, roll)
+}
+
+/// `sheet.frag`'s `residual(p, phi)`.
+fn shader_residual(tilt: [f32; 3], p: glam::Vec3, phi: f32) -> glam::Vec3 {
+    let v = glam::Quat::from_rotation_z(phi) * p;
+    let u = glam::Vec3::from(tilt);
+    let w = (1.0 - u.dot(u)).max(0.0).sqrt();
+    v + 2.0 * u.cross(u.cross(v) + w * v)
+}
+
+#[test]
+fn an_untilted_riding_layer_warps_its_level_frame_to_the_hull_tilt() {
+    use classic_core::vehicle_def::{heading_neighbours, tilt_for_yaw};
+    let mut engine = tank_with_flat_riders(false);
+    let slope = (0.1 / TILE_M).atan();
+    let pts = [glam::Vec3::new(0.6, -0.3, 1.1), glam::Vec3::new(-0.4, 0.5, 0.2)];
+    let step = std::f32::consts::TAU / 16.0;
+    for dir in [0, 3, 4, 9] {
+        face(&mut engine, dir);
+        let v = IsoVehicle::clone(&engine.world.get::<&IsoVehicle>(engine.names["tank"]).unwrap());
+        let heading = v.heading;
+        // the hull warps to the exact chassis tilt: what the riders lean by
+        let hull = (v.pitch, v.roll);
+        assert!(hull.0.hypot(hull.1) > slope * 0.9, "dir {dir}: on the slope {hull:?}");
+        for (entity, yaw) in [("tank.crate", 0.0), ("tank.crane", 0.0)] {
+            // the level frame (no tilt axes), warped by the full residual
+            let b = blend(&engine, entity);
+            assert!(b.third.is_none(), "{entity}: no other tilt level to take a third from");
+            let (p, r) = tilt_for_yaw(hull.0, hull.1, yaw);
+            let h = heading + yaw;
+            let (a, bb, _) = heading_neighbours(h, 16);
+            for (d, tilt) in [(a, b.tilt), (bb, b.tilt)] {
+                let src = d as f32 * step;
+                let want = bake_pose(h, p, r) * bake_pose(src, 0.0, 0.0).inverse();
+                for pt in pts {
+                    let got = shader_residual(tilt, pt, -(h - src));
+                    assert!(
+                        (got - want * pt).length() < 1e-4,
+                        "dir {dir} {entity} from {d}: {got} vs {}",
+                        want * pt
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_flat_rider_matches_a_tilted_one_in_frame_offset_and_pose() {
+    use classic_core::vehicle_def::tilt_rotation;
+    // the same crate on the same slope, baked on 5 × 3 tilt levels or flat
+    let mut tilted = tank_with_flat_riders(true);
+    let mut flat = tank_with_flat_riders(false);
+    for dir in [0, 4, 6, 11] {
+        face(&mut tilted, dir);
+        face(&mut flat, dir);
+        // the same placement (the offset rides the full body tilt either way)
+        assert!((pos(&tilted, "tank.crate") - pos(&flat, "tank.crate")).length() < 1e-6);
+        let alt =
+            |e: &Engine| e.world.get::<&IsoSprite>(e.names["tank.crate"]).unwrap().frame_offset.z;
+        assert!((alt(&tilted) - alt(&flat)).abs() < 1e-6);
+        // the flat one draws its level frame; the tilted one its nearest level
+        let frame =
+            |e: &Engine| e.world.get::<&IsoSprite>(e.names["tank.crate"]).unwrap().frame as u32;
+        assert_eq!(frame(&flat) % 16, frame(&tilted) % 16, "the same direction");
+        assert!(frame(&flat) < 16, "the level (only) frame");
+        // ... and both end on the same drawn pose: level ∘ residual
+        let v = IsoVehicle::clone(&flat.world.get::<&IsoVehicle>(flat.names["tank"]).unwrap());
+        let ax = classic_core::vehicle_def::AngleAxis::symmetric(5, 20.0);
+        let rx = classic_core::vehicle_def::AngleAxis::symmetric(3, 20.0);
+        let lvl = (ax.angle(ax.index(v.pitch)), rx.angle(rx.index(v.roll)));
+        let pose = |tilt: [f32; 3], level: (f32, f32)| {
+            let u = glam::Vec3::from(tilt);
+            let w = (1.0 - u.dot(u)).max(0.0).sqrt();
+            glam::Quat::from_xyzw(u.x, u.y, u.z, w)
+                * glam::Quat::from_rotation_z(-v.heading)
+                * tilt_rotation(level.0, level.1)
+        };
+        let (a, b) = (
+            pose(blend(&tilted, "tank.crate").tilt, lvl),
+            pose(blend(&flat, "tank.crate").tilt, (0.0, 0.0)),
+        );
+        assert!(1.0 - a.dot(b).abs() < 1e-6, "dir {dir}: {a} vs {b}");
+    }
+}
+
+#[test]
+fn the_flat_tilt_warp_needs_an_anchor_depth_sheet_and_respects_the_opt_out() {
+    use super::layers::flat_tilt_warp;
+    let def = tank_def();
+    let crane = def.layers.iter().find(|l| l.name == "crane").unwrap().clone();
+    let mut table = FrameTable {
+        version: 2,
+        sheets: vec![depth_sheet(false)],
+        frames: Default::default(),
+        dir_interp: true,
+        axes: None,
+        tilt_interp: false,
+        companions: vec![],
+    };
+    assert!(flat_tilt_warp(&crane, &table));
+    let mut off = crane.clone();
+    off.tilt_warp = false;
+    assert!(!flat_tilt_warp(&off, &table), "opted out");
+    let json = serde_json::to_value(&off).unwrap();
+    assert_eq!(json["tilt_warp"], false, "the opt-out round-trips");
+    assert!(serde_json::to_value(&crane).unwrap().get("tilt_warp").is_none(), "on: omitted");
+    let mut axes = crane.clone();
+    axes.pitch = Some(classic_core::vehicle_def::AngleAxis::symmetric(3, 20.0));
+    assert!(!flat_tilt_warp(&axes, &table), "a baked axis warps by `tilt_interp`");
+    table.sheets = vec![depth_sheet(false), depth_sheet(true)];
+    assert!(!flat_tilt_warp(&crane, &table), "a global-depth sheet cannot lift texels");
+    table.sheets = vec![depth_sheet(false)];
+    table.dir_interp = false;
+    assert!(!flat_tilt_warp(&crane, &table), "no direction warp, no tilt warp");
+    // opted out on the slope: the crane stays level (no residual)
+    let mut engine = tank_with_flat_riders(false);
+    let tank = engine.vehicles.get_mut("tank").unwrap();
+    tank.layers.iter_mut().find(|l| l.name == "crane").unwrap().tilt_warp = false;
+    face(&mut engine, 0);
+    assert_eq!(blend(&engine, "tank.crane").tilt, [0.0; 3]);
+    assert!(blend(&engine, "tank.crate").tilt.iter().any(|v| v.abs() > 1e-3));
+}

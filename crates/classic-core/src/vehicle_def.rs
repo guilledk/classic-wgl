@@ -372,6 +372,13 @@ pub struct VehicleLayerDef {
     /// Initial visibility.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub visible: bool,
+    /// A riding layer (tool / legs / cargo / lift) with no `pitch` / `roll`
+    /// axes still leans with the hull: its level frame is tilt-warped to the
+    /// hull's drawn tilt when its sheet can be (`dir_interp`, every sheet an
+    /// anchor-relative depth companion), up to ±[`TILT_WARP_MAX_DEG`].
+    /// `false` keeps it level (it then only turns with the heading).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub tilt_warp: bool,
     /// Anchor-relative depth range override (metres); the sheet's own
     /// `depth_range_m` wins when it sets one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -414,6 +421,7 @@ impl VehicleLayerDef {
             clips: BTreeMap::new(),
             ghost: true,
             visible: true,
+            tilt_warp: true,
             depth_range_m: None,
         }
     }
