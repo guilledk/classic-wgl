@@ -9,9 +9,9 @@ use glam::{Vec2, Vec3};
 use crate::Engine;
 
 use super::kinematics::{
-    advance_suspension, anchors_n, derive_wheel_offsets, heading_to_dir, lerp_dir2, lookahead,
-    pitch_index, should_reverse, soft_deadzone, steer_index, step_spring, step_steer,
-    straight_steer, wrap_pi,
+    advance_suspension, anchors_n, axis_box_half, derive_wheel_offsets, heading_to_dir, lerp_dir2,
+    lookahead, path_body, pitch_index, should_reverse, soft_deadzone, steer_index, step_spring,
+    step_steer, straight_steer, wrap_pi,
 };
 use super::{
     TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DUST_CONTACT_M, GOAL_TOLERANCE,
@@ -165,8 +165,7 @@ impl Engine {
         let footprint: Vec<(i32, i32)> = match &def.path_footprint {
             Some(fp) => fp.clone(),
             None => {
-                let half_x = ((wheelbase_m / TILE_M) * 0.5).ceil() as i32;
-                let half_y = ((track_m / TILE_M) * 0.5).ceil() as i32;
+                let (half_x, half_y) = axis_box_half(&def, wheelbase_m, track_m);
                 let mut fp = Vec::with_capacity(((half_x * 2 + 1) * (half_y * 2 + 1)) as usize);
                 for dy in -half_y..=half_y {
                     for dx in -half_x..=half_x {
@@ -293,6 +292,10 @@ impl Engine {
             roll_max,
             track_m,
             path_footprint: footprint,
+            path_body: path_body(
+                &def,
+                [-wheelbase_m * 0.5, wheelbase_m * 0.5, -track_m * 0.5, track_m * 0.5],
+            ),
             turn_rate: def.turn_rate_deg_per_sec.to_radians(),
             safe_fall_m: def.safe_fall_m,
             wheel_travel_up,

@@ -394,11 +394,27 @@ both endpoints.
 
 ### Vehicle search (footprint / slope / jump / turn-cost)
 
-Wheeled vehicles use a richer search than the 1×1 humanoid A\* — still a 2D
-grid search (no heading state, no state lattice), but with four layered gates:
+Wheeled vehicles use a richer search than the 1×1 humanoid A\* — still a
+grid search (no state lattice), but with four layered gates:
 
-- **Footprint**: `erode_for_footprint` inflates the walkability grid by the
-  vehicle's `path_footprint`, then A\* runs as a point agent.
+- **Footprint** (`VehicleFootprint`): an authored `path_footprint` is
+  `Cells` — `erode_for_footprint` inflates the walkability grid by it once,
+  then A\* runs as a point agent.  Otherwise it is `Oriented { body, pivot }`
+  (the `oriented` module): `body` is a `BodyRect` in tiles, chassis frame
+  (`+x` forward, `+y` left) — the def's `path_body_m`, else the wheel
+  contacts' rectangle (`IsoVehicle.path_body`).  The search state is a cell
+  plus its incoming heading (8 directions, or none at the start; collapsed
+  to one per cell when `turn_cost` is 0 and there is no pivot).  A step
+  `a -> b` along `d` is legal when the body swept from `a` to `b` at `d`
+  (front pushed out by the step length) is clear: that is the body at `a`
+  turned to `d`, so a turn needs both headings clear; a `pivot_turn`
+  vehicle also clears every 22.5° heading it turns through at `a`.  The
+  first step checks only the body at `b` (the start is relaxed).  Each
+  footprint is rasterized once per heading into row spans (a cell counts
+  when the body's interior overlaps it), blocked cells into per-row prefix
+  counts, and each `(cell, d)` answer is memoized, so only cells the A\*
+  reaches are checked.  `IsoVehicle.path_footprint` stays the East-facing
+  axis box for selection and `vehicle_footprint_radius`.
 - **Slope**: `derive_vehicle_slope_nav` derives a per-tile feasibility grid by
   sampling terrain at the wheel positions (`±wheelbase/2`, `±track/2`) in all 8
   headings; a tile is walkable if *some* heading keeps `|pitch| ≤ pitch_max` and
@@ -406,7 +422,7 @@ grid search (no heading state, no state lattice), but with four layered gates:
 - **Jump**: `find_path_for_footprint_with_jumps` allows a *downward* step whose
   drop (metres) is within `safe_fall_m` even when the slope grid marks it blocked,
   scaled by `jump_cost`.
-- **Turn cost**: the `a_star` step-cost closure now takes the *previous* cell —
+- **Turn cost**: the cell-state `a_star` step-cost closure takes the *previous* cell —
   `FnMut(prev: Option<GridCell>, current, neighbour)` — and `turn_penalty` adds
   `turn_cost` per 45° of heading change (straight free, 90° = `2·turn_cost`,
   180° = `4·turn_cost`).  The penalty only *raises* costs, so the octile

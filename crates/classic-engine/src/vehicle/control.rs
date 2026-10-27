@@ -7,7 +7,7 @@ use classic_worker::{VehiclePathQuery, VehicleSnapshot};
 
 use crate::Engine;
 
-use super::kinematics::{dir_entry, dir_to_heading, pitch_index, straight_steer};
+use super::kinematics::{dir_entry, dir_to_heading, pitch_index, search_footprint, straight_steer};
 use super::{
     PreviewProbe, PreviewProbeState, VehicleGotoPoll, VehicleGotoSubmit, VehicleWrite, JUMP_COST,
 };
@@ -127,7 +127,7 @@ impl Engine {
                 return VehicleGotoSubmit::Airborne;
             }
             (
-                v.path_footprint.clone(),
+                search_footprint(&v),
                 v.pitch_max,
                 v.roll_max,
                 v.wheelbase_m,
@@ -292,7 +292,7 @@ impl Engine {
         let (footprint, pitch_max, roll_max, wheelbase_m, track_m, safe_fall_m, turn_cost) = {
             let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return -2 };
             (
-                v.path_footprint.clone(),
+                search_footprint(&v),
                 v.pitch_max,
                 v.roll_max,
                 v.wheelbase_m,

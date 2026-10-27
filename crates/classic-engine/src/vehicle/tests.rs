@@ -7,8 +7,8 @@ use crate::Engine;
 
 use super::kinematics::{
     advance_suspension, derive_wheel_offsets, dir_to_heading, heading_to_dir, lerp_dir2, lookahead,
-    pitch_index, should_reverse, soft_deadzone, steer_index, step_spring, step_steer,
-    straight_steer, wrap_pi, MAX_SPRING_STEP,
+    pitch_index, search_footprint, should_reverse, soft_deadzone, steer_index, step_spring,
+    step_steer, straight_steer, wrap_pi, MAX_SPRING_STEP,
 };
 use super::*;
 
@@ -297,6 +297,7 @@ fn spawn_vehicle_creates_body_and_wheels() {
         roll_levels: 1,
         roll_max_deg: 20.0,
         path_footprint: Some(vec![(0, 0)]),
+        path_body_m: None,
         safe_fall_m: 0.0,
         steer_levels: 1,
         steer_max_deg: 30.0,
@@ -481,6 +482,7 @@ fn spawn_vehicle_sizes_body_sheet_by_pitch_levels() {
         roll_levels: 3,
         roll_max_deg: 20.0,
         path_footprint: Some(vec![(0, 0)]),
+        path_body_m: None,
         safe_fall_m: 0.0,
         steer_levels: 1,
         steer_max_deg: 30.0,
@@ -560,6 +562,7 @@ fn goto_rejected_while_airborne() {
         roll_levels: 1,
         roll_max_deg: 20.0,
         path_footprint: Some(vec![(0, 0)]),
+        path_body_m: None,
         safe_fall_m: 0.0,
         steer_levels: 1,
         steer_max_deg: 30.0,
@@ -752,6 +755,7 @@ fn lrv_def(turn_rate_deg: f32) -> (VehicleDef, VehicleAnchors) {
         roll_levels: 1,
         roll_max_deg: 20.0,
         path_footprint: None,
+        path_body_m: None,
         safe_fall_m: 0.0,
         steer_levels: 1,
         steer_max_deg: 30.0,
@@ -965,6 +969,7 @@ fn lrv_def_real() -> (VehicleDef, VehicleAnchors) {
         roll_levels: 3,
         roll_max_deg: 20.0,
         path_footprint: None,
+        path_body_m: None,
         turn_rate_deg_per_sec: 90.0,
         safe_fall_m: 1.5,
         steer_levels: 1,
@@ -1108,6 +1113,74 @@ fn real_lrv_def_auto_derives_and_paths() {
         matches!(goto_sync(&mut engine, "lrv", 24, 24), VehicleGotoPoll::Accepted(_)),
         "goto with real def + auto footprint"
     );
+}
+
+#[test]
+fn the_path_body_is_the_defs_rectangle_else_the_wheel_contacts() {
+    use classic_core::pathfinder::{BodyRect, VehicleFootprint};
+    use classic_core::tilemap::TILE_M;
+
+    let mut engine = engine_with_lrvtest_like_map(None);
+    let (mut def, anchors) = lrv_def_real();
+    insert_lrv(&mut engine, (def.clone(), anchors.clone()));
+    assert!(engine.spawn_vehicle("lrv", "a", 5.0, 5.0));
+    let body = |engine: &Engine, name: &str| {
+        let v = engine.world.get::<&IsoVehicle>(engine.names[name]).unwrap();
+        (v.path_body, search_footprint(&v), v.wheelbase_m, v.track_m)
+    };
+    // auto: the wheel contacts' rectangle, turned by the search
+    let (b, fp, wb, tr) = body(&engine, "a");
+    let want = BodyRect::centred(wb / TILE_M, tr / TILE_M);
+    let b = b.expect("an auto footprint turns");
+    for (got, want) in [(b.rear, want.rear), (b.front, want.front), (b.right, want.right)] {
+        assert!((got - want).abs() < 1e-4, "{b:?} vs {want:?}");
+    }
+    assert!(matches!(fp, VehicleFootprint::Oriented { pivot: false, .. }));
+
+    // the def's own rectangle wins
+    def.path_body_m = Some([-1.83, 1.64, -2.07, 2.07]);
+    insert_lrv(&mut engine, (def.clone(), anchors.clone()));
+    assert!(engine.spawn_vehicle("lrv", "b", 15.0, 5.0));
+    let b = body(&engine, "b").0.unwrap();
+    assert!((b.rear + 1.83 / TILE_M).abs() < 1e-4 && (b.left - 2.07 / TILE_M).abs() < 1e-4);
+
+    // an authored cell footprint is searched as authored
+    def.path_footprint = Some(rect_footprint(1, 1));
+    insert_lrv(&mut engine, (def, anchors));
+    assert!(engine.spawn_vehicle("lrv", "c", 25.0, 5.0));
+    let (b, fp, ..) = body(&engine, "c");
+    assert_eq!(b, None);
+    assert_eq!(fp, VehicleFootprint::Cells(rect_footprint(1, 1)));
+}
+
+#[test]
+fn vehicle_goto_turns_the_body_to_each_step() {
+    use classic_core::tilemap::TILE_M;
+
+    // 3 cells nose to tail, 5 across: facing East its axis box spans rows
+    // -2..=2, so a goal one row in from the map's north edge is out of the
+    // box's reach; driving north, the turned body spans rows -1..=1
+    let mut engine = engine_with_lrvtest_like_map(None);
+    let (mut def, anchors) = lrv_def_real();
+    def.path_footprint = None;
+    def.path_body_m = Some([-0.95 * TILE_M, 0.95 * TILE_M, -1.9 * TILE_M, 1.9 * TILE_M]);
+    def.safe_fall_m = 0.0;
+    insert_lrv(&mut engine, (def, anchors));
+    assert!(engine.spawn_vehicle("lrv", "lrv", 24.5, 20.5));
+
+    match goto_sync(&mut engine, "lrv", 24, 1) {
+        VehicleGotoPoll::Accepted(path) => {
+            assert!(path.iter().all(|c| c[0] == 24), "straight north: {path:?}")
+        }
+        _ => panic!("the body turned north fits by the edge"),
+    }
+    // the same body as its East-facing axis box cannot
+    let (mut def, anchors) = lrv_def_real();
+    def.path_footprint = Some(rect_footprint(1, 2));
+    def.safe_fall_m = 0.0;
+    insert_lrv(&mut engine, (def, anchors));
+    assert!(engine.spawn_vehicle("lrv", "boxed", 24.5, 20.5));
+    assert!(matches!(goto_sync(&mut engine, "boxed", 24, 1), VehicleGotoPoll::NoPath));
 }
 
 #[test]
