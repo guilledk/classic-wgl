@@ -55,6 +55,12 @@ fn boot_sink() -> (
 /// `roms/out/` (a gitignored local cache, overridable via `CLASSIC_ROM_DIR`).
 /// If a ROM isn't staged locally it is streamed from the CDN instead, so a
 /// fresh checkout downloads the ROM the same way the web build does.
+///
+/// `lunar-buildings` (the lunar buildings: landing pad, crane; a dependency
+/// of `lunar` and `padtest`) is listed before it is published: it boots from
+/// a locally built copy in `CLASSIC_ROM_DIR`, and only reaches for the CDN
+/// (failing loudly until the landing window publishes it) when absent.  It
+/// joins `fetch-roms` / `roms.lock.json` when it is published.
 fn rom_lookup(dir: String) -> impl Fn(&str) -> Option<String> {
     move |name: &str| {
         let file: String = match name {
@@ -65,6 +71,7 @@ fn rom_lookup(dir: String) -> impl Fn(&str) -> Option<String> {
             "fxtest" => "fxtest.rom".into(),
             "common" => "common.rom".into(),
             "lunar-common" => "lunar-common.rom".into(),
+            "lunar-buildings" => "lunar-buildings.rom".into(),
             _ => return None,
         };
         let local = format!("{dir}/{file}");
@@ -252,3 +259,27 @@ fn main() {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}
+
+#[cfg(test)]
+mod tests {
+    use super::rom_lookup;
+
+    #[test]
+    fn rom_lookup_prefers_a_local_rom_then_the_cdn() {
+        let dir = std::env::temp_dir().join(format!("classic-rom-lookup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lookup = rom_lookup(dir.to_string_lossy().into_owned());
+        // Not built locally (unpublished `lunar-buildings` included): the CDN.
+        assert_eq!(
+            lookup("lunar-buildings").as_deref(),
+            Some("https://classic-roms.com/lunar-buildings.rom")
+        );
+        // A local build in `CLASSIC_ROM_DIR` wins.
+        std::fs::write(dir.join("lunar-buildings.rom"), b"rom").unwrap();
+        let local = dir.join("lunar-buildings.rom").to_string_lossy().into_owned();
+        assert_eq!(lookup("lunar-buildings"), Some(local));
+        assert_eq!(lookup("moon"), lookup("lunar"), "moon aliases lunar");
+        assert_eq!(lookup("padtest"), None, "unknown names are not ROM names");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
