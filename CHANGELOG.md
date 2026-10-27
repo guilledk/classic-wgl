@@ -327,6 +327,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- A selected vehicle's wheels stay on its chassis while it turns.  A
+  selected sprite never blends (the selection silhouette needs one
+  frame), so the selected mule's hull drew its nearest baked direction
+  while every layer was still placed from the exact heading: turning,
+  the wheels slid around the snapped hull (10 px mean, up to 29 px at
+  zoom 1, against Blender truth).  `apply_layers` now places and frames a
+  selected vehicle's layers from its drawn heading and tilt level (0.5
+  px).  Front tyres also steer into the turn: the turn-left steer state
+  was fed the right-positive heading error, mirroring the tyres whenever
+  the vehicle drove forward (front-tyre IoU 0.73 -> 0.88) (#173).
 - A deck model no longer shows through what stands on it.  The model
   ghost pass redrew every model's occluded pixels at 40% over the sprites
   in front, so a landing pad's deck showed through containers and the

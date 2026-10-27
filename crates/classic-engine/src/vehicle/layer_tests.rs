@@ -6,6 +6,7 @@ use classic_core::tilemap::TILE_M;
 use classic_core::types::{FrameTable, VehicleDef};
 use classic_core::vehicle_def::ClipDef;
 
+use super::kinematics::wrap_pi;
 use super::layers::{chassis_to_tile, clip_frame, contact_offsets, layer_poses};
 use crate::Engine;
 
@@ -591,4 +592,151 @@ fn layer_origins_ride_the_full_body_tilt_like_sockets() {
             assert!((anchor - sock).length() < 1e-3, "dir {dir} {entity}: {anchor} vs {sock}");
         }
     }
+}
+
+/// A mule-like rover: a dir- and tilt-interpolated hull, four wheels (the
+/// front pair steering), and a tool off the hull's corner.
+fn rover_def() -> VehicleDef {
+    serde_json::from_value(serde_json::json!({
+        "version": 2, "name": "rover", "directions": 16, "turn_rate_deg_per_sec": 75.0,
+        "steer_rate_deg_per_sec": 150.0, "reverse_speed": 0.9,
+        "layers": [
+            { "name": "hull", "kind": "hull", "texture": "roverHull",
+              "pitch": { "levels": 3, "max_deg": 20.0 }, "roll": { "levels": 3, "max_deg": 20.0 } },
+            { "name": "tool", "kind": "tool", "texture": "roverTool", "offset": [1.29, -1.2, 0.0] },
+            { "name": "wheel_fl", "kind": "wheel", "texture": "roverWheel", "offset": [1.19, 1.82, 0.45],
+              "spin_frames": 4, "radius_m": 0.09, "steer": { "levels": 3, "max_deg": 25.0 } },
+            { "name": "wheel_fr", "kind": "wheel", "texture": "roverWheel", "offset": [1.19, -1.82, 0.45],
+              "spin_frames": 4, "radius_m": 0.09, "steer": { "levels": 3, "max_deg": 25.0 } },
+            { "name": "wheel_rl", "kind": "wheel", "texture": "roverWheel", "offset": [-1.38, 1.82, 0.45],
+              "spin_frames": 4, "radius_m": 0.09 },
+            { "name": "wheel_rr", "kind": "wheel", "texture": "roverWheel", "offset": [-1.38, -1.82, 0.45],
+              "spin_frames": 4, "radius_m": 0.09 }
+        ]
+    }))
+    .unwrap()
+}
+
+fn spawn_rover() -> Engine {
+    let mut engine = Engine::new_for_test();
+    let tm =
+        engine.world.spawn((super::tests::flat_tilemap_pub(24, 24), Role::new(RoleKind::Tilemap)));
+    engine.names.insert("tilemap".into(), tm);
+    engine.vehicles.insert("rover".into(), rover_def());
+    for (t, tilt) in [("roverHull", true), ("roverTool", false), ("roverWheel", false)] {
+        engine.frame_tables.insert(
+            t.into(),
+            FrameTable {
+                version: 2,
+                sheets: vec![],
+                frames: Default::default(),
+                dir_interp: true,
+                axes: None,
+                tilt_interp: tilt,
+                companions: vec![],
+            },
+        );
+    }
+    assert!(engine.spawn_vehicle("rover", "rover", 12.0, 12.0));
+    engine
+}
+
+const ROVER_LAYERS: [(&str, [f32; 2]); 6] = [
+    ("rover", [0.0, 0.0]),
+    ("rover.tool", [1.29, -1.2]),
+    ("rover.wheel_fl", [1.19, 1.82]),
+    ("rover.wheel_fr", [1.19, -1.82]),
+    ("rover.wheel_rl", [-1.38, 1.82]),
+    ("rover.wheel_rr", [-1.38, -1.82]),
+];
+
+#[test]
+fn every_layer_follows_the_hulls_drawn_heading_selected_or_not() {
+    // Continuous headings (7.3° apart, never on a baked direction): unselected
+    // the hull warps to the exact heading and every layer origin and frame
+    // follows it; selected it draws unblended at its nearer direction (the
+    // selection silhouette needs one frame), and every layer must follow
+    // that, not the exact heading (#173: the wheels slid around the snapped
+    // hull of a selected, turning mule).
+    let step = std::f32::consts::TAU / 16.0;
+    let mut engine = spawn_rover();
+    let body = engine.names["rover"];
+    engine.time.delta = 0.0;
+    for k in 0..50 {
+        let h_deg = k as f32 * 7.3;
+        assert_eq!(engine.vehicle_face("rover", h_deg), 1);
+        for selected in [false, true] {
+            if selected {
+                engine.selection.selected.insert(body);
+            } else {
+                engine.selection.selected.remove(&body);
+            }
+            engine.update_vehicles();
+            let h = engine.world.get::<&IsoVehicle>(body).unwrap().heading;
+            assert!((wrap_pi(h - h_deg.to_radians())).abs() < 1e-4, "faced {h_deg}");
+            let drawn = if selected { super::layers::drawn_heading(h, 16) } else { h };
+            let bp = pos(&engine, "rover");
+            for (name, off) in ROVER_LAYERS {
+                let e = engine.names[name];
+                let p = engine.world.get::<&Transform>(e).unwrap().position;
+                let t = chassis_to_tile(off, drawn);
+                assert!(
+                    (p.x - (bp.x + t[0])).abs() < 1e-4 && (p.y - (bp.y + t[1])).abs() < 1e-4,
+                    "{name} at {h_deg} deg (selected {selected}): {p} vs body {bp} + {t:?}"
+                );
+                let b = engine.world.get::<&IsoSprite>(e).unwrap().dir_blend.expect("dir_interp");
+                if selected {
+                    // Drawn unblended: its nearer neighbour is exactly `drawn`.
+                    let off_dir = b.dtheta_a.min(-b.dtheta_b);
+                    assert!(off_dir.abs() < 1e-4, "{name} at {h_deg}: {off_dir}");
+                    let shown = if -b.dtheta_b < b.dtheta_a {
+                        drawn - b.dtheta_b
+                    } else {
+                        drawn - b.dtheta_a
+                    };
+                    assert!(wrap_pi(shown - drawn).abs() < 1e-4);
+                } else {
+                    // Warped to the exact heading between its neighbours.
+                    let (_, _, t) = classic_core::vehicle_def::heading_neighbours(h, 16);
+                    assert!((b.dtheta_a - t * step).abs() < 1e-4, "{name} at {h_deg}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn front_tyres_steer_into_the_turn_both_ways() {
+    // `steer` is turn-left positive (the baked frames' sense); a positive
+    // tile-space heading change is a right turn.
+    let mut engine = spawn_rover();
+    let body = engine.names["rover"];
+    let wheel = |engine: &Engine| {
+        let v = engine.world.get::<&IsoVehicle>(body).unwrap();
+        (v.steer, v.reversing)
+    };
+    let steer_axis = rover_def().layers[2].steer.unwrap();
+    // Forward, the goal ahead and to the right (South-East of an East-facing
+    // rover): the tyres steer right.
+    engine.world.get::<&mut IsoVehicle>(body).unwrap().path = vec![[12, 12], [16, 15]];
+    engine.time.delta = 0.1;
+    for _ in 0..2 {
+        engine.update_vehicles();
+    }
+    let (steer, rev) = wheel(&engine);
+    assert!(!rev && steer < -0.1, "forward right turn: steer {steer}");
+    assert_eq!(steer_axis.index(steer), 0, "the full-right frame");
+    // Backing round to a goal behind: the nose swings right (heading up) while
+    // reversing, so the tyres steer left.
+    assert!(engine.vehicle_teleport("rover", 12.0, 12.0));
+    engine.world.get::<&mut IsoVehicle>(body).unwrap().path = vec![[12, 12], [5, 13]];
+    let h0 = engine.world.get::<&IsoVehicle>(body).unwrap().heading;
+    for _ in 0..3 {
+        engine.update_vehicles();
+    }
+    let (steer, rev) = wheel(&engine);
+    let h1 = engine.world.get::<&IsoVehicle>(body).unwrap().heading;
+    assert!(rev && wrap_pi(h1 - h0) > 0.0, "reversing, nose swinging right");
+    assert!(steer > 0.1, "reversing right swing: steer {steer}");
+    assert_eq!(steer_axis.index(steer), 2, "the full-left frame");
 }
