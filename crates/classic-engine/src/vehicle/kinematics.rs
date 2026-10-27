@@ -1,13 +1,54 @@
 //! Pure vehicle kinematics: direction/heading maths, springs, steering
 //! quantization, pure-pursuit lookahead, and wheel-offset derivation.
 
+use classic_core::components::IsoVehicle;
 use classic_core::math::iso_camera_px_inverse;
+use classic_core::pathfinder::{BodyRect, VehicleFootprint};
 use classic_core::tilemap::TILE_M;
+use classic_core::types::VehicleDef;
 use glam::Vec2;
 
 use super::{
     REVERSE_ENTER, REVERSE_EXIT, SPRING_DAMPING, SPRING_STIFFNESS, SUSP_DAMPING, SUSP_STIFFNESS,
 };
+
+/// The body rectangle (tiles) the vehicle search turns to each move's
+/// heading: the def's `path_body_m`, else `contacts_m` (the wheel contacts'
+/// `[rear, front, right, left]`, metres).  `None` under an explicit
+/// `path_footprint`, which the search applies as authored.
+pub(super) fn path_body(def: &VehicleDef, contacts_m: [f32; 4]) -> Option<BodyRect> {
+    if def.path_footprint.is_some() {
+        return None;
+    }
+    let [rear, front, right, left] = def.path_body_m.unwrap_or(contacts_m);
+    Some(BodyRect {
+        rear: rear.min(front) / TILE_M,
+        front: rear.max(front) / TILE_M,
+        right: right.min(left) / TILE_M,
+        left: right.max(left) / TILE_M,
+    })
+}
+
+/// The half extents (tiles, rounded out) of a vehicle's axis box, its
+/// `path_footprint` when the def authors none: its `path_body_m` facing
+/// East, else half its wheelbase along `x` and half its track along `y`.
+pub(super) fn axis_box_half(def: &VehicleDef, wheelbase_m: f32, track_m: f32) -> (i32, i32) {
+    let half = |m: f32| (m / TILE_M).ceil() as i32;
+    match def.path_body_m {
+        Some([rear, front, right, left]) => {
+            (half(rear.abs().max(front.abs())), half(right.abs().max(left.abs())))
+        }
+        None => (half(wheelbase_m * 0.5), half(track_m * 0.5)),
+    }
+}
+
+/// The footprint a vehicle searches with: its turned body, else its cells.
+pub(super) fn search_footprint(v: &IsoVehicle) -> VehicleFootprint {
+    match v.path_body {
+        Some(body) => VehicleFootprint::Oriented { body, pivot: v.pivot_turn },
+        None => VehicleFootprint::Cells(v.path_footprint.clone()),
+    }
+}
 
 /// Map a tile-step delta to a sprite-sheet direction frame (0..7), matching the
 /// 8-direction layout used by the assets pipeline (`0=East, 1=SouthEast, …`).

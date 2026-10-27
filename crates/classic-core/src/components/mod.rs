@@ -707,11 +707,16 @@ pub struct IsoVehicle {
     /// offsets and tile metre length at spawn).
     #[serde(skip)]
     pub track_m: f32,
-    /// Collision footprint for pathfinding: integer tile offsets from the body
-    /// anchor cell (copied from the vehicle def at spawn).  A* erodes the nav
-    /// grid by this footprint before searching (issue #35).
+    /// Collision footprint: integer tile offsets from the body anchor cell
+    /// (copied from the vehicle def at spawn, else the body's axis box).  The
+    /// vehicle search erodes the nav grid by it (issue #35) unless
+    /// [`Self::path_body`] is set; selection boxes read it either way.
     #[serde(skip)]
     pub path_footprint: Vec<(i32, i32)>,
+    /// The body rectangle (tiles, chassis frame) the vehicle search turns to
+    /// each move's heading; `None` = search with [`Self::path_footprint`].
+    #[serde(skip)]
+    pub path_body: Option<crate::pathfinder::BodyRect>,
     /// Max heading change while driving, in radians per second (copied from the
     /// vehicle def at spawn).  Drives the bounded-turn follow controller.
     #[serde(skip)]
@@ -924,6 +929,7 @@ impl Default for IsoVehicle {
             roll_max: 20.0f32.to_radians(),
             track_m: 0.0,
             path_footprint: vec![(0, 0)],
+            path_body: None,
             turn_rate: 720.0f32.to_radians(),
             safe_fall_m: 0.0,
             wheel_travel_up: 10.0 / 64.0,

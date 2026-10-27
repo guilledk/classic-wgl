@@ -18,7 +18,9 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use classic_pathfinder::{GridCell, NavSnapshot, PathfinderState, VehicleNavSnapshot};
+use classic_pathfinder::{
+    BodyRect, GridCell, NavSnapshot, PathfinderState, VehicleFootprint, VehicleNavSnapshot,
+};
 
 struct WState {
     pathfinder: PathfinderState,
@@ -98,6 +100,12 @@ pub extern "C" fn find_vehicle(
     to_y: i32,
     footprint: *const i32,
     footprint_len: i32,
+    has_body: i32,
+    body_rear: f32,
+    body_front: f32,
+    body_right: f32,
+    body_left: f32,
+    pivot: i32,
     pitch_max: f32,
     roll_max: f32,
     wheelbase_m: f32,
@@ -111,6 +119,20 @@ pub extern "C" fn find_vehicle(
         .chunks_exact(2)
         .map(|c| (c[0], c[1]))
         .collect();
+    // a body rectangle (tiles) turned to each move's heading, else the cells
+    let footprint = if has_body != 0 {
+        VehicleFootprint::Oriented {
+            body: BodyRect {
+                rear: body_rear,
+                front: body_front,
+                right: body_right,
+                left: body_left,
+            },
+            pivot: pivot != 0,
+        }
+    } else {
+        VehicleFootprint::Cells(footprint)
+    };
     let mut st = state();
     let Some(st) = st.as_mut() else { return -1 };
     match st.pathfinder.find_vehicle(

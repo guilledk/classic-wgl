@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use classic_core::pathfinder::{
-    GridCell, NavSnapshot, PathPoll, PathfinderState, VehicleNavSnapshot,
+    GridCell, NavSnapshot, PathPoll, PathfinderState, VehicleFootprint, VehicleNavSnapshot,
 };
 use wasm_bindgen::prelude::*;
 
@@ -249,9 +249,25 @@ impl PathfinderWorker {
         let q = query;
         let from = js_sys::Array::of2(&JsValue::from(q.from.0), &JsValue::from(q.from.1));
         let to = js_sys::Array::of2(&JsValue::from(q.to.0), &JsValue::from(q.to.1));
+        // A cell footprint goes as `footprint` pairs; a turned body as `body`
+        // `[rear, front, right, left]` tiles plus `pivot`.
         let fp = js_sys::Array::new();
-        for (dx, dy) in q.footprint {
-            fp.push(&js_sys::Array::of2(&JsValue::from(dx), &JsValue::from(dy)));
+        let mut body = JsValue::NULL;
+        let mut pivot = false;
+        match &q.footprint {
+            VehicleFootprint::Cells(cells) => {
+                for &(dx, dy) in cells {
+                    fp.push(&js_sys::Array::of2(&JsValue::from(dx), &JsValue::from(dy)));
+                }
+            }
+            VehicleFootprint::Oriented { body: b, pivot: p } => {
+                let arr = js_sys::Array::new();
+                for v in [b.rear, b.front, b.right, b.left] {
+                    arr.push(&JsValue::from_f64(v as f64));
+                }
+                body = arr.into();
+                pivot = *p;
+            }
         }
 
         let msg = js_sys::Object::new();
@@ -264,6 +280,8 @@ impl PathfinderWorker {
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("from"), &from);
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("to"), &to);
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("footprint"), &fp);
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("body"), &body);
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("pivot"), &JsValue::from_bool(pivot));
         for (key, value) in [
             ("pitchMax", q.pitch_max),
             ("rollMax", q.roll_max),
@@ -290,7 +308,7 @@ impl PathfinderWorker {
         id: PathId,
         from: GridCell,
         to: GridCell,
-        footprint: Vec<GridCell>,
+        footprint: VehicleFootprint,
         pitch_max: f32,
         roll_max: f32,
         wheelbase_m: f32,

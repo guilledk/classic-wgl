@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use classic_core::pathfinder::{
-    GridCell, NavSnapshot, PathPoll, PathfinderState, VehicleNavSnapshot,
+    GridCell, NavSnapshot, PathPoll, PathfinderState, VehicleFootprint, VehicleNavSnapshot,
 };
 
 use super::{PathId, PathJob, VehiclePathQuery, VehicleSnapshot};
@@ -95,7 +95,7 @@ impl PathfinderWorker {
         id: PathId,
         from: GridCell,
         to: GridCell,
-        footprint: Vec<GridCell>,
+        footprint: VehicleFootprint,
         pitch_max: f32,
         roll_max: f32,
         wheelbase_m: f32,
@@ -264,7 +264,7 @@ mod tests {
             0,
             (0, 0),
             (7, 7),
-            vec![(0, 0)],
+            VehicleFootprint::Cells(vec![(0, 0)]),
             pitch,
             roll,
             wb,
@@ -293,7 +293,7 @@ mod tests {
             1,
             (0, 0),
             (7, 7),
-            vec![(0, 0)],
+            VehicleFootprint::Cells(vec![(0, 0)]),
             pitch,
             roll,
             wb,
@@ -317,7 +317,7 @@ mod tests {
             2,
             (0, 0),
             (7, 7),
-            vec![(0, 0)],
+            VehicleFootprint::Cells(vec![(0, 0)]),
             pitch,
             roll,
             wb,
@@ -338,7 +338,7 @@ mod tests {
             0,
             (0, 0),
             (63, 63),
-            vec![(0, 0)],
+            VehicleFootprint::Cells(vec![(0, 0)]),
             pitch,
             roll,
             wb,
@@ -368,7 +368,7 @@ mod tests {
         let query = VehiclePathQuery {
             from: (0, 0),
             to: (7, 7),
-            footprint: vec![(0, 0)],
+            footprint: VehicleFootprint::Cells(vec![(0, 0)]),
             pitch_max,
             roll_max,
             wheelbase_m,

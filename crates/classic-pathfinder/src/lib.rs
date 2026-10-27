@@ -13,6 +13,10 @@
 
 extern crate alloc;
 
+mod oriented;
+
+pub use oriented::{BodyRect, VehicleFootprint};
+
 use alloc::collections::BinaryHeap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -347,6 +351,10 @@ fn turn_penalty(
 /// between the incoming and outgoing direction (per 45°), so A* prefers gentle
 /// routes over sharp corners; `0` disables it.  The penalty only raises costs,
 /// so the 8-directional heuristic stays admissible.
+///
+/// A [`VehicleFootprint::Cells`] footprint erodes both grids once and runs the
+/// 1×1 search; a [`VehicleFootprint::Oriented`] one turns the body to each
+/// move's heading (see [`BodyRect`] and the `oriented` module).
 #[allow(clippy::too_many_arguments)]
 pub fn find_path_for_footprint_with_jumps(
     walkable: &[i32],
@@ -356,11 +364,35 @@ pub fn find_path_for_footprint_with_jumps(
     size_y: i32,
     from: GridCell,
     to: GridCell,
-    footprint: &[GridCell],
+    footprint: &VehicleFootprint,
     safe_fall_m: f32,
     jump_cost: f32,
     turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
+    let vw = size_x as usize + 1;
+    let cell_height = |x: i32, y: i32| -> f32 {
+        let i = y as usize * vw + x as usize;
+        (heights[i] + heights[i + 1] + heights[i + vw] + heights[i + vw + 1]) * 0.25
+    };
+    let footprint = match footprint {
+        VehicleFootprint::Cells(cells) => cells,
+        VehicleFootprint::Oriented { body, pivot } => {
+            return oriented::find_oriented(
+                walkable,
+                structural,
+                size_x,
+                size_y,
+                from,
+                to,
+                body,
+                *pivot,
+                safe_fall_m,
+                jump_cost,
+                turn_cost,
+                cell_height,
+            );
+        }
+    };
     let mut walk_eroded = erode_for_footprint(walkable, size_x, size_y, footprint);
     let struct_eroded = if safe_fall_m > 0.0 {
         erode_for_footprint(structural, size_x, size_y, footprint)
@@ -373,12 +405,6 @@ pub fn find_path_for_footprint_with_jumps(
     if let Some(cell) = walk_eroded.get_mut(from_idx) {
         *cell = 1;
     }
-
-    let vw = size_x as usize + 1;
-    let cell_height = |x: i32, y: i32| -> f32 {
-        let i = y as usize * vw + x as usize;
-        (heights[i] + heights[i + 1] + heights[i + vw] + heights[i + vw + 1]) * 0.25
-    };
 
     a_star(size_x, size_y, from, to, |prev, current, neighbour| {
         let idx = (neighbour.0 + neighbour.1 * size_x) as usize;
@@ -438,7 +464,7 @@ pub fn find_vehicle_path_snapshot(
     snapshot: &VehicleNavSnapshot,
     from: GridCell,
     to: GridCell,
-    footprint: &[GridCell],
+    footprint: &VehicleFootprint,
     pitch_max: f32,
     roll_max: f32,
     wheelbase_m: f32,
@@ -478,7 +504,7 @@ pub fn find_vehicle_path_with_slope(
     slope: &[i32],
     from: GridCell,
     to: GridCell,
-    footprint: &[GridCell],
+    footprint: &VehicleFootprint,
     safe_fall_m: f32,
     jump_cost: f32,
     turn_cost: f32,
@@ -618,7 +644,7 @@ impl PathfinderState {
         &mut self,
         from: GridCell,
         to: GridCell,
-        footprint: &[GridCell],
+        footprint: &VehicleFootprint,
         pitch_max: f32,
         roll_max: f32,
         wheelbase_m: f32,
@@ -667,6 +693,10 @@ impl PathfinderState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn one_cell() -> VehicleFootprint {
+        VehicleFootprint::Cells(vec![(0, 0)])
+    }
 
     fn simple_grid() -> Vec<i32> {
         // 5x5 all walkable
@@ -905,7 +935,7 @@ mod tests {
             5,
             (0, 2),
             (4, 2),
-            &[(0, 0)],
+            &one_cell(),
             1.0,
             1.3,
             0.0,
@@ -924,7 +954,7 @@ mod tests {
             5,
             (0, 2),
             (4, 2),
-            &[(0, 0)],
+            &one_cell(),
             0.0,
             1.3,
             0.0,
@@ -944,7 +974,7 @@ mod tests {
             5,
             (0, 2),
             (4, 2),
-            &[(0, 0)],
+            &one_cell(),
             0.25,
             1.3,
             0.0,
@@ -964,7 +994,7 @@ mod tests {
             5,
             (4, 2),
             (0, 2),
-            &[(0, 0)],
+            &one_cell(),
             1.0,
             1.3,
             0.0,
@@ -998,7 +1028,7 @@ mod tests {
             &snap,
             (0, 0),
             (15, 15),
-            &[(0, 0)],
+            &one_cell(),
             pitch,
             roll,
             wb,
@@ -1019,7 +1049,7 @@ mod tests {
             size,
             (0, 0),
             (15, 15),
-            &[(0, 0)],
+            &one_cell(),
             1.0,
             1.3,
             0.0,
@@ -1038,7 +1068,7 @@ mod tests {
             &snap,
             (0, 0),
             (15, 15),
-            &[(0, 0)],
+            &one_cell(),
             pitch,
             roll,
             wb,
@@ -1061,7 +1091,7 @@ mod tests {
             &snap,
             (0, 8),
             (15, 8),
-            &[(0, 0)],
+            &one_cell(),
             pitch,
             roll,
             wb,
@@ -1090,7 +1120,7 @@ mod tests {
             tile_m(),
         ));
         assert!(state
-            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3, 0.0)
+            .find_vehicle((0, 0), (7, 7), &one_cell(), pitch, roll, wb, tr, 0.0, 1.3, 0.0)
             .is_some());
 
         // Steep terrain (0.5 m/tile): no path — the slope grid was re-derived.
@@ -1108,7 +1138,7 @@ mod tests {
             tile_m(),
         ));
         assert!(state
-            .find_vehicle((0, 0), (7, 7), &[(0, 0)], pitch, roll, wb, tr, 0.0, 1.3, 0.0)
+            .find_vehicle((0, 0), (7, 7), &one_cell(), pitch, roll, wb, tr, 0.0, 1.3, 0.0)
             .is_none());
     }
 
@@ -1138,7 +1168,7 @@ mod tests {
             &snap,
             (0, 4),
             (7, 4),
-            &[(0, 0)],
+            &one_cell(),
             pitch,
             roll,
             wb,

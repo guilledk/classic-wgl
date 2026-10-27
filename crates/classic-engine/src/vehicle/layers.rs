@@ -30,7 +30,7 @@ use classic_core::vehicle_def::{
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 
-use super::kinematics::{anchors_n, straight_steer, wrap_pi};
+use super::kinematics::{anchors_n, axis_box_half, path_body, straight_steer, wrap_pi};
 use super::{TerrainSnapshot, VehicleWrite, COMPRESS_RATIO};
 use crate::Engine;
 
@@ -236,8 +236,7 @@ impl Engine {
         let footprint: Vec<(i32, i32)> = match &def.path_footprint {
             Some(fp) => fp.clone(),
             None => {
-                let half_x = ((wheelbase_m / TILE_M) * 0.5).ceil() as i32;
-                let half_y = ((track_m / TILE_M) * 0.5).ceil() as i32;
+                let (half_x, half_y) = axis_box_half(def, wheelbase_m, track_m);
                 (-half_y..=half_y)
                     .flat_map(|dy| (-half_x..=half_x).map(move |dx| (dx, dy)))
                     .collect()
@@ -312,6 +311,10 @@ impl Engine {
             roll_max,
             track_m,
             path_footprint: footprint,
+            path_body: path_body(
+                def,
+                [contacts[2][0], contacts[0][0], contacts[1][1], contacts[0][1]],
+            ),
             turn_rate: def.turn_rate_deg_per_sec.to_radians(),
             safe_fall_m: def.safe_fall_m,
             wheel_travel_up: wheel_travel_down * COMPRESS_RATIO,

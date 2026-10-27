@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use classic_core::pathfinder::{
-    find_vehicle_path_snapshot, GridCell, PathfinderState, VehicleNavSnapshot,
+    find_vehicle_path_snapshot, GridCell, PathfinderState, VehicleFootprint, VehicleNavSnapshot,
 };
 
 use crate::jobs::Job;
@@ -22,7 +22,7 @@ pub type PathId = u64;
 pub struct VehiclePathQuery {
     pub from: GridCell,
     pub to: GridCell,
-    pub footprint: Vec<GridCell>,
+    pub footprint: VehicleFootprint,
     pub pitch_max: f32,
     pub roll_max: f32,
     pub wheelbase_m: f32,

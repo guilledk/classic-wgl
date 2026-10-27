@@ -9,8 +9,10 @@
 //   { type: "vehicleSnapshot", sizeX, sizeY, structural: Int32Array,
 //     heights: Float32Array, tileM }                          — replace vehicle nav
 //   { type: "findVehicle", id, from: [x, y], to: [x, y],
-//     footprint: [[dx, dy], …], pitchMax, rollMax, wheelbaseM, trackM,
-//     safeFallM, jumpCost, turnCost }                          — run a vehicle search
+//     footprint: [[dx, dy], …], body: [rear, front, right, left] | null,
+//     pivot, pitchMax, rollMax, wheelbaseM, trackM, safeFallM, jumpCost,
+//     turnCost }                                               — run a vehicle search
+//     (a non-null `body` is a turned body rectangle and `footprint` is unused)
 // Replies (to the main thread):
 //   { type: "result", id, path: Int32Array | null }           — flat [x0,y0,…]
 //      where `path` is null when no route exists.
@@ -64,6 +66,7 @@ function handle(msg) {
             fp[i * 2 + 1] = msg.footprint[i][1];
         }
         var fpp = copyInto(fp);
+        var body = msg.body || [0, 0, 0, 0];
         var n = exports.find_vehicle(
             msg.from[0],
             msg.from[1],
@@ -71,6 +74,12 @@ function handle(msg) {
             msg.to[1],
             fpp,
             msg.footprint.length,
+            msg.body ? 1 : 0,
+            body[0],
+            body[1],
+            body[2],
+            body[3],
+            msg.pivot ? 1 : 0,
             msg.pitchMax,
             msg.rollMax,
             msg.wheelbaseM,

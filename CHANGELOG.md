@@ -341,6 +341,21 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- The vehicle search turns the body to each move.  It eroded the nav
+  grid by one axis box, ±half the wheelbase along `x` and ±half the
+  track along `y`, as if the vehicle always faced East: driving north or
+  south a vehicle wider than it is long overhung the box (the lunar
+  mule's 3.64 m track spans ±2.6 tiles in `x`, against a box of ±2), and
+  on a diagonal both axes did.  A search state is now a cell plus its
+  incoming heading, and a step is legal when the body rectangle swept
+  from one cell to the next at the step's heading is clear, so a turn
+  needs the body clear at both headings (and, for a `pivot_turn`
+  vehicle, at every 22.5° between).  Footprints are rasterized per
+  heading and checked by row prefix sums, memoized per cell.  The body is
+  the wheel contacts' rectangle, or a def's new `path_body_m`
+  (`[rear, front, right, left]` metres, e.g. out to the tyres); an
+  authored `path_footprint` is still applied as written.  On 512² grids
+  a route costs 13–49 ms, an unreachable goal 28–109 ms (#176).
 - A selected vehicle's wheels stay on its chassis while it turns.  A
   selected sprite never blends (the selection silhouette needs one
   frame), so the selected mule's hull drew its nearest baked direction

@@ -385,12 +385,20 @@ pub struct VehicleDef {
     #[serde(default)]
     pub roll_max_deg: f32,
     /// Collision footprint for pathfinding: integer tile offsets from the body
-    /// anchor cell that the vehicle occupies.  `None` auto-derives the
-    /// footprint from the wheel extent at spawn (see `Engine::spawn_vehicle`);
-    /// `Some` is an explicit override.  A* treats a cell as passable only when
-    /// every offset is walkable (issue #35).
+    /// anchor cell that the vehicle occupies, the same in every heading.
+    /// `Some` is an explicit override, A* treating a cell as passable only
+    /// when every offset is walkable (issue #35).  `None` (the default) has
+    /// the search turn the body rectangle ([`Self::path_body_m`], else the
+    /// wheel contacts' rectangle) to each move's heading.
     #[serde(default)]
     pub path_footprint: Option<Vec<(i32, i32)>>,
+    /// The body on the ground for pathfinding, metres in the chassis frame
+    /// (`x` forward, `y` left): `[rear, front, right, left]`, e.g. out to the
+    /// tyres' edges.  The search turns it to each move's heading.  `None`
+    /// takes the wheel contacts' rectangle; ignored under an explicit
+    /// [`Self::path_footprint`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_body_m: Option<[f32; 4]>,
     /// Max body heading change while driving, in degrees per second.  Drives
     /// the bounded-turn follow controller (issue #35).  Defaults high so the
     /// movement approximates the old instant-turn behaviour for simple defs.
@@ -501,6 +509,7 @@ impl Default for VehicleDef {
             roll_levels: 0,
             roll_max_deg: 0.0,
             path_footprint: None,
+            path_body_m: None,
             turn_rate_deg_per_sec: 0.0,
             safe_fall_m: 0.0,
             steer_levels: 0,
@@ -955,6 +964,7 @@ mod tests {
             roll_levels: 3,
             roll_max_deg: 20.0,
             path_footprint: None,
+            path_body_m: None,
             turn_rate_deg_per_sec: 720.0,
             safe_fall_m: 0.0,
             steer_levels: 5,

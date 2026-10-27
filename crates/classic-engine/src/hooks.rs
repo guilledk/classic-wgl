@@ -626,7 +626,7 @@ impl Engine {
         &self,
         from: (i32, i32),
         to: (i32, i32),
-        footprint: &[(i32, i32)],
+        footprint: &pathfinder::VehicleFootprint,
         pitch_max: f32,
         roll_max: f32,
         wheelbase_m: f32,
@@ -652,10 +652,10 @@ impl Engine {
         );
         classic_core::cl_info!(
             classic_core::instrument::Chan::Path,
-            "find_vehicle_path {} -> {}: footprint={} tiles, pitch={:.3}rad fall={}m, found={}",
+            "find_vehicle_path {} -> {}: footprint={}, pitch={:.3}rad fall={}m, found={}",
             format!("{from:?}"),
             format!("{to:?}"),
-            footprint.len(),
+            format!("{footprint:?}"),
             pitch_max.min(roll_max),
             safe_fall_m,
             result.is_some(),
