@@ -2,7 +2,7 @@
 //! probes.
 
 use classic_core::components::{IsoVehicle, Transform};
-use classic_core::pathfinder::PathPoll;
+use classic_core::pathfinder::{unpack_waypoint, PathPoll, PoseGoal};
 use classic_worker::{VehiclePathQuery, VehicleSnapshot};
 
 use crate::Engine;
@@ -10,6 +10,7 @@ use crate::Engine;
 use super::kinematics::{dir_entry, dir_to_heading, pitch_index, search_footprint, straight_steer};
 use super::{
     PreviewProbe, PreviewProbeState, VehicleGotoPoll, VehicleGotoSubmit, VehicleWrite, JUMP_COST,
+    POSE_REVERSE_COST, POSE_TURN_MARGIN,
 };
 
 impl Engine {
@@ -28,6 +29,8 @@ impl Engine {
             v.heading = dir_to_heading(v.direction, v.directions);
             v.path.clear();
             v.path_idx = 0;
+            v.path_reverse.clear();
+            v.goal_heading = None;
             v.steer_index = straight_steer(v.steer_levels);
             v.steer = 0.0;
             v.reversing = false;
@@ -106,6 +109,40 @@ impl Engine {
     /// inline under `synchronous_workers`) and returns a request id to poll
     /// with [`Engine::vehicle_goto_poll`].
     pub fn vehicle_goto(&mut self, name: &str, tx: i32, ty: i32) -> VehicleGotoSubmit {
+        self.submit_goto(name, (tx, ty), None)
+    }
+
+    /// Drive a vehicle to tile point `(x, y)` arriving facing tile heading
+    /// `heading_deg` (`0` = East, `90` = South).  The route (the
+    /// `pathfinder` pose search) turns at the vehicle's turning radius
+    /// (`speed / turn_rate`, with a margin) and, when it can reverse, backs
+    /// up where a forward arc has no room: a three-point or K-turn.  Poll
+    /// with [`Engine::vehicle_goto_poll`]; the follower drives each forward
+    /// and backward run in turn, steering, and stops at the point (a
+    /// `pivot_turn` vehicle then turns in place onto the heading).
+    /// `NoVehicle` for an unknown vehicle or a non-finite pose.
+    pub fn vehicle_goto_pose(
+        &mut self,
+        name: &str,
+        x: f32,
+        y: f32,
+        heading_deg: f32,
+    ) -> VehicleGotoSubmit {
+        if !(x.is_finite() && y.is_finite() && heading_deg.is_finite()) {
+            return VehicleGotoSubmit::NoVehicle;
+        }
+        let heading = super::kinematics::wrap_pi(heading_deg.to_radians());
+        self.submit_goto(name, (x.floor() as i32, y.floor() as i32), Some((x, y, heading)))
+    }
+
+    /// Submit a route to `to`, or to the pose `(x, y, heading)`.
+    fn submit_goto(
+        &mut self,
+        name: &str,
+        to: (i32, i32),
+        pose: Option<(f32, f32, f32)>,
+    ) -> VehicleGotoSubmit {
+        let (tx, ty) = to;
         let Some(&ve) = self.names.get(name) else {
             classic_core::cl_info!(
                 classic_core::instrument::Chan::Path,
@@ -113,10 +150,21 @@ impl Engine {
             );
             return VehicleGotoSubmit::NoVehicle;
         };
-        let (footprint, pitch_max, roll_max, wheelbase_m, track_m, safe_fall_m, turn_cost) = {
+        let (footprint, pitch_max, roll_max, wheelbase_m, track_m, safe_fall_m, turn_cost, pose) = {
             let Ok(v) = self.world.get::<&IsoVehicle>(ve) else {
                 return VehicleGotoSubmit::NoVehicle;
             };
+            // The pose goal: turning at the follower's own radius (its turn
+            // rate at speed), with a margin for the steering lag.
+            let pose = pose.map(|(x, y, heading)| PoseGoal {
+                x,
+                y,
+                heading,
+                start_heading: v.heading,
+                turn_radius: (POSE_TURN_MARGIN * v.speed / v.turn_rate.max(1e-3)).max(1.0),
+                reverse: v.reverse_speed > 0.0,
+                reverse_cost: POSE_REVERSE_COST,
+            });
             // Reject new paths while airborne: the vehicle keeps its current
             // trajectory until its wheels touch down again (issue #40).
             if v.airborne {
@@ -134,6 +182,7 @@ impl Engine {
                 v.track_m,
                 v.safe_fall_m,
                 v.turn_cost,
+                pose,
             )
         };
         let from = {
@@ -159,10 +208,14 @@ impl Engine {
             safe_fall_m,
             jump_cost: JUMP_COST,
             turn_cost,
+            pose,
         };
         self.submit_vehicle_path(id, query);
 
         self.vehicle_path_entities.insert(id, ve);
+        if let Some(goal) = pose {
+            self.vehicle_pose_goals.insert(id, goal.heading);
+        }
         if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
             v.face = None;
             v.reverse_to = None;
@@ -175,13 +228,22 @@ impl Engine {
     /// `v.path_idx`) here — the single mutation point shared by the sync and
     /// async paths.
     pub fn vehicle_goto_poll(&mut self, id: u64) -> VehicleGotoPoll {
+        // a pose route's waypoints carry their gear (`unpack_waypoint`)
+        let mut gears = Vec::new();
         let poll = if let Some(worker) = self.pathfinder.as_mut() {
             match worker.poll_vehicle_path(id) {
                 PathPoll::Pending => VehicleGotoPoll::Pending,
                 PathPoll::NoPath => VehicleGotoPoll::NoPath,
-                PathPoll::Path(cells) => {
-                    VehicleGotoPoll::Accepted(cells.into_iter().map(|(x, y)| [x, y]).collect())
-                }
+                PathPoll::Path(cells) => VehicleGotoPoll::Accepted(
+                    cells
+                        .into_iter()
+                        .map(|c| {
+                            let ((x, y), back) = unpack_waypoint(c);
+                            gears.push(back);
+                            [x, y]
+                        })
+                        .collect(),
+                ),
             }
         } else {
             VehicleGotoPoll::Pending
@@ -189,15 +251,29 @@ impl Engine {
 
         match &poll {
             VehicleGotoPoll::Accepted(path) => {
+                let goal_heading = self.vehicle_pose_goals.remove(&id);
                 if let Some(ve) = self.vehicle_path_entities.remove(&id) {
                     if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
                         v.path = path.clone();
                         v.path_idx = if v.path.len() > 1 { 1 } else { 0 };
+                        v.goal_heading = goal_heading;
+                        v.path_reverse = if goal_heading.is_some() { gears } else { Vec::new() };
+                        if let Some(h) = goal_heading {
+                            classic_core::cl_info!(
+                                classic_core::instrument::Chan::Path,
+                                "pose route {id}: {} waypoints, {} backward, facing {:.0} deg: {:?}",
+                                v.path.len(),
+                                v.path_reverse.iter().filter(|&&b| b).count(),
+                                h.to_degrees(),
+                                v.path.iter().zip(&v.path_reverse).collect::<Vec<_>>()
+                            );
+                        }
                     }
                 }
             }
             VehicleGotoPoll::NoPath => {
                 self.vehicle_path_entities.remove(&id);
+                self.vehicle_pose_goals.remove(&id);
             }
             VehicleGotoPoll::Pending => {}
         }
@@ -211,6 +287,8 @@ impl Engine {
         if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
             v.path.clear();
             v.path_idx = 0;
+            v.path_reverse.clear();
+            v.goal_heading = None;
             v.face = None;
             v.reverse_to = None;
             return true;
@@ -232,6 +310,8 @@ impl Engine {
         }
         v.path.clear();
         v.path_idx = 0;
+        v.path_reverse.clear();
+        v.goal_heading = None;
         v.reverse_to = None;
         v.face = Some(super::kinematics::wrap_pi(heading_deg.to_radians()));
         1
@@ -262,6 +342,8 @@ impl Engine {
         }
         v.path.clear();
         v.path_idx = 0;
+        v.path_reverse.clear();
+        v.goal_heading = None;
         v.face = None;
         v.reverse_to = Some([x, y]);
         1
@@ -350,6 +432,7 @@ impl Engine {
             safe_fall_m,
             jump_cost: JUMP_COST,
             turn_cost,
+            pose: None,
         };
         self.submit_vehicle_path(id, query);
         self.preview_probe = Some(PreviewProbe {

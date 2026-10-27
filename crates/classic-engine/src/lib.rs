@@ -380,6 +380,9 @@ pub struct Engine {
     pub vehicle_blocks: std::collections::BTreeMap<i32, Vec<[i32; 4]>>,
     /// Re-plans submitted for vehicles whose route a vehicle block cut.
     vehicle_replans: Vec<u64>,
+    /// The goal heading of each in-flight pose route request
+    /// (`vehicle_goto_pose`), by request id.
+    vehicle_pose_goals: HashMap<u64, f32>,
     /// The single in-flight (or cached) vehicle reachability probe, if any.
     preview_probe: Option<vehicle::PreviewProbe>,
     /// Next background-task id handed to a guest.

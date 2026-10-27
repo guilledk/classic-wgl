@@ -282,6 +282,25 @@ impl PathfinderWorker {
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("footprint"), &fp);
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("body"), &body);
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("pivot"), &JsValue::from_bool(pivot));
+        let pose = match &q.pose {
+            Some(p) => {
+                let arr = js_sys::Array::new();
+                for v in [
+                    p.x,
+                    p.y,
+                    p.heading,
+                    p.start_heading,
+                    p.turn_radius,
+                    if p.reverse { 1.0 } else { 0.0 },
+                    p.reverse_cost,
+                ] {
+                    arr.push(&JsValue::from_f64(v as f64));
+                }
+                arr.into()
+            }
+            None => JsValue::NULL,
+        };
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("pose"), &pose);
         for (key, value) in [
             ("pitchMax", q.pitch_max),
             ("rollMax", q.roll_max),
@@ -328,6 +347,7 @@ impl PathfinderWorker {
             safe_fall_m,
             jump_cost,
             turn_cost,
+            pose: None,
         };
         self.request_vehicle(id, query, VehicleSnapshot::Current);
     }

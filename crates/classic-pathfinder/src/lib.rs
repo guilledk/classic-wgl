@@ -14,8 +14,10 @@
 extern crate alloc;
 
 mod oriented;
+mod pose;
 
 pub use oriented::{BodyRect, VehicleFootprint};
+pub use pose::{heading_index, pack_waypoint, unpack_waypoint, PoseGoal, REVERSE_FLAG};
 
 use alloc::collections::BinaryHeap;
 use alloc::vec;
@@ -554,6 +556,95 @@ pub fn find_vehicle_path_with_slope(
     )
 }
 
+/// The body a pose search turns: an oriented footprint's rectangle, else
+/// the East-facing bounding box of its cells.
+fn footprint_body(footprint: &VehicleFootprint) -> BodyRect {
+    match footprint {
+        VehicleFootprint::Oriented { body, .. } => *body,
+        VehicleFootprint::Cells(cells) => {
+            let (mut x0, mut x1, mut y0, mut y1) = (0, 0, 0, 0);
+            for &(x, y) in cells {
+                (x0, x1, y0, y1) = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+            }
+            // cells are centred on their offsets: the box reaches their edges
+            BodyRect {
+                rear: x0 as f32 - 0.45,
+                front: x1 as f32 + 0.45,
+                right: -(y1 as f32) - 0.45,
+                left: -(y0 as f32) + 0.45,
+            }
+        }
+    }
+}
+
+/// Whether a pose route (cells plus each segment's gear, `reverse[i]` for
+/// the segment into `path[i]`) stays clear on `grid` (`1` open): the body
+/// swept along each chord the follower drives, facing along it (backward
+/// on a reverse segment).
+pub fn route_clear_pose(
+    grid: &[i32],
+    size_x: i32,
+    size_y: i32,
+    path: &[GridCell],
+    reverse: &[bool],
+    footprint: &VehicleFootprint,
+) -> bool {
+    pose::route_clear_pose(grid, size_x, size_y, path, reverse, &footprint_body(footprint))
+}
+
+/// Pose-goal vehicle search ([`PoseGoal`], the `pose` module) over a
+/// snapshot and a pre-derived slope grid: drive to a point facing a
+/// heading, backing up where a forward arc has no room.  Waypoints carry
+/// their gear ([`unpack_waypoint`]).
+pub fn find_vehicle_pose_with_slope(
+    snapshot: &VehicleNavSnapshot,
+    slope: &[i32],
+    from: GridCell,
+    goal: &PoseGoal,
+    footprint: &VehicleFootprint,
+    turn_cost: f32,
+) -> Option<Vec<GridCell>> {
+    let walkable: Vec<i32> =
+        snapshot.structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
+    let pivot = matches!(footprint, VehicleFootprint::Oriented { pivot: true, .. });
+    pose::find_pose(
+        &walkable,
+        snapshot.size_x,
+        snapshot.size_y,
+        from,
+        goal,
+        &footprint_body(footprint),
+        pivot,
+        turn_cost,
+    )
+}
+
+/// [`find_vehicle_pose_with_slope`], deriving the slope grid.
+#[allow(clippy::too_many_arguments)]
+pub fn find_vehicle_pose_snapshot(
+    snapshot: &VehicleNavSnapshot,
+    from: GridCell,
+    goal: &PoseGoal,
+    footprint: &VehicleFootprint,
+    pitch_max: f32,
+    roll_max: f32,
+    wheelbase_m: f32,
+    track_m: f32,
+    turn_cost: f32,
+) -> Option<Vec<GridCell>> {
+    let slope = derive_vehicle_slope_nav(
+        &snapshot.heights,
+        snapshot.size_x,
+        snapshot.size_y,
+        snapshot.tile_m,
+        wheelbase_m,
+        track_m,
+        pitch_max,
+        roll_max,
+    );
+    find_vehicle_pose_with_slope(snapshot, &slope, from, goal, footprint, turn_cost)
+}
+
 /// Chebyshev-approximation heuristic (admissible for 8-directional grid).
 /// Returns the estimate of cost from `a` to `b`.
 fn heuristic(a: GridCell, b: GridCell) -> f32 {
@@ -681,6 +772,47 @@ impl PathfinderState {
         jump_cost: f32,
         turn_cost: f32,
     ) -> Option<Vec<GridCell>> {
+        let slope = self.slope(pitch_max, roll_max, wheelbase_m, track_m)?;
+        let snap = self.vehicle.as_ref()?;
+        find_vehicle_path_with_slope(
+            snap,
+            &slope,
+            from,
+            to,
+            footprint,
+            safe_fall_m,
+            jump_cost,
+            turn_cost,
+        )
+    }
+
+    /// Run the pose-goal vehicle search ([`find_vehicle_pose_with_slope`])
+    /// over the current vehicle snapshot, with the same slope cache.
+    #[allow(clippy::too_many_arguments)]
+    pub fn find_vehicle_pose(
+        &mut self,
+        from: GridCell,
+        goal: &PoseGoal,
+        footprint: &VehicleFootprint,
+        pitch_max: f32,
+        roll_max: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+        turn_cost: f32,
+    ) -> Option<Vec<GridCell>> {
+        let slope = self.slope(pitch_max, roll_max, wheelbase_m, track_m)?;
+        let snap = self.vehicle.as_ref()?;
+        find_vehicle_pose_with_slope(snap, &slope, from, goal, footprint, turn_cost)
+    }
+
+    /// The slope grid for `(pitch, roll, wheelbase, track)`, cached.
+    fn slope(
+        &mut self,
+        pitch_max: f32,
+        roll_max: f32,
+        wheelbase_m: f32,
+        track_m: f32,
+    ) -> Option<Vec<i32>> {
         let snap = self.vehicle.as_ref()?;
         let key =
             [pitch_max.to_bits(), roll_max.to_bits(), wheelbase_m.to_bits(), track_m.to_bits()];
@@ -705,16 +837,7 @@ impl PathfinderState {
                 grid
             }
         };
-        find_vehicle_path_with_slope(
-            snap,
-            &slope,
-            from,
-            to,
-            footprint,
-            safe_fall_m,
-            jump_cost,
-            turn_cost,
-        )
+        Some(slope)
     }
 }
 

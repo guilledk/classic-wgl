@@ -11,8 +11,10 @@
 //   { type: "findVehicle", id, from: [x, y], to: [x, y],
 //     footprint: [[dx, dy], …], body: [rear, front, right, left] | null,
 //     pivot, pitchMax, rollMax, wheelbaseM, trackM, safeFallM, jumpCost,
-//     turnCost }                                               — run a vehicle search
-//     (a non-null `body` is a turned body rectangle and `footprint` is unused)
+//     turnCost, pose: [x, y, heading, startHeading, turnRadius, reverse,
+//     reverseCost] | null }                                    — run a vehicle search
+//     (a non-null `body` is a turned body rectangle and `footprint` is unused;
+//     a non-null `pose` drives to that pose and `to` is unused)
 // Replies (to the main thread):
 //   { type: "result", id, path: Int32Array | null }           — flat [x0,y0,…]
 //      where `path` is null when no route exists.
@@ -67,6 +69,10 @@ function handle(msg) {
         }
         var fpp = copyInto(fp);
         var body = msg.body || [0, 0, 0, 0];
+        // a pose goal [x, y, heading, startHeading, turnRadius, reverse,
+        // reverseCost] turns this into a pose search
+        var pose = msg.pose || [0, 0, 0, 0, 0, 0, 0];
+        exports.set_pose_goal(msg.pose ? 1 : 0, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]);
         var n = exports.find_vehicle(
             msg.from[0],
             msg.from[1],

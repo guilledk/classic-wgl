@@ -51,6 +51,12 @@ pub enum TestAction {
     /// reaches the guest's click handling.
     #[serde(rename = "click")]
     Click { x: f32, y: f32, button: u32 },
+    /// Drive vehicle `name` (an exact name, else the bare part of an
+    /// `ns::name`) to tile point `(x, y)` facing tile heading `heading`
+    /// degrees (`Engine::vehicle_goto_pose`); the route installs when the
+    /// search resolves.
+    #[serde(rename = "vehicleGotoPose")]
+    VehicleGotoPose { name: String, x: f32, y: f32, heading: f32 },
     #[serde(rename = "keyPress")]
     KeyPress { key: String, pressed: bool },
     #[serde(rename = "wheel")]
@@ -386,6 +392,18 @@ fn run_frame(
                     engine.input.mouse_pos = glam::Vec2::new(*x, *y);
                     engine.input.mouse_axis.x = ((*x / vw) - 0.5) * 2.0;
                     engine.input.mouse_axis.y = ((*y / vh) - 0.5) * 2.0;
+                }
+                TestAction::VehicleGotoPose { name, x, y, heading } => {
+                    let name = resolve_scenario_name(engine, name);
+                    match engine.vehicle_goto_pose(&name, *x, *y, *heading) {
+                        classic_engine::vehicle::VehicleGotoSubmit::Submitted(id) => {
+                            engine.vehicle_goto_autopoll(id)
+                        }
+                        _ => classic_core::cl_info!(
+                            Chan::Test,
+                            "  [vehicleGotoPose] {name} took no route"
+                        ),
+                    }
                 }
                 TestAction::Click { x, y, button } => {
                     engine.scripted_input.click(glam::Vec2::new(*x, *y), *button as usize);
@@ -771,6 +789,20 @@ fn assert_ui_text_centered(engine: &Engine, state: &DemoStateRef, tolerance: f32
         }
     }
     true
+}
+
+/// Resolve an entity name: exact, else the first (sorted) whose bare
+/// (post-`::`) name matches.
+fn resolve_scenario_name(engine: &Engine, name: &str) -> String {
+    if engine.names.contains_key(name) {
+        return name.to_string();
+    }
+    let mut keys: Vec<&String> = engine.names.keys().collect();
+    keys.sort();
+    keys.into_iter()
+        .find(|k| k.rsplit("::").next() == Some(name))
+        .cloned()
+        .unwrap_or_else(|| name.to_string())
 }
 
 /// Resolve a vehicle def name: exact, else the def whose bare (post-`::`)
