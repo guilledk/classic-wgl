@@ -158,7 +158,18 @@ fn main() {
                 engine = Some(e);
             }
             if let Some(e) = engine.as_mut() {
+                let t0 = std::time::Instant::now();
                 e.frame(input, vw, vh, delta);
+                // Threaded workers advance in wall time: pace the frames to
+                // the fixed step so they see the frame rate a player does.
+                if config.workers_threaded {
+                    if let Some(dt) = config.fixed_dt {
+                        let step = std::time::Duration::from_secs_f32(dt);
+                        if let Some(rest) = step.checked_sub(t0.elapsed()) {
+                            std::thread::sleep(rest);
+                        }
+                    }
+                }
                 if e.test_should_close {
                     *should_close = true;
                 }

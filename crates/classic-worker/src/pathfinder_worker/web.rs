@@ -310,6 +310,9 @@ impl PathfinderWorker {
             None => JsValue::NULL,
         };
         let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("pose"), &pose);
+        let closed = js_sys::Int32Array::new_with_length(q.closed.len() as u32 * 4);
+        closed.copy_from(q.closed.as_flattened());
+        let _ = js_sys::Reflect::set(&msg, &JsValue::from_str("closed"), &closed);
         for (key, value) in [
             ("pitchMax", q.pitch_max),
             ("rollMax", q.roll_max),
@@ -325,7 +328,7 @@ impl PathfinderWorker {
                 &JsValue::from_f64(value as f64),
             );
         }
-        self.post(&msg, &[]);
+        self.post(&msg, &[&closed.buffer()]);
         if let Some(shared) = restore {
             self.push_vehicle_snapshot(&shared);
         }
@@ -360,6 +363,7 @@ impl PathfinderWorker {
             jump_cost,
             turn_cost,
             pose: None,
+            closed: Vec::new(),
         };
         self.request_vehicle(id, query, VehicleSnapshot::Current);
     }

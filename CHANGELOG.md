@@ -10,6 +10,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `CLASSIC_WORKERS=threaded`: a scripted run (`CLASSIC_TEST`) keeps the
+  pathfinder and guest workers on their threads, without the per-frame
+  join, and a headless run with `CLASSIC_FIXED_DT` paces its frames to
+  that step, so `CLASSIC_PERF` sees the frames a player does.  The native
+  pathfinder logs each vehicle search's time on the `path` channel.  It is
+  how the frame stall on a lunar fetch was found (#182).
+
 - `set_vehicle_block_owner(id, owner)` (guest import,
   `Engine::set_vehicle_block_owner`): a vehicle block can exempt one
   vehicle, so a lane reserved for the mule fetching from it keeps every
@@ -244,6 +251,21 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   rendering and pathfinding are unchanged (#174).
 
 ### Changed
+
+- Owned vehicle blocks no longer cost a grid per request: the shared
+  vehicle snapshot leaves owned blocks out and each vehicle query carries
+  the rects other vehicles own (`VehiclePathQuery::closed`), which the
+  worker closes on the grid it builds per search anyway.  The main thread
+  stops building a fresh snapshot for an owner's searches, and the web
+  worker stops receiving (and leaking) two full grids per request; it now
+  frees its upload buffers (`dealloc`).  The worker keeps its derived
+  slope grid across a new blocking grid over the same heights (#182).
+- The pose search keeps its motion primitives between searches
+  (`PrimCache`, ≈6 ms each time before), guides itself with the goal's
+  distance field (round walls, refusing a walled-off goal before the
+  lattice search, a window that widens for a detour) and weights its
+  heuristic 1.1: on a 400² map a 40 × 25 tile manoeuvre takes 5 ms
+  (15 ms), a 140 × 120 tile drive 12 ms (70 ms) (#182).
 
 - Bloom only glows what saturates.  The bright pass runs on the whole lit
   frame once anything emissive is on screen, and its 0.82 level (0.25

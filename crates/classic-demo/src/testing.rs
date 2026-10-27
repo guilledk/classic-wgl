@@ -433,7 +433,8 @@ fn run_frame(
                         }
                         None => classic_core::cl_info!(
                             Chan::Test,
-                            "  [clickEntity] '{name}' has no screen point"
+                            "  [clickEntity] '{name}' has no screen point (named: {})",
+                            engine.names.contains_key(&name)
                         ),
                     }
                 }

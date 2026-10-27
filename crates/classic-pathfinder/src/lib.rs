@@ -17,7 +17,7 @@ mod oriented;
 mod pose;
 
 pub use oriented::{BodyRect, VehicleFootprint};
-pub use pose::{heading_index, pack_waypoint, unpack_waypoint, PoseGoal, REVERSE_FLAG};
+pub use pose::{heading_index, pack_waypoint, unpack_waypoint, PoseGoal, PrimCache, REVERSE_FLAG};
 
 use alloc::collections::BinaryHeap;
 use alloc::vec;
@@ -539,11 +539,43 @@ pub fn find_vehicle_path_with_slope(
     jump_cost: f32,
     turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
-    let walkable: Vec<i32> =
-        snapshot.structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
+    vehicle_path_search(
+        snapshot,
+        slope,
+        from,
+        to,
+        footprint,
+        safe_fall_m,
+        jump_cost,
+        turn_cost,
+        &[],
+    )
+}
+
+/// [`find_vehicle_path_with_slope`] with the extra `closed` rects blocked.
+#[allow(clippy::too_many_arguments)]
+fn vehicle_path_search(
+    snapshot: &VehicleNavSnapshot,
+    slope: &[i32],
+    from: GridCell,
+    to: GridCell,
+    footprint: &VehicleFootprint,
+    safe_fall_m: f32,
+    jump_cost: f32,
+    turn_cost: f32,
+    closed: &[[i32; 4]],
+) -> Option<Vec<GridCell>> {
+    let walkable = walkable_grid(snapshot, slope, closed);
+    let structural: alloc::borrow::Cow<[i32]> = if closed.is_empty() {
+        alloc::borrow::Cow::Borrowed(&snapshot.structural)
+    } else {
+        let mut s = snapshot.structural.clone();
+        stamp_rects(&mut s, snapshot.size_x, snapshot.size_y, closed);
+        alloc::borrow::Cow::Owned(s)
+    };
     find_path_for_footprint_with_jumps(
         &walkable,
-        &snapshot.structural,
+        &structural,
         &snapshot.heights,
         snapshot.size_x,
         snapshot.size_y,
@@ -604,10 +636,26 @@ pub fn find_vehicle_pose_with_slope(
     footprint: &VehicleFootprint,
     turn_cost: f32,
 ) -> Option<Vec<GridCell>> {
-    let walkable: Vec<i32> =
-        snapshot.structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
+    let mut cache = PrimCache::default();
+    pose_search(snapshot, slope, from, goal, footprint, turn_cost, &[], &mut cache)
+}
+
+/// The pose search over `snapshot`'s structural grid, `slope` and the
+/// extra `closed` rects, with its primitives kept in `cache`.
+#[allow(clippy::too_many_arguments)]
+fn pose_search(
+    snapshot: &VehicleNavSnapshot,
+    slope: &[i32],
+    from: GridCell,
+    goal: &PoseGoal,
+    footprint: &VehicleFootprint,
+    turn_cost: f32,
+    closed: &[[i32; 4]],
+    cache: &mut PrimCache,
+) -> Option<Vec<GridCell>> {
+    let walkable = walkable_grid(snapshot, slope, closed);
     let pivot = matches!(footprint, VehicleFootprint::Oriented { pivot: true, .. });
-    pose::find_pose(
+    pose::find_pose_cached(
         &walkable,
         snapshot.size_x,
         snapshot.size_y,
@@ -616,7 +664,39 @@ pub fn find_vehicle_pose_with_slope(
         &footprint_body(footprint),
         pivot,
         turn_cost,
+        cache,
     )
+}
+
+/// `snapshot`'s structural grid and `slope` combined, with the inclusive
+/// tile rects `closed` blocked on top (the vehicle blocks another vehicle
+/// owns, which the shared snapshot leaves open).
+pub fn walkable_grid(
+    snapshot: &VehicleNavSnapshot,
+    slope: &[i32],
+    closed: &[[i32; 4]],
+) -> Vec<i32> {
+    let mut walkable: Vec<i32> =
+        snapshot.structural.iter().zip(slope.iter()).map(|(&s, &w)| s & w).collect();
+    stamp_rects(&mut walkable, snapshot.size_x, snapshot.size_y, closed);
+    walkable
+}
+
+/// Zero every cell of `grid` (`size_x × size_y`) under the inclusive tile
+/// rects `[x0, y0, x1, y1]` (clipped to the grid).
+pub fn stamp_rects(grid: &mut [i32], size_x: i32, size_y: i32, rects: &[[i32; 4]]) {
+    if grid.len() != (size_x.max(0) * size_y.max(0)) as usize {
+        return;
+    }
+    for &[x0, y0, x1, y1] in rects {
+        let (x0, x1) = (x0.max(0), x1.min(size_x - 1));
+        let (y0, y1) = (y0.max(0), y1.min(size_y - 1));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                grid[(y * size_x + x) as usize] = 0;
+            }
+        }
+    }
 }
 
 /// [`find_vehicle_pose_with_slope`], deriving the slope grid.
@@ -731,11 +811,12 @@ pub struct PathfinderState {
     nav: NavSnapshot,
     vehicle: Option<VehicleNavSnapshot>,
     vehicle_slope_cache: Option<([u32; 4], Vec<i32>)>,
+    pose_prims: PrimCache,
 }
 
 impl PathfinderState {
     pub fn new(nav: NavSnapshot) -> Self {
-        Self { nav, vehicle: None, vehicle_slope_cache: None }
+        Self { nav, vehicle: None, vehicle_slope_cache: None, pose_prims: PrimCache::default() }
     }
 
     /// Replace the nav snapshot searched by [`Self::find`].
@@ -743,11 +824,19 @@ impl PathfinderState {
         self.nav = nav;
     }
 
-    /// Replace the vehicle snapshot; clears the cached slope grid (the terrain
-    /// changed).
+    /// Replace the vehicle snapshot; clears the cached slope grid when the
+    /// terrain changed (a new blocking grid over the same heights, a vehicle
+    /// block, keeps it).
     pub fn set_vehicle(&mut self, vehicle: VehicleNavSnapshot) {
+        let same_terrain = self.vehicle.as_ref().is_some_and(|old| {
+            (old.size_x, old.size_y, old.tile_m.to_bits())
+                == (vehicle.size_x, vehicle.size_y, vehicle.tile_m.to_bits())
+                && old.heights == vehicle.heights
+        });
+        if !same_terrain {
+            self.vehicle_slope_cache = None;
+        }
         self.vehicle = Some(vehicle);
-        self.vehicle_slope_cache = None;
     }
 
     /// Run plain humanoid A* over the current nav snapshot.
@@ -757,7 +846,8 @@ impl PathfinderState {
 
     /// Run footprint-, slope- and jump-aware vehicle A* over the current vehicle
     /// snapshot, caching the derived slope grid per `(pitch, roll, wheelbase,
-    /// track)`.
+    /// track)`.  `closed`: inclusive tile rects blocked on top (another
+    /// vehicle's owned vehicle blocks).
     #[allow(clippy::too_many_arguments)]
     pub fn find_vehicle(
         &mut self,
@@ -771,10 +861,11 @@ impl PathfinderState {
         safe_fall_m: f32,
         jump_cost: f32,
         turn_cost: f32,
+        closed: &[[i32; 4]],
     ) -> Option<Vec<GridCell>> {
         let slope = self.slope(pitch_max, roll_max, wheelbase_m, track_m)?;
         let snap = self.vehicle.as_ref()?;
-        find_vehicle_path_with_slope(
+        vehicle_path_search(
             snap,
             &slope,
             from,
@@ -783,11 +874,13 @@ impl PathfinderState {
             safe_fall_m,
             jump_cost,
             turn_cost,
+            closed,
         )
     }
 
     /// Run the pose-goal vehicle search ([`find_vehicle_pose_with_slope`])
-    /// over the current vehicle snapshot, with the same slope cache.
+    /// over the current vehicle snapshot, with the same slope cache and
+    /// `closed` rects.
     #[allow(clippy::too_many_arguments)]
     pub fn find_vehicle_pose(
         &mut self,
@@ -799,10 +892,11 @@ impl PathfinderState {
         wheelbase_m: f32,
         track_m: f32,
         turn_cost: f32,
+        closed: &[[i32; 4]],
     ) -> Option<Vec<GridCell>> {
         let slope = self.slope(pitch_max, roll_max, wheelbase_m, track_m)?;
         let snap = self.vehicle.as_ref()?;
-        find_vehicle_pose_with_slope(snap, &slope, from, goal, footprint, turn_cost)
+        pose_search(snap, &slope, from, goal, footprint, turn_cost, closed, &mut self.pose_prims)
     }
 
     /// The slope grid for `(pitch, roll, wheelbase, track)`, cached.
@@ -1271,7 +1365,7 @@ mod tests {
             tile_m(),
         ));
         assert!(state
-            .find_vehicle((0, 0), (7, 7), &one_cell(), pitch, roll, wb, tr, 0.0, 1.3, 0.0)
+            .find_vehicle((0, 0), (7, 7), &one_cell(), pitch, roll, wb, tr, 0.0, 1.3, 0.0, &[])
             .is_some());
 
         // Steep terrain (0.5 m/tile): no path — the slope grid was re-derived.
@@ -1289,8 +1383,55 @@ mod tests {
             tile_m(),
         ));
         assert!(state
-            .find_vehicle((0, 0), (7, 7), &one_cell(), pitch, roll, wb, tr, 0.0, 1.3, 0.0)
+            .find_vehicle((0, 0), (7, 7), &one_cell(), pitch, roll, wb, tr, 0.0, 1.3, 0.0, &[])
             .is_none());
+    }
+
+    #[test]
+    fn closed_rects_block_one_search_and_a_new_blocking_grid_keeps_the_slope() {
+        let size = 8;
+        let n = (size + 1) as usize;
+        let (pitch, roll, wb, tr) = (0.3, 0.3, 1.0, 1.0);
+        let mut state = PathfinderState::new(NavSnapshot::new(size, size, vec![1; 64]));
+        state.set_vehicle(VehicleNavSnapshot::new(
+            size,
+            size,
+            vec![1; 64],
+            vec![1.0; n * n],
+            tile_m(),
+        ));
+        let wall = [[4, 0, 4, 7]];
+        let find = |st: &mut PathfinderState, closed: &[[i32; 4]]| {
+            st.find_vehicle((0, 0), (7, 7), &one_cell(), pitch, roll, wb, tr, 0.0, 1.3, 0.0, closed)
+        };
+        assert!(find(&mut state, &wall).is_none(), "closed for this search");
+        assert!(find(&mut state, &[]).is_some(), "and only this one");
+        // a new blocking grid over the same heights keeps the derived slope
+        let cached = state.vehicle_slope_cache.clone();
+        assert!(cached.is_some());
+        state.set_vehicle(VehicleNavSnapshot::new(
+            size,
+            size,
+            vec![1; 64],
+            vec![1.0; n * n],
+            tile_m(),
+        ));
+        assert_eq!(state.vehicle_slope_cache, cached);
+        // the pose search closes them too
+        let goal = PoseGoal {
+            x: 6.5,
+            y: 3.5,
+            heading: 0.0,
+            start_heading: 0.0,
+            turn_radius: 1.0,
+            reverse: true,
+            reverse_cost: 2.0,
+        };
+        let pose = |st: &mut PathfinderState, closed: &[[i32; 4]]| {
+            st.find_vehicle_pose((1, 3), &goal, &one_cell(), pitch, roll, wb, tr, 0.0, closed)
+        };
+        assert!(pose(&mut state, &[]).is_some());
+        assert!(pose(&mut state, &wall).is_none());
     }
 
     #[test]
