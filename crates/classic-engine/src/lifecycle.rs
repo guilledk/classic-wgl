@@ -109,6 +109,7 @@ impl Engine {
             floor_rects: Default::default(),
             vehicle_blocks: Default::default(),
             vehicle_replans: Vec::new(),
+            vehicle_pose_goals: HashMap::new(),
             preview_probe: None,
             next_task_id: 0,
             guest_worker: None,

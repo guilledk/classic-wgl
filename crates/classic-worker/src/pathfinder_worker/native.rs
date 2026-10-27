@@ -115,6 +115,7 @@ impl PathfinderWorker {
             safe_fall_m,
             jump_cost,
             turn_cost,
+            pose: None,
         };
         self.request_vehicle(id, query, VehicleSnapshot::Current);
     }
@@ -376,6 +377,7 @@ mod tests {
             safe_fall_m: 0.0,
             jump_cost: 1.3,
             turn_cost: 0.0,
+            pose: None,
         };
 
         worker.request_vehicle(1, query.clone(), VehicleSnapshot::Current);

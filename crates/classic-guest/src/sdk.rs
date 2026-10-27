@@ -402,6 +402,21 @@ impl GuestHost {
         }
     }
 
+    /// Drive a wheeled vehicle to tile point `(x, y)` arriving facing tile
+    /// heading `heading_deg` (`0` = East, `90` = South): it turns at its
+    /// turning radius and backs up (a three-point or K-turn) where a forward
+    /// arc has no room.  Returns a request id to poll with
+    /// [`Self::vehicle_goto_poll`] (`> 0`), `0` while airborne (re-issue next
+    /// frame), or `-1` for an unknown vehicle or a non-finite pose.
+    pub fn vehicle_goto_pose(&mut self, name: &str, x: f64, y: f64, heading_deg: f64) -> i32 {
+        let name = self.resolve(name);
+        match self.engine_mut().vehicle_goto_pose(&name, x as f32, y as f32, heading_deg as f32) {
+            VehicleGotoSubmit::Airborne => 0,
+            VehicleGotoSubmit::NoVehicle => -1,
+            VehicleGotoSubmit::Submitted(id) => id as i32,
+        }
+    }
+
     /// Poll a vehicle path request by id: `0` pending, `1` accepted (path
     /// installed), `-1` no path.
     pub fn vehicle_goto_poll(&mut self, id: i32) -> i32 {

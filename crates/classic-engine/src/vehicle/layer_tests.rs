@@ -596,7 +596,7 @@ fn layer_origins_ride_the_full_body_tilt_like_sockets() {
 
 /// A mule-like rover: a dir- and tilt-interpolated hull, four wheels (the
 /// front pair steering), and a tool off the hull's corner.
-fn rover_def() -> VehicleDef {
+pub(super) fn rover_def() -> VehicleDef {
     serde_json::from_value(serde_json::json!({
         "version": 2, "name": "rover", "directions": 16, "turn_rate_deg_per_sec": 75.0,
         "steer_rate_deg_per_sec": 150.0, "reverse_speed": 0.9,

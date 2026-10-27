@@ -396,6 +396,91 @@ impl Engine {
                 if behind - step <= 1e-5 {
                     v.reverse_to = None;
                 }
+            } else if !v.path.is_empty() && v.path_reverse.len() == v.path.len() {
+                // A pose route (`vehicle_goto_pose`): runs of forward and
+                // backward segments.  Pursue the end of the current run only
+                // (never across a gear change); on reaching it stop, and take
+                // the next run in its gear.  Backing up, the tail leads: the
+                // heading turns so the travel direction (heading + π) bends
+                // toward the target, with the wheels steering as in reverse.
+                let n = v.path.len();
+                let idx = v.path_idx.clamp(1, n - 1);
+                let back = v.path_reverse[idx];
+                let mut end = idx;
+                while end + 1 < n && v.path_reverse[end + 1] == back {
+                    end += 1;
+                }
+                let target = (v.path[end][0] as f32 + 0.5, v.path[end][1] as f32 + 0.5);
+                let to_end = ((target.0 - x).powi(2) + (target.1 - y).powi(2)).sqrt();
+                if to_end <= GOAL_TOLERANCE {
+                    if end + 1 == n {
+                        // Arrived: a tracked vehicle turns in place onto the
+                        // goal heading; anything else arrives on it already.
+                        x = target.0;
+                        y = target.1;
+                        if let Some(h) = v.goal_heading {
+                            classic_core::cl_info!(
+                                classic_core::instrument::Chan::Path,
+                                "pose route arrived at {target:?}, heading {:.1} deg off",
+                                wrap_pi(v.heading - h).abs().to_degrees()
+                            );
+                        }
+                        v.face = v.goal_heading.filter(|_| v.pivot_turn);
+                        v.path.clear();
+                        v.path_idx = 0;
+                        v.path_reverse.clear();
+                        v.goal_heading = None;
+                    } else {
+                        // A cusp: stop here this step and change gear.
+                        v.path_idx = end + 1;
+                    }
+                    v.reversing = false;
+                } else {
+                    let rate = if back { v.reverse_speed } else { v.speed };
+                    let turn_radius = rate / v.turn_rate.max(1e-3);
+                    // On the last run, pursue along the goal heading past the
+                    // goal (a virtual waypoint beyond it), so the vehicle lines
+                    // up on the heading as it arrives instead of aiming at the
+                    // point from wherever it is.  A cusp is pursued no further
+                    // than itself.
+                    let mut run = v.path[..=end].to_vec();
+                    let last_run = end + 1 == n;
+                    if let (true, Some(h)) = (last_run, v.goal_heading) {
+                        let ahead = if back { -3.0 } else { 3.0 };
+                        let g = v.path[end];
+                        run.push([
+                            g[0] + (h.cos() * ahead).round() as i32,
+                            g[1] + (h.sin() * ahead).round() as i32,
+                        ]);
+                    }
+                    let reach = if last_run { turn_radius * 1.5 } else { to_end };
+                    let lookahead_dist = (turn_radius * 1.5).min(reach).max(0.75);
+                    let (gx, gy, next_idx) = lookahead(&run, idx, x, y, lookahead_dist);
+                    v.path_idx = next_idx.clamp(idx, end);
+                    let desired = (gy - y).atan2(gx - x);
+                    let travel = if back { v.heading + std::f32::consts::PI } else { v.heading };
+                    let err = wrap_pi(desired - travel);
+                    v.reversing = back;
+                    let demand = if back { err } else { -err };
+                    v.steer = step_steer(v.steer, demand, v.steer_max, v.steer_rate, delta);
+                    let max_turn = v.turn_rate * delta;
+                    let turn = err.clamp(-max_turn, max_turn);
+                    v.heading = wrap_pi(v.heading + turn);
+                    v.turned += turn;
+                    let pivoting = v.pivot_turn && err.abs() > PIVOT_TURN_ENTER;
+                    if pivoting {
+                        v.steer = 0.0;
+                    }
+                    // ease into a cusp or the goal, so the stop is not a jolt
+                    let ease = (to_end / 1.5).clamp(0.35, 1.0);
+                    let drive_speed = if pivoting { 0.0 } else { rate * ease };
+                    let dir: f32 = if back { -1.0 } else { 1.0 };
+                    let step = drive_speed * delta;
+                    x += dir * v.heading.cos() * step;
+                    y += dir * v.heading.sin() * step;
+                    drive_tiles = dir * drive_speed;
+                    following = true;
+                }
             } else if !v.path.is_empty() {
                 // Arrive once the final waypoint is within tolerance; snap to
                 // its center and stop.
@@ -410,6 +495,8 @@ impl Engine {
                     y = goal.1;
                     v.path.clear();
                     v.path_idx = 0;
+                    v.path_reverse.clear();
+                    v.goal_heading = None;
                     v.reversing = false;
                 } else {
                     // Pure-pursuit: lead the target by ~1.5× the minimum

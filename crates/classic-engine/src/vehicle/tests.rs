@@ -1813,3 +1813,108 @@ fn a_vehicle_block_across_a_route_makes_the_vehicle_replan() {
     }
     assert!(engine.world.get::<&IsoVehicle>(ve).unwrap().path.is_empty());
 }
+
+/// The lrvtest-like map with the mule-like rover (16 directions, front
+/// steer, reversing at 0.9 tiles/s) spawned facing East at `(12.5, 24.5)`.
+fn engine_with_rover() -> Engine {
+    let mut engine = engine_with_lrvtest_like_map(None);
+    engine.vehicles.insert("rover".into(), super::layer_tests::rover_def());
+    assert!(engine.spawn_vehicle("rover", "rover", 12.5, 24.5));
+    engine.set_synchronous_workers(true);
+    engine
+}
+
+/// Submit a pose goto and install it (synchronous workers).
+fn goto_pose_sync(engine: &mut Engine, x: f32, y: f32, deg: f32) -> VehicleGotoPoll {
+    match engine.vehicle_goto_pose("rover", x, y, deg) {
+        VehicleGotoSubmit::Submitted(id) => engine.vehicle_goto_poll(id),
+        _ => VehicleGotoPoll::NoPath,
+    }
+}
+
+/// Drive until the route is done: the biggest per-frame heading change
+/// (radians), whether it backed up, and the frames it took.
+fn drive_route(engine: &mut Engine) -> (f32, bool, u32) {
+    let ve = engine.names["rover"];
+    let (mut max_turn, mut backed) = (0.0f32, false);
+    for frame in 0..3000 {
+        let h0 = engine.world.get::<&IsoVehicle>(ve).unwrap().heading;
+        engine.time.delta = 1.0 / 30.0;
+        engine.update_vehicles();
+        let v = engine.world.get::<&IsoVehicle>(ve).unwrap();
+        max_turn = max_turn.max(wrap_pi(v.heading - h0).abs());
+        backed |= v.reversing;
+        if v.path.is_empty() && v.face.is_none() {
+            return (max_turn, backed, frame);
+        }
+    }
+    panic!("route not done in 100 s");
+}
+
+/// How far (degrees) the rover's heading is off `deg`, and its distance
+/// (tiles) from `(x, y)`.
+fn pose_error(engine: &Engine, x: f32, y: f32, deg: f32) -> (f32, f32) {
+    let ve = engine.names["rover"];
+    let v = engine.world.get::<&IsoVehicle>(ve).unwrap();
+    let p = engine.world.get::<&classic_core::components::Transform>(ve).unwrap().position;
+    (wrap_pi(v.heading - deg.to_radians()).abs().to_degrees(), (p.x - x).hypot(p.y - y))
+}
+
+#[test]
+fn a_pose_goto_arrives_on_the_heading_in_open_space() {
+    // Half the rover's 16-direction step: what its frame can show.
+    let tolerance = 11.25;
+    for (x, y, deg) in [(30.5, 24.5, 180.0), (28.5, 34.5, 90.0), (30.5, 16.5, 315.0)] {
+        let mut engine = engine_with_rover();
+        assert!(
+            matches!(goto_pose_sync(&mut engine, x, y, deg), VehicleGotoPoll::Accepted(_)),
+            "pose ({x}, {y}) facing {deg}"
+        );
+        let turn_rate = engine.world.get::<&IsoVehicle>(engine.names["rover"]).unwrap().turn_rate;
+        let (max_turn, _, frames) = drive_route(&mut engine);
+        let (dh, dp) = pose_error(&engine, x, y, deg);
+        assert!(dh <= tolerance, "facing {deg}: {dh:.1} deg off after {frames} frames");
+        assert!(dp <= 0.01, "at ({x}, {y}): {dp} tiles off");
+        assert!(max_turn <= turn_rate / 30.0 + 1e-4, "no heading jump: {max_turn}");
+    }
+}
+
+#[test]
+fn a_narrow_lane_mouth_takes_a_k_turn_clear_of_the_vehicle_blocks() {
+    use classic_core::pathfinder::route_clear_pose;
+    // A corridor (rows 17..=31) along x, the rest stamped as vehicle blocks:
+    // facing East at its west end, reach (32.5, 24.5) facing West.  Too
+    // narrow to U-turn forward, so the route backs up.
+    let mut engine = engine_with_rover();
+    engine.set_vehicle_block(1, &[[0, 0, 47, 16], [0, 32, 47, 47]]);
+    let VehicleGotoPoll::Accepted(path) = goto_pose_sync(&mut engine, 32.5, 24.5, 180.0) else {
+        panic!("a K-turn route");
+    };
+    let ve = engine.names["rover"];
+    let (reverse, fp) = {
+        let v = engine.world.get::<&IsoVehicle>(ve).unwrap();
+        (v.path_reverse.clone(), search_footprint(&v))
+    };
+    assert!(reverse.iter().any(|&b| b), "backs up: {path:?}");
+    let cells: Vec<(i32, i32)> = path.iter().map(|c| (c[0], c[1])).collect();
+    let s = &engine.vehicle_nav_snapshot;
+    assert!(route_clear_pose(&s.structural, 48, 48, &cells, &reverse, &fp), "every chord clear");
+    let (_, backed, _) = drive_route(&mut engine);
+    assert!(backed, "the follower drove the reverse run");
+    let (dh, dp) = pose_error(&engine, 32.5, 24.5, 180.0);
+    assert!(dh <= 11.25 && dp <= 0.01, "arrives facing West: {dh:.1} deg, {dp} tiles");
+}
+
+#[test]
+fn an_unreachable_pose_is_refused() {
+    let mut engine = engine_with_rover();
+    engine.set_vehicle_block(1, &[[30, 0, 30, 47]]);
+    assert!(matches!(goto_pose_sync(&mut engine, 40.5, 24.5, 0.0), VehicleGotoPoll::NoPath));
+    // no room for the body at the goal, and off the map
+    assert!(matches!(goto_pose_sync(&mut engine, 1.5, 1.5, 0.0), VehicleGotoPoll::NoPath));
+    assert!(matches!(goto_pose_sync(&mut engine, -4.0, 9.0, 0.0), VehicleGotoPoll::NoPath));
+    assert!(matches!(
+        engine.vehicle_goto_pose("rover", f32::NAN, 9.0, 0.0),
+        VehicleGotoSubmit::NoVehicle
+    ));
+}

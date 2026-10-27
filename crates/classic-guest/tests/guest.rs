@@ -430,6 +430,34 @@ fn guest_floor_rect_imports_wired() {
 }
 
 #[test]
+fn guest_vehicle_goto_pose_import_wired() {
+    // An unknown vehicle and a non-finite pose both answer `-1`.
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_goto_pose" (func $pose (param i32 i32 f64 f64 f64) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "g")
+            (data (i32.const 8) "nope")
+            (func (export "update") (param f64)
+                (drop (call $set (i32.const 0) (i32.const 1)
+                    (f64.convert_i32_s (call $pose (i32.const 8) (i32.const 4)
+                        (f64.const 3) (f64.const 4) (f64.const 90)))
+                    (f64.convert_i32_s (call $pose (i32.const 0) (i32.const 1)
+                        (f64.const nan) (f64.const 4) (f64.const 90)))
+                    (f64.const 7)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            engine.spawn_named("g");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("g"), Some((-1.0, -1.0, 7.0)));
+        },
+    );
+}
+
+#[test]
 fn guest_vehicle_block_imports_wired() {
     // Sets block 4 to two rects (the second in reverse corner order), writes
     // the rect count, a ragged list's `-1` and two clears (1, then 0) to `g`,

@@ -438,6 +438,42 @@ wheelbase, track)` only — `turn_cost` does not affect it.  The path stays a
 `Vec<GridCell>`; reverse is a *follower* manoeuvre (see `classic-ecs` /
 `classic-iso`), not a planner edge.
 
+### Pose goals (`pathfinder::pose`, `vehicle_goto_pose`)
+
+`vehicle_goto_pose(name, x, y, heading_deg)` drives to a point *facing* a
+heading.  The search (`find_vehicle_pose_*`, `PoseGoal`) is a state
+lattice, on the pathfinder worker like any vehicle search (the query's
+`pose`; on the web the `findVehicle` message's `pose` and the wasm
+`set_pose_goal` before `find_vehicle`):
+
+- **State:** cell × 16 headings (22.5°) × the gear it arrived in.
+- **Primitives** from each heading: straight, or a 22.5° arc of the
+  turning radius (`1.3 · speed / turn_rate`: the follower's own, with a
+  margin) left or right then a short straight, forward and (when
+  `reverse_speed > 0`) backward; a `pivot_turn` vehicle also turns 22.5° in
+  place.  Lengths are picked so the end rounds onto a cell centre.  Each
+  primitive's swept body (the body rectangle along the motion, and along
+  the chords the follower will drive between its waypoints) is rasterized
+  once into row spans; the first move ignores the cells under the body
+  where it stands.
+- **Cost:** length (backward ×2), `turn_cost` per 45°, 3 tiles per gear
+  change; Euclidean heuristic.  Searched in a window round start and goal
+  (8 + 3·radius + body reach tiles of margin).  Goal: the goal cell at the
+  nearest of the 16 headings.
+- **Route:** waypoints with the gear packed into `y`
+  (`pack_waypoint` / `unpack_waypoint`, `REVERSE_FLAG`); the engine unpacks
+  them into `IsoVehicle.path` + `path_reverse` and keeps `goal_heading`.
+- **Follower:** drives one gear run at a time (pursuit never looks across a
+  cusp), stops at each cusp and changes gear; backing up, the tail leads
+  (the heading turns so heading + π bends toward the target, the wheels
+  steering as in reverse); on the last run it pursues a virtual waypoint 3
+  tiles past the goal along its heading, so it arrives lined up (tests hold
+  it within half a 16-direction step); it eases into cusps and the goal.
+  A `pivot_turn` vehicle then turns in place onto the exact heading (the
+  mule, front-steered, arcs and backs up instead: it has no pivot).
+- **Blocks:** a vehicle block cutting a pose route re-plans it as a pose
+  route (`route_clear_pose` checks the chords in gear).
+
 ### Vehicle blocking grid (`vehicle::block`, `set_vehicle_block`)
 
 The vehicle search never reads the nav grid: `NavMesh.data` is *human*

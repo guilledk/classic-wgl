@@ -856,6 +856,15 @@ pub struct IsoVehicle {
     /// by any other movement command.
     #[serde(skip)]
     pub reverse_to: Option<[f32; 2]>,
+    /// A pose route's gear per waypoint (`true` = the segment into it is
+    /// driven backward), as long as `path`; empty for a plain route
+    /// (`vehicle_goto_pose`).
+    #[serde(skip)]
+    pub path_reverse: Vec<bool>,
+    /// A pose route's goal heading (tile radians): the route arrives facing
+    /// it (`vehicle_goto_pose`).
+    #[serde(skip)]
+    pub goal_heading: Option<f32>,
 }
 
 /// Runtime state of one v2 vehicle layer (`classic_core::vehicle_def`).
@@ -963,6 +972,8 @@ impl Default for IsoVehicle {
             pivot_turn: false,
             face: None,
             reverse_to: None,
+            path_reverse: Vec::new(),
+            goal_heading: None,
         }
     }
 }

@@ -83,7 +83,7 @@ impl Engine {
         if snap.structural.len() != (sx * sy) as usize {
             return;
         }
-        let cut: Vec<(hecs::Entity, (i32, i32))> = self
+        let cut: Vec<(hecs::Entity, (i32, i32), Option<f32>)> = self
             .world
             .query::<&IsoVehicle>()
             .iter()
@@ -91,33 +91,64 @@ impl Engine {
                 if v.path_idx >= v.path.len() {
                     return None;
                 }
-                let route: Vec<(i32, i32)> =
-                    v.path[v.path_idx.saturating_sub(1)..].iter().map(|c| (c[0], c[1])).collect();
-                let clear = classic_core::pathfinder::route_clear(
-                    &snap.structural,
-                    sx,
-                    sy,
-                    &route,
-                    &search_footprint(v),
-                );
+                let from = v.path_idx.saturating_sub(1);
+                let route: Vec<(i32, i32)> = v.path[from..].iter().map(|c| (c[0], c[1])).collect();
+                // a pose route is checked along the chords it drives, in gear
+                let pose = v.path_reverse.len() == v.path.len();
+                let clear = if pose {
+                    classic_core::pathfinder::route_clear_pose(
+                        &snap.structural,
+                        sx,
+                        sy,
+                        &route,
+                        &v.path_reverse[from..],
+                        &search_footprint(v),
+                    )
+                } else {
+                    classic_core::pathfinder::route_clear(
+                        &snap.structural,
+                        sx,
+                        sy,
+                        &route,
+                        &search_footprint(v),
+                    )
+                };
                 let goal = *route.last()?;
-                (!clear).then_some((e, goal))
+                (!clear).then_some((e, goal, v.goal_heading.filter(|_| pose)))
             })
             .collect();
-        for (ve, goal) in cut {
+        for (ve, goal, heading) in cut {
             if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
                 v.path.clear();
                 v.path_idx = 0;
+                v.path_reverse.clear();
+                v.goal_heading = None;
             }
             let name = self.debug_name(ve);
             classic_core::cl_info!(
                 classic_core::instrument::Chan::Path,
                 "vehicle block cut {name}'s route: re-planning to {goal:?}"
             );
-            if let VehicleGotoSubmit::Submitted(id) = self.vehicle_goto(&name, goal.0, goal.1) {
+            let submit = match heading {
+                Some(h) => self.vehicle_goto_pose(
+                    &name,
+                    goal.0 as f32 + 0.5,
+                    goal.1 as f32 + 0.5,
+                    h.to_degrees(),
+                ),
+                None => self.vehicle_goto(&name, goal.0, goal.1),
+            };
+            if let VehicleGotoSubmit::Submitted(id) = submit {
                 self.vehicle_replans.push(id);
             }
         }
+    }
+
+    /// Have `update_vehicles` poll vehicle route request `id` and install its
+    /// route when it resolves (as the vehicle-block re-plans are), for a host
+    /// that submits a route without polling it itself (a test scenario).
+    pub fn vehicle_goto_autopoll(&mut self, id: u64) {
+        self.vehicle_replans.push(id);
     }
 
     /// Poll the re-plans [`Engine::set_vehicle_block`] submitted: an

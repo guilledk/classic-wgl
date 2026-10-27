@@ -9,7 +9,8 @@
 use std::sync::Arc;
 
 use classic_core::pathfinder::{
-    find_vehicle_path_snapshot, GridCell, PathfinderState, VehicleFootprint, VehicleNavSnapshot,
+    find_vehicle_path_snapshot, find_vehicle_pose_snapshot, GridCell, PathfinderState, PoseGoal,
+    VehicleFootprint, VehicleNavSnapshot,
 };
 
 use crate::jobs::Job;
@@ -30,6 +31,9 @@ pub struct VehiclePathQuery {
     pub safe_fall_m: f32,
     pub jump_cost: f32,
     pub turn_cost: f32,
+    /// A pose goal: drive to a point facing a heading (`to` unused; the
+    /// waypoints carry their gear, `pathfinder::unpack_waypoint`).
+    pub pose: Option<PoseGoal>,
 }
 
 /// Which vehicle nav snapshot a vehicle query searches.
@@ -57,20 +61,46 @@ impl Job for PathJob {
     fn run(self, state: &mut PathfinderState) -> Self::Output {
         match self {
             PathJob::Find { from, to } => state.find(from, to),
-            PathJob::FindVehicle { query: q, snapshot: VehicleSnapshot::Current } => state
-                .find_vehicle(
-                    q.from,
-                    q.to,
-                    &q.footprint,
-                    q.pitch_max,
-                    q.roll_max,
-                    q.wheelbase_m,
-                    q.track_m,
-                    q.safe_fall_m,
-                    q.jump_cost,
-                    q.turn_cost,
-                ),
+            PathJob::FindVehicle { query: q, snapshot: VehicleSnapshot::Current } => {
+                match &q.pose {
+                    Some(goal) => state.find_vehicle_pose(
+                        q.from,
+                        goal,
+                        &q.footprint,
+                        q.pitch_max,
+                        q.roll_max,
+                        q.wheelbase_m,
+                        q.track_m,
+                        q.turn_cost,
+                    ),
+                    None => state.find_vehicle(
+                        q.from,
+                        q.to,
+                        &q.footprint,
+                        q.pitch_max,
+                        q.roll_max,
+                        q.wheelbase_m,
+                        q.track_m,
+                        q.safe_fall_m,
+                        q.jump_cost,
+                        q.turn_cost,
+                    ),
+                }
+            }
             PathJob::FindVehicle { query: q, snapshot: VehicleSnapshot::Fresh(Some(snapshot)) } => {
+                if let Some(goal) = &q.pose {
+                    return find_vehicle_pose_snapshot(
+                        &snapshot,
+                        q.from,
+                        goal,
+                        &q.footprint,
+                        q.pitch_max,
+                        q.roll_max,
+                        q.wheelbase_m,
+                        q.track_m,
+                        q.turn_cost,
+                    );
+                }
                 find_vehicle_path_snapshot(
                     &snapshot,
                     q.from,

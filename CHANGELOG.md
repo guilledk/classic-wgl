@@ -10,6 +10,19 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `vehicle_goto_pose(name, x, y, heading_deg)` (guest import,
+  `Engine::vehicle_goto_pose`) drives a vehicle to a point arriving
+  facing a heading, instead of the guest driving to a point and then
+  snapping round with `vehicle_face`.  A 16-heading state lattice on the
+  pathfinder worker (`pathfinder::PoseGoal`) turns at the vehicle's own
+  turning radius and, when it can reverse, backs up where a forward arc
+  has no room (three-point and K-turns), at twice the cost of driving
+  forward plus a gear-change cost.  The follower drives each forward and
+  backward run with rate-limited steering and arrives within half a
+  direction step of the heading; a `pivot_turn` vehicle turns in place
+  instead.  `Engine::vehicle_goto_autopoll` and a `vehicleGotoPose`
+  scenario action drive it from a test (#179).
+
 - Vehicle blocks: `set_vehicle_block(id, rects)` / `clear_vehicle_block(id)`
   (guest imports, `Engine::set_vehicle_block`) stamp named sets of
   inclusive tile rects only vehicles may not drive over.  The vehicle

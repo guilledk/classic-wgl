@@ -19,7 +19,8 @@
 use std::sync::{Mutex, MutexGuard};
 
 use classic_pathfinder::{
-    BodyRect, GridCell, NavSnapshot, PathfinderState, VehicleFootprint, VehicleNavSnapshot,
+    BodyRect, GridCell, NavSnapshot, PathfinderState, PoseGoal, VehicleFootprint,
+    VehicleNavSnapshot,
 };
 
 struct WState {
@@ -28,6 +29,36 @@ struct WState {
 }
 
 static STATE: Mutex<Option<WState>> = Mutex::new(None);
+
+/// The pose goal for the next `find_vehicle` (`set_pose_goal`), consumed by
+/// it: set, the search drives to a pose instead of a cell.
+static POSE: Mutex<Option<PoseGoal>> = Mutex::new(None);
+
+/// Set (`has != 0`) or clear the next `find_vehicle`'s pose goal (tile
+/// point, tile headings in radians, turning radius in tiles).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn set_pose_goal(
+    has: i32,
+    x: f32,
+    y: f32,
+    heading: f32,
+    start_heading: f32,
+    turn_radius: f32,
+    reverse: i32,
+    reverse_cost: f32,
+) {
+    let goal = (has != 0).then_some(PoseGoal {
+        x,
+        y,
+        heading,
+        start_heading,
+        turn_radius,
+        reverse: reverse != 0,
+        reverse_cost,
+    });
+    *POSE.lock().unwrap_or_else(|p| p.into_inner()) = goal;
+}
 
 fn state() -> MutexGuard<'static, Option<WState>> {
     STATE.lock().unwrap_or_else(|p| p.into_inner())
@@ -133,8 +164,24 @@ pub extern "C" fn find_vehicle(
     } else {
         VehicleFootprint::Cells(footprint)
     };
+    let pose = POSE.lock().unwrap_or_else(|p| p.into_inner()).take();
     let mut st = state();
     let Some(st) = st.as_mut() else { return -1 };
+    if let Some(goal) = pose {
+        return match st.pathfinder.find_vehicle_pose(
+            (from_x, from_y),
+            &goal,
+            &footprint,
+            pitch_max,
+            roll_max,
+            wheelbase_m,
+            track_m,
+            turn_cost,
+        ) {
+            Some(path) => write_result(&mut st.result, path),
+            None => -1,
+        };
+    }
     match st.pathfinder.find_vehicle(
         (from_x, from_y),
         (to_x, to_y),

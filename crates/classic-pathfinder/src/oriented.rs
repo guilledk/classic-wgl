@@ -81,9 +81,22 @@ fn heading16(k: usize) -> (f32, f32) {
 /// The cells a body rectangle `[x0, x1] × [y0, y1]` (chassis frame) covers
 /// at heading `(hx, hy)`, anchored on a cell centre: every cell its interior
 /// overlaps (a cell it only touches is left out).
-pub(crate) fn rect_spans(x0: f32, x1: f32, y0: f32, y1: f32, (hx, hy): (f32, f32)) -> Spans {
+pub(crate) fn rect_spans(x0: f32, x1: f32, y0: f32, y1: f32, h: (f32, f32)) -> Spans {
+    rect_spans_at(x0, x1, y0, y1, h, (0.0, 0.0))
+}
+
+/// [`rect_spans`] with the body's origin at `(ox, oy)` tiles from the anchor
+/// cell's centre (a pose between cell centres).
+pub(crate) fn rect_spans_at(
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+    (hx, hy): (f32, f32),
+    (ox, oy): (f32, f32),
+) -> Spans {
     // chassis (a, b) -> tile offset a·h + b·left, left = (hy, -hx)
-    let at = |a: f32, b: f32| (snap(a * hx + b * hy), snap(a * hy - b * hx));
+    let at = |a: f32, b: f32| (snap(ox + a * hx + b * hy), snap(oy + a * hy - b * hx));
     let poly = [at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)];
     let ymin = poly.iter().map(|p| p.1).fold(f32::MAX, f32::min);
     let ymax = poly.iter().map(|p| p.1).fold(f32::MIN, f32::max);
