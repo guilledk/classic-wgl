@@ -549,12 +549,12 @@ WarpTexel best2(WarpTexel x, WarpTexel y) {
 uniform highp sampler2D blend_thirds;
 
 
-// The merged direction blend at this fragment (discards where neither
-// neighbour covers it).  `vOutline.zw` / `vInterp.xy` are the anchors,
-// `vInterp.zw` the drawn heading minus each neighbour's (tile radians; a
-// tile-space turn is the opposite world turn).
-WarpTexel blendDirections() {
-    highp vec2 q = vQuad.xy + vTexCoord * vQuad.zw;
+// The merged direction blend at quad pixel `q` (`covered` false where
+// neither neighbour covers it).  `vOutline.zw` / `vInterp.xy` are the
+// anchors, `vInterp.zw` the drawn heading minus each neighbour's (tile
+// radians; a tile-space turn is the opposite world turn).
+WarpTexel blendAt(highp vec2 q, out bool covered) {
+    covered = true;
     highp float rangeM = depth_scale * (depth_span.x - depth_span.y) * 0.5;
     WarpTexel a = warpDirection(tex_sampler, depth_sampler, normal_sampler, vUvRect, vContent,
                                 vOutline.zw, -vInterp.z, vTilt, rangeM, q);
@@ -584,9 +584,7 @@ WarpTexel blendDirections() {
             }
             best = best2(best, c);
         }
-        if (!(best.opaque && best.err < WARP_BEST2_PX)) {
-            discard;
-        }
+        covered = best.opaque && best.err < WARP_BEST2_PX;
         return best;
     }
     if (!b.ok) {
@@ -609,6 +607,23 @@ WarpTexel blendDirections() {
     m.depth = mix(a.depth, b.depth, t);
     return m;
 }
+
+// The selection silhouette of a blend: whether a pixel the blend leaves
+// uncovered has a covered cardinal neighbour `vOutline.y` quad pixels away
+// (the outline radius in content pixels; the warped silhouette, so the
+// outline turns with the body).  Only selected blends pay these searches.
+bool blendOutline(highp vec2 q) {
+    highp float r = vOutline.y;
+    bool c;
+    blendAt(q + vec2(r, 0.0), c);
+    if (c) return true;
+    blendAt(q - vec2(r, 0.0), c);
+    if (c) return true;
+    blendAt(q + vec2(0.0, r), c);
+    if (c) return true;
+    blendAt(q - vec2(0.0, r), c);
+    return c;
+}
 #endif
 
 void main(void ) {
@@ -625,9 +640,23 @@ void main(void ) {
     }
 #endif
 #ifdef INTERP
-    // A direction blend (never selected: the engine draws a selected sprite
-    // on its nearest direction, with the silhouette).
-    WarpTexel blended = blendDirections();
+    // A direction blend; a selected one draws its silhouette edge on the
+    // pixels just outside the warped body.
+    highp vec2 q = vQuad.xy + vTexCoord * vQuad.zw;
+    bool covered;
+    WarpTexel blended = blendAt(q, covered);
+    if (!covered) {
+        if (selected > 0.5 && blendOutline(q)) {
+            gl_FragDepth = depth_base;
+#ifdef ID_PASS
+            fragColor = vec4(vMisc.y / 255.0, 0.0, 0.0, 1.0);
+#else
+            fragColor = vec4(selection_color, 1.0);
+#endif
+            return;
+        }
+        discard;
+    }
     vec4 color = blended.color;
 #else
     vec4 color = getTilePixel(vec2(vTexCoord.x, vTexCoord.y));

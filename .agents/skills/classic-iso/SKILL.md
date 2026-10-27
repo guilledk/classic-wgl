@@ -709,14 +709,16 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
   the heading), exactly as `vehicle_socket_frame` does. A layer origin and
   a zero-offset socket on it are the same point (a 1.2 m turret on an 8°
   slope sits ~17 cm back, which the old `z += x·sin p` lift missed).
-- **Selected vehicles place layers by the drawn pose**: a selected sprite
-  never blends (`dir_choice`: the selection silhouette needs one frame),
-  so a selected vehicle's hull and layers draw their nearer baked
-  direction (`layers::drawn_heading`, `B` only past the midpoint) and
-  nearest tilt level.  `apply_layers` then places and frames every layer
-  from that snapped heading and level tilt too; from the exact pose the
-  wheels slid around the snapped hull of a turning mule (up to 0.4 m,
-  #173).  Sockets keep the exact pose.
+- **Selected or not, a vehicle poses the same**: a selected sprite blends
+  like any other (`dir_choice` has no selection input) and
+  `sheet.frag#INTERP` draws its silhouette edge round the warped body, so
+  `apply_layers` places and frames every layer from the exact heading and
+  tilt whether the vehicle is selected or not.  Selection only adds the
+  outline (`IsoDraw.selected`).  Until #178 a selected sprite drew its
+  nearer baked direction, so the player's (selected) mule turned in steps
+  in lunar while padtest's scripted one turned smoothly; #173 had placed a
+  selected vehicle's layers on that snapped pose.  The layer test
+  `a_selected_vehicle_poses_exactly_as_an_unselected_one` pins it.
 - **Cargo / layer sheets need a ground anchor the engine can find**: a
   layer with no anchors-artifact entry places its frames' **packer
   `anchor`**, else the **cell centre (0.5, 0.5)**, on its chassis point. So

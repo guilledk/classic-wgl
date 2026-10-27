@@ -111,7 +111,8 @@ pub(crate) fn plan_sprite_frame(
                     base.blend(b).with_third_row(thirds.len() - 1)
                 }
                 _ => base.blend(b),
-            },
+            }
+            .with_blend_outline(OUTLINE_RADIUS_PX),
             None => base,
         };
         let inst = inst.with_team(d.team, d.emissive);
