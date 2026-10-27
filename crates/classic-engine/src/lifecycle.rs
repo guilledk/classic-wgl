@@ -1230,13 +1230,22 @@ impl Engine {
                     camera_ignored: true,
                     texture: None,
                     frame: None,
-                    color: Some([particles::BLOOM_THRESHOLD, particles::BLOOM_INTENSITY, 0.0, 0.0]),
+                    color: Some([
+                        particles::BLOOM_THRESHOLD,
+                        particles::BLOOM_INTENSITY,
+                        particles::BLOOM_KNEE,
+                        0.0,
+                    ]),
                     depth: None,
                     normal: None,
                     screen: None,
                 });
             }
-            gfx.apply_bloom(particles::BLOOM_THRESHOLD, particles::BLOOM_INTENSITY);
+            gfx.apply_bloom(
+                particles::BLOOM_THRESHOLD,
+                particles::BLOOM_KNEE,
+                particles::BLOOM_INTENSITY,
+            );
         }
 
         classic_gfx::perf::phase("ui");

@@ -80,7 +80,7 @@
 {"order":38.756134,"kind":"IsoSprite","name":"lunar-common::lrvWheelRr","model":[3.6570678,-3.6570678,0.0,0.0,0.0,0.0,-5.9719667,0.0,0.70710677,0.70710677,0.0,0.0,223.08572,-195.83533,7.179935,1.0],"camera_ignored":false,"texture":"lunar-common::lunar-common_atlas","frame":0.0,"depth":"lunar-common::lunar-common_atlas-depth","normal":"lunar-common::lunar-common_atlas-normal"}
 {"order":10.343891,"kind":"Particles","name":"lunar::rocketPlume/core","model":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,219.69218,-191.56718,55.13374,1.0],"camera_ignored":false,"frame":32.0}
 {"order":10.343891,"kind":"Particles","name":"lunar::rocketPlume/exhaust","model":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,219.69218,-191.56718,55.13374,1.0],"camera_ignored":false,"frame":51.0}
-{"order":0.0,"kind":"Bloom","name":"bloom","model":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"camera_ignored":true,"color":[0.82,0.9,0.0,0.0]}
+{"order":0.0,"kind":"Bloom","name":"bloom","model":[1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"camera_ignored":true,"color":[0.95,0.9,0.05,0.0]}
 {"order":0.0,"kind":"UiRect","name":"e#17","model":[1280.0,0.0,0.0,0.0,0.0,720.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,0.0,1.0],"camera_ignored":true,"color":[0.0,0.0,0.0,0.0]}
 {"order":-1000.0,"kind":"UiSprite","name":"e#26","model":[128.0,0.0,0.0,0.0,0.0,128.0,0.0,0.0,0.0,0.0,1.0,0.0,64.0,528.0,-1000.0,1.0],"camera_ignored":true,"texture":"common::editorIcons","frame":0.0}
 {"order":-1000.0,"kind":"UiRect","name":"e#18","model":[1280.0,0.0,0.0,0.0,0.0,68.0,0.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,-1000.0,1.0],"camera_ignored":true,"color":[0.0,0.0,0.0,0.5]}

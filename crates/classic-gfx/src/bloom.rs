@@ -62,10 +62,12 @@ impl BloomTargets {
 
 impl Gfx {
     /// Run the bloom post-pass on the main target (see the module docs).
-    /// `threshold` is the bright-pass level (max channel, `0..1`), `intensity`
-    /// the composite gain.  Leaves the main target bound with blending
-    /// restored to `SRC_ALPHA, ONE_MINUS_SRC_ALPHA` and depth/stencil off.
-    pub fn apply_bloom(&mut self, threshold: f32, intensity: f32) {
+    /// `threshold` is the bright-pass level (max channel, `0..1`), `knee` the
+    /// width over which it ramps to full weight (`smoothstep(threshold,
+    /// threshold + knee, max channel)`), `intensity` the composite gain.
+    /// Leaves the main target bound with blending restored to `SRC_ALPHA,
+    /// ONE_MINUS_SRC_ALPHA` and depth/stencil off.
+    pub fn apply_bloom(&mut self, threshold: f32, knee: f32, intensity: f32) {
         let (w, h) = self.main_target_size();
         if w < 4 || h < 4 {
             return;
@@ -130,7 +132,7 @@ impl Gfx {
             thr.uniform_1i(gl, "src_tex", BLOOM_UNIT_A as i32);
             thr.uniform_vec2(gl, "src_texel", &[0.5 / sw as f32, 0.5 / sh as f32]);
             thr.uniform_1f(gl, "threshold", t);
-            thr.uniform_1f(gl, "knee", 0.25);
+            thr.uniform_1f(gl, "knee", knee);
             self.draw_post_quad(thr);
         };
         // The main target's texture keeps its own (NEAREST) filtering for

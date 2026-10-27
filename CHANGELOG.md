@@ -212,6 +212,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Bloom only glows what saturates.  The bright pass runs on the whole lit
+  frame once anything emissive is on screen, and its 0.82 level (0.25
+  knee) let sunlit white paint bloom: the sunlit rocket hull alone was
+  ~13% of a zoom-1 lunar frame.  The level is now 0.95 with a 0.05 knee
+  (`particles::BLOOM_KNEE`, passed to `Gfx::apply_bloom`), so emissive
+  and particle cores (1.0) bloom at full weight.  The lunar trace golden's
+  `Bloom` row records the new level and knee (#175).
 - Iso sprites draw as instanced batches (`classic_gfx::sprite_batch`):
   one 160-byte instance per sprite, and runs on one atlas page share a
   `drawElementsInstanced` in the normal, ghost and shadow passes
