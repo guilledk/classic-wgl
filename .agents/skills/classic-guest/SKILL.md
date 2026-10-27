@@ -161,6 +161,8 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `vehicle_teleport` | `(name_ptr, name_len, x: f64, y: f64) -> i32` | reposition a wheeled vehicle (body + 4 wheels) and reset its physics |
 | `vehicle_goto` | `(name_ptr, name_len, tx: i32, ty: i32) -> i32` | set a vehicle's destination; the host runs A* and stores the waypoints |
 | `vehicle_stop` | `(name_ptr, name_len) -> i32` | stop a vehicle, clearing its movement path |
+| `vehicle_face` | `(name_ptr, name_len, heading_deg: f64) -> i32` | face tile heading `heading_deg` (0 = East, 90 = South), dropping the path: a `pivot_turn` vehicle turns in place at its turn rate, any other snaps next step; `1` ok, `0` unknown, `-1` airborne / non-finite |
+| `vehicle_reverse_to` | `(name_ptr, name_len, x: f64, y: f64) -> i32` | back straight to tile point `(x, y)` keeping the heading (no steering; the sideways offset is not corrected, so line up with `vehicle_face` first), at `reverse_speed` (else `speed`); `1` ok, `0` unknown, `-1` airborne / non-finite / not behind |
 | `vehicle_spawn` | `(def_ptr, def_len, name_ptr, name_len, x: f64, y: f64) -> i32` | spawn a vehicle of a declared definition at `(x, y)` |
 | `bench_mode` | `() -> i32` | what to run: `0` interactive, `1` full benchmark, `2` short (`CLASSIC_BENCH=full\|short`, web `?bench[=short]`) |
 | `bench_section` | `(name_ptr, name_len) -> i32` | start the benchmark section `name` with this frame (its marker, with camera + viewport params, lands in the `CLASSIC_PERF` output; `cargo xtask bench` reports per section) |

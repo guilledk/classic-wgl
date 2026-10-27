@@ -355,7 +355,40 @@ impl Engine {
             let mut following = false;
             // Signed ground speed this step (tiles/s; negative = reversing).
             let mut drive_tiles = 0.0f32;
-            if !v.path.is_empty() {
+            if let Some(target) = v.face {
+                // `vehicle_face`: a tracked vehicle turns in place at its turn
+                // rate; anything else snaps (it cannot turn standing still).
+                let err = wrap_pi(target - v.heading);
+                let turn = if v.pivot_turn {
+                    let max_turn = v.turn_rate * delta;
+                    err.clamp(-max_turn, max_turn)
+                } else {
+                    err
+                };
+                v.heading = wrap_pi(v.heading + turn);
+                v.turned += turn;
+                if (err - turn).abs() <= 1e-5 {
+                    v.heading = target;
+                    v.face = None;
+                }
+            } else if let Some([tx, ty]) = v.reverse_to {
+                // `vehicle_reverse_to`: straight back along the heading (no
+                // steering) until the target's distance along it is covered.
+                let (c, s) = (v.heading.cos(), v.heading.sin());
+                let behind = (-((tx - x) * c + (ty - y) * s)).max(0.0);
+                let rate = if v.reverse_speed > 0.0 { v.reverse_speed } else { v.speed };
+                let step = (rate * delta).min(behind);
+                x -= c * step;
+                y -= s * step;
+                if delta > 0.0 {
+                    drive_tiles = -step / delta;
+                }
+                v.reversing = true;
+                following = true;
+                if behind - step <= 1e-5 {
+                    v.reverse_to = None;
+                }
+            } else if !v.path.is_empty() {
                 // Arrive once the final waypoint is within tolerance; snap to
                 // its center and stop.
                 let goal = (

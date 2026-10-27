@@ -840,6 +840,17 @@ pub struct IsoVehicle {
     /// Turn in place instead of arcing (tracked vehicles).
     #[serde(skip)]
     pub pivot_turn: bool,
+    /// A heading to face (tile-space radians), set by `vehicle_face`: a
+    /// `pivot_turn` vehicle turns to it in place at `turn_rate`, any other
+    /// snaps to it on the next step.  Cleared on arrival and by any other
+    /// movement command.
+    #[serde(skip)]
+    pub face: Option<f32>,
+    /// A point (tile coordinates) to back up to in a straight line along the
+    /// current heading, set by `vehicle_reverse_to`.  Cleared on arrival and
+    /// by any other movement command.
+    #[serde(skip)]
+    pub reverse_to: Option<[f32; 2]>,
 }
 
 /// Runtime state of one v2 vehicle layer (`classic_core::vehicle_def`).
@@ -944,6 +955,8 @@ impl Default for IsoVehicle {
             odometer_m: 0.0,
             turned: 0.0,
             pivot_turn: false,
+            face: None,
+            reverse_to: None,
         }
     }
 }

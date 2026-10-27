@@ -194,6 +194,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   which fails naming it), web fails naming it until `roms.json` lists
   it; `fetch-roms` and `roms.lock.json` gain it when the landing window
   publishes it (#171).
+- Vehicle facing and straight reversing for guests.  ABI rows
+  `vehicle_face(name, heading_deg)` (tile degrees, 0 = East, 90 = South:
+  a `pivot_turn` vehicle turns in place at its turn rate, any other
+  snaps) and `vehicle_reverse_to(name, x, y)` (backs straight to a tile
+  point keeping its heading, at `reverse_speed`), so a mule lines up on
+  a box and backs over it without path-following detours.  Both drop
+  the path; `vehicle_goto` / `vehicle_stop` / teleport cancel them
+  (#172).
 
 ### Changed
 

@@ -418,6 +418,22 @@ impl GuestHost {
         self.engine_mut().vehicle_stop(&name) as i32
     }
 
+    /// Turn a vehicle to face tile heading `heading_deg` (tile degrees, `0` =
+    /// East, `90` = South): in place for a `pivot_turn` vehicle, else a snap.
+    /// `1` accepted, `0` unknown vehicle, `-1` airborne / non-finite.
+    pub fn vehicle_face(&mut self, name: &str, heading_deg: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_face(&name, heading_deg as f32)
+    }
+
+    /// Back a vehicle up in a straight line to tile point `(x, y)`, keeping
+    /// its heading.  `1` accepted, `0` unknown vehicle, `-1` airborne,
+    /// non-finite or not behind it.
+    pub fn vehicle_reverse_to(&mut self, name: &str, x: f64, y: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_reverse_to(&name, x as f32, y as f32)
+    }
+
     /// Set a wheeled vehicle's speed (tiles per second), mutating its
     /// `IsoVehicle.speed` (e.g. slow a loaded LRV).
     pub fn vehicle_set_speed(&mut self, name: &str, speed: f64) -> i32 {

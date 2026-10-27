@@ -31,6 +31,8 @@ impl Engine {
             v.steer_index = straight_steer(v.steer_levels);
             v.steer = 0.0;
             v.reversing = false;
+            v.face = None;
+            v.reverse_to = None;
             // A teleport is not a speed change: no dust burst next step.
             v.dust_speed = 0.0;
 
@@ -161,6 +163,10 @@ impl Engine {
         self.submit_vehicle_path(id, query);
 
         self.vehicle_path_entities.insert(id, ve);
+        if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
+            v.face = None;
+            v.reverse_to = None;
+        }
         VehicleGotoSubmit::Submitted(id)
     }
 
@@ -205,9 +211,60 @@ impl Engine {
         if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
             v.path.clear();
             v.path_idx = 0;
+            v.face = None;
+            v.reverse_to = None;
             return true;
         }
         false
+    }
+
+    /// Turn a vehicle to face tile heading `heading_deg` (tile degrees: `0` =
+    /// East, `90` = South), dropping its path.  A `pivot_turn` (tracked)
+    /// vehicle turns in place at its `turn_rate`; any other snaps to the
+    /// heading on the next step (it cannot turn without driving).  Returns
+    /// `1` when accepted, `0` for an unknown vehicle, `-1` while airborne or
+    /// for a non-finite heading.
+    pub fn vehicle_face(&mut self, name: &str, heading_deg: f32) -> i32 {
+        let Some(&ve) = self.names.get(name) else { return 0 };
+        let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) else { return 0 };
+        if v.airborne || !heading_deg.is_finite() {
+            return -1;
+        }
+        v.path.clear();
+        v.path_idx = 0;
+        v.reverse_to = None;
+        v.face = Some(super::kinematics::wrap_pi(heading_deg.to_radians()));
+        1
+    }
+
+    /// Back a vehicle up in a straight line to tile point `(x, y)`, keeping
+    /// its current heading (no steering): it drives along `-heading` at
+    /// `reverse_speed` (its `speed` when reversing is off) until it has
+    /// covered the point's distance along that line, then stops.  The point's
+    /// sideways offset from the line is not corrected (line the vehicle up
+    /// with [`Engine::vehicle_face`] first).  Drops its path.  Returns `1`
+    /// when accepted, `0` for an unknown vehicle, `-1` while airborne, for a
+    /// non-finite point or one that is not behind the vehicle.
+    pub fn vehicle_reverse_to(&mut self, name: &str, x: f32, y: f32) -> i32 {
+        let Some(&ve) = self.names.get(name) else { return 0 };
+        let Some((bx, by)) =
+            self.world.get::<&Transform>(ve).ok().map(|t| (t.position.x, t.position.y))
+        else {
+            return 0;
+        };
+        let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) else { return 0 };
+        if v.airborne || !x.is_finite() || !y.is_finite() {
+            return -1;
+        }
+        let behind = -((x - bx) * v.heading.cos() + (y - by) * v.heading.sin());
+        if behind <= 0.0 {
+            return -1;
+        }
+        v.path.clear();
+        v.path_idx = 0;
+        v.face = None;
+        v.reverse_to = Some([x, y]);
+        1
     }
 
     /// Set a vehicle's speed (tiles per second), mutating its `IsoVehicle.speed`

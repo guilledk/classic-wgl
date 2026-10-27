@@ -369,6 +369,34 @@ fn guest_vehicle_imports_are_wired() {
 }
 
 #[test]
+fn guest_vehicle_face_and_reverse_imports_wired() {
+    // Writes the `vehicle_face` / `vehicle_reverse_to` results for an unknown
+    // vehicle (0 each) into `r.x` / `r.y`: both link and reach the engine.
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_face" (func $face (param i32 i32 f64) (result i32)))
+            (import "env" "vehicle_reverse_to" (func $rev (param i32 i32 f64 f64) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "mule")
+            (data (i32.const 8) "r")
+            (func (export "update") (param f64)
+                (drop (call $set (i32.const 8) (i32.const 1)
+                    (f64.convert_i32_s (call $face (i32.const 0) (i32.const 4) (f64.const 90)))
+                    (f64.convert_i32_s (call $rev (i32.const 0) (i32.const 4)
+                        (f64.const 3) (f64.const 4)))
+                    (f64.const 7)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            engine.spawn_named("r");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("r"), Some((0.0, 0.0, 7.0)), "unknown vehicle: 0, 0");
+        },
+    );
+}
+
+#[test]
 fn guest_selection_and_speed_imports_wired() {
     with_each_runtime(
         r#"(module
