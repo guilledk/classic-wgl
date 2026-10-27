@@ -722,6 +722,20 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
   chassis tilt when the hull sheet warps tilt), turned into the layer's own
   yaw (`tilt_for_yaw`), so a carried box leans exactly as far as its
   carrier.  Wheels and turrets do not ride the tilt.
+- **Flat tilt warp** (`layers::flat_tilt_warp`): a riding layer with **no**
+  tilt axes (the mule's robot arm, baked level to save sheet pages) still
+  leans with the hull when its sheet can warp (`dir_interp`, every sheet an
+  anchor-relative depth companion): its level frame is warped by the full
+  residual from level to the hull's drawn tilt (`pick_tilt` with no axes,
+  ±`TILT_WARP_MAX_DEG`), on the same `sheet.frag#INTERP` path: both
+  direction neighbours, normals rotated, the hole fallback.  There is no
+  third source (no other level to take one from), so surface a lean turns
+  into view that the level frame never saw falls back to the hole fill.
+  Opt out per layer with `tilt_warp: false` (it then turns with the
+  heading only, as before #187).  Against the mule's 3 × 3 ±20° baked lift
+  as truth (padtest, the lift forced flat): IoU 0.71–0.82 / 19 dB at ±20°
+  and 0.84–0.92 / 22–23 dB at ±10°, against 0.15–0.48 / 13–14 dB and
+  0.36–0.67 / 13–15 dB for the unwarped level frame.
 - **Layer placement**: a layer's chassis offset is rotated by the full body
   tilt about the body's ground point (`rot_pitch · rot_roll · pos`, then
   the heading), exactly as `vehicle_socket_frame` does. A layer origin and

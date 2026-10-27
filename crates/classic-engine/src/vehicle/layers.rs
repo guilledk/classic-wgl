@@ -48,6 +48,25 @@ pub(crate) struct LayerTilt {
     pub(crate) interp: bool,
 }
 
+/// Whether riding layer `l` (no `pitch` / `roll` axes), drawn from sheet
+/// `table`, leans with the hull by warping its level frame: the "flat
+/// tilt warp".  On when the sheet can warp (`dir_interp`, every sheet an
+/// anchor-relative depth companion: the warp lifts each texel to 3-D from
+/// it) unless the def opts out (`tilt_warp: false`).  The level frame is
+/// then the only tilt source, warped by the full residual (to ±
+/// `TILT_WARP_MAX_DEG` a side): the direction blend's two neighbours as
+/// usual, with the hole fallback, and no third source (there is no other
+/// level to take one from), so surface a lean turns into view that the
+/// level frame never saw stays a hole filled by the fallback.
+pub(crate) fn flat_tilt_warp(l: &VehicleLayerDef, table: &FrameTable) -> bool {
+    use classic_core::types::DepthMode;
+    l.tilt_warp
+        && l.pitch.is_none()
+        && l.roll.is_none()
+        && table.dir_interp
+        && table.sheets.iter().all(|s| s.depth.is_some() && s.depth_mode == DepthMode::Anchor)
+}
+
 /// A layer's pose in the vehicle frame: position (metres, `x` forward, `y`
 /// left, `z` up) and yaw relative to the hull (tile radians).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -395,6 +414,11 @@ impl Engine {
         // Whether a layer's sheet warps its tilt (`tilt_interp`).
         let tilt_interp =
             |l: &VehicleLayerDef| self.frame_tables.get(&l.texture).is_some_and(|t| t.tilt_interp);
+        // Whether a riding layer with no tilt axes warps its level frame to
+        // the hull's tilt ([`flat_tilt_warp`]).
+        let flat_warp = |l: &VehicleLayerDef| {
+            self.frame_tables.get(&l.texture).is_some_and(|t| flat_tilt_warp(l, t))
+        };
         // The hull's drawn tilt: its baked level angles (`0` on an axis it
         // lacks), or the exact chassis tilt when its sheet warps tilt.  What a
         // layer riding it (cargo, a tool) leans by.
@@ -461,7 +485,7 @@ impl Engine {
                     }
                 }
                 LayerKind::Tool | LayerKind::Legs | LayerKind::Cargo | LayerKind::Lift => {
-                    let interp = tilt_interp(l);
+                    let interp = tilt_interp(l) || flat_warp(l);
                     if l.pitch.is_some() || l.roll.is_some() || interp {
                         let (p, r) = tilt_for_yaw(hull_tilt.0, hull_tilt.1, pose.yaw);
                         let pick = pick_tilt(l.pitch, l.roll, layer_heading, p, r, interp);

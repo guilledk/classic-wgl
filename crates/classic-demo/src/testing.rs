@@ -77,6 +77,19 @@ pub enum TestAction {
     /// search resolves.
     #[serde(rename = "vehicleGotoPose")]
     VehicleGotoPose { name: String, x: f32, y: f32, heading: f32 },
+    /// Play a clip on a vehicle layer (`Engine::vehicle_play`; name exact,
+    /// else the bare part of an `ns::name`): `speed` multiplies its fps
+    /// (negative plays backward), `repeat` 0 loops, n holds the end.
+    #[serde(rename = "vehiclePlay")]
+    VehiclePlay {
+        name: String,
+        layer: String,
+        clip: String,
+        #[serde(default = "default_one")]
+        speed: f32,
+        #[serde(default)]
+        repeat: i32,
+    },
     #[serde(rename = "keyPress")]
     KeyPress { key: String, pressed: bool },
     #[serde(rename = "wheel")]
@@ -134,6 +147,10 @@ pub struct SpawnVehicles {
 
 fn default_cols() -> u32 {
     16
+}
+
+fn default_one() -> f32 {
+    1.0
 }
 
 fn default_spacing() -> f32 {
@@ -436,6 +453,15 @@ fn run_frame(
                             "  [clickEntity] '{name}' has no screen point (named: {})",
                             engine.names.contains_key(&name)
                         ),
+                    }
+                }
+                TestAction::VehiclePlay { name, layer, clip, speed, repeat } => {
+                    let name = resolve_scenario_name(engine, name);
+                    if !engine.vehicle_play(&name, layer, clip, *speed, *repeat) {
+                        classic_core::cl_info!(
+                            Chan::Test,
+                            "  [vehiclePlay] {name}: no layer {layer} clip {clip}"
+                        );
                     }
                 }
                 TestAction::VehicleGotoPose { name, x, y, heading } => {
