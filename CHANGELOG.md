@@ -252,6 +252,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Changed
 
+- Pose routes manoeuvre tighter.  The planner turns at the follower's
+  own radius (`speed / turn_rate`, was 1.3× it), which the follower now
+  holds by pursuing one radius ahead (was 1.5); it eases into a gear
+  change over 0.75 tile to half speed (was 1.5 tiles, to 35%).  Costs are
+  in time: a backward tile costs `1.5 · speed / reverse_speed` (was a flat
+  2), a gear change 1.5 tiles (was 3).  The def tunes both new knobs:
+  `turn_radius_m` (a wider planning radius; never under the follower's)
+  and `gear_change_s` (a stand at each gear change, default 0), also as
+  scene `VehicleOverrides`.  In `padtest` with the mule reversing at its
+  forward speed, lining up for the ramp box takes 16.0 s (23.7 s) and for
+  the slot 2 box 17.2 s (17.5 s) (#183).
 - Owned vehicle blocks no longer cost a grid per request: the shared
   vehicle snapshot leaves owned blocks out and each vehicle query carries
   the rects other vehicles own (`VehiclePathQuery::closed`), which the

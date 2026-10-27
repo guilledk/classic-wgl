@@ -11,7 +11,7 @@ use crate::Engine;
 use super::kinematics::{dir_entry, dir_to_heading, pitch_index, search_footprint, straight_steer};
 use super::{
     PreviewProbe, PreviewProbeState, VehicleGotoPoll, VehicleGotoSubmit, VehicleWrite, JUMP_COST,
-    POSE_REVERSE_COST, POSE_TURN_MARGIN,
+    POSE_GEAR_COST, POSE_REVERSE_PENALTY,
 };
 
 impl Engine {
@@ -32,6 +32,7 @@ impl Engine {
             v.path_idx = 0;
             v.path_reverse.clear();
             v.goal_heading = None;
+            v.gear_wait = 0.0;
             v.steer_index = straight_steer(v.steer_levels);
             v.steer = 0.0;
             v.reversing = false;
@@ -116,7 +117,7 @@ impl Engine {
     /// Drive a vehicle to tile point `(x, y)` arriving facing tile heading
     /// `heading_deg` (`0` = East, `90` = South).  The route (the
     /// `pathfinder` pose search) turns at the vehicle's turning radius
-    /// (`speed / turn_rate`, with a margin) and, when it can reverse, backs
+    /// (`speed / turn_rate`, or the def's wider `turn_radius_m`) and, when it can reverse, backs
     /// up where a forward arc has no room: a three-point or K-turn.  Poll
     /// with [`Engine::vehicle_goto_poll`]; the follower drives each forward
     /// and backward run in turn, steering, and stops at the point (a
@@ -156,15 +157,19 @@ impl Engine {
                 return VehicleGotoSubmit::NoVehicle;
             };
             // The pose goal: turning at the follower's own radius (its turn
-            // rate at speed), with a margin for the steering lag.
+            // rate at speed; the follower steers onto the arcs, see
+            // `POSE_LOOKAHEAD`), or the def's wider `turn_radius_m`.  Costs
+            // are in time: a backward tile at the reverse speed (times a
+            // penalty), a gear change as its stop and pull-away.
             let pose = pose.map(|(x, y, heading)| PoseGoal {
                 x,
                 y,
                 heading,
                 start_heading: v.heading,
-                turn_radius: (POSE_TURN_MARGIN * v.speed / v.turn_rate.max(1e-3)).max(1.0),
+                turn_radius: pose_turn_radius(&v),
                 reverse: v.reverse_speed > 0.0,
-                reverse_cost: POSE_REVERSE_COST,
+                reverse_cost: POSE_REVERSE_PENALTY * v.speed / v.reverse_speed.max(1e-3),
+                gear_cost: POSE_GEAR_COST + v.gear_change_s * v.speed,
             });
             // Reject new paths while airborne: the vehicle keeps its current
             // trajectory until its wheels touch down again (issue #40).
@@ -259,6 +264,7 @@ impl Engine {
                         v.path = path.clone();
                         v.path_idx = if v.path.len() > 1 { 1 } else { 0 };
                         v.goal_heading = goal_heading;
+                        v.gear_wait = 0.0;
                         v.path_reverse = if goal_heading.is_some() { gears } else { Vec::new() };
                         if let Some(h) = goal_heading {
                             classic_core::cl_info!(
@@ -551,4 +557,11 @@ impl Engine {
         let Ok(v) = self.world.get::<&IsoVehicle>(ve) else { return -1.0 };
         v.path_footprint.iter().map(|(dx, dy)| dx.abs().max(dy.abs())).max().unwrap_or(0) as f64
     }
+}
+
+/// The radius (tiles) a pose route plans `v`'s arcs at: the follower's own
+/// (`speed / turn_rate`), or the def's `turn_radius_m` when wider.
+pub(super) fn pose_turn_radius(v: &IsoVehicle) -> f32 {
+    let own = v.speed / v.turn_rate.max(1e-3);
+    v.turn_radius.map_or(own, |r| r.max(own)).max(1.0)
 }

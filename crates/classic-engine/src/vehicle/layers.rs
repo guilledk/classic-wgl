@@ -317,6 +317,8 @@ impl Engine {
             steer_rate: def.steer_rate_deg_per_sec.to_radians(),
             reverse_speed: def.reverse_speed,
             turn_cost: def.turn_cost,
+            turn_radius: def.turn_radius_m.map(|m| m / classic_core::tilemap::TILE_M),
+            gear_change_s: def.gear_change_s.max(0.0),
             dust_effect: def.dust_effect.clone(),
             touchdown_effect: def.touchdown_effect.clone(),
             def_name: def_name.to_string(),

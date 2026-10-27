@@ -15,7 +15,7 @@ use super::kinematics::{
 };
 use super::{
     TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DUST_CONTACT_M, GOAL_TOLERANCE,
-    MOON_GRAVITY, PIVOT_TURN_ENTER, WHEEL_SUFFIXES,
+    MOON_GRAVITY, PIVOT_TURN_ENTER, POSE_EASE_MIN, POSE_EASE_TILES, POSE_LOOKAHEAD, WHEEL_SUFFIXES,
 };
 
 impl Engine {
@@ -307,6 +307,8 @@ impl Engine {
             steer_rate: def.steer_rate_deg_per_sec.to_radians(),
             reverse_speed: def.reverse_speed,
             turn_cost: def.turn_cost,
+            turn_radius: def.turn_radius_m.map(|m| m / classic_core::tilemap::TILE_M),
+            gear_change_s: def.gear_change_s.max(0.0),
             dust_effect: def.dust_effect.clone(),
             touchdown_effect: def.touchdown_effect.clone(),
             ..Default::default()
@@ -412,7 +414,10 @@ impl Engine {
                 }
                 let target = (v.path[end][0] as f32 + 0.5, v.path[end][1] as f32 + 0.5);
                 let to_end = ((target.0 - x).powi(2) + (target.1 - y).powi(2)).sqrt();
-                if to_end <= GOAL_TOLERANCE {
+                if v.gear_wait > 0.0 {
+                    // standing at a gear change (the def's `gear_change_s`)
+                    v.gear_wait = (v.gear_wait - delta).max(0.0);
+                } else if to_end <= GOAL_TOLERANCE {
                     if end + 1 == n {
                         // Arrived: a tracked vehicle turns in place onto the
                         // goal heading; anything else arrives on it already.
@@ -433,11 +438,14 @@ impl Engine {
                     } else {
                         // A cusp: stop here this step and change gear.
                         v.path_idx = end + 1;
+                        v.gear_wait = v.gear_change_s;
                     }
                     v.reversing = false;
                 } else {
                     let rate = if back { v.reverse_speed } else { v.speed };
-                    let turn_radius = rate / v.turn_rate.max(1e-3);
+                    // the radius the route was planned at (in either gear:
+                    // the arcs are drawn at it)
+                    let turn_radius = super::control::pose_turn_radius(&v);
                     // On the last run, pursue along the goal heading past the
                     // goal (a virtual waypoint beyond it), so the vehicle lines
                     // up on the heading as it arrives instead of aiming at the
@@ -454,7 +462,7 @@ impl Engine {
                         ]);
                     }
                     let reach = if last_run { turn_radius * 1.5 } else { to_end };
-                    let lookahead_dist = (turn_radius * 1.5).min(reach).max(0.75);
+                    let lookahead_dist = (turn_radius * POSE_LOOKAHEAD).min(reach).max(0.75);
                     let (gx, gy, next_idx) = lookahead(&run, idx, x, y, lookahead_dist);
                     v.path_idx = next_idx.clamp(idx, end);
                     let desired = (gy - y).atan2(gx - x);
@@ -472,7 +480,7 @@ impl Engine {
                         v.steer = 0.0;
                     }
                     // ease into a cusp or the goal, so the stop is not a jolt
-                    let ease = (to_end / 1.5).clamp(0.35, 1.0);
+                    let ease = (to_end / POSE_EASE_TILES).clamp(POSE_EASE_MIN, 1.0);
                     let drive_speed = if pivoting { 0.0 } else { rate * ease };
                     let dir: f32 = if back { -1.0 } else { 1.0 };
                     let step = drive_speed * delta;

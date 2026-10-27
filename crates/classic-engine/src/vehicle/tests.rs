@@ -1905,6 +1905,80 @@ fn a_narrow_lane_mouth_takes_a_k_turn_clear_of_the_vehicle_blocks() {
     assert!(dh <= 11.25 && dp <= 0.01, "arrives facing West: {dh:.1} deg, {dp} tiles");
 }
 
+/// The backward and forward tiles of the rover's installed pose route.
+fn gear_tiles(engine: &Engine) -> (f32, f32) {
+    let v = engine.world.get::<&IsoVehicle>(engine.names["rover"]).unwrap();
+    let (mut back, mut fwd) = (0.0, 0.0);
+    for (i, w) in v.path.windows(2).enumerate() {
+        let d = ((w[1][0] - w[0][0]) as f32).hypot((w[1][1] - w[0][1]) as f32);
+        if v.path_reverse[i + 1] {
+            back += d;
+        } else {
+            fwd += d;
+        }
+    }
+    (back, fwd)
+}
+
+#[test]
+fn backing_up_is_costed_at_the_reverse_speed() {
+    // A goal 8 tiles straight behind, facing the same way: a vehicle that
+    // reverses as fast as it drives backs straight there; one that reverses
+    // at a quarter of that drives most of the way round instead.
+    let set_reverse = |engine: &mut Engine, ratio: f32| {
+        let ve = engine.names["rover"];
+        let mut v = engine.world.get::<&mut IsoVehicle>(ve).unwrap();
+        v.reverse_speed = v.speed * ratio;
+    };
+    let mut engine = engine_with_rover();
+    set_reverse(&mut engine, 1.0);
+    assert!(matches!(goto_pose_sync(&mut engine, 4.5, 24.5, 0.0), VehicleGotoPoll::Accepted(_)));
+    let (back, fwd) = gear_tiles(&engine);
+    assert!(back >= 7.0 && fwd < 1.0, "backs straight there: {back} back, {fwd} forward");
+    let mut engine = engine_with_rover();
+    set_reverse(&mut engine, 0.25);
+    assert!(matches!(goto_pose_sync(&mut engine, 4.5, 24.5, 0.0), VehicleGotoPoll::Accepted(_)));
+    let (slow_back, slow_fwd) = gear_tiles(&engine);
+    assert!(slow_back < back && slow_fwd > slow_back, "{slow_back} back, {slow_fwd} forward");
+}
+
+#[test]
+fn a_gear_change_stands_for_the_defs_gear_change_s_and_the_radius_never_narrows() {
+    // the narrow lane's K-turn, with and without a half-second gear change
+    let run = |gear_change_s: f32| {
+        let mut engine = engine_with_rover();
+        engine.set_vehicle_block(1, &[[0, 0, 47, 16], [0, 32, 47, 47]]);
+        let ve = engine.names["rover"];
+        engine.world.get::<&mut IsoVehicle>(ve).unwrap().gear_change_s = gear_change_s;
+        assert!(matches!(
+            goto_pose_sync(&mut engine, 32.5, 24.5, 180.0),
+            VehicleGotoPoll::Accepted(_)
+        ));
+        let cusps = {
+            let v = engine.world.get::<&IsoVehicle>(ve).unwrap();
+            v.path_reverse.windows(2).skip(1).filter(|w| w[0] != w[1]).count() as u32
+        };
+        let (_, _, frames) = drive_route(&mut engine);
+        let (dh, dp) = pose_error(&engine, 32.5, 24.5, 180.0);
+        assert!(dh <= 11.25 && dp <= 0.01, "arrives: {dh:.1} deg, {dp} tiles");
+        (cusps, frames)
+    };
+    let (cusps, quick) = run(0.0);
+    let (_, paused) = run(0.5);
+    assert!(cusps >= 1, "a K-turn");
+    // 0.5 s at 30 frames a second, per gear change
+    assert!(paused >= quick + 15 * cusps - 1, "{quick} -> {paused} frames over {cusps} cusps");
+
+    // the def's radius widens the planned arcs, never narrows them
+    let engine = engine_with_rover();
+    let mut v = engine.world.get::<&mut IsoVehicle>(engine.names["rover"]).unwrap();
+    let own = v.speed / v.turn_rate;
+    v.turn_radius = Some(own * 2.0);
+    assert!((super::control::pose_turn_radius(&v) - own * 2.0).abs() < 1e-4);
+    v.turn_radius = Some(own * 0.5);
+    assert!((super::control::pose_turn_radius(&v) - own.max(1.0)).abs() < 1e-4);
+}
+
 #[test]
 fn an_unreachable_pose_is_refused() {
     let mut engine = engine_with_rover();

@@ -865,6 +865,17 @@ pub struct IsoVehicle {
     /// it (`vehicle_goto_pose`).
     #[serde(skip)]
     pub goal_heading: Option<f32>,
+    /// A pose route's planning radius (tiles), from the def's
+    /// `turn_radius_m` (`None`: the follower's own at plan time).
+    #[serde(skip)]
+    pub turn_radius: Option<f32>,
+    /// Seconds a pose route stands at a gear change (the def's
+    /// `gear_change_s`).
+    #[serde(skip)]
+    pub gear_change_s: f32,
+    /// Seconds left standing at the current gear change.
+    #[serde(skip)]
+    pub gear_wait: f32,
 }
 
 /// Runtime state of one v2 vehicle layer (`classic_core::vehicle_def`).
@@ -974,6 +985,9 @@ impl Default for IsoVehicle {
             reverse_to: None,
             path_reverse: Vec::new(),
             goal_heading: None,
+            turn_radius: None,
+            gear_change_s: 0.0,
+            gear_wait: 0.0,
         }
     }
 }

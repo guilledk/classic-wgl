@@ -1426,6 +1426,7 @@ mod tests {
             turn_radius: 1.0,
             reverse: true,
             reverse_cost: 2.0,
+            gear_cost: 3.0,
         };
         let pose = |st: &mut PathfinderState, closed: &[[i32; 4]]| {
             st.find_vehicle_pose((1, 3), &goal, &one_cell(), pitch, roll, wb, tr, 0.0, closed)

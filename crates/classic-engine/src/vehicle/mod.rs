@@ -79,11 +79,22 @@ const AIRBORNE_PITCH: f32 = -0.26;
 /// Distance from the final waypoint (in tiles) at which the pure-pursuit
 /// follower considers the goal reached and stops.
 const GOAL_TOLERANCE: f32 = 0.5;
-/// A pose route's turning radius over the follower's own (`speed /
-/// turn_rate`): room for the steering lag and the pursuit's corner cutting.
-const POSE_TURN_MARGIN: f32 = 1.3;
-/// A pose route's cost multiplier for a backward tile.
-const POSE_REVERSE_COST: f32 = 2.0;
+/// A pose route's cost multiplier for a backward tile, on top of the time
+/// it takes (`speed / reverse_speed`): backing up is only taken where it
+/// saves half as much again of the forward drive.
+const POSE_REVERSE_PENALTY: f32 = 1.5;
+/// A pose route's cost of a gear change (tiles of forward driving): the
+/// easing into the stop and out of it, plus the def's `gear_change_s` at
+/// speed.
+const POSE_GEAR_COST: f32 = 1.5;
+/// The distance (tiles) a pose route's follower eases into a gear change
+/// or the goal over, and the fraction of its speed it slows to.
+const POSE_EASE_TILES: f32 = 0.75;
+const POSE_EASE_MIN: f32 = 0.5;
+/// The pose follower's look-ahead, in turning radii (the plain follower's
+/// is 1.5): close enough that it holds the planned arcs, which are no
+/// wider than it can turn.
+const POSE_LOOKAHEAD: f32 = 1.0;
 
 /// Cost multiplier for a downward "jump" step in A* (`>= 1.0`).  A mild
 /// penalty makes the vehicle prefer flat routes but take a jump when it
