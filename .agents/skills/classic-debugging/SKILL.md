@@ -592,6 +592,17 @@ with `classic_gfx::perf::phase("name")`, a counter with
   separate on run.
 - **Discard warmup.**  Skip the first ~120 frames, and the first run after
   a build (cold caches, clocks ramping).  Wait for an idle machine.
+- **Profile a scripted run with threaded workers.**  `CLASSIC_TEST` (and
+  `CLASSIC_GOLDEN`) run the pathfinder and the guest worker inline and join
+  them every frame, so a scenario's frames include every search.  Add
+  `CLASSIC_WORKERS=threaded` to keep them on their threads as a player has
+  them; a headless run with `CLASSIC_FIXED_DT` then sleeps each frame up to
+  that step, so the workers get the wall time a player's frame gives them
+  (a 400² terrain generation is otherwise still running when the script
+  wants the map).  The `path` log channel prints each vehicle search's own
+  time on the native worker (`vehicle pose search: 14.6 ms, found`).  To
+  find a stall, look for the frame whose `update` phase (the guests)
+  spikes: an engine call is cheap, the guest's own work is not.
 
 ### Bench sections and `cargo xtask bench`
 

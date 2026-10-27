@@ -17,11 +17,23 @@
 //! Costs are the primitive's length (reversing at `reverse_cost` times),
 //! plus `turn_cost` per 45° of heading change and a fixed cost per gear
 //! change, so the vehicle backs up only when a forward route is much longer
-//! or absent.  The heuristic is the straight-line distance, which no
-//! primitive undercuts (a primitive costs at least its displacement).
+//! or absent.  The heuristic is the larger of the straight-line distance
+//! and the goal's distance field (an 8-connected Dijkstra over the open
+//! cells of the window, scaled by `cos 22.5°` so that it never exceeds the
+//! straight line between two cells): no primitive undercuts either (a
+//! primitive costs at least its displacement, and the body's centre only
+//! crosses cells the body covers, which are open).  The field steers the
+//! search round walls instead of into them, and a goal cell the start
+//! cannot reach (an infinite field there) refuses the route at once.  The
+//! heuristic is weighted by [`HEURISTIC_WEIGHT`] (a bounded-suboptimal
+//! search: a route within that factor of the cheapest).
 //!
 //! The search runs in a window round the start and the goal (the cells a
-//! manoeuvre needs), so its state count stays small on a big map.  The route
+//! manoeuvre needs), so its state count stays small on a big map; a window
+//! the field finds no way across doubles until it does (a detour round a
+//! long wall) or covers the map.  The
+//! primitives depend only on the body, the turning radius and the flags:
+//! a [`PrimCache`] keeps the last set between searches.  The route
 //! comes back as waypoints whose `y` carries [`REVERSE_FLAG`] on a segment
 //! driven backward ([`pack_waypoint`] / [`unpack_waypoint`]).
 
@@ -37,6 +49,12 @@ const HEADINGS: usize = 16;
 const STEP: f32 = core::f32::consts::TAU / HEADINGS as f32;
 /// Cost of a gear change (tiles of driving).
 const SWITCH_COST: f32 = 3.0;
+/// The weight on the heuristic: a route at most this much costlier than
+/// the cheapest, found without expanding the band of near-equal states a
+/// long drive off the lattice's headings leaves (the turn costs the
+/// heuristic does not see).  A 140 × 120 tile drive on open ground takes a
+/// third of the time.
+const HEURISTIC_WEIGHT: f32 = 1.1;
 /// Sample spacing (tiles) along a primitive for its swept body.
 const SAMPLE: f32 = 0.1;
 
@@ -92,6 +110,80 @@ struct Prim {
     /// Swept body cells, relative to the start cell.
     cells: Spans,
     cost: f32,
+}
+
+/// The last primitive set built (they cost a few milliseconds to sweep),
+/// keyed by everything they depend on.
+#[derive(Default)]
+pub struct PrimCache {
+    key: Option<[u32; 7]>,
+    prims: Vec<Vec<Prim>>,
+}
+
+impl PrimCache {
+    fn get(
+        &mut self,
+        b: &BodyRect,
+        r: f32,
+        reverse: bool,
+        pivot: bool,
+        turn_step: f32,
+    ) -> &[Vec<Prim>] {
+        let key = [
+            b.rear.to_bits(),
+            b.front.to_bits(),
+            b.right.to_bits(),
+            b.left.to_bits(),
+            r.to_bits(),
+            turn_step.to_bits(),
+            reverse as u32 | (pivot as u32) << 1,
+        ];
+        if self.key != Some(key) {
+            self.prims = primitives(b, r, reverse, pivot, turn_step);
+            self.key = Some(key);
+        }
+        &self.prims
+    }
+}
+
+/// The goal's distance field over the window `[x0, x1] × [y0, y1]`: the
+/// 8-connected shortest distance (tiles) from each cell `open` passes to
+/// `to` (`f32::MAX` where it cannot reach), indexed
+/// `(y - y0) * w + (x - x0)`.
+fn goal_field(
+    open_cell: impl Fn(i32, i32) -> bool,
+    win: (i32, i32, i32, i32),
+    to: GridCell,
+) -> Vec<f32> {
+    let (x0, y0, x1, y1) = win;
+    let w = (x1 - x0 + 1) as usize;
+    let mut d = vec![f32::MAX; w * (y1 - y0 + 1) as usize];
+    if !open_cell(to.0, to.1) {
+        return d;
+    }
+    let idx = |x: i32, y: i32| (y - y0) as usize * w + (x - x0) as usize;
+    d[idx(to.0, to.1)] = 0.0;
+    let mut open = BinaryHeap::new();
+    open.push(Key { cost: 0.0, state: idx(to.0, to.1) as u32 });
+    while let Some(Key { cost, state }) = open.pop() {
+        if cost > d[state as usize] {
+            continue;
+        }
+        let (x, y) = ((state as usize % w) as i32 + x0, (state as usize / w) as i32 + y0);
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx < x0 || ny < y0 || nx > x1 || ny > y1 || !open_cell(nx, ny) {
+                continue;
+            }
+            let nd = cost + if dx != 0 && dy != 0 { core::f32::consts::SQRT_2 } else { 1.0 };
+            let n = idx(nx, ny);
+            if nd < d[n] {
+                d[n] = nd;
+                open.push(Key { cost: nd, state: n as u32 });
+            }
+        }
+    }
+    d
 }
 
 /// Row runs of a cell set.
@@ -300,6 +392,7 @@ impl Ord for Key {
 
 /// Search a pose route on `walkable` (`1` open) for a vehicle at cell `from`
 /// (see the module docs).  `turn_cost` is per 45° of heading change.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn find_pose(
     walkable: &[i32],
@@ -310,6 +403,23 @@ pub(crate) fn find_pose(
     body: &BodyRect,
     pivot: bool,
     turn_cost: f32,
+) -> Option<Vec<GridCell>> {
+    let mut cache = PrimCache::default();
+    find_pose_cached(walkable, size_x, size_y, from, goal, body, pivot, turn_cost, &mut cache)
+}
+
+/// [`find_pose`] with the primitives kept in `cache` between searches.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn find_pose_cached(
+    walkable: &[i32],
+    size_x: i32,
+    size_y: i32,
+    from: GridCell,
+    goal: &PoseGoal,
+    body: &BodyRect,
+    pivot: bool,
+    turn_cost: f32,
+    cache: &mut PrimCache,
 ) -> Option<Vec<GridCell>> {
     if size_x <= 0 || size_y <= 0 || !goal.x.is_finite() || !goal.y.is_finite() {
         return None;
@@ -326,19 +436,47 @@ pub(crate) fn find_pose(
     }
     let r = goal.turn_radius.max(0.5);
     let reverse_cost = goal.reverse_cost.max(1.0);
-    let prims = primitives(body, r, goal.reverse, pivot, turn_cost.max(0.0) * 0.5);
+    let prims = cache.get(body, r, goal.reverse, pivot, turn_cost.max(0.0) * 0.5);
     let blocked = Blocked::new(walkable, size_x, size_y);
 
-    // the window: start and goal, with room to manoeuvre round them
+    // the cells under the body where it stands (relaxed for the first move)
+    let mut start_body = BTreeSet::new();
+    stamp(&mut start_body, body, 0.0, 0.0, k0 as f32 * STEP);
+    let one = vec![(0, 0, 0)];
+    let clear_cell = |x: i32, y: i32| blocked.clear(x, y, &one);
+    let (sy0, sy1) = (
+        start_body.first().map_or(0, |c| c.0) + from.1,
+        start_body.last().map_or(0, |c| c.0) + from.1,
+    );
+    let under_start =
+        |x: i32, y: i32| (sy0..=sy1).contains(&y) && start_body.contains(&(y - from.1, x - from.0));
+
+    // the window: start and goal, with room to manoeuvre round them; while
+    // the goal's distance field (see the module docs; the cells under the
+    // body where it stands count as open, as for the first move) does not
+    // reach the start, the window doubles, up to the whole map, and a goal
+    // the start cannot reach on the map is refused without a search
     let reach = libm::fabsf(body.rear)
         .max(libm::fabsf(body.front))
         .max(libm::fabsf(body.left))
         .max(libm::fabsf(body.right));
-    let margin = libm::ceilf(8.0 + 3.0 * r + reach) as i32;
-    let wx0 = (from.0.min(to.0) - margin).max(0);
-    let wy0 = (from.1.min(to.1) - margin).max(0);
-    let wx1 = (from.0.max(to.0) + margin).min(size_x - 1);
-    let wy1 = (from.1.max(to.1) + margin).min(size_y - 1);
+    let mut margin = libm::ceilf(8.0 + 3.0 * r + reach) as i32;
+    let (wx0, wy0, wx1, wy1, field) = loop {
+        let wx0 = (from.0.min(to.0) - margin).max(0);
+        let wy0 = (from.1.min(to.1) - margin).max(0);
+        let wx1 = (from.0.max(to.0) + margin).min(size_x - 1);
+        let wy1 = (from.1.max(to.1) + margin).min(size_y - 1);
+        let field =
+            goal_field(|x, y| clear_cell(x, y) || under_start(x, y), (wx0, wy0, wx1, wy1), to);
+        let w = (wx1 - wx0 + 1) as usize;
+        if field[(from.1 - wy0) as usize * w + (from.0 - wx0) as usize] < f32::MAX {
+            break (wx0, wy0, wx1, wy1, field);
+        }
+        if wx0 == 0 && wy0 == 0 && wx1 == size_x - 1 && wy1 == size_y - 1 {
+            return None;
+        }
+        margin *= 2;
+    };
     let (ww, wh) = ((wx1 - wx0 + 1) as usize, (wy1 - wy0 + 1) as usize);
     let total = ww * wh * HEADINGS * 2;
     let state = |c: GridCell, k: usize, back: bool| {
@@ -352,13 +490,11 @@ pub(crate) fn find_pose(
         let c = s / 2 / HEADINGS;
         (((c % ww) as i32 + wx0, (c / ww) as i32 + wy0), k, back)
     };
-
-    // the cells under the body where it stands (relaxed for the first move)
-    let mut start_body = BTreeSet::new();
-    stamp(&mut start_body, body, 0.0, 0.0, k0 as f32 * STEP);
-    let clear_cell = |x: i32, y: i32| blocked.clear(x, y, &vec![(0, 0, 0)]);
-
-    let h = |c: GridCell| libm::hypotf((c.0 - to.0) as f32, (c.1 - to.1) as f32);
+    let fi = |c: GridCell| (c.1 - wy0) as usize * ww + (c.0 - wx0) as usize;
+    let cos_step = libm::cosf(STEP);
+    let h = |c: GridCell| {
+        libm::hypotf((c.0 - to.0) as f32, (c.1 - to.1) as f32).max(field[fi(c)] * cos_step)
+    };
     let mut g = vec![f32::MAX; total];
     let mut came: Vec<(u32, u16)> = vec![(u32::MAX, 0); total];
     let start = state(from, k0, false);
@@ -406,7 +542,7 @@ pub(crate) fn find_pose(
         let at_start = s == start;
         for (pi, prim) in prims[k].iter().enumerate() {
             let e = (c.0 + prim.end.0, c.1 + prim.end.1);
-            if e.0 < wx0 || e.1 < wy0 || e.0 > wx1 || e.1 > wy1 {
+            if e.0 < wx0 || e.1 < wy0 || e.0 > wx1 || e.1 > wy1 || field[fi(e)] == f32::MAX {
                 continue;
             }
             let fits = if at_start {
@@ -432,7 +568,7 @@ pub(crate) fn find_pose(
             if ng < g[n as usize] {
                 g[n as usize] = ng;
                 came[n as usize] = (s, pi as u16);
-                open.push(Key { cost: ng + h(e), state: n });
+                open.push(Key { cost: ng + HEURISTIC_WEIGHT * h(e), state: n });
             }
         }
     }
@@ -583,6 +719,25 @@ mod tests {
     }
 
     #[test]
+    fn a_wall_with_a_gap_is_driven_round_through_the_gap() {
+        // a wall at x = 40 with a 14-cell gap at its south end: the field
+        // leads the search to the gap, and the route crosses the wall there
+        let n = 80;
+        let mut g = vec![1; (n * n) as usize];
+        for y in 0..60 {
+            g[(y * n + 40) as usize] = 0;
+        }
+        let p =
+            find_pose(&g, n, n, (25, 20), &goal(55.5, 20.5, 0.0, 0.0, true), &mule(), false, 0.4)
+                .expect("round the wall");
+        let cross = p.windows(2).find_map(|w| {
+            let ((a, _), (b, _)) = (unpack_waypoint(w[0]), unpack_waypoint(w[1]));
+            (a.0 < 40 && b.0 >= 40).then_some(b.1)
+        });
+        assert!(cross.is_some_and(|y| y >= 60), "crosses in the gap: {p:?}");
+    }
+
+    #[test]
     #[ignore = "perf check: prints timings"]
     fn perf_pose_search() {
         use std::time::Instant;
@@ -604,5 +759,74 @@ mod tests {
             t.elapsed(),
             p.map_or(0, |p| p.len())
         );
+    }
+
+    #[test]
+    #[ignore = "perf check: prints timings"]
+    fn perf_pose_breakdown() {
+        use std::time::Instant;
+        let t = Instant::now();
+        let _ = primitives(&mule(), 2.6, true, false, 0.2);
+        std::println!("primitives: {:?}", t.elapsed());
+        let n = 400;
+        let g = vec![1; (n * n) as usize];
+        let t = Instant::now();
+        let p = find_pose(
+            &g,
+            n,
+            n,
+            (60, 60),
+            &goal(200.5, 180.5, 180.0, 0.0, true),
+            &mule(),
+            false,
+            0.4,
+        );
+        std::println!("far 140x120: {:?} ({:?})", t.elapsed(), p.map(|p| p.len()));
+        let mut cache = PrimCache::default();
+        for (name, from, gx, gy, deg) in [
+            ("near 40x25", (100, 100), 140.5, 125.5, 180.0),
+            ("far 140x120", (60, 60), 200.5, 180.5, 180.0),
+        ] {
+            let _ = find_pose_cached(
+                &g,
+                n,
+                n,
+                from,
+                &goal(gx, gy, deg, 0.0, true),
+                &mule(),
+                false,
+                0.4,
+                &mut cache,
+            );
+            let t = Instant::now();
+            let p = find_pose_cached(
+                &g,
+                n,
+                n,
+                from,
+                &goal(gx, gy, deg, 0.0, true),
+                &mule(),
+                false,
+                0.4,
+                &mut cache,
+            );
+            std::println!("cached {name}: {:?} ({:?})", t.elapsed(), p.map(|p| p.len()));
+        }
+        let mut w = g.clone();
+        for y in 0..n {
+            w[(y * n + 200) as usize] = 0;
+        }
+        let t = Instant::now();
+        let p = find_pose(
+            &w,
+            n,
+            n,
+            (170, 200),
+            &goal(230.5, 200.5, 0.0, 0.0, true),
+            &mule(),
+            false,
+            0.4,
+        );
+        std::println!("walled off 60: {:?} ({:?})", t.elapsed(), p.map(|p| p.len()));
     }
 }

@@ -34,6 +34,10 @@ pub struct VehiclePathQuery {
     /// A pose goal: drive to a point facing a heading (`to` unused; the
     /// waypoints carry their gear, `pathfinder::unpack_waypoint`).
     pub pose: Option<PoseGoal>,
+    /// Inclusive tile rects `[x0, y0, x1, y1]` closed on top of the current
+    /// snapshot for this search (the vehicle blocks other vehicles own).  A
+    /// `Fresh` snapshot is built with them already.
+    pub closed: Vec<[i32; 4]>,
 }
 
 /// Which vehicle nav snapshot a vehicle query searches.
@@ -45,6 +49,7 @@ pub enum VehicleSnapshot {
     /// A snapshot built for this query (`None` when there is no terrain to
     /// build one from, which finds no path).  The synchronous engine path uses
     /// this so it searches the live world, exactly like an inline search.
+    /// The query's `closed` rects are not applied (the snapshot has them).
     Fresh(Option<Arc<VehicleNavSnapshot>>),
 }
 
@@ -59,6 +64,34 @@ impl Job for PathJob {
     type Output = Option<Vec<GridCell>>;
 
     fn run(self, state: &mut PathfinderState) -> Self::Output {
+        // the search's own time (native; the web Worker runs pathfinder.wasm)
+        #[cfg(not(target_arch = "wasm32"))]
+        let (t0, kind) = (
+            std::time::Instant::now(),
+            match &self {
+                PathJob::FindVehicle { query: VehiclePathQuery { pose: Some(_), .. }, .. } => {
+                    "vehicle pose"
+                }
+                PathJob::FindVehicle { .. } => "vehicle",
+                PathJob::Find { .. } => "",
+            },
+        );
+        let out = self.run_job(state);
+        #[cfg(not(target_arch = "wasm32"))]
+        if !kind.is_empty() {
+            classic_core::cl_info!(
+                classic_core::instrument::Chan::Path,
+                "{kind} search: {:.1} ms, {}",
+                t0.elapsed().as_secs_f64() * 1e3,
+                if out.is_some() { "found" } else { "no path" }
+            );
+        }
+        out
+    }
+}
+
+impl PathJob {
+    fn run_job(self, state: &mut PathfinderState) -> Option<Vec<GridCell>> {
         match self {
             PathJob::Find { from, to } => state.find(from, to),
             PathJob::FindVehicle { query: q, snapshot: VehicleSnapshot::Current } => {
@@ -72,6 +105,7 @@ impl Job for PathJob {
                         q.wheelbase_m,
                         q.track_m,
                         q.turn_cost,
+                        &q.closed,
                     ),
                     None => state.find_vehicle(
                         q.from,
@@ -84,6 +118,7 @@ impl Job for PathJob {
                         q.safe_fall_m,
                         q.jump_cost,
                         q.turn_cost,
+                        &q.closed,
                     ),
                 }
             }

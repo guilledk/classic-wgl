@@ -355,7 +355,9 @@ impl Engine {
 
         // Determinism barrier: under CLASSIC_TEST, wait for in-flight worker
         // jobs (pathfinding) so frame boundaries are deterministic.
-        if env_config::EnvConfig::get().test_active() {
+        if env_config::EnvConfig::get().test_active()
+            && !env_config::EnvConfig::get().workers_threaded
+        {
             self.join_workers();
         }
 

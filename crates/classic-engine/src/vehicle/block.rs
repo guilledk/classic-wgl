@@ -12,6 +12,12 @@
 //! covers.  A change re-shares the vehicle snapshot with the pathfinder
 //! worker (native and web) and stops every vehicle whose remaining route it
 //! cuts, re-planning that vehicle to the same goal.
+//!
+//! A block with an owner (`set_vehicle_block_owner`) is open to that
+//! vehicle only.  The shared snapshot leaves owned blocks out, and every
+//! vehicle query carries the rects of the blocks *other* vehicles own
+//! (`closed`), which the worker stamps on its per-search walkable grid: no
+//! request copies or re-sends a grid, whoever owns what.
 
 use classic_core::components::IsoVehicle;
 
@@ -76,13 +82,21 @@ impl Engine {
             Some(o) => self.vehicle_block_owners.insert(id, o),
             None => self.vehicle_block_owners.remove(&id),
         };
-        self.replan_cut_vehicle_routes();
+        // an owned block leaves the shared grid (an unowned one joins it)
+        self.vehicle_blocks_changed();
         true
     }
 
-    /// Whether vehicle `name` owns any vehicle block.
-    pub(crate) fn owns_vehicle_block(&self, name: &str) -> bool {
-        self.vehicle_block_owners.values().any(|o| o == name)
+    /// The rects of the vehicle blocks other vehicles than `vehicle` own:
+    /// closed to it on top of the shared grid ([`crate::hooks::BlockView`]).
+    pub(crate) fn closed_vehicle_blocks(&self, vehicle: &str) -> Vec<[i32; 4]> {
+        self.vehicle_block_owners
+            .iter()
+            .filter(|(_, owner)| owner.as_str() != vehicle)
+            .filter_map(|(id, _)| self.vehicle_blocks.get(id))
+            .flatten()
+            .copied()
+            .collect()
     }
 
     /// Remove vehicle block `id`; `false` when there is none.
@@ -96,47 +110,46 @@ impl Engine {
     }
 
     /// Re-share the vehicle snapshot and re-plan the routes the change cut.
+    /// The humanoid nav grid never sees vehicle blocks, so it is left alone.
     fn vehicle_blocks_changed(&mut self) {
-        self.refresh_nav_snapshot();
+        let obstacles = self.compute_nav_obstacles();
+        self.share_vehicle_nav_snapshot(&obstacles);
         self.replan_cut_vehicle_routes();
     }
 
     /// Stop every vehicle whose remaining route (from the waypoint it left)
-    /// is no longer clear on its vehicle blocking grid (the shared one, or an
-    /// owner's with its own blocks open), and submit a fresh search to its
-    /// goal, polled by [`Engine::poll_vehicle_replans`].  An airborne
-    /// vehicle (which takes no goto) just stops.
+    /// is no longer clear on its vehicle blocking grid (the shared one, with
+    /// the blocks other vehicles own closed on top), and submit a fresh
+    /// search to its goal, polled by [`Engine::poll_vehicle_replans`].  An
+    /// airborne vehicle (which takes no goto) just stops.
     fn replan_cut_vehicle_routes(&mut self) {
         let snap = std::sync::Arc::clone(&self.vehicle_nav_snapshot);
         let (sx, sy) = (snap.size_x, snap.size_y);
         if snap.structural.len() != (sx * sy) as usize {
             return;
         }
-        // an owner's view of the grid, built once per owner
-        let obstacles = self.compute_nav_obstacles();
-        let mut owner_grids: std::collections::HashMap<String, Vec<i32>> = Default::default();
-        for owner in self.vehicle_block_owners.values() {
-            if !owner_grids.contains_key(owner) {
-                if let Some(s) = self.build_vehicle_nav_snapshot_for(&obstacles, Some(owner)) {
-                    owner_grids.insert(owner.clone(), s.structural.clone());
-                }
-            }
-        }
-        let names: std::collections::HashMap<hecs::Entity, String> = self
+        // a vehicle's view: the shared grid, copied only when other
+        // vehicles' blocks close more of it
+        let views: std::collections::HashMap<hecs::Entity, Vec<i32>> = self
             .world
             .query::<&IsoVehicle>()
             .iter()
-            .map(|(e, _)| (e, self.debug_name(e)))
+            .filter(|(_, v)| v.path_idx < v.path.len())
+            .filter_map(|(e, _)| {
+                let closed = self.closed_vehicle_blocks(&self.debug_name(e));
+                (!closed.is_empty()).then(|| {
+                    let mut grid = snap.structural.clone();
+                    classic_core::pathfinder::stamp_rects(&mut grid, sx, sy, &closed);
+                    (e, grid)
+                })
+            })
             .collect();
         let cut: Vec<(hecs::Entity, (i32, i32), Option<f32>)> = self
             .world
             .query::<&IsoVehicle>()
             .iter()
             .filter_map(|(e, v)| {
-                let grid = names
-                    .get(&e)
-                    .and_then(|n| owner_grids.get(n))
-                    .map_or(snap.structural.as_slice(), Vec::as_slice);
+                let grid = views.get(&e).map_or(snap.structural.as_slice(), Vec::as_slice);
                 if v.path_idx >= v.path.len() {
                     return None;
                 }

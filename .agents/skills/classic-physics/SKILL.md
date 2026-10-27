@@ -457,9 +457,23 @@ lattice, on the pathfinder worker like any vehicle search (the query's
   once into row spans; the first move ignores the cells under the body
   where it stands.
 - **Cost:** length (backward ×2), `turn_cost` per 45°, 3 tiles per gear
-  change; Euclidean heuristic.  Searched in a window round start and goal
-  (8 + 3·radius + body reach tiles of margin).  Goal: the goal cell at the
-  nearest of the 16 headings.
+  change.  Heuristic: the larger of the straight line and the goal's
+  8-connected distance field over the window's open cells (scaled by
+  `cos 22.5°`, so it never exceeds the straight line between two cells),
+  weighted 1.1 (`HEURISTIC_WEIGHT`: a route within 10% of the cheapest,
+  without expanding the band of near-equal states a long off-lattice drive
+  leaves).  The field steers round walls, prunes cells that cannot reach
+  the goal, and refuses a walled-off goal before any lattice search.
+  Searched in a window round start and goal (8 + 3·radius + body reach
+  tiles of margin), doubled while the field finds no way across (a detour
+  round a long wall), up to the map.  Goal: the goal cell at the nearest
+  of the 16 headings.
+- **Cost of a search** (400² open map, mule body, warm primitives): 5 ms
+  for a 40 × 25 tile manoeuvre, 12 ms for a 140 × 120 drive, 14 ms to
+  refuse a goal walled off across the map.  The primitives (≈6 ms to
+  sweep) stay in a `PrimCache` on the worker's `PathfinderState` between
+  searches; the free functions (`find_vehicle_pose_*`) build them per
+  call.
 - **Route:** waypoints with the gear packed into `y`
   (`pack_waypoint` / `unpack_waypoint`, `REVERSE_FLAG`); the engine unpacks
   them into `IsoVehicle.path` + `path_reverse` and keeps `goal_heading`.
@@ -500,12 +514,19 @@ tile rects (`Engine::vehicle_blocks: BTreeMap<id, Vec<[x0, y0, x1, y1]>>`):
 - Human / `IsoAgent` pathing (`NavSnapshot`) never sees vehicle blocks.
 - **Owners** (`set_vehicle_block_owner(id, owner)`,
   `Engine::vehicle_block_owners`): an owned block is open to its owner
-  only.  The shared snapshot (the background worker's current one, every
-  other vehicle's) keeps it; an owner's requests search a fresh snapshot
-  built without its blocks (`build_vehicle_nav_snapshot_for`), which the
-  web worker installs for that request and then swaps the shared one back.
-  An ownership change re-plans with each vehicle's own view, so the old
-  owner stops (and re-plans) if its route crosses the block.  Why a
+  only.  The shared snapshot (`BlockView::Shared`, the background worker's
+  current one) leaves owned blocks out; every vehicle query carries
+  `closed`, the rects of the blocks *other* vehicles own
+  (`Engine::closed_vehicle_blocks`), which the worker stamps on the
+  walkable grid it builds per search anyway (`pathfinder::walkable_grid`;
+  web: the `findVehicle` message's `closed`, the wasm `set_closed`).  So no
+  request builds, copies or re-sends a grid on the main thread, and the
+  worker's derived slope grid survives (`PathfinderState::set_vehicle`
+  keeps it while the heights are unchanged).  Only the synchronous
+  (deterministic) path builds a fresh snapshot per request, with
+  `BlockView::Vehicle(name)`.  An ownership change re-shares the snapshot
+  and re-plans with each vehicle's own view, so the old owner stops (and
+  re-plans) if its route crosses the block.  Why a
   separate call rather than an owner argument on `set_vehicle_block`:
   ownership changes on its own (the lane goes to whichever vehicle is
   fetching) without re-sending the rects, and `set_vehicle_block` keeps

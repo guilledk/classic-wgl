@@ -1932,12 +1932,47 @@ fn a_block_owner_drives_through_its_block_and_no_one_else_does() {
     // replacing the rects keeps the owner
     engine.set_vehicle_block(1, &[[24, 0, 24, 47], [25, 0, 25, 3]]);
     assert!(matches!(goto_sync(&mut engine, "lrv", 40, 12), VehicleGotoPoll::Accepted(_)));
-    // the shared grid (other vehicles, the background worker) keeps it
-    assert_eq!(engine.vehicle_nav_snapshot.structural[10 * 48 + 24], 0);
+    // the shared grid leaves an owned block out; every other vehicle's
+    // queries close it on top
+    assert_eq!(engine.vehicle_nav_snapshot.structural[10 * 48 + 24], 1);
+    assert_eq!(engine.closed_vehicle_blocks("other"), vec![[24, 0, 24, 47], [25, 0, 25, 3]]);
+    assert!(engine.closed_vehicle_blocks("lrv").is_empty());
     // clearing the block reopens it for everyone, and forgets the owner
     assert!(engine.clear_vehicle_block(1));
     assert!(engine.vehicle_block_owners.is_empty());
     assert!(matches!(goto_sync(&mut engine, "other", 40, 30), VehicleGotoPoll::Accepted(_)));
+}
+
+/// Submit a goto on the background pathfinder thread and wait for it.
+fn goto_threaded(engine: &mut Engine, name: &str, tx: i32, ty: i32) -> VehicleGotoPoll {
+    engine.set_synchronous_workers(false);
+    let VehicleGotoSubmit::Submitted(id) = engine.vehicle_goto(name, tx, ty) else {
+        return VehicleGotoPoll::NoPath;
+    };
+    for _ in 0..5000 {
+        match engine.vehicle_goto_poll(id) {
+            VehicleGotoPoll::Pending => std::thread::sleep(std::time::Duration::from_millis(1)),
+            done => return done,
+        }
+    }
+    panic!("the background search never answered");
+}
+
+#[test]
+fn the_background_search_opens_a_block_to_its_owner_only() {
+    // the worker's shared grid leaves the owned wall out; `other`'s query
+    // closes it on top, `lrv`'s does not
+    let mut engine = engine_with_wide_body();
+    assert!(engine.spawn_vehicle("lrv", "other", 5.5, 30.5));
+    engine.set_vehicle_block(1, &[[24, 0, 24, 47]]);
+    assert!(matches!(goto_threaded(&mut engine, "lrv", 40, 10), VehicleGotoPoll::NoPath));
+    engine.set_vehicle_block_owner(1, Some("lrv"));
+    assert!(matches!(goto_threaded(&mut engine, "lrv", 40, 10), VehicleGotoPoll::Accepted(_)));
+    assert!(matches!(goto_threaded(&mut engine, "other", 40, 30), VehicleGotoPoll::NoPath));
+    // given away, it closes to lrv and opens to its new owner
+    engine.set_vehicle_block_owner(1, Some("other"));
+    assert!(matches!(goto_threaded(&mut engine, "lrv", 40, 12), VehicleGotoPoll::NoPath));
+    assert!(matches!(goto_threaded(&mut engine, "other", 40, 30), VehicleGotoPoll::Accepted(_)));
 }
 
 #[test]

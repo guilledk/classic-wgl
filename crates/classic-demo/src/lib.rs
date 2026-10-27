@@ -329,7 +329,7 @@ fn finish_init_engine(
         // and golden capture run all background work (pathfinding, the guest
         // worker) inline, so frame output is independent of thread scheduling.
         let env = classic_engine::env_config::EnvConfig::get();
-        e.set_synchronous_workers(env.test_active() || env.golden_active());
+        e.set_synchronous_workers(env.synchronous_workers());
         install_worker(e, loaded, compiled);
     }
 

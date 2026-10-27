@@ -88,6 +88,14 @@ pub struct EnvConfig {
     /// CLASSIC_BENCH=full|short (web: `?bench` / `?bench=short`): what a
     /// bench-aware ROM runs (see `bench`).
     pub bench: crate::bench::BenchMode,
+    /// CLASSIC_WORKERS=threaded: keep the background workers (pathfinding,
+    /// the guest worker) off the render thread even under CLASSIC_TEST /
+    /// CLASSIC_GOLDEN, and skip the per-frame join barrier, so a scripted
+    /// run profiles (`CLASSIC_PERF`) the frames a player sees.  The run is
+    /// then no longer deterministic.  A headless run with CLASSIC_FIXED_DT
+    /// then paces its frames to that step in wall time, so the workers see
+    /// the frame rate a player does.
+    pub workers_threaded: bool,
 }
 
 static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
@@ -147,6 +155,7 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
         perf: env_or_query("CLASSIC_PERF", "perf"),
         bench: crate::bench::BenchMode::parse(env_or_query("CLASSIC_BENCH", "bench").as_deref()),
         perf_gpu: read_bool("CLASSIC_PERF_GPU") || web_query("perf_gpu").is_some(),
+        workers_threaded: read("CLASSIC_WORKERS").trim() == "threaded",
         test,
     }
 });
@@ -163,6 +172,12 @@ impl EnvConfig {
     /// Whether a golden-trace comparison is active (`CLASSIC_GOLDEN` is
     /// `check` or `update`).  Golden capture must be deterministic, so this
     /// also forces synchronous workers.
+    /// Whether the background workers run inline (the deterministic
+    /// harness: CLASSIC_TEST or CLASSIC_GOLDEN, unless CLASSIC_WORKERS=threaded).
+    pub fn synchronous_workers(&self) -> bool {
+        (self.test_active() || self.golden_active()) && !self.workers_threaded
+    }
+
     pub fn golden_active(&self) -> bool {
         !self.golden_mode.is_empty()
     }

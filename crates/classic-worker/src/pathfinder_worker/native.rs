@@ -116,6 +116,7 @@ impl PathfinderWorker {
             jump_cost,
             turn_cost,
             pose: None,
+            closed: Vec::new(),
         };
         self.request_vehicle(id, query, VehicleSnapshot::Current);
     }
@@ -378,6 +379,7 @@ mod tests {
             jump_cost: 1.3,
             turn_cost: 0.0,
             pose: None,
+            closed: Vec::new(),
         };
 
         worker.request_vehicle(1, query.clone(), VehicleSnapshot::Current);

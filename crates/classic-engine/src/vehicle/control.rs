@@ -5,6 +5,7 @@ use classic_core::components::{IsoVehicle, Transform};
 use classic_core::pathfinder::{unpack_waypoint, PathPoll, PoseGoal};
 use classic_worker::{VehiclePathQuery, VehicleSnapshot};
 
+use crate::hooks::BlockView;
 use crate::Engine;
 
 use super::kinematics::{dir_entry, dir_to_heading, pitch_index, search_footprint, straight_steer};
@@ -209,6 +210,7 @@ impl Engine {
             jump_cost: JUMP_COST,
             turn_cost,
             pose,
+            closed: Vec::new(),
         };
         self.submit_vehicle_path(id, query, name);
 
@@ -433,6 +435,7 @@ impl Engine {
             jump_cost: JUMP_COST,
             turn_cost,
             pose: None,
+            closed: Vec::new(),
         };
         self.submit_vehicle_path(id, query, name);
         self.preview_probe = Some(PreviewProbe {
@@ -447,20 +450,20 @@ impl Engine {
 
     /// Submit `vehicle`'s path request to the pathfinder.  A synchronous
     /// pathfinder searches a snapshot freshly built from the live world (so the
-    /// deterministic path sees current heights and `blocks_nav` obstacles); a
-    /// background one searches the snapshot last pushed at nav refresh, but
-    /// for a vehicle owning a vehicle block, which searches a fresh snapshot
-    /// with its own blocks open.
-    fn submit_vehicle_path(&mut self, id: u64, query: VehiclePathQuery, vehicle: &str) {
+    /// deterministic path sees current heights and `blocks_nav` obstacles),
+    /// with the vehicle blocks as `vehicle` sees them.  A background one
+    /// searches the snapshot last shared, plus the query's `closed` rects (the
+    /// blocks other vehicles own): the main thread builds no grid per request.
+    fn submit_vehicle_path(&mut self, id: u64, mut query: VehiclePathQuery, vehicle: &str) {
         self.ensure_pathfinder();
         let synchronous = self.pathfinder.as_ref().is_some_and(|w| w.is_synchronous());
-        // A vehicle owning a block searches its own view of the grid (its
-        // blocks open), built fresh; everyone else the shared one.
-        let owner = self.owns_vehicle_block(vehicle).then_some(vehicle);
-        let snapshot = if synchronous || owner.is_some() {
+        let snapshot = if synchronous {
             let obstacles = self.compute_nav_obstacles();
-            VehicleSnapshot::Fresh(self.build_vehicle_nav_snapshot_for(&obstacles, owner))
+            VehicleSnapshot::Fresh(
+                self.build_vehicle_nav_snapshot_for(&obstacles, BlockView::Vehicle(vehicle)),
+            )
         } else {
+            query.closed = self.closed_vehicle_blocks(vehicle);
             VehicleSnapshot::Current
         };
         if let Some(worker) = self.pathfinder.as_mut() {

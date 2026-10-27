@@ -9,7 +9,8 @@
 //! `set_snapshot` / `set_vehicle_snapshot` upload a grid copy, `find` /
 //! `find_vehicle` run the search and leave the result in an internal buffer,
 //! and `result_ptr` exposes that buffer to the shim.  `alloc` returns a
-//! caller-writable scratch buffer for uploading input grids.
+//! caller-writable scratch buffer for uploading inputs, which the shim hands
+//! back with `dealloc` once the call that read it returns.
 
 // The raw pointers come from the wasm linear memory across the JS/WASM ABI
 // boundary (`#[no_mangle] extern "C"` symbols instantiated by the Worker), so
@@ -33,6 +34,19 @@ static STATE: Mutex<Option<WState>> = Mutex::new(None);
 /// The pose goal for the next `find_vehicle` (`set_pose_goal`), consumed by
 /// it: set, the search drives to a pose instead of a cell.
 static POSE: Mutex<Option<PoseGoal>> = Mutex::new(None);
+
+/// The rects closed for the next `find_vehicle` (`set_closed`), consumed by
+/// it: the vehicle blocks other vehicles own.
+static CLOSED: Mutex<Vec<[i32; 4]>> = Mutex::new(Vec::new());
+
+/// Close `count` inclusive tile rects (`[x0, y0, x1, y1]` each, at `ptr`)
+/// for the next `find_vehicle`.
+#[no_mangle]
+pub extern "C" fn set_closed(ptr: *const i32, count: i32) {
+    let flat = unsafe { core::slice::from_raw_parts(ptr, count.max(0) as usize * 4) };
+    *CLOSED.lock().unwrap_or_else(|p| p.into_inner()) =
+        flat.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+}
 
 /// Set (`has != 0`) or clear the next `find_vehicle`'s pose goal (tile
 /// point, tile headings in radians, turning radius in tiles).
@@ -64,15 +78,27 @@ fn state() -> MutexGuard<'static, Option<WState>> {
     STATE.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Allocate a caller-writable scratch buffer of `len` bytes.  Leaked (inputs are
-/// uploaded rarely — once per terrain commit, or a tiny footprint per request).
+/// The layout of an `alloc(len)` buffer (4-aligned: the inputs are `i32` /
+/// `f32` arrays).
+fn scratch_layout(len: i32) -> std::alloc::Layout {
+    std::alloc::Layout::from_size_align(len.max(1) as usize, 4).expect("scratch layout")
+}
+
+/// Allocate a caller-writable scratch buffer of `len` bytes; the caller
+/// frees it with [`dealloc`].
 #[no_mangle]
 pub extern "C" fn alloc(len: i32) -> *mut u8 {
-    let len = len.max(0) as usize;
-    let mut v = Vec::<u8>::with_capacity(len);
-    let p = v.as_mut_ptr();
-    core::mem::forget(v);
-    p
+    // SAFETY: the layout has a non-zero size.
+    unsafe { std::alloc::alloc(scratch_layout(len)) }
+}
+
+/// Free a buffer [`alloc`] returned for `len` bytes.
+#[no_mangle]
+pub extern "C" fn dealloc(ptr: *mut u8, len: i32) {
+    if !ptr.is_null() {
+        // SAFETY: `ptr` came from `alloc(len)` and is freed once.
+        unsafe { std::alloc::dealloc(ptr, scratch_layout(len)) }
+    }
 }
 
 #[no_mangle]
@@ -165,6 +191,7 @@ pub extern "C" fn find_vehicle(
         VehicleFootprint::Cells(footprint)
     };
     let pose = POSE.lock().unwrap_or_else(|p| p.into_inner()).take();
+    let closed = std::mem::take(&mut *CLOSED.lock().unwrap_or_else(|p| p.into_inner()));
     let mut st = state();
     let Some(st) = st.as_mut() else { return -1 };
     if let Some(goal) = pose {
@@ -177,6 +204,7 @@ pub extern "C" fn find_vehicle(
             wheelbase_m,
             track_m,
             turn_cost,
+            &closed,
         ) {
             Some(path) => write_result(&mut st.result, path),
             None => -1,
@@ -193,6 +221,7 @@ pub extern "C" fn find_vehicle(
         safe_fall_m,
         jump_cost,
         turn_cost,
+        &closed,
     ) {
         Some(path) => write_result(&mut st.result, path),
         None => -1,

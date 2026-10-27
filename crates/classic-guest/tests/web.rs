@@ -273,6 +273,71 @@ async fn pathfinder_worker_round_trips_snapshots_and_paths() {
 }
 
 #[wasm_bindgen_test]
+async fn pathfinder_worker_closes_a_querys_rects_for_that_search_only() {
+    use classic_core::pathfinder::VehicleNavSnapshot;
+    use classic_core::pathfinder::{NavSnapshot, PathPoll, PoseGoal, VehicleFootprint};
+    use classic_worker::{VehiclePathQuery, VehicleSnapshot};
+    use std::sync::Arc;
+
+    // A vehicle query's `closed` rects (another vehicle's owned blocks) go
+    // to the Worker with the query: a wall closed for one search, open for
+    // the next, on both the cell and the pose search.
+    let mut worker =
+        classic_worker::PathfinderWorker::new(Arc::new(NavSnapshot::new(8, 8, vec![1; 64])));
+    worker.set_vehicle_snapshot(Arc::new(VehicleNavSnapshot::new(
+        8,
+        8,
+        vec![1; 64],
+        vec![1.0; 81],
+        classic_core::tilemap::TILE_M,
+    )));
+    let query = |closed: Vec<[i32; 4]>, pose: Option<PoseGoal>| VehiclePathQuery {
+        from: (1, 3),
+        to: (7, 3),
+        footprint: VehicleFootprint::Cells(vec![(0, 0)]),
+        pitch_max: 0.3,
+        roll_max: 0.3,
+        wheelbase_m: 1.0,
+        track_m: 1.0,
+        safe_fall_m: 0.0,
+        jump_cost: 1.3,
+        turn_cost: 0.0,
+        pose,
+        closed,
+    };
+    let goal = PoseGoal {
+        x: 6.5,
+        y: 3.5,
+        heading: 0.0,
+        start_heading: 0.0,
+        turn_radius: 1.0,
+        reverse: true,
+        reverse_cost: 2.0,
+    };
+    let wall = vec![[4, 0, 4, 7]];
+    let cases = [
+        (1, wall.clone(), None, false),
+        (2, vec![], None, true),
+        (3, wall, Some(goal), false),
+        (4, vec![], Some(goal), true),
+    ];
+    for (id, closed, pose, _) in &cases {
+        worker.request_vehicle(*id, query(closed.clone(), *pose), VehicleSnapshot::Current);
+    }
+    for (id, _, _, found) in cases {
+        let mut answer = PathPoll::Pending;
+        for _ in 0..1000 {
+            answer = worker.poll_vehicle_path(id);
+            if answer != PathPoll::Pending {
+                break;
+            }
+            sleep(5).await;
+        }
+        assert_eq!(matches!(answer, PathPoll::Path(_)), found, "query {id}: {answer:?}");
+    }
+}
+
+#[wasm_bindgen_test]
 async fn guest_worker_round_trips_task_bytes() {
     use classic_core::pathfinder::NavSnapshot;
     use std::sync::Arc;

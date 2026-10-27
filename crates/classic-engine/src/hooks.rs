@@ -636,7 +636,7 @@ impl Engine {
         turn_cost: f32,
     ) -> Option<Vec<(i32, i32)>> {
         let obstacles = self.compute_nav_obstacles();
-        let snapshot = self.build_vehicle_nav_snapshot(&obstacles)?;
+        let snapshot = self.build_vehicle_nav_snapshot_for(&obstacles, BlockView::All)?;
         let result = pathfinder::find_vehicle_path_snapshot(
             &snapshot,
             from,
@@ -687,12 +687,7 @@ impl Engine {
 
         // Rebuild + push the vehicle nav snapshot (structural nav + heights +
         // tile metre length) so the worker can run vehicle A* off-thread too.
-        if let Some(vehicle_snapshot) = self.build_vehicle_nav_snapshot(&obstacles) {
-            if let Some(worker) = self.pathfinder.as_mut() {
-                worker.set_vehicle_snapshot(Arc::clone(&vehicle_snapshot));
-            }
-            self.vehicle_nav_snapshot = vehicle_snapshot;
-        }
+        self.share_vehicle_nav_snapshot(&obstacles);
 
         self.refresh_guest_worker_nav();
         self.nav_version = self.nav_version.wrapping_add(1);
@@ -740,23 +735,27 @@ impl Engine {
         grid
     }
 
-    /// Build the [`pathfinder::VehicleNavSnapshot`] the worker uses for vehicle
-    /// A*, from the live `NavMesh` (structural nav) and `Tilemap` (heights +
-    /// the fixed `TILE_M` tile metre length).  Returns `None` when either
-    /// component is missing.
-    pub(crate) fn build_vehicle_nav_snapshot(
-        &self,
-        obstacles: &[i32],
-    ) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
-        self.build_vehicle_nav_snapshot_for(obstacles, None)
+    /// Rebuild the shared vehicle nav snapshot (`BlockView::Shared`) and
+    /// push it to the pathfinder worker.
+    pub(crate) fn share_vehicle_nav_snapshot(&mut self, obstacles: &[i32]) {
+        if let Some(vehicle_snapshot) =
+            self.build_vehicle_nav_snapshot_for(obstacles, BlockView::Shared)
+        {
+            if let Some(worker) = self.pathfinder.as_mut() {
+                worker.set_vehicle_snapshot(Arc::clone(&vehicle_snapshot));
+            }
+            self.vehicle_nav_snapshot = vehicle_snapshot;
+        }
     }
 
-    /// [`Self::build_vehicle_nav_snapshot`] as vehicle `owner` sees it: the
-    /// vehicle blocks it owns (`set_vehicle_block_owner`) left open.
+    /// Build a [`pathfinder::VehicleNavSnapshot`] for vehicle A*, from the
+    /// live `NavMesh` (structural nav) and `Tilemap` (heights + the fixed
+    /// `TILE_M` tile metre length), with the vehicle blocks `view` sees.
+    /// Returns `None` when either component is missing.
     pub(crate) fn build_vehicle_nav_snapshot_for(
         &self,
         obstacles: &[i32],
-        owner: Option<&str>,
+        view: BlockView<'_>,
     ) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
         let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
         let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
@@ -773,10 +772,7 @@ impl Engine {
                 size_y,
                 self.vehicle_blocks
                     .iter()
-                    .filter(|(id, _)| {
-                        owner.is_none()
-                            || self.vehicle_block_owners.get(id).map(String::as_str) != owner
-                    })
+                    .filter(|(id, _)| view.blocks(self.vehicle_block_owners.get(id)))
                     .flat_map(|(_, rects)| rects),
             );
         }
@@ -1568,6 +1564,30 @@ impl Engine {
                 );
                 false
             }
+        }
+    }
+}
+
+/// Which vehicle blocks a vehicle grid stamps.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BlockView<'a> {
+    /// The shared grid the background worker keeps: the unowned blocks.
+    /// A query adds the blocks other vehicles own
+    /// (`Engine::closed_vehicle_blocks`), so no request copies the grid.
+    Shared,
+    /// Every block (a search on no vehicle's behalf).
+    All,
+    /// As vehicle `name` sees them: every block but its own.
+    Vehicle(&'a str),
+}
+
+impl BlockView<'_> {
+    /// Whether a block owned by `owner` (`None`: unowned) is stamped.
+    pub(crate) fn blocks(self, owner: Option<&String>) -> bool {
+        match (self, owner) {
+            (_, None) | (BlockView::All, _) => true,
+            (BlockView::Shared, Some(_)) => false,
+            (BlockView::Vehicle(v), Some(o)) => o != v,
         }
     }
 }
