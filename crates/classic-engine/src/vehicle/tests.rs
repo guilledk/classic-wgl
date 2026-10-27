@@ -2032,6 +2032,111 @@ fn vehicle_set_reverse_speed_sets_the_reverse_gear_only() {
     assert!(!engine.world.get::<&IsoVehicle>(ve).unwrap().path_reverse.iter().any(|&b| b));
 }
 
+/// Drive `name`'s route to its end: the frames it took and the frames its
+/// body (rasterized as the planner does) was on a blocked cell.
+fn drive_counting_contacts(engine: &mut Engine, name: &str) -> (u32, u32) {
+    let ve = engine.names[name];
+    let (mut cells, mut contacts) = (Vec::new(), 0);
+    for frame in 0..4000 {
+        engine.time.delta = 1.0 / 30.0;
+        engine.update_vehicles();
+        let v = engine.world.get::<&IsoVehicle>(ve).unwrap();
+        let p = engine.world.get::<&classic_core::components::Transform>(ve).unwrap().position;
+        let s = &engine.vehicle_nav_snapshot;
+        classic_core::pathfinder::body_blocked_cells(
+            &s.structural,
+            s.size_x,
+            s.size_y,
+            &[],
+            &search_footprint(&v),
+            (p.x, p.y),
+            v.heading,
+            &mut cells,
+        );
+        contacts += !cells.is_empty() as u32;
+        if v.path.is_empty() && v.face.is_none() {
+            return (frame, contacts);
+        }
+    }
+    panic!("{name} never arrived");
+}
+
+/// A route past blocks: a start tile point, a goal cell and the rects.
+type CornerCase = ((f32, f32), (i32, i32), Vec<[i32; 4]>);
+
+/// Blocks a route has to bend round: pillars and walls across the
+/// straight line, an L and a dog-leg.
+fn corner_cases() -> Vec<CornerCase> {
+    let mut cases = Vec::new();
+    for (x0, y0, w, h) in
+        [(18, 6, 3, 8), (18, 4, 6, 12), (20, 8, 2, 4), (22, 2, 2, 14), (18, 9, 10, 10)]
+    {
+        for gy in [6, 10, 14, 20] {
+            cases.push(((5.5, 10.5), (40, gy), vec![[x0, y0, x0 + w, y0 + h]]));
+        }
+    }
+    cases.push(((5.5, 10.5), (40, 10), vec![[20, 0, 23, 13]]));
+    cases.push(((5.5, 10.5), (24, 8), vec![[16, 0, 18, 18], [16, 16, 34, 18]]));
+    cases.push(((5.5, 10.5), (38, 30), vec![[14, 0, 16, 20], [26, 13, 28, 47]]));
+    cases.push(((8.5, 40.5), (40, 40), vec![[18, 14, 30, 47]]));
+    cases.push(((8.5, 20.5), (40, 20), vec![[18, 0, 30, 30]]));
+    cases.push(((5.5, 16.5), (40, 16), vec![[18, 10, 22, 22]]));
+    cases
+}
+
+/// The rover (the mule's 16-direction kit) as `lrv` on the 48² test map.
+fn engine_with_rover_as_lrv() -> Engine {
+    let mut engine = engine_with_lrvtest_like_map(None);
+    engine.vehicles.insert("rover".into(), super::layer_tests::rover_def());
+    assert!(engine.spawn_vehicle("rover", "lrv", 5.5, 10.5));
+    engine
+}
+
+#[test]
+fn the_follower_keeps_the_body_off_the_corners_the_route_goes_round() {
+    // Every planned route is clear; unguarded, the pursuit follower cuts
+    // its corners onto the blocks (the padtest contacts); guarded, the
+    // body never touches a blocked cell, and it still arrives.
+    let (mut cut, mut cases) = (0, 0);
+    for (start, goal, rects) in corner_cases() {
+        let mut frames = [0; 2];
+        for guard in [false, true] {
+            let mut engine = engine_with_rover_as_lrv();
+            engine.vehicle_teleport("lrv", start.0, start.1);
+            engine.vehicle_follow_guard = guard;
+            engine.set_vehicle_block(1, &rects);
+            let route = goto_sync(&mut engine, "lrv", goal.0, goal.1);
+            assert!(matches!(route, VehicleGotoPoll::Accepted(_)), "{rects:?}: a route");
+            let (f, contacts) = drive_counting_contacts(&mut engine, "lrv");
+            frames[guard as usize] = f;
+            if guard {
+                assert_eq!(contacts, 0, "{rects:?} to {goal:?}: guarded contacts");
+                let p = engine.get_pos("lrv").unwrap();
+                assert!((p.0 - goal.0 as f32 - 0.5).hypot(p.1 - goal.1 as f32 - 0.5) <= 0.5);
+            } else {
+                cut += (contacts > 0) as u32;
+            }
+        }
+        // hugging the lines costs a few per cent at most
+        assert!(frames[1] <= frames[0] * 21 / 20, "{rects:?}: {frames:?}");
+        cases += 1;
+    }
+    assert!(cut * 2 >= cases, "unguarded, most of the {cases} cut a corner: {cut}");
+}
+
+#[test]
+fn the_guard_holds_a_wide_body_off_a_pillar_its_pursuit_cuts() {
+    // the wide body (3.8 tiles across, 1.9 long) round a pillar: 29 frames
+    // on it unguarded, none guarded
+    for (guard, want) in [(false, 29), (true, 0)] {
+        let mut engine = engine_with_wide_body();
+        engine.vehicle_follow_guard = guard;
+        engine.set_vehicle_block(1, &[[20, 0, 23, 13]]);
+        assert!(matches!(goto_sync(&mut engine, "lrv", 40, 10), VehicleGotoPoll::Accepted(_)));
+        assert_eq!(drive_counting_contacts(&mut engine, "lrv").1, want, "guard {guard}");
+    }
+}
+
 #[test]
 fn an_unreachable_pose_is_refused() {
     let mut engine = engine_with_rover();

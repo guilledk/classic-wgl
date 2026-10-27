@@ -624,6 +624,62 @@ pub fn route_clear_pose(
     pose::route_clear_pose(grid, size_x, size_y, path, reverse, &footprint_body(footprint))
 }
 
+/// The farthest a vehicle's body reaches from its origin (tiles), in any
+/// heading.
+pub fn footprint_reach(footprint: &VehicleFootprint) -> f32 {
+    let b = footprint_body(footprint);
+    libm::hypotf(
+        libm::fabsf(b.rear).max(libm::fabsf(b.front)),
+        libm::fabsf(b.right).max(libm::fabsf(b.left)),
+    )
+}
+
+/// The blocked cells under a vehicle's body standing at tile point `(x, y)`
+/// facing tile heading `heading` (radians): every cell the body rectangle's
+/// interior overlaps (the planner's rasterization) that is `0` on `grid`,
+/// off the grid, or inside one of the inclusive tile rects `closed`.  The
+/// path follower checks each step's pose with it.
+#[allow(clippy::too_many_arguments)]
+pub fn body_blocked_cells(
+    grid: &[i32],
+    size_x: i32,
+    size_y: i32,
+    closed: &[[i32; 4]],
+    footprint: &VehicleFootprint,
+    (x, y): (f32, f32),
+    heading: f32,
+    out: &mut Vec<GridCell>,
+) {
+    out.clear();
+    let b = footprint_body(footprint);
+    // cell `c` is centred on `c + 0.5`: anchor on the nearest cell centre
+    let (ix, iy) = (x - 0.5, y - 0.5);
+    let (cx, cy) = (libm::roundf(ix) as i32, libm::roundf(iy) as i32);
+    let h = (libm::cosf(heading), libm::sinf(heading));
+    let spans = oriented::rect_spans_at(
+        b.rear,
+        b.front,
+        b.right,
+        b.left,
+        h,
+        (ix - cx as f32, iy - cy as f32),
+    );
+    for (dy, dx0, dx1) in spans {
+        let yy = cy + dy;
+        for xx in cx + dx0..=cx + dx1 {
+            let off = xx < 0 || yy < 0 || xx >= size_x || yy >= size_y;
+            let blocked = off
+                || grid.get((yy * size_x + xx) as usize).is_none_or(|&g| g == 0)
+                || closed
+                    .iter()
+                    .any(|&[x0, y0, x1, y1]| (x0..=x1).contains(&xx) && (y0..=y1).contains(&yy));
+            if blocked {
+                out.push((xx, yy));
+            }
+        }
+    }
+}
+
 /// Pose-goal vehicle search ([`PoseGoal`], the `pose` module) over a
 /// snapshot and a pre-derived slope grid: drive to a point facing a
 /// heading, backing up where a forward arc has no room.  Waypoints carry
