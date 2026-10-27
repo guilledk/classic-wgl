@@ -606,12 +606,7 @@ impl Engine {
             // the uniform-grid path uses the cell size directly.
             // Direction interpolation: blend the two baked directions, or draw
             // the nearer one (`dir_blend`).
-            let choice = Self::dir_choice(
-                &self.frame_tables,
-                &iso_sprite,
-                frame_ref.as_ref(),
-                visual_selected.contains(entity),
-            );
+            let choice = Self::dir_choice(&self.frame_tables, &iso_sprite, frame_ref.as_ref());
             let (frame_ref, sprite_anchor) = match &choice {
                 DirChoice::UseB { frame, anchor } => (Some(frame.clone()), *anchor),
                 _ => (frame_ref, iso_sprite.anchor),

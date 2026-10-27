@@ -393,9 +393,13 @@ anchor, and the drawn heading minus each neighbour's, in tile radians).
   whose texture has `dir_interp`, from the continuous `IsoVehicle.heading`;
   otherwise parts keep the quantized frame and `dir_blend = None`.
 - **Planning** (`classic-engine` `dir_blend.rs`, `dir_choice`): blend when
-  both frames resolve, the table has `dir_interp`, both sheets have anchor
-  depth companions and the sprite is not selected (the silhouette needs one
-  frame); else draw the nearer direction.  The drawn quad is the union of
+  both frames resolve, the table has `dir_interp` and both sheets have
+  anchor depth companions (selected or not); else draw the nearer
+  direction.  A selected blend draws its silhouette in the shader: a pixel
+  the blend leaves uncovered is outline when a cardinal neighbour
+  `outline.y` quad pixels away is covered (`blendOutline`, four more blend
+  searches, paid only by selected blends; the instance's
+  `with_blend_outline` sets the radius).  The drawn quad is the union of
   both directions' content rects (from their anchors) plus 4 px; the shadow
   caster is the nearer direction's plain frame.
 - **Shader**: per neighbour a fixed-point backward warp (4 steps, one depth

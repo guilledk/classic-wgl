@@ -650,14 +650,30 @@ const ROVER_LAYERS: [(&str, [f32; 2]); 6] = [
     ("rover.wheel_rr", [-1.38, -1.82]),
 ];
 
+/// Every layer's drawn state: position, frame offset, frame name, scale
+/// and direction blend.
+fn layer_states(engine: &Engine) -> Vec<String> {
+    ROVER_LAYERS
+        .iter()
+        .map(|(name, _)| {
+            let e = engine.names[*name];
+            let p = engine.world.get::<&Transform>(e).unwrap().position;
+            let s = engine.world.get::<&IsoSprite>(e).unwrap();
+            format!(
+                "{name} {p:?} {:?} {:?} {:?} {:?} {:?}",
+                s.frame_offset, s.frame_name, s.frame, s.scale, s.dir_blend
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn every_layer_follows_the_hulls_drawn_heading_selected_or_not() {
-    // Continuous headings (7.3° apart, never on a baked direction): unselected
-    // the hull warps to the exact heading and every layer origin and frame
-    // follows it; selected it draws unblended at its nearer direction (the
-    // selection silhouette needs one frame), and every layer must follow
-    // that, not the exact heading (#173: the wheels slid around the snapped
-    // hull of a selected, turning mule).
+fn a_selected_vehicle_poses_exactly_as_an_unselected_one() {
+    // Continuous headings (7.3° apart, never on a baked direction):
+    // selected or not, the hull warps to the exact heading and tilt
+    // and every layer origin and frame follows it (#178: a selected mule
+    // drew snapped directions, so its turns stepped in lunar, where the
+    // player selects it, and not in padtest, where nothing does).
     let step = std::f32::consts::TAU / 16.0;
     let mut engine = spawn_rover();
     let body = engine.names["rover"];
@@ -665,6 +681,7 @@ fn every_layer_follows_the_hulls_drawn_heading_selected_or_not() {
     for k in 0..50 {
         let h_deg = k as f32 * 7.3;
         assert_eq!(engine.vehicle_face("rover", h_deg), 1);
+        let mut states = Vec::new();
         for selected in [false, true] {
             if selected {
                 engine.selection.selected.insert(body);
@@ -674,34 +691,22 @@ fn every_layer_follows_the_hulls_drawn_heading_selected_or_not() {
             engine.update_vehicles();
             let h = engine.world.get::<&IsoVehicle>(body).unwrap().heading;
             assert!((wrap_pi(h - h_deg.to_radians())).abs() < 1e-4, "faced {h_deg}");
-            let drawn = if selected { super::layers::drawn_heading(h, 16) } else { h };
             let bp = pos(&engine, "rover");
             for (name, off) in ROVER_LAYERS {
                 let e = engine.names[name];
                 let p = engine.world.get::<&Transform>(e).unwrap().position;
-                let t = chassis_to_tile(off, drawn);
+                let t = chassis_to_tile(off, h);
                 assert!(
                     (p.x - (bp.x + t[0])).abs() < 1e-4 && (p.y - (bp.y + t[1])).abs() < 1e-4,
                     "{name} at {h_deg} deg (selected {selected}): {p} vs body {bp} + {t:?}"
                 );
                 let b = engine.world.get::<&IsoSprite>(e).unwrap().dir_blend.expect("dir_interp");
-                if selected {
-                    // Drawn unblended: its nearer neighbour is exactly `drawn`.
-                    let off_dir = b.dtheta_a.min(-b.dtheta_b);
-                    assert!(off_dir.abs() < 1e-4, "{name} at {h_deg}: {off_dir}");
-                    let shown = if -b.dtheta_b < b.dtheta_a {
-                        drawn - b.dtheta_b
-                    } else {
-                        drawn - b.dtheta_a
-                    };
-                    assert!(wrap_pi(shown - drawn).abs() < 1e-4);
-                } else {
-                    // Warped to the exact heading between its neighbours.
-                    let (_, _, t) = classic_core::vehicle_def::heading_neighbours(h, 16);
-                    assert!((b.dtheta_a - t * step).abs() < 1e-4, "{name} at {h_deg}");
-                }
+                let (_, _, t) = classic_core::vehicle_def::heading_neighbours(h, 16);
+                assert!((b.dtheta_a - t * step).abs() < 1e-4, "{name} at {h_deg}");
             }
+            states.push(layer_states(&engine));
         }
+        assert_eq!(states[0], states[1], "selected vs not at {h_deg} deg");
     }
 }
 

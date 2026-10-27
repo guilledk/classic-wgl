@@ -63,13 +63,13 @@ fn content_rect(fr: &ResolvedFrame, anchor_px: Vec2) -> [f32; 4] {
 }
 
 impl Engine {
-    /// Choose how `sprite` draws given its resolved direction-A frame.
-    /// `selected` sprites never blend (the silhouette needs one frame).
+    /// Choose how `sprite` draws given its resolved direction-A frame.  A
+    /// selected sprite blends too: `sheet.frag#INTERP` draws its silhouette
+    /// edge round the warped body.
     pub(crate) fn dir_choice(
         tables: &HashMap<String, FrameTable>,
         sprite: &IsoSprite,
         frame_a: Option<&ResolvedFrame>,
-        selected: bool,
     ) -> DirChoice {
         let Some(blend) = sprite.dir_blend else { return DirChoice::Plain };
         let Some(fa) = frame_a else { return DirChoice::Plain };
@@ -82,8 +82,7 @@ impl Engine {
             && fa.anchor_depth
             && fb.anchor_depth
             && fa.depth_tex.is_some()
-            && fb.depth_tex.is_some()
-            && !selected;
+            && fb.depth_tex.is_some();
         if !blendable {
             return if b_nearer {
                 DirChoice::UseB { frame: fb, anchor: blend.anchor_b }
@@ -275,11 +274,10 @@ mod tests {
             emissive: None,
         };
         let fa = Engine::resolve_frame(&tables, "tex", "tex_0").unwrap();
-        let geom =
-            |b: DirBlend| match Engine::dir_choice(&tables, &sprite(Some(b)), Some(&fa), false) {
-                DirChoice::Blend(g) => g,
-                _ => panic!("blends"),
-            };
+        let geom = |b: DirBlend| match Engine::dir_choice(&tables, &sprite(Some(b)), Some(&fa)) {
+            DirChoice::Blend(g) => g,
+            _ => panic!("blends"),
+        };
         // On A's sheet: the third region is set, from frame 2's rect.
         let g = geom(blend(2.0, false));
         let th = g.region.third.expect("third on A's sheet");

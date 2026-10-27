@@ -45,6 +45,12 @@ pub enum TestAction {
     MouseMove { x: f32, y: f32 },
     #[serde(rename = "mouseClick")]
     MouseClick { x: f32, y: f32, button: u32 },
+    /// A full click through the platform input path (`ScriptedInput::click`):
+    /// pressed next frame, released the frame after, the pointer left there.
+    /// Selects like a player's click (RTS point-select on release) and
+    /// reaches the guest's click handling.
+    #[serde(rename = "click")]
+    Click { x: f32, y: f32, button: u32 },
     #[serde(rename = "keyPress")]
     KeyPress { key: String, pressed: bool },
     #[serde(rename = "wheel")]
@@ -380,6 +386,9 @@ fn run_frame(
                     engine.input.mouse_pos = glam::Vec2::new(*x, *y);
                     engine.input.mouse_axis.x = ((*x / vw) - 0.5) * 2.0;
                     engine.input.mouse_axis.y = ((*y / vh) - 0.5) * 2.0;
+                }
+                TestAction::Click { x, y, button } => {
+                    engine.scripted_input.click(glam::Vec2::new(*x, *y), *button as usize);
                 }
                 TestAction::MouseClick { x, y, button } => {
                     engine.input.mouse_pos = glam::Vec2::new(*x, *y);

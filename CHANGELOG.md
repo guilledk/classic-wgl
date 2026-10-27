@@ -353,6 +353,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- A selected vehicle turns as smoothly as an unselected one.  A selected
+  sprite never blended its baked directions (the selection silhouette
+  sampled one frame), so the player's mule, selected to be commanded,
+  turned in 22.5° steps in lunar while padtest's scripted, unselected one
+  turned smoothly.  Selected blends now draw their silhouette edge round
+  the warped body (`sheet.frag#INTERP` `blendOutline`, the radius in the
+  instance's `outline.y`), and `apply_layers` poses a selected vehicle's
+  layers from the exact heading and tilt, as an unselected one's.
+  Turning selected, the hull's biggest frame-to-frame change (its blue
+  panels' orientation in degrees plus area in %) falls from 14.6 to 5.7
+  in lunar and from 14.3 to 4.7 in padtest.  A new
+  `click` test action presses and releases the mouse through the platform
+  input path (`ScriptedInput::click`), so a scenario selects and commands
+  a unit as a player does (#178).
 - The vehicle search turns the body to each move.  It eroded the nav
   grid by one axis box, ±half the wheelbase along `x` and ±half the
   track along `y`, as if the vehicle always faced East: driving north or

@@ -174,10 +174,11 @@ impl IsoSpriteInstance {
     /// `b`'s direction B to the drawn heading (`sheet.frag#INTERP`).
     pub fn blend(mut self, b: &DirBlendRegion) -> Self {
         self.misc[3] = 2.0;
-        // `outline.xy` (the selection outline) is unused by a blend (a selected
-        // sprite never blends): `outline.x` holds its `blend_thirds` row, -1 =
-        // none ([`IsoSpriteInstance::with_third_row`]).
+        // `outline.x` holds its `blend_thirds` row, -1 = none
+        // ([`IsoSpriteInstance::with_third_row`]); `outline.y` its selection
+        // outline radius in quad pixels ([`IsoSpriteInstance::with_blend_outline`]).
         self.outline[0] = -1.0;
+        self.outline[1] = 0.0;
         self.outline[2] = b.anchor_a_px[0];
         self.outline[3] = b.anchor_a_px[1];
         self.uv_b = b.uv_b;
@@ -189,6 +190,14 @@ impl IsoSpriteInstance {
         self.m[1][3] = b.tilt[1];
         self.m[2][3] = b.tilt[2];
         self.quad = b.quad;
+        self
+    }
+
+    /// A direction blend's selection outline radius, in content (quad)
+    /// pixels: the blend warps its silhouette, so the outline is searched in
+    /// quad pixels, not as a sheet-UV offset.
+    pub fn with_blend_outline(mut self, radius_px: f32) -> Self {
+        self.outline[1] = radius_px;
         self
     }
 
@@ -1156,6 +1165,40 @@ mod tests {
         let i = IsoSpriteInstance::default().blend(&DirBlendRegion::default());
         assert_eq!(i.outline[0], -1.0, "a blend has no third row until pointed at one");
         assert_eq!(i.with_third_row(7).outline[0], 7.0);
+    }
+
+    #[test]
+    fn a_selected_blend_keeps_its_flag_and_outline_radius() {
+        // `sheet.frag#INTERP` reads `selected` from `misc.z` and the outline
+        // radius (quad pixels) from `outline.y`.
+        let model = Mat4::IDENTITY;
+        let region = SpriteRegion::Uv {
+            uv_rect: &[0.0, 0.0, 0.5, 0.5],
+            trim_offset: &[2.0, 3.0],
+            source_size: &[64.0, 64.0],
+            content_size: &[40.0, 50.0],
+        };
+        let mk = |selected| {
+            IsoSpriteInstance::new(
+                &model,
+                &region,
+                (128, 128),
+                &[0.0; 4],
+                0.5,
+                1.0,
+                0,
+                &[1.0; 3],
+                selected,
+                1.0,
+            )
+        };
+        let b = DirBlendRegion::default();
+        let sel = mk(true).blend(&b).with_third_row(3).with_blend_outline(1.0);
+        assert_eq!(sel.misc[2], 1.0, "selected");
+        assert_eq!(sel.outline[..2], [3.0, 1.0], "third row, outline radius");
+        let unsel = mk(false).blend(&b);
+        assert_eq!(unsel.misc[2], 0.0);
+        assert_eq!(unsel.outline[1], 0.0, "no outline radius until set");
     }
 
     #[test]
