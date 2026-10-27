@@ -132,6 +132,15 @@ pub(super) fn contact_offsets(def: &VehicleDef) -> [[f32; 2]; 4] {
     [[hi[0], hi[1]], [hi[0], lo[1]], [lo[0], hi[1]], [lo[0], lo[1]]]
 }
 
+/// The heading a layer drawn unblended shows for `heading`: its nearer
+/// direction neighbour, as [`Engine::dir_choice`] picks it (`B` only past the
+/// midpoint).
+pub(super) fn drawn_heading(heading: f32, dirs: u32) -> f32 {
+    let (a, b, t) = heading_neighbours(heading, dirs);
+    let d = if t > 0.5 { b } else { a };
+    d as f32 * std::f32::consts::TAU / dirs.max(1) as f32
+}
+
 /// The clip frame (absolute on the layer's clip axis) of a playback, and
 /// whether it is finished.
 pub(super) fn clip_frame(def: &ClipDef, play: &ClipPlay) -> (u32, bool) {
@@ -349,7 +358,14 @@ impl Engine {
         };
         let Some(def) = self.vehicles.get(&def_name).cloned() else { return };
         let anchors = self.vehicle_anchors.get(&def.anchors).cloned();
-        let heading = write.heading;
+        // A selected vehicle draws unblended (`dir_choice`: the selection
+        // silhouette needs one frame): every layer snaps to its nearest baked
+        // direction and tilt level.  Place and frame the layers from that drawn
+        // pose, or they slide around the snapped hull while it turns (up to
+        // 0.4 m on the mule).
+        let selected = self.selection.selected.contains(&ve);
+        let heading =
+            if selected { drawn_heading(write.heading, def.directions) } else { write.heading };
         let [bx, by, _] = write.body;
 
         // Turret slew toward the aim / target, and clip time.
@@ -385,9 +401,11 @@ impl Engine {
             }
         }
         let poses = layer_poses(&def, &v_state.layers.iter().map(|s| s.yaw).collect::<Vec<_>>());
-        // Whether a layer's sheet warps its tilt (`tilt_interp`).
-        let tilt_interp =
-            |l: &VehicleLayerDef| self.frame_tables.get(&l.texture).is_some_and(|t| t.tilt_interp);
+        // Whether a layer's sheet warps its tilt (`tilt_interp`); never while
+        // selected.
+        let tilt_interp = |l: &VehicleLayerDef| {
+            !selected && self.frame_tables.get(&l.texture).is_some_and(|t| t.tilt_interp)
+        };
         // The hull's drawn tilt: its baked level angles (`0` on an axis it
         // lacks), or the exact chassis tilt when its sheet warps tilt.  What a
         // layer riding it (cargo, a tool) leans by.
@@ -396,6 +414,10 @@ impl Engine {
                 let interp = tilt_interp(h);
                 pick_tilt(h.pitch, h.roll, heading, v_state.pitch, v_state.roll, interp).drawn
             });
+        // The body tilt the layers ride: the exact chassis tilt (as the
+        // sockets), or the hull's snapped level while selected.
+        let (body_pitch, body_roll) =
+            if selected { hull_tilt } else { (v_state.pitch, v_state.roll) };
 
         for s in &v_state.layers {
             let Some(l) = def.layers.get(s.def_index) else { continue };
@@ -406,8 +428,8 @@ impl Engine {
             // about the body's ground point (as `vehicle_socket_frame` does,
             // so a layer origin and a zero-offset socket on it agree), then
             // turned by the heading.
-            let tilted = super::sockets::rot_pitch(v_state.pitch)
-                * super::sockets::rot_roll(v_state.roll)
+            let tilted = super::sockets::rot_pitch(body_pitch)
+                * super::sockets::rot_roll(body_roll)
                 * pose.pos;
             let t = chassis_to_tile([tilted.x, tilted.y], heading);
             let (lx, ly) = (bx + t[0], by + t[1]);

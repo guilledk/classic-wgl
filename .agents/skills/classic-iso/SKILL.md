@@ -583,9 +583,13 @@ centre = straight, top = full-left — the exporter's steer-major order).
 
 `steer_index` is quantized from the *integrated* steering **state**
 (`IsoVehicle.steer`, rate-limited at `steer_rate`) rather than the raw heading
-error, so the tires sweep through their steer frames instead of snapping.  When
-the vehicle reverses (target ~100° behind, `should_reverse` hysteresis), it
-drives backward along `heading` while the tires steer into the same turn; the
+error, so the tires sweep through their steer frames instead of snapping.  The
+state is turn-left positive (the baked frames' sense) while the heading error
+is tile-space, where a positive change turns right: driving forward the demand
+is `-err` (the tires steer into the turn); when the vehicle reverses (target
+~100° behind, `should_reverse` hysteresis) it backs along `heading` and the
+nose swings the other way, so the demand is `+err` (until #173 the demand was
+`err` both ways, mirroring the tires whenever the vehicle drove forward); the
 tire anchor is steer-invariant (the yaw is about the axle's vertical axis), so
 the tire reuses the wheel's ground-origin anchor.
 
@@ -696,6 +700,14 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
   the heading), exactly as `vehicle_socket_frame` does. A layer origin and
   a zero-offset socket on it are the same point (a 1.2 m turret on an 8°
   slope sits ~17 cm back, which the old `z += x·sin p` lift missed).
+- **Selected vehicles place layers by the drawn pose**: a selected sprite
+  never blends (`dir_choice`: the selection silhouette needs one frame),
+  so a selected vehicle's hull and layers draw their nearer baked
+  direction (`layers::drawn_heading`, `B` only past the midpoint) and
+  nearest tilt level.  `apply_layers` then places and frames every layer
+  from that snapped heading and level tilt too; from the exact pose the
+  wheels slid around the snapped hull of a turning mule (up to 0.4 m,
+  #173).  Sockets keep the exact pose.
 - **Cargo / layer sheets need a ground anchor the engine can find**: a
   layer with no anchors-artifact entry places its frames' **packer
   `anchor`**, else the **cell centre (0.5, 0.5)**, on its chassis point. So

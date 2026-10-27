@@ -383,6 +383,7 @@ impl Engine {
                 if delta > 0.0 {
                     drive_tiles = -step / delta;
                 }
+                v.steer = step_steer(v.steer, 0.0, v.steer_max, v.steer_rate, delta);
                 v.reversing = true;
                 following = true;
                 if behind - step <= 1e-5 {
@@ -423,8 +424,13 @@ impl Engine {
                     // Front wheels steer into the turn (rate-limited state, so
                     // the tires sweep through their steer frames rather than
                     // snapping); the body rotates toward the target at the max
-                    // turn rate.
-                    v.steer = step_steer(v.steer, err, v.steer_max, v.steer_rate, delta);
+                    // turn rate.  `steer` is turn-left positive (the baked
+                    // frames' sense) and `err` is tile-space, where a positive
+                    // heading change turns right: driving forward the wheels
+                    // steer against `err`; backing up swings the nose the
+                    // other way, so they steer with it.
+                    let demand = if v.reversing { err } else { -err };
+                    v.steer = step_steer(v.steer, demand, v.steer_max, v.steer_rate, delta);
                     let max_turn = v.turn_rate * delta;
                     let turn = err.clamp(-max_turn, max_turn);
                     v.heading = wrap_pi(v.heading + turn);
