@@ -328,6 +328,9 @@ impl Engine {
     /// terrain under each wheel, integrate the point-mass jump + suspension,
     /// and write the five sprites.
     pub fn update_vehicles(&mut self) {
+        if !self.vehicle_replans.is_empty() {
+            self.poll_vehicle_replans();
+        }
         let delta = self.time.delta;
         let vehicles: Vec<hecs::Entity> =
             self.world.query::<&IsoVehicle>().iter().map(|(e, _)| e).collect();

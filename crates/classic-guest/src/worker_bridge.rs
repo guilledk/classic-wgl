@@ -238,7 +238,7 @@ mod tests {
         let imports = WorkerImports::new();
         let table: Vec<&str> = imports_for(Backend::Worker).map(|i| i.name).collect();
         assert_eq!(imports.names().collect::<Vec<_>>(), table);
-        assert_eq!(table.len(), 137);
+        assert_eq!(table.len(), 139);
     }
 
     #[test]
