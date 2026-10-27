@@ -500,6 +500,21 @@ impl GuestHost {
         self.engine_mut().vehicle_set_speed(&name, speed as f32) as i32
     }
 
+    /// Set a vehicle's reverse speed (tiles per second; `0` stops it
+    /// reversing).  `0` for an unknown vehicle.
+    pub fn vehicle_set_reverse_speed(&mut self, name: &str, speed: f64) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_set_reverse_speed(&name, speed as f32) as i32
+    }
+
+    /// A vehicle's heading: tile degrees in `[0, 360)` (`0` East, `90`
+    /// South), the simulation's own, not its sprite frame's.  NaN for an
+    /// unknown vehicle.
+    pub fn vehicle_heading(&mut self, name: &str) -> f64 {
+        let name = self.resolve(name);
+        self.engine().vehicle_heading(&name).map_or(f64::NAN, f64::from)
+    }
+
     /// Aim a vehicle's turret layers at the map point `(x, y)`.
     pub fn vehicle_aim(&mut self, name: &str, x: f64, y: f64) -> i32 {
         let name = self.resolve(name);
