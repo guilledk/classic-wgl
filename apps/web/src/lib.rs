@@ -5,7 +5,10 @@ use wasm_bindgen::prelude::*;
 /// ROMs are built by the `classic-roms` repo and published to a Cloudflare R2
 /// public bucket served at `classic-roms.com` (CORS-enabled).  `common` and
 /// `lunar-common` are the shared asset-only dependency ROMs the shipped scenes
-/// resolve at boot.
+/// resolve at boot; `lunar-buildings` (landing pad, crane) is `lunar`'s.  Until
+/// the landing window publishes it, `roms.json` has no checksum for it and a
+/// boot that needs it fails loudly naming it (the web build has no local ROM
+/// directory).
 #[cfg(target_arch = "wasm32")]
 const ROM_URLS: &[(&str, &str)] = &[
     ("demo", "https://classic-roms.com/demo.rom"),
@@ -16,6 +19,7 @@ const ROM_URLS: &[(&str, &str)] = &[
     ("fxtest", "https://classic-roms.com/fxtest.rom"),
     ("common", "https://classic-roms.com/common.rom"),
     ("lunar-common", "https://classic-roms.com/lunar-common.rom"),
+    ("lunar-buildings", "https://classic-roms.com/lunar-buildings.rom"),
 ];
 
 /// Read a query-string parameter from the page URL.
@@ -66,7 +70,7 @@ pub fn main() {
 }
 
 /// Resolve the `?rom=` selector to a multi-ROM dependency DAG: the named root
-/// plus its `common`/`lunar-common` deps, each fetched from the CDN through the
+/// plus its `common`/`lunar-common`/`lunar-buildings` deps, each fetched from the CDN through the
 /// name -> location registry and Cache-API-cached keyed by the `sha256`
 /// published in `roms.json`.  Arbitrary URLs/paths are resolved the same way
 /// (their manifest `deps` are fetched through the registry).

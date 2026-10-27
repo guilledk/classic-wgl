@@ -46,7 +46,9 @@ const LOCK_PATH: &str = "tests/golden/roms.lock.json";
 /// The ROMs shipped by `classic-roms`.  (`moon` is a resolve-time alias for
 /// `lunar` only — the desktop/web `rom_lookup`/`static_lookup` handle it — so it
 /// is not fetched here.)  `common` + `lunar-common` are the shared asset-only
-/// dependency ROMs the shipped scenes resolve at boot.
+/// dependency ROMs the shipped scenes resolve at boot.  `lunar-buildings` joins
+/// this list (and `roms.lock.json`) when the landing window publishes it; until
+/// then the desktop table boots it from a local `CLASSIC_ROM_DIR` build.
 const ROMS: &[(&str, &str)] = &[
     ("demo", "demo.rom"),
     ("lunar", "lunar.rom"),

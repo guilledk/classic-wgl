@@ -188,6 +188,12 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   closure for 150 fixed frames, swapping clips mid-run, and its timer
   must match `model_clip_time` every frame (`classic-demo`, test only)
   (#169).
+- `lunar-buildings` in the desktop ROM table and the web `ROM_URLS`, so
+  `lunar`'s new dependency (landing pad, crane) resolves.  Not published
+  yet: desktop boots a local build from `CLASSIC_ROM_DIR` (else the CDN,
+  which fails naming it), web fails naming it until `roms.json` lists
+  it; `fetch-roms` and `roms.lock.json` gain it when the landing window
+  publishes it (#171).
 
 ### Changed
 
