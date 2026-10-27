@@ -478,6 +478,17 @@ pub struct VehicleDef {
     /// Named attachment points (emitters, lights, muzzles), keyed by name.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub sockets: std::collections::BTreeMap<String, crate::vehicle_def::SocketDef>,
+    /// Lights every vehicle of this def carries: scene `Light`s whose
+    /// `socket` (`node`) names one of [`Self::sockets`] and whose `position`
+    /// / `dir` are in that socket's frame (`parent` is ignored).  Spawned
+    /// with the vehicle (`<vehicle>__light<i>`), removed with it; a vehicle
+    /// spawned at runtime gets them too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lights: Vec<crate::components::Light>,
+    /// Emitters every vehicle of this def carries, as [`Self::lights`]
+    /// (`<vehicle>__emitter<i>`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emitters: Vec<crate::components::Emitter>,
     /// How the spawned layers share a ghost group.
     #[serde(default, skip_serializing_if = "is_instance_ghost")]
     pub ghost_group: crate::vehicle_def::GhostGroupMode,
@@ -537,6 +548,8 @@ impl Default for VehicleDef {
             px_per_m: 0.0,
             layers: Vec::new(),
             sockets: Default::default(),
+            lights: Vec::new(),
+            emitters: Vec::new(),
             ghost_group: Default::default(),
             depth_range_m: None,
             pivot_turn: false,

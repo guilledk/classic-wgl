@@ -71,6 +71,15 @@ impl Engine {
     /// four wheel `IsoSprite`s, positioned at `(x, y)` with anchors/offsets taken
     /// from the definition sidecar.
     pub fn spawn_vehicle(&mut self, def_name: &str, entity_name: &str, x: f32, y: f32) -> bool {
+        let spawned = self.spawn_vehicle_parts(def_name, entity_name, x, y);
+        if spawned {
+            self.spawn_vehicle_attachments(def_name, entity_name);
+        }
+        spawned
+    }
+
+    /// [`Self::spawn_vehicle`] but for the def's lights and emitters.
+    fn spawn_vehicle_parts(&mut self, def_name: &str, entity_name: &str, x: f32, y: f32) -> bool {
         let Some(def) = self.vehicles.get(def_name).cloned() else { return false };
         let Some(tm_entity) = self.entity_by_role(RoleKind::Tilemap) else { return false };
         let tile_scale = self.world.get::<&Transform>(tm_entity).map(|t| t.scale.x).unwrap_or(45.0);

@@ -11,6 +11,7 @@
 //! runs each frame (after the guest update closures) and pushes
 //! positions/frames/anchors/offsets into the five sprites.
 
+mod attach;
 pub(crate) mod block;
 mod control;
 mod dust;

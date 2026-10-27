@@ -10,6 +10,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- Vehicle defs declare lights and emitters: `lights[]` / `emitters[]`,
+  scene `Light` / `Emitter` components with a `socket` (checked against
+  the def's `sockets` by `vehicle_def::validate`).  `spawn_vehicle`, so
+  `vehicle_spawn` and a scene's vehicles alike, gives every vehicle its
+  own (`{vehicle}__light{i}` / `{vehicle}__emitter{i}`, parented on the
+  socket), and despawning the vehicle removes them: extra mules spawned
+  at runtime were dark, the lamps being per-name scene entities.  A light
+  or emitter on a vehicle socket, a def's or a scene's, dims with the
+  vehicle's `vehicle_emissive` strength up to 1 (`0` is off; a night
+  bloom above 1 leaves it as authored) (#185).
+
 - `vehicle_heading(name) -> f64` and `vehicle_set_reverse_speed(name,
   speed) -> i32` (guest imports, `Engine::vehicle_heading` /
   `Engine::vehicle_set_reverse_speed`).  Since #178 a direction-blended
