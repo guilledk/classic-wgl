@@ -27,6 +27,9 @@ pub const MODEL_GHOST_GROUP: u32 = 255;
 /// 0..2 and the shadow map on [`crate::SHADOW_MAP_UNIT`]).
 const COMPOSITE_COLOR_UNIT: u32 = 4;
 const COMPOSITE_DEPTH_UNIT: u32 = 5;
+/// The ghost mask's unit: the particle texture's, which the particle pass
+/// rebinds on every draw.
+const COMPOSITE_MASK_UNIT: u32 = 6;
 
 /// The model target size for a main target of `width` x `height` at camera
 /// `zoom`: `ceil(size × min(1, 1/zoom))`, at least 1 px.  A non-positive or
@@ -146,7 +149,8 @@ impl Gfx {
     /// - [`IsoSpritePass::Normal`]: depth `LEQUAL`, writes depth and stamps
     ///   `ghost_group` into the stencil (like a sprite's normal pass).
     /// - [`IsoSpritePass::Ghost`]: 40% alpha where the model is behind the depth
-    ///   buffer (`GREATER`), skipping pixels its own group already covers.
+    ///   buffer (`GREATER`), skipping pixels its own group already covers and
+    ///   those of models that opt out (`Model.ghost`, the target's mask).
     ///
     /// No-op before the first [`Gfx::begin_model_pass`].
     pub fn composite_models(&self, pass: IsoSpritePass, ghost_group: u32) {
@@ -159,10 +163,13 @@ impl Gfx {
             gl.bind_texture(glow::TEXTURE_2D, Some(target.color_tex));
             gl.active_texture(glow::TEXTURE0 + COMPOSITE_DEPTH_UNIT);
             gl.bind_texture(glow::TEXTURE_2D, Some(target.depth_tex));
+            gl.active_texture(glow::TEXTURE0 + COMPOSITE_MASK_UNIT);
+            gl.bind_texture(glow::TEXTURE_2D, Some(target.mask_tex));
             gl.active_texture(glow::TEXTURE0);
         }
         s.uniform_1i(gl, "color_tex", COMPOSITE_COLOR_UNIT as i32);
         s.uniform_1i(gl, "depth_tex", COMPOSITE_DEPTH_UNIT as i32);
+        s.uniform_1i(gl, "mask_tex", COMPOSITE_MASK_UNIT as i32);
         s.uniform_1f(
             gl,
             "ghost_alpha",

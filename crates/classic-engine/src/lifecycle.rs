@@ -1106,6 +1106,7 @@ impl Engine {
                     inst.team.as_ref(),
                     &inst.emissive,
                     inst.alpha_test,
+                    inst.ghost,
                 );
             }
             gfx.end_model_draws(run);

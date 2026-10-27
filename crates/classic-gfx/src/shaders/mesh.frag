@@ -54,7 +54,14 @@ layout(std140) uniform LightBlock {
     Light lights[MAX_LIGHTS];
 } u_lights;
 
-out vec4 fragColor;
+// 1 when this model opts out of the ghost pass (`Model.ghost = false`: a deck
+// or floor sprites stand on); written to the model target's ghost mask.
+uniform float no_ghost;
+
+layout(location = 0) out vec4 fragColor;
+// The model target's R8 ghost mask (`ModelTarget`): alpha 1, so the global
+// alpha blend replaces it and the nearest model's flag wins.
+layout(location = 1) out vec4 ghostMask;
 
 // --- BEGIN SHARED LIGHTING (byte-identical in sheet.frag / iso_tilemap.frag /
 // --- mesh.frag / particle.vert; pinned by `lit_shaders_share_the_lighting_block`) ---
@@ -226,6 +233,7 @@ float emissiveStrength(highp vec2 uv) {
 }
 
 void main(void ) {
+    ghostMask = vec4(no_ghost, 0.0, 0.0, 1.0);
     vec4 color = use_texture > 0.5 ? texture(tex_sampler, vTexCoord) : base_color;
     if (use_team > 0.5 && use_texture > 0.5) {
         color = teamTint(color, vTexCoord);

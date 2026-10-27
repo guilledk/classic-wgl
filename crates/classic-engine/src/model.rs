@@ -133,6 +133,8 @@ pub(crate) struct ModelInstance {
     pub(crate) emissive: Vec<classic_gfx::EmissiveRect>,
     /// Draw with the alpha-tested program (`ModelMesh::alpha_test`).
     pub(crate) alpha_test: bool,
+    /// `Model.ghost`: whether the ghost pass may redraw it where occluded.
+    pub(crate) ghost: bool,
 }
 
 /// The first upload of a model image's content (see `Engine::model_textures`).
@@ -539,6 +541,7 @@ impl Engine {
                     team,
                     emissive,
                     alpha_test: mesh.alpha_test,
+                    ghost: model.ghost,
                 });
             }
             if instances.is_empty() {
@@ -1002,6 +1005,37 @@ mod tests {
             [draws[0].instances[0].alpha_test, draws[1].instances[0].alpha_test],
             [true, false]
         );
+    }
+
+    #[test]
+    fn a_deck_model_opts_out_of_the_ghost_pass() {
+        // `Model.ghost` is on by default, omitted from dumps, and `"ghost":
+        // false` in state.json (a landing pad's deck) reaches the draw.
+        let deck: Model = serde_json::from_value(serde_json::json!({
+            "position": [2.0, 2.0, 0.0], "scale": [1.0, 1.0, 1.0],
+            "model": "solid", "tilemap": "tilemap", "ghost": false
+        }))
+        .unwrap();
+        assert!(!deck.ghost);
+        let rocket = Model::new("solid", "tilemap");
+        assert!(rocket.ghost, "models ghost by default");
+        let dump = serde_json::to_value(&rocket).unwrap();
+        assert!(dump.get("ghost").is_none(), "the default is omitted");
+        assert_eq!(serde_json::to_value(&deck).unwrap()["ghost"], false);
+
+        let mut e = Engine::new_for_test();
+        let png = png_2x2([200, 200, 200, 255]);
+        e.load_model_glb("solid", &textured_glb(&png, None)).unwrap();
+        flat_tilemap(&mut e);
+        let ents: Vec<_> = [deck, rocket]
+            .map(|m| {
+                let ent = e.world.spawn((Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE), m));
+                (0.0, ent, DrawKind::Model)
+            })
+            .into();
+        e.update_models(0.0);
+        let draws = e.model_draws(&ents, &HashMap::new());
+        assert_eq!([draws[0].instances[0].ghost, draws[1].instances[0].ghost], [false, true]);
     }
 
     #[test]
