@@ -748,6 +748,16 @@ impl Engine {
         &self,
         obstacles: &[i32],
     ) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
+        self.build_vehicle_nav_snapshot_for(obstacles, None)
+    }
+
+    /// [`Self::build_vehicle_nav_snapshot`] as vehicle `owner` sees it: the
+    /// vehicle blocks it owns (`set_vehicle_block_owner`) left open.
+    pub(crate) fn build_vehicle_nav_snapshot_for(
+        &self,
+        obstacles: &[i32],
+        owner: Option<&str>,
+    ) -> Option<Arc<pathfinder::VehicleNavSnapshot>> {
         let nav_entity = self.entity_by_role(RoleKind::NavMesh)?;
         let nav = self.world.get::<&NavMesh>(nav_entity).ok()?;
         let size_x = nav.size_x;
@@ -761,7 +771,13 @@ impl Engine {
                 &mut structural,
                 size_x,
                 size_y,
-                self.vehicle_blocks.values().flatten(),
+                self.vehicle_blocks
+                    .iter()
+                    .filter(|(id, _)| {
+                        owner.is_none()
+                            || self.vehicle_block_owners.get(id).map(String::as_str) != owner
+                    })
+                    .flat_map(|(_, rects)| rects),
             );
         }
 

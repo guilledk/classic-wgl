@@ -498,6 +498,18 @@ tile rects (`Engine::vehicle_blocks: BTreeMap<id, Vec<[x0, y0, x1, y1]>>`):
   (`poll_vehicle_replans`), installing the new route or leaving it stopped.
   Collider `blocks_nav` changes still only refresh the snapshots.
 - Human / `IsoAgent` pathing (`NavSnapshot`) never sees vehicle blocks.
+- **Owners** (`set_vehicle_block_owner(id, owner)`,
+  `Engine::vehicle_block_owners`): an owned block is open to its owner
+  only.  The shared snapshot (the background worker's current one, every
+  other vehicle's) keeps it; an owner's requests search a fresh snapshot
+  built without its blocks (`build_vehicle_nav_snapshot_for`), which the
+  web worker installs for that request and then swaps the shared one back.
+  An ownership change re-plans with each vehicle's own view, so the old
+  owner stops (and re-plans) if its route crosses the block.  Why a
+  separate call rather than an owner argument on `set_vehicle_block`:
+  ownership changes on its own (the lane goes to whichever vehicle is
+  fetching) without re-sending the rects, and `set_vehicle_block` keeps
+  its signature.
 
 ### Integration
 

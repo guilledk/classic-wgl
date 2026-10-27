@@ -210,7 +210,7 @@ impl Engine {
             turn_cost,
             pose,
         };
-        self.submit_vehicle_path(id, query);
+        self.submit_vehicle_path(id, query, name);
 
         self.vehicle_path_entities.insert(id, ve);
         if let Some(goal) = pose {
@@ -434,7 +434,7 @@ impl Engine {
             turn_cost,
             pose: None,
         };
-        self.submit_vehicle_path(id, query);
+        self.submit_vehicle_path(id, query, name);
         self.preview_probe = Some(PreviewProbe {
             name: name.to_string(),
             target,
@@ -445,16 +445,21 @@ impl Engine {
         self.poll_preview_probe(id)
     }
 
-    /// Submit a vehicle path request to the pathfinder.  A synchronous
+    /// Submit `vehicle`'s path request to the pathfinder.  A synchronous
     /// pathfinder searches a snapshot freshly built from the live world (so the
     /// deterministic path sees current heights and `blocks_nav` obstacles); a
-    /// background one searches the snapshot last pushed at nav refresh.
-    fn submit_vehicle_path(&mut self, id: u64, query: VehiclePathQuery) {
+    /// background one searches the snapshot last pushed at nav refresh, but
+    /// for a vehicle owning a vehicle block, which searches a fresh snapshot
+    /// with its own blocks open.
+    fn submit_vehicle_path(&mut self, id: u64, query: VehiclePathQuery, vehicle: &str) {
         self.ensure_pathfinder();
         let synchronous = self.pathfinder.as_ref().is_some_and(|w| w.is_synchronous());
-        let snapshot = if synchronous {
+        // A vehicle owning a block searches its own view of the grid (its
+        // blocks open), built fresh; everyone else the shared one.
+        let owner = self.owns_vehicle_block(vehicle).then_some(vehicle);
+        let snapshot = if synchronous || owner.is_some() {
             let obstacles = self.compute_nav_obstacles();
-            VehicleSnapshot::Fresh(self.build_vehicle_nav_snapshot(&obstacles))
+            VehicleSnapshot::Fresh(self.build_vehicle_nav_snapshot_for(&obstacles, owner))
         } else {
             VehicleSnapshot::Current
         };

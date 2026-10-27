@@ -37,6 +37,9 @@ enum Backend {
 pub struct PathfinderWorker {
     backend: Backend,
     snapshot: Arc<NavSnapshot>,
+    /// The shared vehicle snapshot last set: a request over a fresh one
+    /// (an owner's view, `VehicleSnapshot::Fresh`) puts it back after.
+    vehicle: Option<Arc<VehicleNavSnapshot>>,
 }
 
 impl PathfinderWorker {
@@ -81,7 +84,8 @@ impl PathfinderWorker {
             let _ = crate::post_transfer(&worker, &init, &[&wasm.buffer()]);
         }
 
-        let worker_handle = Self { backend: Backend::Worker { worker, results }, snapshot };
+        let worker_handle =
+            Self { backend: Backend::Worker { worker, results }, snapshot, vehicle: None };
         worker_handle.push_snapshot(&worker_handle.snapshot);
         worker_handle
     }
@@ -90,7 +94,7 @@ impl PathfinderWorker {
     /// deterministic test/golden mode).
     pub fn new_synchronous(snapshot: Arc<NavSnapshot>) -> Self {
         let queue = JobQueue::synchronous(PathfinderState::new((*snapshot).clone()));
-        Self { backend: Backend::Inline(queue), snapshot }
+        Self { backend: Backend::Inline(queue), snapshot, vehicle: None }
     }
 
     /// Whether searches run inline.
@@ -214,6 +218,7 @@ impl PathfinderWorker {
 
     /// Replace the vehicle nav snapshot the worker derives the slope grid from.
     pub fn set_vehicle_snapshot(&mut self, snapshot: Arc<VehicleNavSnapshot>) {
+        self.vehicle = Some(Arc::clone(&snapshot));
         match &mut self.backend {
             Backend::Worker { .. } => self.push_vehicle_snapshot(&snapshot),
             Backend::Inline(queue) => {
@@ -234,17 +239,21 @@ impl PathfinderWorker {
             queue.submit(id, PathJob::FindVehicle { query, snapshot });
             return;
         }
-        match snapshot {
-            VehicleSnapshot::Current => {}
-            // The Worker keeps one current snapshot: install the fresh one first.
-            VehicleSnapshot::Fresh(Some(fresh)) => self.set_vehicle_snapshot(fresh),
+        // The Worker keeps one current snapshot: install a fresh one for this
+        // request, then put the shared one back for the requests after it.
+        let restore = match snapshot {
+            VehicleSnapshot::Current => None,
+            VehicleSnapshot::Fresh(Some(fresh)) => {
+                self.push_vehicle_snapshot(&fresh);
+                self.vehicle.clone()
+            }
             VehicleSnapshot::Fresh(None) => {
                 if let Backend::Worker { results, .. } = &self.backend {
                     results.borrow_mut().insert(id, PathPoll::NoPath);
                 }
                 return;
             }
-        }
+        };
 
         let q = query;
         let from = js_sys::Array::of2(&JsValue::from(q.from.0), &JsValue::from(q.from.1));
@@ -317,6 +326,9 @@ impl PathfinderWorker {
             );
         }
         self.post(&msg, &[]);
+        if let Some(shared) = restore {
+            self.push_vehicle_snapshot(&shared);
+        }
     }
 
     /// Submit a vehicle path request over the current vehicle snapshot under a

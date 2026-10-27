@@ -10,6 +10,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `set_vehicle_block_owner(id, owner)` (guest import,
+  `Engine::set_vehicle_block_owner`): a vehicle block can exempt one
+  vehicle, so a lane reserved for the mule fetching from it keeps every
+  other vehicle out but not that one.  The owner's searches use a fresh
+  snapshot with its blocks open (the web worker swaps the shared one back
+  after the request), everyone else's the shared one; an ownership change
+  re-plans the routes it cuts.  A separate call, since ownership moves
+  from vehicle to vehicle without the rects changing (#181).
 - `vehicle_goto_pose(name, x, y, heading_deg)` (guest import,
   `Engine::vehicle_goto_pose`) drives a vehicle to a point arriving
   facing a heading, instead of the guest driving to a point and then
