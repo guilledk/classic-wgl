@@ -89,7 +89,7 @@ impl Engine {
         let span = span_m.max(1e-3);
         let h = 0.5 * span / TILE_M;
         let (f, l) = heading_axes(heading);
-        let at = |a: [f32; 2], k: f32| self.height_at(x + a[0] * h * k, y + a[1] * h * k);
+        let at = |a: [f32; 2], k: f32| self.ground_at(x + a[0] * h * k, y + a[1] * h * k);
         let pitch = ((at(f, 1.0) - at(f, -1.0)) / span).atan();
         let roll = ((at(l, 1.0) - at(l, -1.0)) / span).atan();
         (pitch, roll)
@@ -127,7 +127,7 @@ impl Engine {
             let cy = p.y + (sf * f[1] + sl * l[1]) * half / TILE_M;
             // The corner's height above the anchor on the drawn tilt plane.
             let lift = sf * half * dp.tan() + sl * half * dr.tan();
-            rest = rest.max(self.height_at(cx, cy) - lift);
+            rest = rest.max(self.ground_at(cx, cy) - lift);
         }
         if let Ok(mut s) = self.world.get::<&mut IsoSprite>(e) {
             s.frame_offset.z = rest - ground;
@@ -385,6 +385,27 @@ mod tests {
         let b = sprite(&e).dir_blend.unwrap();
         assert_eq!(b.tilt, [0.0; 3]);
         assert!(b.third.is_none());
+    }
+
+    #[test]
+    fn terrain_fit_rests_on_a_raised_floor() {
+        let mut e = Engine::new_for_test();
+        slope_tilemap(&mut e, 16, 0.0);
+        spawn_box(&mut e, false, Vec3::new(8.0, 8.0, 0.0));
+        // A 0.5 m deck under the whole footprint: level, lifted 0.5 m over the
+        // terrain (the sprite's altitude reference).
+        assert!(e.set_floor_rect(7, 6.0, 6.0, 10.0, 10.0, 0.5));
+        assert_eq!(e.sprite_fit_terrain("box", 0.0, 2.44), Some((0.0, 0.0)));
+        assert!((sprite(&e).frame_offset.z - 0.5).abs() < 1e-5);
+        // The deck edge under its front half: it tilts nose-up onto it and
+        // rests with its lowest corner on the ground.
+        assert!(e.set_floor_rect(7, 8.0, 6.0, 10.0, 10.0, 0.2));
+        let (p, r) = e.sprite_fit_terrain("box", 0.0, 2.44).unwrap();
+        assert!(p > 0.05 && r.abs() < 1e-5, "{p} {r}");
+        // Cleared: back on the terrain.
+        assert!(e.clear_floor_rect(7));
+        assert_eq!(e.sprite_fit_terrain("box", 0.0, 2.44), Some((0.0, 0.0)));
+        assert_eq!(sprite(&e).frame_offset.z, 0.0);
     }
 
     #[test]

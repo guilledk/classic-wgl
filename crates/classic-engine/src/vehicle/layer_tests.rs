@@ -740,3 +740,65 @@ fn front_tyres_steer_into_the_turn_both_ways() {
     assert!(steer > 0.1, "reversing right swing: steer {steer}");
     assert_eq!(steer_axis.index(steer), 2, "the full-left frame");
 }
+
+#[test]
+fn floor_rects_raise_each_wheel_at_their_edge() {
+    // An East-facing rover at (12, 12): front contacts at x ≈ 13.69, rear at
+    // x ≈ 10.04; left (north) at y ≈ 9.41, right at y ≈ 14.59.
+    let mut engine = spawn_rover();
+    let body = engine.names["rover"];
+    let base = engine.height_at(12.0, 12.0);
+    assert_eq!(base, engine.height_at(3.0, 20.0), "a flat test map");
+    let teleport = |engine: &mut Engine| {
+        engine.world.get::<&mut IsoVehicle>(body).unwrap().heading = 0.0;
+        assert!(engine.vehicle_teleport("rover", 12.0, 12.0));
+        engine.time.delta = 0.0;
+        engine.update_vehicles();
+        IsoVehicle::clone(&engine.world.get::<&IsoVehicle>(body).unwrap())
+    };
+    // The front wheels on a deck 0.3 m up, the rear on the terrain: each wheel
+    // takes its own ground, the body pitches nose-up over the wheelbase and
+    // sits at the mean of its contacts.
+    assert!(engine.set_floor_rect(1, 20.0, 0.0, 13.0, 24.0, base + 0.3), "either corner order");
+    let v = teleport(&mut engine);
+    assert_eq!(
+        v.wheel_h.map(|h| ((h - base) * 1e4).round() / 1e4),
+        [0.3, 0.3, 0.0, 0.0],
+        "fl fr on, rl rr off"
+    );
+    let wheelbase = 1.19 + 1.38;
+    assert!((v.pitch - (0.3f32 / wheelbase).atan()).abs() < 1e-4, "pitch {}", v.pitch);
+    assert!(v.roll.abs() < 1e-5);
+    assert!((v.altitude - (base + 0.15)).abs() < 1e-5);
+    // Drawn over the terrain, untouched by the floor: a layer's altitude is
+    // its height above the terrain (the sprite model re-adds the terrain).
+    for name in ["rover.wheel_fl", "rover.wheel_rl"] {
+        let e = engine.names[name];
+        let z = engine.world.get::<&Transform>(e).unwrap().position.z;
+        let alt = engine.world.get::<&IsoSprite>(e).unwrap().frame_offset.z;
+        assert!((alt - (z - base)).abs() < 1e-5, "{name}: altitude {alt} vs z {z}");
+    }
+    assert_eq!(engine.height_at(14.0, 12.0), base, "the terrain itself is unchanged");
+    assert_eq!(engine.ground_at(14.0, 12.0), base + 0.3);
+    assert_eq!(engine.ground_at(12.99, 12.0), base, "edges are sharp");
+    // A deck under the left wheels only: the left side rides up, the body
+    // rolls left-up.
+    assert!(engine.clear_floor_rect(1));
+    assert!(engine.set_floor_rect(2, 0.0, 0.0, 24.0, 12.0, base + 0.3));
+    let v = teleport(&mut engine);
+    assert_eq!(
+        v.wheel_h.map(|h| ((h - base) * 1e4).round() / 1e4),
+        [0.3, 0.0, 0.3, 0.0],
+        "fl rl on, fr rr off"
+    );
+    assert!((v.roll - (0.3f32 / 3.64).atan()).abs() < 1e-4, "roll {}", v.roll);
+    // A floor below the terrain changes nothing; clearing restores it.
+    assert!(engine.set_floor_rect(3, 0.0, 0.0, 24.0, 24.0, base - 1.0));
+    assert!(engine.clear_floor_rect(2));
+    let v = teleport(&mut engine);
+    assert_eq!(v.wheel_h, [base; 4]);
+    assert!(engine.clear_floor_rect(3));
+    assert!(!engine.clear_floor_rect(3), "already gone");
+    assert!(!engine.set_floor_rect(4, f32::NAN, 0.0, 1.0, 1.0, 0.0));
+    assert_eq!(teleport(&mut engine).pitch, 0.0);
+}

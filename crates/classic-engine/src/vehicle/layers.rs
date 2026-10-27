@@ -381,7 +381,7 @@ impl Engine {
                     s.yaw_target = wrap_pi(desired - heading);
                     let dist_m = ((px - tx).powi(2) + (py - ty).powi(2)).sqrt() * TILE_M;
                     let z_turret = write.body[2] + p.z;
-                    let dz = terrain.height(px, py) - z_turret;
+                    let dz = terrain.ground(px, py) - z_turret;
                     let elev = dz.atan2(dist_m.max(1e-3));
                     s.pitch = match l.pitch {
                         Some(ax) => elev.clamp(ax.min().to_radians(), ax.max_deg.to_radians()),

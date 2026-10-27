@@ -397,6 +397,39 @@ fn guest_vehicle_face_and_reverse_imports_wired() {
 }
 
 #[test]
+fn guest_floor_rect_imports_wired() {
+    // Sets floor 3 at 7.5 m (over the 1 m test map) on tiles (1..2) x (1..2), writes the ground
+    // height there to `g.x`, then clears it (twice: 1, then 0) into `g.y/z`.
+    with_each_runtime(
+        r#"(module
+            (import "env" "set_floor_rect" (func $set_floor (param i32 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "clear_floor_rect" (func $clear (param i32) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "g")
+            (func (export "update") (param f64)
+                (drop (call $set_floor (i32.const 3) (f64.const 2) (f64.const 2)
+                    (f64.const 1) (f64.const 1) (f64.const 7.5)))
+                (drop (call $set (i32.const 0) (i32.const 1)
+                    (f64.convert_i32_s (call $clear (i32.const 3)))
+                    (f64.convert_i32_s (call $clear (i32.const 3)))
+                    (f64.const 0)))
+                (drop (call $set_floor (i32.const 3) (f64.const 2) (f64.const 2)
+                    (f64.const 1) (f64.const 1) (f64.const 7.5)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            engine.spawn_named("g");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("g"), Some((1.0, 0.0, 0.0)), "cleared once, then gone");
+            assert_eq!(engine.ground_at(1.5, 1.5), 7.5, "set again, either corner order");
+            assert!(engine.height_at(1.5, 1.5) < 7.5, "the terrain is unchanged");
+        },
+    );
+}
+
+#[test]
 fn guest_selection_and_speed_imports_wired() {
     with_each_runtime(
         r#"(module

@@ -107,6 +107,8 @@ macro_rules! for_each_host_import {
             vehicle_stop(name: str) -> i32 [native web worker];
             vehicle_face(name: str, heading_deg: f64) -> i32 [native web worker];
             vehicle_reverse_to(name: str, x: f64, y: f64) -> i32 [native web worker];
+            set_floor_rect(id: i32, x0: f64, y0: f64, x1: f64, y1: f64, z_m: f64) -> i32 [native web worker];
+            clear_floor_rect(id: i32) -> i32 [native web worker];
             vehicle_set_speed(name: str, speed: f64) -> i32 [native web worker];
             vehicle_probe(name: str, tx: i32, ty: i32) -> i32 [native web worker];
             vehicle_probe_clear(name: str) -> i32 [native web worker];
@@ -985,9 +987,9 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 135);
-        assert_eq!(imports_for(Backend::Web).count(), 135);
-        assert_eq!(imports_for(Backend::Worker).count(), 135);
+        assert_eq!(imports_for(Backend::Native).count(), 137);
+        assert_eq!(imports_for(Backend::Web).count(), 137);
+        assert_eq!(imports_for(Backend::Worker).count(), 137);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
         assert_eq!(imports_for(Backend::Tier3Trap).count(), 28);
     }
