@@ -378,6 +378,9 @@ pub struct Engine {
     /// Vehicle blocks by id (`set_vehicle_block`): inclusive tile rects
     /// only vehicles may not cross, see `vehicle::block`.
     pub vehicle_blocks: std::collections::BTreeMap<i32, Vec<[i32; 4]>>,
+    /// The vehicle each owned vehicle block exempts (`set_vehicle_block_owner`),
+    /// by block id: its own searches drive through the block.
+    pub vehicle_block_owners: std::collections::BTreeMap<i32, String>,
     /// Re-plans submitted for vehicles whose route a vehicle block cut.
     vehicle_replans: Vec<u64>,
     /// The goal heading of each in-flight pose route request

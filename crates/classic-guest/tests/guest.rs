@@ -458,6 +458,38 @@ fn guest_vehicle_goto_pose_import_wired() {
 }
 
 #[test]
+fn guest_vehicle_block_owner_import_wired() {
+    // No block 4: `0`; set it, then own it (`1`) and disown it (`1`).
+    with_each_runtime(
+        r#"(module
+            (import "env" "set_vehicle_block" (func $set_block (param i32 i32 i32) (result i32)))
+            (import "env" "set_vehicle_block_owner" (func $own (param i32 i32 i32) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "g")
+            (data (i32.const 8) "mule")
+            (data (i32.const 16) "\01\00\00\00\01\00\00\00\02\00\00\00\02\00\00\00")
+            (func (export "update") (param f64)
+                (local $none i32)
+                (local.set $none (call $own (i32.const 4) (i32.const 8) (i32.const 4)))
+                (drop (call $set_block (i32.const 4) (i32.const 16) (i32.const 16)))
+                (drop (call $set (i32.const 0) (i32.const 1)
+                    (f64.convert_i32_s (local.get $none))
+                    (f64.convert_i32_s (call $own (i32.const 4) (i32.const 8) (i32.const 4)))
+                    (f64.const 0)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            engine.spawn_named("g");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("g"), Some((0.0, 1.0, 0.0)));
+            assert_eq!(engine.vehicle_block_owners.get(&4).map(String::as_str), Some("mule"));
+        },
+    );
+}
+
+#[test]
 fn guest_vehicle_block_imports_wired() {
     // Sets block 4 to two rects (the second in reverse corner order), writes
     // the rect count, a ragged list's `-1` and two clears (1, then 0) to `g`,

@@ -58,8 +58,36 @@ impl Engine {
         self.vehicle_blocks_changed();
     }
 
+    /// Give vehicle block `id` an owner: vehicle `owner`'s own searches drive
+    /// through it while every other vehicle's respect it (a lane reserved
+    /// for the vehicle working in it); `None` makes it block everyone again.
+    /// The block keeps its owner when its rects are replaced, and loses it
+    /// when cleared.  Re-plans the routes the change cuts (the old owner's
+    /// through it).  `false` when there is no block `id`.
+    pub fn set_vehicle_block_owner(&mut self, id: i32, owner: Option<&str>) -> bool {
+        if !self.vehicle_blocks.contains_key(&id) {
+            return false;
+        }
+        let owner = owner.filter(|o| !o.is_empty()).map(str::to_string);
+        if self.vehicle_block_owners.get(&id) == owner.as_ref() {
+            return true;
+        }
+        match owner {
+            Some(o) => self.vehicle_block_owners.insert(id, o),
+            None => self.vehicle_block_owners.remove(&id),
+        };
+        self.replan_cut_vehicle_routes();
+        true
+    }
+
+    /// Whether vehicle `name` owns any vehicle block.
+    pub(crate) fn owns_vehicle_block(&self, name: &str) -> bool {
+        self.vehicle_block_owners.values().any(|o| o == name)
+    }
+
     /// Remove vehicle block `id`; `false` when there is none.
     pub fn clear_vehicle_block(&mut self, id: i32) -> bool {
+        self.vehicle_block_owners.remove(&id);
         let had = self.vehicle_blocks.remove(&id).is_some();
         if had {
             self.vehicle_blocks_changed();
@@ -74,20 +102,41 @@ impl Engine {
     }
 
     /// Stop every vehicle whose remaining route (from the waypoint it left)
-    /// is no longer clear on the vehicle blocking grid, and submit a fresh
-    /// search to its goal, polled by [`Engine::poll_vehicle_replans`].  An
-    /// airborne vehicle (which takes no goto) just stops.
+    /// is no longer clear on its vehicle blocking grid (the shared one, or an
+    /// owner's with its own blocks open), and submit a fresh search to its
+    /// goal, polled by [`Engine::poll_vehicle_replans`].  An airborne
+    /// vehicle (which takes no goto) just stops.
     fn replan_cut_vehicle_routes(&mut self) {
         let snap = std::sync::Arc::clone(&self.vehicle_nav_snapshot);
         let (sx, sy) = (snap.size_x, snap.size_y);
         if snap.structural.len() != (sx * sy) as usize {
             return;
         }
+        // an owner's view of the grid, built once per owner
+        let obstacles = self.compute_nav_obstacles();
+        let mut owner_grids: std::collections::HashMap<String, Vec<i32>> = Default::default();
+        for owner in self.vehicle_block_owners.values() {
+            if !owner_grids.contains_key(owner) {
+                if let Some(s) = self.build_vehicle_nav_snapshot_for(&obstacles, Some(owner)) {
+                    owner_grids.insert(owner.clone(), s.structural.clone());
+                }
+            }
+        }
+        let names: std::collections::HashMap<hecs::Entity, String> = self
+            .world
+            .query::<&IsoVehicle>()
+            .iter()
+            .map(|(e, _)| (e, self.debug_name(e)))
+            .collect();
         let cut: Vec<(hecs::Entity, (i32, i32), Option<f32>)> = self
             .world
             .query::<&IsoVehicle>()
             .iter()
             .filter_map(|(e, v)| {
+                let grid = names
+                    .get(&e)
+                    .and_then(|n| owner_grids.get(n))
+                    .map_or(snap.structural.as_slice(), Vec::as_slice);
                 if v.path_idx >= v.path.len() {
                     return None;
                 }
@@ -97,7 +146,7 @@ impl Engine {
                 let pose = v.path_reverse.len() == v.path.len();
                 let clear = if pose {
                     classic_core::pathfinder::route_clear_pose(
-                        &snap.structural,
+                        grid,
                         sx,
                         sy,
                         &route,
@@ -106,7 +155,7 @@ impl Engine {
                     )
                 } else {
                     classic_core::pathfinder::route_clear(
-                        &snap.structural,
+                        grid,
                         sx,
                         sy,
                         &route,

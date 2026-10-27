@@ -479,6 +479,15 @@ impl GuestHost {
         rects.len() as i32
     }
 
+    /// Give vehicle block `id` an owner: vehicle `owner` (resolved like the
+    /// `vehicle_*` names) drives through it while every other vehicle is kept
+    /// out; an empty name makes it block everyone again.  Routes the change
+    /// cuts re-plan.  `0` when there is no block `id`.
+    pub fn set_vehicle_block_owner(&mut self, id: i32, owner: &str) -> i32 {
+        let owner = (!owner.is_empty()).then(|| self.resolve(owner));
+        self.engine_mut().set_vehicle_block_owner(id, owner.as_deref()) as i32
+    }
+
     /// Remove vehicle block `id`; `0` when there is none.
     pub fn clear_vehicle_block(&mut self, id: i32) -> i32 {
         self.engine_mut().clear_vehicle_block(id) as i32

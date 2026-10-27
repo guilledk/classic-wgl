@@ -1918,3 +1918,53 @@ fn an_unreachable_pose_is_refused() {
         VehicleGotoSubmit::NoVehicle
     ));
 }
+
+#[test]
+fn a_block_owner_drives_through_its_block_and_no_one_else_does() {
+    // A wall across the map at x = 24, owned by `lrv`.
+    let mut engine = engine_with_wide_body();
+    assert!(engine.spawn_vehicle("lrv", "other", 5.5, 30.5));
+    assert!(!engine.set_vehicle_block_owner(1, Some("lrv")), "no block 1 yet");
+    engine.set_vehicle_block(1, &[[24, 0, 24, 47]]);
+    assert!(engine.set_vehicle_block_owner(1, Some("lrv")));
+    assert!(matches!(goto_sync(&mut engine, "lrv", 40, 10), VehicleGotoPoll::Accepted(_)));
+    assert!(matches!(goto_sync(&mut engine, "other", 40, 30), VehicleGotoPoll::NoPath));
+    // replacing the rects keeps the owner
+    engine.set_vehicle_block(1, &[[24, 0, 24, 47], [25, 0, 25, 3]]);
+    assert!(matches!(goto_sync(&mut engine, "lrv", 40, 12), VehicleGotoPoll::Accepted(_)));
+    // the shared grid (other vehicles, the background worker) keeps it
+    assert_eq!(engine.vehicle_nav_snapshot.structural[10 * 48 + 24], 0);
+    // clearing the block reopens it for everyone, and forgets the owner
+    assert!(engine.clear_vehicle_block(1));
+    assert!(engine.vehicle_block_owners.is_empty());
+    assert!(matches!(goto_sync(&mut engine, "other", 40, 30), VehicleGotoPoll::Accepted(_)));
+}
+
+#[test]
+fn losing_a_blocks_ownership_replans_the_route_through_it() {
+    let mut engine = engine_with_wide_body();
+    engine.set_vehicle_block(1, &[[24, 0, 24, 47]]);
+    engine.set_vehicle_block_owner(1, Some("lrv"));
+    let VehicleGotoPoll::Accepted(route) = goto_sync(&mut engine, "lrv", 40, 10) else {
+        panic!("the owner's route");
+    };
+    let ve = engine.names["lrv"];
+    for _ in 0..10 {
+        engine.time.delta = 1.0 / 60.0;
+        engine.update_vehicles();
+    }
+    // handing it to another vehicle cuts lrv's route: it stops, re-plans,
+    // and (the wall spans the map) stays stopped
+    assert!(engine.set_vehicle_block_owner(1, Some("other")));
+    assert!(engine.world.get::<&IsoVehicle>(ve).unwrap().path.is_empty(), "stopped");
+    for _ in 0..3 {
+        engine.time.delta = 1.0 / 60.0;
+        engine.update_vehicles();
+    }
+    assert!(engine.world.get::<&IsoVehicle>(ve).unwrap().path.is_empty(), "no way round");
+    // given back, a new goto drives through again
+    assert!(engine.set_vehicle_block_owner(1, Some("lrv")));
+    assert!(
+        matches!(goto_sync(&mut engine, "lrv", 40, 10), VehicleGotoPoll::Accepted(r) if r.last() == route.last())
+    );
+}
