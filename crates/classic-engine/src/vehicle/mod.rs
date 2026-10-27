@@ -15,6 +15,7 @@ mod attach;
 pub(crate) mod block;
 mod control;
 mod dust;
+mod guard;
 mod kinematics;
 #[cfg(test)]
 mod layer_tests;

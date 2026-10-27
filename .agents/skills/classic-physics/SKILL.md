@@ -498,6 +498,34 @@ lattice, on the pathfinder worker like any vehicle search (the query's
 - **Blocks:** a vehicle block cutting a pose route re-plans it as a pose
   route (`route_clear_pose` checks the chords in gear).
 
+### Follower body guard (`vehicle/guard.rs`)
+
+The planners keep the oriented body clear along a route's lines; the
+pure-pursuit followers (plain and pose) aim a look-ahead point down the
+route and so cut inside its corners, a few cm onto cells it went round.
+While following a route (not `vehicle_face` / `vehicle_reverse_to`) each
+step is guarded against the vehicle grid (the shared snapshot plus the
+blocks other vehicles own), rasterized as the planner does
+(`pathfinder::body_blocked_cells`: cells the body's interior overlaps):
+
+- **Look-ahead:** when a blocked cell lies within reach (a square scan of
+  body reach + look-ahead + 1 tiles), the follower plays its pursuit
+  forward (0.1 tile steps, its turn rate per tile, look-ahead + 1 tiles)
+  and takes the longest of its look-ahead, ⅔, ⅖ of it or 0.5 tile whose
+  played path stays off blocked cells (`GuardGrid::safe_lookahead`).
+- **Step:** the step's pose may not add a blocked cell to those the body
+  is on (a relaxed start keeps its own).  Else the first clear of: the
+  step aimed at the next waypoint, the step straight on, then each at ½,
+  ¼ and 1/10 of the step (slower turns tighter); none clear, the one
+  adding the fewest cells.  It never holds a vehicle still: the grid does
+  not change under it, and a block change re-plans cut routes anyway.
+- The plain planner turns its body at a cell; a corner tighter than the
+  vehicle's speed / turn rate can still be grazed (a 3.8-tile-wide test
+  body round a 2-tile pillar: 3 frames); the mule-like test kit and the
+  padtest runs stay clear.
+- `Engine::vehicle_follow_guard` (default on) switches it off for A/B.
+  Cost: padtest, three mules, `vehicles` phase mean 0.073 → 0.093 ms.
+
 ### Vehicle blocking grid (`vehicle::block`, `set_vehicle_block`)
 
 The vehicle search never reads the nav grid: `NavMesh.data` is *human*

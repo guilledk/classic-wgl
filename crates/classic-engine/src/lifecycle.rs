@@ -110,6 +110,7 @@ impl Engine {
             vehicle_blocks: Default::default(),
             vehicle_block_owners: Default::default(),
             vehicle_replans: Vec::new(),
+            vehicle_follow_guard: true,
             vehicle_pose_goals: HashMap::new(),
             preview_probe: None,
             next_task_id: 0,

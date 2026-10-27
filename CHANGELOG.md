@@ -430,6 +430,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Vehicle path followers no longer cut a route's corners onto blocked
+  cells.  The planners keep the oriented body clear along the route's
+  lines, but the pure-pursuit follower aims down the route and grazed the
+  cells it went round (the padtest multi-mule run: 2–5 cm onto the pad's
+  structures at (72, 66) and (67, 73)).  The follower now shortens its
+  look-ahead where a played-forward pursuit would put the body on a
+  blocked cell, and checks each step's pose, falling back to a step
+  toward the next waypoint, straight on, or slower (`vehicle/guard.rs`,
+  `pathfinder::body_blocked_cells`; `Engine::vehicle_follow_guard`, on by
+  default) (#186).
+
 - Scenario mouse input reaches the engine.  A `mouseClick` wrote
   `engine.input` after the update closures, and the next frame's
   platform snapshot overwrote it before selection, picking or the guest

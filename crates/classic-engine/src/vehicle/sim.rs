@@ -363,6 +363,7 @@ impl Engine {
         };
         let wheel_handles = self.vehicle_wheel_handles(ve);
         let tire_handles = self.vehicle_tire_handles(ve);
+        let guard = self.follow_guard_grid(ve);
 
         let write = {
             let Some(mut v) = self.world.get::<&mut IsoVehicle>(ve).ok() else { return };
@@ -370,6 +371,7 @@ impl Engine {
             // -- movement along the A* path (kinematic bicycle, forward+reverse) --
             let mut x = body_x;
             let mut y = body_y;
+            let heading0 = v.heading;
             let mut following = false;
             // Signed ground speed this step (tiles/s; negative = reversing).
             let mut drive_tiles = 0.0f32;
@@ -471,7 +473,17 @@ impl Engine {
                         ]);
                     }
                     let reach = if last_run { turn_radius * 1.5 } else { to_end };
-                    let lookahead_dist = (turn_radius * POSE_LOOKAHEAD).min(reach).max(0.75);
+                    let mut lookahead_dist = (turn_radius * POSE_LOOKAHEAD).min(reach).max(0.75);
+                    if let Some(g) = &guard {
+                        lookahead_dist = g.safe_lookahead(
+                            &run,
+                            idx,
+                            (x, y, v.heading),
+                            back,
+                            1.0 / turn_radius.max(1e-3),
+                            lookahead_dist,
+                        );
+                    }
                     let (gx, gy, next_idx) = lookahead(&run, idx, x, y, lookahead_dist);
                     v.path_idx = next_idx.clamp(idx, end);
                     let desired = (gy - y).atan2(gx - x);
@@ -521,7 +533,18 @@ impl Engine {
                     // through corners rather than orbiting a waypoint inside
                     // its turning circle.
                     let turn_radius = v.speed / v.turn_rate.max(1e-3);
-                    let lookahead_dist = (turn_radius * 1.5).max(1.0);
+                    let mut lookahead_dist = (turn_radius * 1.5).max(1.0);
+                    if let Some(g) = &guard {
+                        // shorter where the pursuit would cut onto blocks
+                        lookahead_dist = g.safe_lookahead(
+                            &v.path,
+                            v.path_idx,
+                            (x, y, v.heading),
+                            v.reversing,
+                            v.turn_rate / v.speed.max(1e-3),
+                            lookahead_dist,
+                        );
+                    }
                     let (gx, gy, next_idx) = lookahead(&v.path, v.path_idx, x, y, lookahead_dist);
                     v.path_idx = next_idx;
 
@@ -567,6 +590,21 @@ impl Engine {
                     y += dir * v.heading.sin() * step;
                     drive_tiles = dir * drive_speed;
                     following = true;
+                }
+            }
+            // Keep the body off blocked cells the route went round: the
+            // follower's pursuit cuts inside the planned corners.
+            if following && v.face.is_none() && v.reverse_to.is_none() {
+                if let Some(guard) = &guard {
+                    let moved = super::guard::follow_guard(
+                        guard,
+                        &mut v,
+                        (body_x, body_y, heading0),
+                        (x, y),
+                        drive_tiles,
+                        delta,
+                    );
+                    (x, y, drive_tiles) = moved;
                 }
             }
             if !following {

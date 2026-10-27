@@ -383,6 +383,9 @@ pub struct Engine {
     pub vehicle_block_owners: std::collections::BTreeMap<i32, String>,
     /// Re-plans submitted for vehicles whose route a vehicle block cut.
     vehicle_replans: Vec<u64>,
+    /// Keep path followers' bodies off blocked cells (`vehicle::guard`; on by
+    /// default).  Off, a follower cuts its route's corners as it pursues.
+    pub vehicle_follow_guard: bool,
     /// The goal heading of each in-flight pose route request
     /// (`vehicle_goto_pose`), by request id.
     vehicle_pose_goals: HashMap<u64, f32>,
