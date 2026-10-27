@@ -1,7 +1,9 @@
 //! v2 layered vehicles: spawn, layer placement and frames, clips, turrets,
 //! spin and pivot turns.
 
-use classic_core::components::{ClipPlay, IsoSprite, IsoVehicle, Role, RoleKind, Transform};
+use classic_core::components::{
+    ClipPlay, Emitter, IsoSprite, IsoVehicle, Light, Role, RoleKind, Transform,
+};
 use classic_core::tilemap::TILE_M;
 use classic_core::types::{FrameTable, VehicleDef};
 use classic_core::vehicle_def::ClipDef;
@@ -806,4 +808,81 @@ fn floor_rects_raise_each_wheel_at_their_edge() {
     assert!(!engine.clear_floor_rect(3), "already gone");
     assert!(!engine.set_floor_rect(4, f32::NAN, 0.0, 1.0, 1.0, 0.0));
     assert_eq!(teleport(&mut engine).pitch, 0.0);
+}
+
+/// The tank with a beacon spot and a lamp emitter declared on its def.
+fn tank_with_def_lights() -> Engine {
+    let mut engine = socket_tank();
+    let def = engine.vehicles.get_mut("tank").unwrap();
+    def.lights = serde_json::from_value(serde_json::json!([{
+        "kind": "spot", "socket": "lamp", "position": [0.0, 0.0, 0.1], "color": [1, 0.5, 0],
+        "intensity": 2.0, "radius": 5, "dir": [1.0, 0.0, -0.25], "cone_angle": 0.4
+    }]))
+    .unwrap();
+    def.emitters = serde_json::from_value(serde_json::json!([{
+        "effect": "glow", "socket": "muzzle"
+    }]))
+    .unwrap();
+    classic_core::vehicle_def::validate(def).expect("sockets resolve");
+    engine
+}
+
+#[test]
+fn a_defs_lights_and_emitters_come_and_go_with_each_vehicle() {
+    let mut engine = tank_with_def_lights();
+    // the scene's tank predates the def's lights: spawn two more at runtime
+    assert!(engine.spawn_vehicle("tank", "t1", 4.0, 4.0));
+    assert!(engine.spawn_vehicle("tank", "t2", 16.0, 16.0));
+    for name in ["t1", "t2"] {
+        let light = engine.world.get::<&Light>(engine.names[&format!("{name}__light0")]).unwrap();
+        assert_eq!((light.parent.as_deref(), light.node.as_deref()), (Some(name), Some("lamp")));
+        let em = engine.world.get::<&Emitter>(engine.names[&format!("{name}__emitter0")]).unwrap();
+        assert_eq!((em.parent.as_deref(), em.node.as_deref()), (Some(name), Some("muzzle")));
+    }
+    // each lamp sits on its own vehicle's socket, at full strength
+    let lamps: Vec<_> = engine.gather_lights();
+    assert_eq!(lamps.len(), 2);
+    for (light, name) in lamps.iter().zip(["t1", "t2"]) {
+        let at = engine.vehicle_socket_pos(name, "lamp").unwrap() + glam::Vec3::new(0.0, 0.0, 0.1);
+        assert!(lamps.iter().any(|l| (l.position - at).length() < 1e-4), "{name}: {light:?}");
+        assert_eq!(light.intensity, 2.0);
+    }
+    // a despawned vehicle takes its own, and only its own
+    assert!(engine.despawn_named("t1"));
+    assert!(!engine.names.contains_key("t1__light0") && !engine.names.contains_key("t1__emitter0"));
+    assert!(engine.names.contains_key("t2__light0") && engine.names.contains_key("t2__emitter0"));
+    assert_eq!(engine.gather_lights().len(), 1);
+}
+
+#[test]
+fn socket_lamps_dim_with_the_vehicles_emissive_strength() {
+    let mut engine = tank_with_def_lights();
+    assert!(engine.spawn_vehicle("tank", "t1", 4.0, 4.0));
+    let intensity = |engine: &Engine| engine.gather_lights()[0].intensity;
+    assert_eq!(intensity(&engine), 2.0, "never set: authored");
+    engine.vehicle_emissive("t1", 0.0);
+    assert_eq!(intensity(&engine), 0.0, "emissive 0 puts the lamps out");
+    engine.vehicle_emissive("t1", 0.5);
+    assert_eq!(intensity(&engine), 1.0);
+    engine.vehicle_emissive("t1", 1.8);
+    assert_eq!(intensity(&engine), 2.0, "a bloom above 1 leaves them authored");
+    // the emitter on a socket scales alike; anything off a socket does not
+    assert_eq!(engine.vehicle_lamp_scale(Some("t1"), Some("muzzle")), 1.0);
+    engine.vehicle_emissive("t1", 0.25);
+    assert_eq!(engine.vehicle_lamp_scale(Some("t1"), Some("muzzle")), 0.25);
+    assert_eq!(engine.vehicle_lamp_scale(Some("t1"), None), 1.0, "wheel dust is no lamp");
+    assert_eq!(engine.vehicle_lamp_scale(Some("tilemap"), Some("x")), 1.0, "not a vehicle");
+}
+
+#[test]
+fn a_def_light_on_an_unknown_socket_is_refused() {
+    let mut def = tank_def();
+    def.lights = serde_json::from_value(serde_json::json!([{
+        "socket": "nope", "position": [0, 0, 0], "color": [1, 1, 1]
+    }]))
+    .unwrap();
+    def.emitters = serde_json::from_value(serde_json::json!([{ "effect": "glow" }])).unwrap();
+    let errs = classic_core::vehicle_def::validate(&def).unwrap_err();
+    assert!(errs.iter().any(|e| e.contains("light 0: unknown socket 'nope'")), "{errs:?}");
+    assert!(errs.iter().any(|e| e.contains("emitter 0: needs a `socket`")), "{errs:?}");
 }

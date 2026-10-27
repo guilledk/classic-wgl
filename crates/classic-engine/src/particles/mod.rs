@@ -907,7 +907,9 @@ impl Engine {
                 (false, _) => None,
             };
             inst.tint = em.color;
-            inst.intensity = em.intensity;
+            // a lamp on a vehicle socket dims with its emissive strength
+            inst.intensity =
+                em.intensity * self.vehicle_lamp_scale(em.parent.as_deref(), em.node.as_deref());
             inst.rate = em.rate;
             inst.prev_frame = Some(inst.frame);
             let (scale, speed) = (em.scale, em.speed);

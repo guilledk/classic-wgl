@@ -913,6 +913,17 @@ pub fn validate(def: &crate::types::VehicleDef) -> Result<(), Vec<String>> {
             errs.push(format!("socket '{sname}': offset must be finite"));
         }
     }
+    // The def's lights and emitters each ride one of its sockets.
+    let lights = def.lights.iter().map(|l| l.node.as_deref()).enumerate().map(|s| ("light", s));
+    let emitters =
+        def.emitters.iter().map(|e| e.node.as_deref()).enumerate().map(|s| ("emitter", s));
+    for (what, (i, socket)) in lights.chain(emitters) {
+        match socket {
+            Some(s) if def.sockets.contains_key(s) => {}
+            Some(s) => errs.push(format!("{what} {i}: unknown socket '{s}'")),
+            None => errs.push(format!("{what} {i}: needs a `socket`")),
+        }
+    }
     if errs.is_empty() {
         Ok(())
     } else {

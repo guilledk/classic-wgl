@@ -379,7 +379,8 @@ as the one-sprite reference the instanced path mirrors.
   on (RGBA8: they saturate toward white and cross the bright-pass).
 - Instance: `team = rgb, emissive` (the 14th `vec4`, 16 attributes total),
   flag 4 in `misc.z` = team on.  ABI: `vehicle_team(name, r, g, b)`,
-  `vehicle_emissive(name, strength)` (every part of the vehicle).
+  `vehicle_emissive(name, strength)` (every part of the vehicle; its
+  socket lights and emitters dim with it, up to 1: `classic-iso`).
 
 ## 5c. Direction interpolation (`sheet.frag#INTERP`)
 

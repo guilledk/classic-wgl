@@ -876,6 +876,10 @@ pub struct IsoVehicle {
     /// Seconds left standing at the current gear change.
     #[serde(skip)]
     pub gear_wait: f32,
+    /// The names of the light and emitter entities spawned from the def's
+    /// `lights` / `emitters` (removed with the vehicle).
+    #[serde(skip)]
+    pub attachments: Vec<String>,
 }
 
 /// Runtime state of one v2 vehicle layer (`classic_core::vehicle_def`).
@@ -988,6 +992,7 @@ impl Default for IsoVehicle {
             turn_radius: None,
             gear_change_s: 0.0,
             gear_wait: 0.0,
+            attachments: Vec::new(),
         }
     }
 }

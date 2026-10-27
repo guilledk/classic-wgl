@@ -206,9 +206,14 @@ impl Engine {
         true
     }
 
-    /// Despawn a named entity and drop its name registration.
+    /// Despawn a named entity and drop its name registration.  A vehicle
+    /// takes the lights and emitters its def gave it with it.
     pub fn despawn_named(&mut self, name: &str) -> bool {
-        let Some(entity) = self.names.remove(name) else { return false };
+        let Some(&entity) = self.names.get(name) else { return false };
+        for attachment in self.vehicle_attachments(entity) {
+            self.despawn_named(&attachment);
+        }
+        self.names.remove(name);
         self.name_order.retain(|n| n != name);
         let _ = self.world.despawn(entity);
         true
@@ -1094,6 +1099,8 @@ impl Engine {
                 continue;
             }
             let mut l = light.clone();
+            // A lamp on a vehicle socket dims with its emissive strength.
+            l.intensity *= self.vehicle_lamp_scale(l.parent.as_deref(), l.node.as_deref());
             // A `node`-attached light rides that glTF node's full transform; on a
             // vehicle the node is a socket, whose frame also turns a spot's beam
             // (authored in the socket layer's local frame: `x` forward, `y`

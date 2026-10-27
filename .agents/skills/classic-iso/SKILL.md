@@ -647,6 +647,11 @@ every violation and still loads the def.
 - **Sockets** `{name: {layer, offset[3]}}`: metres in the layer's frame,
   origin at its ground anchor; a hull socket turns with heading, pitch and
   roll, a turret socket with turret yaw then gun pitch.
+- **Lights / emitters** `lights[]`, `emitters[]`: scene `Light` /
+  `Emitter` components (same keys), each with a `socket` naming one of
+  `sockets` (`validate` refuses an unknown or missing one); `position` /
+  `dir` are in the socket's frame, `parent` is ignored.  Every vehicle of
+  the def gets its own (below).
 
 **Runtime** (`classic-engine` `vehicle/layers.rs`): `spawn_vehicle` spawns a v2
 def as one sprite entity per layer, named `{vehicle}.{layer}` (the hull is
@@ -679,13 +684,26 @@ rotated by the heading.  A `Light` or `Emitter` with `parent: <vehicle>` and
 socket layer's frame too (`gather_lights` turns it; model-node lights keep a
 world beam).
 
+**Def lights and emitters** (`vehicle/attach.rs`): `spawn_vehicle` (a scene's
+vehicle, `vehicle_spawn`, a `spawnVehicles` scenario) spawns the def's
+`lights` / `emitters` as ordinary entities `{vehicle}__light{i}` /
+`{vehicle}__emitter{i}`, parented to the new vehicle on their socket and
+listed in `IsoVehicle.attachments`; `despawn_named` (guest `despawn`) of
+the vehicle removes them.  So a vehicle spawned at runtime has its lamps,
+which per-name scene `Light` entities cannot give it.  Every light or
+emitter on a vehicle socket (the def's or a scene's) is scaled by the
+vehicle's emissive strength up to 1 (`vehicle_lamp_scale`): `0` puts the
+lamps out, above 1 (a night bloom) leaves them as authored; off a socket
+(wheel dust) nothing is scaled.  Day and night are the guest's
+`set_light`, which local lights do not follow, as in a scene.
+
 **ABI** (`abi_manifest`): `vehicle_aim(name, x, y)` (tile point; elevation to
 the terrain there), `vehicle_aim_angles(name, yaw_deg, pitch_deg)` (yaw
 relative to the hull), `vehicle_play(name, layer, clip, speed, repeat)`
 (`speed` multiplies fps, negative plays backward; `repeat` 0 loops, n holds
 the end frame; `fire` on a turret), `vehicle_layer_visible(name, layer,
 visible)`, `vehicle_layer_color(name, layer, r, g, b, a)`, `vehicle_team(name, r, g, b)`,
-`vehicle_emissive(name, strength)`, `vehicle_socket_pos(name, socket)`
+`vehicle_emissive(name, strength)` (also dims the socket lamps, up to 1), `vehicle_socket_pos(name, socket)`
 (`triple_opt`, world metres), `vehicle_socket_fx(name, socket, effect)` (one
 shot oriented by the full socket frame: the effect's local `+x` is the
 socket's forward, so ribbon `end`s, light `offset`s, spawn shapes and the
