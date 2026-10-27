@@ -357,8 +357,10 @@ impl Engine {
         1
     }
 
-    /// Set a vehicle's speed (tiles per second), mutating its `IsoVehicle.speed`
-    /// (e.g. slow a loaded LRV).  Returns `false` for an unknown vehicle.
+    /// Set a vehicle's forward speed (tiles per second), mutating its
+    /// `IsoVehicle.speed` (e.g. slow a loaded LRV); the reverse speed is
+    /// [`Self::vehicle_set_reverse_speed`].  Returns `false` for an unknown
+    /// vehicle.
     pub fn vehicle_set_speed(&mut self, name: &str, speed: f32) -> bool {
         let Some(&ve) = self.names.get(name) else { return false };
         if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
@@ -366,6 +368,34 @@ impl Engine {
             return true;
         }
         false
+    }
+
+    /// Set a vehicle's reverse speed (tiles per second; `0` stops it
+    /// reversing, a pose route then turns round instead of backing up).
+    /// `vehicle_set_speed` sets the forward speed only: a guest that slows a
+    /// loaded vehicle sets both.  `false` for an unknown vehicle or a
+    /// non-finite speed.
+    pub fn vehicle_set_reverse_speed(&mut self, name: &str, speed: f32) -> bool {
+        let Some(&ve) = self.names.get(name) else { return false };
+        if !speed.is_finite() {
+            return false;
+        }
+        if let Ok(mut v) = self.world.get::<&mut IsoVehicle>(ve) {
+            v.reverse_speed = speed.max(0.0);
+            return true;
+        }
+        false
+    }
+
+    /// A vehicle's heading in tile degrees, `[0, 360)` (`0` East, `90`
+    /// South): the simulation's continuous heading.  The hull's sprite frame
+    /// shows only the direction at or below it (the blend to the next one
+    /// is drawn, not stored), so a guest reading the frame is off by up to a
+    /// direction step.  `None` for an unknown vehicle.
+    pub fn vehicle_heading(&self, name: &str) -> Option<f32> {
+        let &ve = self.names.get(name)?;
+        let v = self.world.get::<&IsoVehicle>(ve).ok()?;
+        Some(v.heading.to_degrees().rem_euclid(360.0) % 360.0)
     }
 
     /// Non-mutating vehicle reachability probe: run the same footprint-, slope-

@@ -490,6 +490,36 @@ fn guest_vehicle_block_owner_import_wired() {
 }
 
 #[test]
+fn guest_vehicle_heading_and_reverse_speed_imports_wired() {
+    // No vehicle `nope`: the heading reads NaN (stored as `x != x`) and the
+    // reverse speed is refused (`0`).
+    with_each_runtime(
+        r#"(module
+            (import "env" "vehicle_heading" (func $heading (param i32 i32) (result f64)))
+            (import "env" "vehicle_set_reverse_speed" (func $rev (param i32 i32 f64) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "g")
+            (data (i32.const 8) "nope")
+            (func (export "update") (param f64)
+                (local $h f64)
+                (local.set $h (call $heading (i32.const 8) (i32.const 4)))
+                (drop (call $set (i32.const 0) (i32.const 1)
+                    (f64.convert_i32_s (f64.ne (local.get $h) (local.get $h)))
+                    (f64.convert_i32_s (call $rev (i32.const 8) (i32.const 4) (f64.const 1.6)))
+                    (f64.const 3)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            engine.spawn_named("g");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("g"), Some((1.0, 0.0, 3.0)));
+        },
+    );
+}
+
+#[test]
 fn guest_vehicle_block_imports_wired() {
     // Sets block 4 to two rects (the second in reverse corner order), writes
     // the rect count, a ragged list's `-1` and two clears (1, then 0) to `g`,

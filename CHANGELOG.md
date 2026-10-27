@@ -10,6 +10,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `vehicle_heading(name) -> f64` and `vehicle_set_reverse_speed(name,
+  speed) -> i32` (guest imports, `Engine::vehicle_heading` /
+  `Engine::vehicle_set_reverse_speed`).  Since #178 a direction-blended
+  hull's sprite frame is the direction at or below its heading, so a guest
+  reading the frame was up to 22.5° off (line-up checks, set-down box
+  headings); `vehicle_heading` is the simulation's own, in tile degrees
+  `[0, 360)`, NaN for an unknown vehicle.  `vehicle_set_speed` sets the
+  forward speed only, so a loaded mule slowed to 1.6 still reversed at
+  2.4: the reverse speed now has its own setter (`0` stops reversing)
+  rather than `vehicle_set_speed` scaling both, which would change every
+  guest that sets a speed and leave no way to set the two apart (#184).
+
 - `CLASSIC_WORKERS=threaded`: a scripted run (`CLASSIC_TEST`) keeps the
   pathfinder and guest workers on their threads, without the per-frame
   join, and a headless run with `CLASSIC_FIXED_DT` paces its frames to

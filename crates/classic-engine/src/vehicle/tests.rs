@@ -1980,6 +1980,59 @@ fn a_gear_change_stands_for_the_defs_gear_change_s_and_the_radius_never_narrows(
 }
 
 #[test]
+fn vehicle_heading_reads_the_simulation_not_the_sprite_frame() {
+    let mut engine = engine_with_rover();
+    assert!(engine.vehicle_heading("nope").is_none());
+    let ve = engine.names["rover"];
+    // 40 degrees: between two of the 16 directions (22.5 and 45)
+    engine.world.get::<&mut IsoVehicle>(ve).unwrap().heading = 40f32.to_radians();
+    assert!((engine.vehicle_heading("rover").unwrap() - 40.0).abs() < 1e-3);
+    // tile degrees run [0, 360): -90 (North) reads 270
+    engine.world.get::<&mut IsoVehicle>(ve).unwrap().heading = -std::f32::consts::FRAC_PI_2;
+    assert!((engine.vehicle_heading("rover").unwrap() - 270.0).abs() < 1e-3);
+    // turning on a route, it follows the heading between the frames' steps
+    engine.world.get::<&mut IsoVehicle>(ve).unwrap().heading = 0.0;
+    assert!(matches!(goto_pose_sync(&mut engine, 24.5, 34.5, 90.0), VehicleGotoPoll::Accepted(_)));
+    let mut off_step = false;
+    for _ in 0..90 {
+        engine.time.delta = 1.0 / 30.0;
+        engine.update_vehicles();
+        let h = engine.world.get::<&IsoVehicle>(ve).unwrap().heading;
+        let read = engine.vehicle_heading("rover").unwrap();
+        assert!((read - h.to_degrees().rem_euclid(360.0)).abs() < 1e-3);
+        off_step |= (read / 22.5 - (read / 22.5).round()).abs() > 0.1;
+    }
+    assert!(off_step, "headings between the direction steps");
+}
+
+#[test]
+fn vehicle_set_reverse_speed_sets_the_reverse_gear_only() {
+    let mut engine = engine_with_rover();
+    assert!(!engine.vehicle_set_reverse_speed("nope", 1.0));
+    assert!(!engine.vehicle_set_reverse_speed("rover", f32::NAN));
+    let ve = engine.names["rover"];
+    let speed = engine.world.get::<&IsoVehicle>(ve).unwrap().speed;
+    assert!(engine.vehicle_set_reverse_speed("rover", 1.6));
+    let v = engine.world.get::<&IsoVehicle>(ve).unwrap();
+    assert_eq!((v.speed, v.reverse_speed), (speed, 1.6));
+    drop(v);
+    // backing straight up runs at it: 1.6 tiles/s over 30 frames
+    let x0 = engine.world.get::<&classic_core::components::Transform>(ve).unwrap().position.x;
+    assert_eq!(engine.vehicle_reverse_to("rover", x0 - 4.0, 24.5), 1);
+    for _ in 0..30 {
+        engine.time.delta = 1.0 / 30.0;
+        engine.update_vehicles();
+    }
+    let x1 = engine.world.get::<&classic_core::components::Transform>(ve).unwrap().position.x;
+    assert!((x0 - x1 - 1.6).abs() < 0.05, "backed {} tiles in a second", x0 - x1);
+    // 0 stops it reversing: a pose route turns round forward instead
+    assert!(engine.vehicle_set_reverse_speed("rover", -2.0));
+    assert_eq!(engine.world.get::<&IsoVehicle>(ve).unwrap().reverse_speed, 0.0);
+    assert!(matches!(goto_pose_sync(&mut engine, 4.5, 24.5, 180.0), VehicleGotoPoll::Accepted(_)));
+    assert!(!engine.world.get::<&IsoVehicle>(ve).unwrap().path_reverse.iter().any(|&b| b));
+}
+
+#[test]
 fn an_unreachable_pose_is_refused() {
     let mut engine = engine_with_rover();
     engine.set_vehicle_block(1, &[[30, 0, 30, 47]]);
