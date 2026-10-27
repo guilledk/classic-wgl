@@ -366,6 +366,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Scenario mouse input reaches the engine.  A `mouseClick` wrote
+  `engine.input` after the update closures, and the next frame's
+  platform snapshot overwrote it before selection, picking or the guest
+  read it; `ScriptedInput` carried keys only.  It now carries the mouse
+  too: `click` / `mouseClick` press the button on the next frame and
+  release it on the one after, `mouseMove` / `setMouseIso` move the
+  pointer (hover only), and the pointer stays where it was put
+  (`mouse_axis` follows it).  New actions aim at the world through the
+  current camera: `clickIso {tx, ty, button}`, `clickEntity {name,
+  button}` (the entity's ground anchor) and `moveIso {tx, ty}`.  A
+  scenario now selects and commands a unit exactly as a player does
+  (#180).
 - A selected vehicle turns as smoothly as an unselected one.  A selected
   sprite never blended its baked directions (the selection silhouette
   sampled one frame), so the player's mule, selected to be commanded,

@@ -8,11 +8,13 @@
 //! that snapshot instead, so a press issued on frame N is seen by every
 //! update closure (the guest) on frame N + 1.
 //!
-//! Mouse clicks go the same way ([`ScriptedInput::click`]): the button is
-//! pressed on the next frame and released on the one after, at a pointer
-//! position that then stays put, so a scripted click runs the same input
-//! path a player's does (RTS point-select on release, the guest's click
-//! handling on press).
+//! The mouse goes the same way: [`ScriptedInput::click`] presses the button
+//! on the next frame and releases it on the one after, and
+//! [`ScriptedInput::move_to`] moves the pointer (hover only); the pointer then
+//! stays put (`Engine::frame` also derives `mouse_axis` from it).  So a
+//! scripted click runs the same input path a player's does: RTS
+//! point-select on release, collider click handlers and guest hover events,
+//! and the guest's click and pointer reads.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -44,6 +46,17 @@ impl ScriptedInput {
     /// Release `key` from the held set (from the next frame on).
     pub fn release(&mut self, key: &str) {
         self.held.remove(key);
+    }
+
+    /// Move the pointer to screen pixel `pos` (hover only) from the next
+    /// frame on; it stays there.
+    pub fn move_to(&mut self, pos: Vec2) {
+        self.pointer = Some(pos);
+    }
+
+    /// The scripted pointer position, once a click or move has set it.
+    pub fn pointer(&self) -> Option<Vec2> {
+        self.pointer
     }
 
     /// Click mouse `button` at screen pixel `pos`: pressed on the next frame,

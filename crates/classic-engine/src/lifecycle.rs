@@ -176,6 +176,11 @@ impl Engine {
         // Scripted keys land after the platform snapshot, so a scenario's
         // `keyPress` (issued after the update closures) is seen next frame.
         self.scripted_input.apply(&mut self.input);
+        // a scripted pointer also stands in for the platform's mouse axis
+        if let Some(p) = self.scripted_input.pointer() {
+            let (w, h) = (vw.max(1.0), vh.max(1.0));
+            self.input.mouse_axis = glam::Vec2::new((p.x / w - 0.5) * 2.0, (p.y / h - 0.5) * 2.0);
+        }
         self.time.delta = delta;
         if delta > 0.0 {
             self.time.fps = (1.0 / delta) as u32;
