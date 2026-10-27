@@ -229,6 +229,86 @@ fn tracks_spin_with_distance_and_pivot_turns() {
     assert!(engine.world.get::<&IsoVehicle>(tank).unwrap().heading.abs() > 0.1);
 }
 
+fn heading(engine: &Engine) -> f32 {
+    engine.world.get::<&IsoVehicle>(engine.names["tank"]).unwrap().heading
+}
+
+#[test]
+fn vehicle_face_pivots_in_place_or_snaps() {
+    use std::f32::consts::FRAC_PI_2;
+    let mut engine = spawn_tank(8.0, 8.0);
+    let tank = engine.names["tank"];
+    engine.world.get::<&mut IsoVehicle>(tank).unwrap().heading = 0.0;
+    let start = pos(&engine, "tank");
+    // Tracked (`pivot_turn`, 90 deg/s): South (90 tile degrees) in 10 steps
+    // of 0.1 s, standing still.
+    assert_eq!(engine.vehicle_face("tank", 90.0), 1);
+    engine.time.delta = 0.1;
+    engine.update_vehicles();
+    assert!((heading(&engine) - FRAC_PI_2 / 10.0).abs() < 1e-5, "{}", heading(&engine));
+    for _ in 0..9 {
+        engine.update_vehicles();
+    }
+    assert!((heading(&engine) - FRAC_PI_2).abs() < 1e-5, "{}", heading(&engine));
+    assert!(engine.world.get::<&IsoVehicle>(tank).unwrap().face.is_none(), "arrived");
+    let after = pos(&engine, "tank");
+    assert!((after.x - start.x).abs() < 1e-5 && (after.y - start.y).abs() < 1e-5);
+    // The short way round: from South to North-East (-45) turns back.
+    assert_eq!(engine.vehicle_face("tank", -45.0), 1);
+    engine.update_vehicles();
+    assert!((heading(&engine) - (FRAC_PI_2 - FRAC_PI_2 / 10.0)).abs() < 1e-5);
+    // Wheeled (no pivot turn): it cannot turn standing still, so it snaps.
+    engine.world.get::<&mut IsoVehicle>(tank).unwrap().pivot_turn = false;
+    assert_eq!(engine.vehicle_face("tank", 180.0), 1);
+    engine.update_vehicles();
+    assert!((heading(&engine).abs() - std::f32::consts::PI).abs() < 1e-5);
+    // Any other command drops a pending face; bad input is refused.
+    engine.world.get::<&mut IsoVehicle>(tank).unwrap().pivot_turn = true;
+    assert_eq!(engine.vehicle_face("tank", 0.0), 1);
+    assert!(engine.vehicle_stop("tank"));
+    assert!(engine.world.get::<&IsoVehicle>(tank).unwrap().face.is_none());
+    assert_eq!(engine.vehicle_face("tank", f32::NAN), -1);
+    assert_eq!(engine.vehicle_face("ghost", 0.0), 0);
+}
+
+#[test]
+fn vehicle_reverse_to_backs_straight_keeping_heading() {
+    // The mule backing over a box: lined up East, the box 3 tiles behind.
+    let mut engine = spawn_tank(8.0, 8.0);
+    let tank = engine.names["tank"];
+    {
+        let mut v = engine.world.get::<&mut IsoVehicle>(tank).unwrap();
+        v.heading = 0.0;
+        v.reverse_speed = 1.0;
+    }
+    let start = pos(&engine, "tank");
+    // Ahead is refused; behind is accepted (its 0.3 sideways offset is not
+    // steered for: the heading is kept).
+    assert_eq!(engine.vehicle_reverse_to("tank", start.x + 3.0, start.y), -1);
+    assert_eq!(engine.vehicle_reverse_to("tank", start.x - 3.0, start.y + 0.3), 1);
+    engine.time.delta = 0.1;
+    engine.update_vehicles();
+    let v = engine.world.get::<&IsoVehicle>(tank).unwrap().reversing;
+    assert!(v, "reversing");
+    assert!((pos(&engine, "tank").x - (start.x - 0.1)).abs() < 1e-4, "reverse_speed 1 tile/s");
+    let mut steps = 1;
+    while engine.world.get::<&IsoVehicle>(tank).unwrap().reverse_to.is_some() {
+        engine.update_vehicles();
+        steps += 1;
+        assert!(steps < 100, "never arrived");
+    }
+    assert_eq!(steps, 30, "3 tiles at 1 tile/s, no overshoot");
+    let end = pos(&engine, "tank");
+    assert!((end.x - (start.x - 3.0)).abs() < 1e-4, "{end:?}");
+    assert!((end.y - start.y).abs() < 1e-5, "straight: no sideways drift");
+    assert_eq!(heading(&engine), 0.0, "heading kept");
+    // Stopped: the next step does not move it.
+    engine.update_vehicles();
+    assert!((pos(&engine, "tank").x - end.x).abs() < 1e-6);
+    assert!(!engine.world.get::<&IsoVehicle>(tank).unwrap().reversing);
+    assert_eq!(engine.vehicle_reverse_to("ghost", 0.0, 0.0), 0);
+}
+
 fn socket_tank() -> Engine {
     let mut engine = Engine::new_for_test();
     let tm = engine.world.spawn((
