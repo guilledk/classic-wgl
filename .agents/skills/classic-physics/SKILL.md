@@ -438,6 +438,31 @@ wheelbase, track)` only — `turn_cost` does not affect it.  The path stays a
 `Vec<GridCell>`; reverse is a *follower* manoeuvre (see `classic-ecs` /
 `classic-iso`), not a planner edge.
 
+### Vehicle blocking grid (`vehicle::block`, `set_vehicle_block`)
+
+The vehicle search never reads the nav grid: `NavMesh.data` is *human*
+walkability (slope-limited), and a vehicle derives its own slope limits.
+Its `structural` grid (`build_vehicle_nav_snapshot`) is the `blocks_nav`
+colliders' footprints (`compute_nav_obstacles`, unchanged) with every
+**vehicle block** cell zeroed.  A vehicle block is a named set of inclusive
+tile rects (`Engine::vehicle_blocks: BTreeMap<id, Vec<[x0, y0, x1, y1]>>`):
+
+- **Why ids, in bulk:** one call per structure (a pad's ~90 rail rects),
+  and clearing one structure never reopens cells another still covers (a
+  per-cell flag would).  Set replaces, an empty list or
+  `clear_vehicle_block` removes.
+- **Invalidation:** a change runs `refresh_nav_snapshot`, which re-shares
+  the vehicle snapshot with the pathfinder worker (native thread and the web
+  `pathfinder.wasm`: the stamped `structural` rides the existing
+  `vehicleSnapshot` message) and resets its slope cache.  The oriented
+  search keeps no state between requests.
+- **Re-plan:** then every vehicle whose remaining route (from the waypoint
+  it left) fails `pathfinder::route_clear` (the search's own step rule) is
+  stopped and re-submitted to its goal; `update_vehicles` polls those
+  (`poll_vehicle_replans`), installing the new route or leaving it stopped.
+  Collider `blocks_nav` changes still only refresh the snapshots.
+- Human / `IsoAgent` pathing (`NavSnapshot`) never sees vehicle blocks.
+
 ### Integration
 
 Pathfinding is exposed to ROM guests as the async `request_path`/`poll_path`

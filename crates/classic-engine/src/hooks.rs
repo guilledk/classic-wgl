@@ -753,8 +753,17 @@ impl Engine {
         let size_x = nav.size_x;
         let size_y = nav.size_y;
         // The vehicle `structural` grid gates hard obstacles (blocking
-        // colliders); slope climbability is derived per-request from pitch/roll.
-        let structural: Vec<i32> = obstacles.to_vec();
+        // colliders and the vehicle blocks); slope climbability is derived
+        // per-request from pitch/roll.
+        let mut structural: Vec<i32> = obstacles.to_vec();
+        if structural.len() == (size_x * size_y) as usize {
+            crate::vehicle::block::stamp_vehicle_blocks(
+                &mut structural,
+                size_x,
+                size_y,
+                self.vehicle_blocks.values().flatten(),
+            );
+        }
 
         let tm_entity = self.entity_by_role(RoleKind::Tilemap)?;
         let tm = self.world.get::<&Tilemap>(tm_entity).ok()?;

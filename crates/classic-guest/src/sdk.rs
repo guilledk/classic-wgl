@@ -448,6 +448,27 @@ impl GuestHost {
         self.engine_mut().clear_floor_rect(id) as i32
     }
 
+    /// Set (or replace) vehicle block `id`: `rects` is a flat list of
+    /// inclusive tile rects `[x0, y0, x1, y1, ...]` (`i32`s, passed as their
+    /// bits) vehicles may not drive over; human and `IsoAgent` pathing never
+    /// see them.  An empty list clears the block.  Vehicles whose remaining
+    /// route it cuts stop and re-plan to their goal.  Returns the rect count,
+    /// `-1` when the list is not whole rects.
+    pub fn set_vehicle_block(&mut self, id: i32, rects: &[u32]) -> i32 {
+        let (whole, ragged) = rects.as_chunks::<4>();
+        if !ragged.is_empty() {
+            return -1;
+        }
+        let rects: Vec<[i32; 4]> = whole.iter().map(|r| r.map(|v| v as i32)).collect();
+        self.engine_mut().set_vehicle_block(id, &rects);
+        rects.len() as i32
+    }
+
+    /// Remove vehicle block `id`; `0` when there is none.
+    pub fn clear_vehicle_block(&mut self, id: i32) -> i32 {
+        self.engine_mut().clear_vehicle_block(id) as i32
+    }
+
     /// Set a wheeled vehicle's speed (tiles per second), mutating its
     /// `IsoVehicle.speed` (e.g. slow a loaded LRV).
     pub fn vehicle_set_speed(&mut self, name: &str, speed: f64) -> i32 {

@@ -1715,3 +1715,101 @@ fn sixteen_direction_vehicles_quantize_to_sixteen_frames() {
         Some("lrvWheelFl_5")
     );
 }
+
+/// The lrvtest-like map with a vehicle 3 cells nose to tail and 5 across
+/// (`path_body_m`) spawned at `(5.5, 10.5)` as `lrv`.
+fn engine_with_wide_body() -> Engine {
+    use classic_core::tilemap::TILE_M;
+    let mut engine = engine_with_lrvtest_like_map(None);
+    let (mut def, anchors) = lrv_def_real();
+    def.path_footprint = None;
+    def.path_body_m = Some([-0.95 * TILE_M, 0.95 * TILE_M, -1.9 * TILE_M, 1.9 * TILE_M]);
+    def.safe_fall_m = 0.0;
+    insert_lrv(&mut engine, (def, anchors));
+    assert!(engine.spawn_vehicle("lrv", "lrv", 5.5, 10.5));
+    engine
+}
+
+#[test]
+fn a_vehicle_block_stops_the_vehicle_search_and_clearing_it_reopens_it() {
+    let mut engine = engine_with_wide_body();
+    // a wall across the map at x = 24, and a second block sharing a cell
+    engine.set_vehicle_block(1, &[[24, 0, 24, 47]]);
+    engine.set_vehicle_block(2, &[[24, 20, 30, 20]]);
+    assert!(matches!(goto_sync(&mut engine, "lrv", 40, 10), VehicleGotoPoll::NoPath));
+    // human pathing never sees it
+    assert!(engine.find_path((5, 10), (40, 10)).is_some());
+    // clearing the wall reopens the route; block 2 keeps its own cells
+    assert!(engine.clear_vehicle_block(1));
+    assert!(!engine.clear_vehicle_block(1), "already gone");
+    assert!(matches!(goto_sync(&mut engine, "lrv", 40, 10), VehicleGotoPoll::Accepted(_)));
+    assert_eq!(engine.vehicle_nav_snapshot.structural[20 * 48 + 24], 0);
+    assert_eq!(engine.vehicle_nav_snapshot.structural[10 * 48 + 24], 1);
+    // an empty list clears too
+    engine.set_vehicle_block(2, &[]);
+    assert!(engine.vehicle_blocks.is_empty());
+    assert_eq!(engine.vehicle_nav_snapshot.structural[20 * 48 + 24], 1);
+}
+
+#[test]
+fn a_lane_of_vehicle_blocks_is_driven_along_and_refused_across() {
+    // blocked but for a 5-tall east-west lane (rows 8..=12) and a 3-wide
+    // north-south one (columns 23..=25) crossing it
+    let mut engine = engine_with_wide_body();
+    let walls = [[0, 0, 22, 7], [26, 0, 47, 7], [0, 13, 22, 47], [26, 13, 47, 47]];
+    engine.set_vehicle_block(7, &walls);
+    match goto_sync(&mut engine, "lrv", 40, 10) {
+        VehicleGotoPoll::Accepted(path) => {
+            assert!(path.iter().all(|c| c[1] == 10), "straight along the lane: {path:?}")
+        }
+        _ => panic!("the 5-tall lane fits the body across it"),
+    }
+    // the body turned south is 5 wide: not down the 3-wide lane
+    assert!(matches!(goto_sync(&mut engine, "lrv", 24, 40), VehicleGotoPoll::NoPath));
+    // a body 3 wide is
+    let (mut def, anchors) = lrv_def_real();
+    def.path_footprint = None;
+    def.path_body_m = Some([-0.6, 0.6, -0.6, 0.6]);
+    def.safe_fall_m = 0.0;
+    insert_lrv(&mut engine, (def, anchors));
+    assert!(engine.spawn_vehicle("lrv", "small", 5.5, 10.5));
+    assert!(matches!(goto_sync(&mut engine, "small", 24, 40), VehicleGotoPoll::Accepted(_)));
+}
+
+#[test]
+fn a_vehicle_block_across_a_route_makes_the_vehicle_replan() {
+    use classic_core::pathfinder::route_clear;
+
+    let mut engine = engine_with_wide_body();
+    let VehicleGotoPoll::Accepted(first) = goto_sync(&mut engine, "lrv", 40, 10) else {
+        panic!("open map");
+    };
+    assert!(first.iter().all(|c| c[1] == 10));
+    for _ in 0..30 {
+        engine.time.delta = 1.0 / 60.0;
+        engine.update_vehicles();
+    }
+    let ve = engine.names["lrv"];
+    // a block off the route changes nothing
+    engine.set_vehicle_block(1, &[[10, 30, 12, 32]]);
+    assert_eq!(engine.world.get::<&IsoVehicle>(ve).unwrap().path, first);
+    // a wall across it, with a way round to the south
+    engine.set_vehicle_block(2, &[[30, 0, 30, 20]]);
+    assert!(engine.world.get::<&IsoVehicle>(ve).unwrap().path.is_empty(), "stopped");
+    engine.time.delta = 1.0 / 60.0;
+    engine.update_vehicles();
+    let path = engine.world.get::<&IsoVehicle>(ve).unwrap().path.clone();
+    assert_eq!(path.last(), Some(&[40, 10]), "re-planned to the same goal: {path:?}");
+    assert_ne!(path, first);
+    let cells: Vec<(i32, i32)> = path.iter().map(|c| (c[0], c[1])).collect();
+    let fp = search_footprint(&engine.world.get::<&IsoVehicle>(ve).unwrap());
+    let snap = &engine.vehicle_nav_snapshot;
+    assert!(route_clear(&snap.structural, 48, 48, &cells, &fp), "the new route is clear");
+    // a wall with no way round: the vehicle stays stopped
+    engine.set_vehicle_block(3, &[[34, 0, 34, 47]]);
+    for _ in 0..3 {
+        engine.time.delta = 1.0 / 60.0;
+        engine.update_vehicles();
+    }
+    assert!(engine.world.get::<&IsoVehicle>(ve).unwrap().path.is_empty());
+}

@@ -10,6 +10,18 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- Vehicle blocks: `set_vehicle_block(id, rects)` / `clear_vehicle_block(id)`
+  (guest imports, `Engine::set_vehicle_block`) stamp named sets of
+  inclusive tile rects only vehicles may not drive over.  The vehicle
+  search ignores the nav grid (human, slope-limited walkability), so
+  until now only a `blocks_nav` collider could keep a vehicle off a
+  structure flush with the ground, like the pad crane's rails.  Its
+  blocking grid is now those colliders and the vehicle blocks; human and
+  `IsoAgent` pathing are unchanged.  One id per structure, so a building's
+  rects are one call and clearing it never reopens another's cells.  A
+  change re-shares the vehicle snapshot with the pathfinder worker (native
+  and web), and every vehicle whose remaining route it cuts
+  (`pathfinder::route_clear`) stops and re-plans to its goal (#177).
 - `classic_core::meshopt`: a pure-Rust `EXT_meshopt_compression`
   decoder (builds for wasm32): meshoptimizer's vertex codec (versions 0
   and 1), index codec (`TRIANGLES`, versions 0 and 1) and index sequence

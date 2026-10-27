@@ -430,6 +430,43 @@ fn guest_floor_rect_imports_wired() {
 }
 
 #[test]
+fn guest_vehicle_block_imports_wired() {
+    // Sets block 4 to two rects (the second in reverse corner order), writes
+    // the rect count, a ragged list's `-1` and two clears (1, then 0) to `g`,
+    // then sets it again.
+    with_each_runtime(
+        r#"(module
+            (import "env" "set_vehicle_block" (func $set_block (param i32 i32 i32) (result i32)))
+            (import "env" "clear_vehicle_block" (func $clear (param i32) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "g")
+            (data (i32.const 16) "\01\00\00\00\01\00\00\00\02\00\00\00\02\00\00\00\05\00\00\00\05\00\00\00\03\00\00\00\03\00\00\00")
+            (func (export "update") (param f64)
+                (drop (call $set (i32.const 0) (i32.const 1)
+                    (f64.convert_i32_s (call $set_block (i32.const 4) (i32.const 16) (i32.const 32)))
+                    (f64.convert_i32_s (call $set_block (i32.const 4) (i32.const 16) (i32.const 12)))
+                    (f64.convert_i32_s (i32.add
+                        (i32.mul (call $clear (i32.const 4)) (i32.const 10))
+                        (call $clear (i32.const 4))))))
+                (drop (call $set_block (i32.const 4) (i32.const 16) (i32.const 32)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            engine.spawn_named("g");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(
+                engine.get_pos("g"),
+                Some((2.0, -1.0, 10.0)),
+                "2 rects, ragged, cleared once"
+            );
+            assert_eq!(engine.vehicle_blocks.get(&4), Some(&vec![[1, 1, 2, 2], [3, 3, 5, 5]]));
+        },
+    );
+}
+
+#[test]
 fn guest_selection_and_speed_imports_wired() {
     with_each_runtime(
         r#"(module

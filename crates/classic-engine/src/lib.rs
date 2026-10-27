@@ -375,6 +375,11 @@ pub struct Engine {
     pub preview_paths: HashMap<String, Vec<[i32; 2]>>,
     /// Raised floors by id (`set_floor_rect`): see [`floor`].
     pub floor_rects: std::collections::BTreeMap<i32, floor::FloorRect>,
+    /// Vehicle blocks by id (`set_vehicle_block`): inclusive tile rects
+    /// only vehicles may not cross, see `vehicle::block`.
+    pub vehicle_blocks: std::collections::BTreeMap<i32, Vec<[i32; 4]>>,
+    /// Re-plans submitted for vehicles whose route a vehicle block cut.
+    vehicle_replans: Vec<u64>,
     /// The single in-flight (or cached) vehicle reachability probe, if any.
     preview_probe: Option<vehicle::PreviewProbe>,
     /// Next background-task id handed to a guest.

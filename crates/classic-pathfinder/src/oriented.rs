@@ -379,6 +379,32 @@ pub(crate) fn find_oriented(
     None
 }
 
+/// Whether an oriented route stays clear on `grid`: the same per-step rule
+/// as [`find_oriented`] (the first step only the body at its end, every
+/// later step its swept body), pivots aside.  A step that is not one cell in
+/// one of the 8 directions is refused.
+pub(crate) fn route_clear_oriented(
+    grid: &[i32],
+    size_x: i32,
+    size_y: i32,
+    path: &[GridCell],
+    body: &BodyRect,
+) -> bool {
+    let masks = Masks::new(body);
+    let blocked = Blocked::new(grid, size_x, size_y);
+    path.windows(2).enumerate().all(|(i, w)| {
+        let (a, b) = (w[0], w[1]);
+        let Some(d) = DIRS.iter().position(|&o| o == (b.0 - a.0, b.1 - a.1)) else {
+            return false;
+        };
+        if i == 0 {
+            blocked.clear(b.0, b.1, &masks.body16[2 * d])
+        } else {
+            blocked.clear(a.0, a.1, &masks.swept8[d])
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -614,6 +640,24 @@ mod tests {
         g[(12 * n + 12) as usize] = 1;
         let blocked = Blocked::new(&g, n, n);
         assert!(pivot_clear(&blocked, &masks, 10, 10, 0, 4));
+    }
+
+    #[test]
+    fn a_route_check_follows_the_search_rule() {
+        let n = 20;
+        let mut g = vec![1; (n * n) as usize];
+        let body = long_body();
+        let path = search(&g, n, (4, 10), (15, 10), &body, 0.0).expect("open");
+        assert!(route_clear_oriented(&g, n, n, &path, &body));
+        // a block beside the route's far end, inside the turned body
+        g[(11 * n + 15) as usize] = 0;
+        assert!(!route_clear_oriented(&g, n, n, &path, &body));
+        // a block behind the start (the vehicle is already there) is fine
+        g[(11 * n + 15) as usize] = 1;
+        g[(10 * n + 1) as usize] = 0;
+        assert!(route_clear_oriented(&g, n, n, &path, &body));
+        // a jump of two cells is no route
+        assert!(!route_clear_oriented(&g, n, n, &[(4, 10), (6, 10)], &body));
     }
 
     #[test]

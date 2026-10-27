@@ -425,6 +425,34 @@ pub fn find_path_for_footprint_with_jumps(
     })
 }
 
+/// Whether a planned vehicle `path` (from where the vehicle stands) stays
+/// clear on `grid` (`1` open): every cell of a [`VehicleFootprint::Cells`]
+/// footprint at each later waypoint, or an oriented body by the search's own
+/// step rule.  Lets a change to the blocking grid find the routes it cuts.
+pub fn route_clear(
+    grid: &[i32],
+    size_x: i32,
+    size_y: i32,
+    path: &[GridCell],
+    footprint: &VehicleFootprint,
+) -> bool {
+    match footprint {
+        VehicleFootprint::Cells(cells) => path.iter().skip(1).all(|&(x, y)| {
+            cells.iter().all(|&(dx, dy)| {
+                let (cx, cy) = (x + dx, y + dy);
+                cx >= 0
+                    && cy >= 0
+                    && cx < size_x
+                    && cy < size_y
+                    && grid[(cx + cy * size_x) as usize] != 0
+            })
+        }),
+        VehicleFootprint::Oriented { body, .. } => {
+            oriented::route_clear_oriented(grid, size_x, size_y, path, body)
+        }
+    }
+}
+
 /// A snapshot of the terrain the vehicle pathfinder needs: the structural nav
 /// grid (obstacle-free walkability) plus the vertex height grid it derives the
 /// slope-feasibility grid from.
