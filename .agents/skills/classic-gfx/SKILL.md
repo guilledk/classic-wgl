@@ -1231,7 +1231,13 @@ form.  No transform feedback, no per-frame CPU simulation.
   window, a canvas: not sampleable), from a lazily created blit copy — separable 5-tap-bilinear Gaussian at half and
   quarter res, additive composite.  RGBA8 only (no float RT on WebGL2).
   Always on (no toggle); the engine skips it only on frames with nothing
-  emissive live, so effect-free scenes are pixel-identical.
+  emissive live, so effect-free scenes are pixel-identical.  It bright-passes
+  the *whole lit frame*, so the level (`particles::BLOOM_THRESHOLD` 0.95,
+  `BLOOM_KNEE` 0.05: `smoothstep(t, t + knee, max channel)`) sits above
+  sunlit paint (a sunlit white hull reads 0.83-0.94) and saturated emissive /
+  particle cores reach full weight at 1.0.  Lit surfaces pushed past 1.0
+  still clip to 1.0 in RGBA8 and bloom (the landed rocket's hull at zoom 1);
+  only an emissive-only bloom source would separate those (#175).
 - **Texture units**: particles 6, bloom 7–8, smoke noise 9, half-res composite 10,
   light grid 11, sprite ghost ids 12
   (sprites 0–2, shadow 3, model

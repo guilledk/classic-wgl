@@ -48,8 +48,15 @@ use crate::Engine;
 /// is rebased (keeps `u_time - t_birth` precise in `f32`).
 const EPOCH_SPAN: f64 = 1024.0;
 
-/// Bloom bright-pass level (max channel) and composite gain.
-pub const BLOOM_THRESHOLD: f32 = 0.82;
+/// Bloom bright-pass level (max channel, `0..1` on the RGBA8 main target),
+/// soft-knee width above it, and composite gain.  The pass runs on the whole
+/// lit frame once anything emissive is on screen, so the level sits above
+/// sunlit paint (a white rocket hull lit by the sun reads 0.83-0.94): what
+/// blooms is what saturates, emissive cores, particle glow and flashes,
+/// which reach full weight at 1.0.  (It was 0.82 with a 0.25 knee: the
+/// sunlit rocket hull alone bloomed over ~13% of a zoom-1 lunar frame.)
+pub const BLOOM_THRESHOLD: f32 = 0.95;
+pub const BLOOM_KNEE: f32 = 0.05;
 pub const BLOOM_INTENSITY: f32 = 0.9;
 
 /// Hard cap on one instance's ring (per layer).
