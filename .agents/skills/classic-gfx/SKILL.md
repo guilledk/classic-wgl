@@ -1126,6 +1126,16 @@ no depth map, no ghost pass.  CPU parse/animation lives in `classic-core::model`
   group — the exact sprite pass states, so a model ghosts behind sprites and
   terrain.  `MODEL_GHOST_GROUP` = 255 is reserved (vehicle groups cycle 1..254).
   No MSAA anywhere (the look depends on hard edges).
+- **Ghost opt-out (`Model.ghost`, default `true`)**: all models share one
+  composite and one group, so a sprite's `ghost_group` cannot stop a model
+  ghost (on the ghost-id path sprites stamp stencil 0; a sprite set to 255
+  only collides with the models' group on the stencil fallback).  A deck
+  or floor sprites stand on sets `"ghost": false`: `mesh.frag` writes it to
+  the target's `R8` ghost mask (`COLOR_ATTACHMENT1`, output 1, alpha 1 so the
+  global alpha blend replaces it and the nearest model wins), and the
+  `Ghost` composite discards masked texels (mask on unit 6, the particle
+  texture's).  Before, a landing pad's deck redrew at 40% over every box and
+  vehicle standing on it.
 - GPU keys: meshes `"{model}::{mesh_index}"` (`Engine.model_gpu`), textures
   `"{model}::image::{i}"` (`Gfx.textures`); the embedded image's CPU pixels are
   dropped after upload.  Textures are shared by content

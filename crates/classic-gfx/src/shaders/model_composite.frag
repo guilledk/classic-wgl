@@ -8,6 +8,8 @@ in vec2 vUv;
 // both NEAREST-sampled, so each low-res texel lands as a solid screen block.
 uniform sampler2D color_tex;
 uniform highp sampler2D depth_tex;
+// 1 where the nearest model opts out of the ghost pass (`Model.ghost`).
+uniform sampler2D mask_tex;
 // 0 for the normal composite; the sprite ghost alpha (0.4) for the ghost pass.
 uniform float ghost_alpha;
 
@@ -18,6 +20,10 @@ void main(void ) {
     float depth = texture(depth_tex, vUv).r;
     // Uncovered texels (cleared to alpha 0 / depth 1) are not part of a model.
     if (color.a < 0.5 || depth >= 1.0) {
+        discard;
+    }
+    // A deck or floor model never ghosts over the sprites standing on it.
+    if (ghost_alpha > 0.0 && texture(mask_tex, vUv).r > 0.5) {
         discard;
     }
     // The model's own view depth, so terrain and sprites depth-test against it

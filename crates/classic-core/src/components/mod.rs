@@ -340,10 +340,13 @@ pub struct IsoSprite {
     /// Footprint vertices in iso tile coords: `[NE, SE, SW, NW]`.
     #[serde(default = "default_footprint")]
     pub footprint: Vec<Vec2>,
-    /// Stencil ghost group id (0 = ungrouped).  Sprites sharing a non-zero id
-    /// (e.g. a vehicle's body + wheels) never ghost through each other, while
-    /// still ghosting through terrain and other entities.  Assignable
-    /// declaratively in `state.json`; `spawn_vehicle` assigns it imperatively.
+    /// Stencil ghost group id (0 = ungrouped; 1..=254, as 255 is the models'
+    /// group).  Sprites sharing a non-zero id (e.g. a vehicle's body + wheels)
+    /// never ghost through each other, while still ghosting through terrain
+    /// and other entities.  It scopes sprite-on-sprite ghosting only: a model
+    /// behind the sprite ghosts over it unless the model opts out
+    /// (`Model.ghost`).  Assignable declaratively in `state.json`;
+    /// `spawn_vehicle` assigns it imperatively.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub ghost_group: u32,
     /// Per-sprite tint (RGBA) multiplied onto the sprite's albedo by the sheet
@@ -544,6 +547,14 @@ pub struct Model {
     /// omitted from dumps) is `1`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emissive: Option<f32>,
+    /// Whether the model ghosts (redraws at 40% alpha) where sprites or
+    /// terrain occlude it.  `false` for a deck or floor that sprites stand on
+    /// (a landing pad): a box on the deck is drawn over the deck, so the deck
+    /// would otherwise show through it.  A sprite's `IsoSprite.ghost_group`
+    /// scopes sprite-on-sprite ghosting only; it never stops a model ghost.
+    /// `true` by default (omitted from dumps).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub ghost: bool,
     /// Clip time in seconds (transient).
     #[serde(skip)]
     pub time: f32,
@@ -576,6 +587,7 @@ impl Model {
             playing: false,
             tint: None,
             emissive: None,
+            ghost: true,
             time: 0.0,
             frame_offset: Vec3::ZERO,
             node_world: Vec::new(),
@@ -1271,6 +1283,10 @@ fn default_emitter_color() -> [f32; 3] {
 
 fn default_true() -> bool {
     true
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 impl Emitter {

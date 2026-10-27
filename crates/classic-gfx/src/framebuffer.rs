@@ -271,14 +271,16 @@ impl Drop for GlFrameBuffer {
     }
 }
 
-/// The 3D-model pixelation target: an RGBA8 colour texture + a
-/// `DEPTH_COMPONENT24` depth texture, both `NEAREST`-sampled so the composite
-/// pass (`model_composite`) can upscale colour **and** depth block-for-block
-/// and write the depth back with `gl_FragDepth` (WebGL2 cannot scale-blit a
-/// depth buffer).
+/// The 3D-model pixelation target: an RGBA8 colour texture, an R8 ghost
+/// mask and a `DEPTH_COMPONENT24` depth texture, all `NEAREST`-sampled so the
+/// composite pass (`model_composite`) can upscale colour **and** depth
+/// block-for-block and write the depth back with `gl_FragDepth` (WebGL2
+/// cannot scale-blit a depth buffer).  The mask (`mesh.frag` output 1) is 1
+/// where the nearest model opts out of the ghost pass (`Model.ghost`).
 pub struct ModelTarget {
     fbo: glow::Framebuffer,
     pub(crate) color_tex: glow::Texture,
+    pub(crate) mask_tex: glow::Texture,
     pub(crate) depth_tex: glow::Texture,
     pub width: u32,
     pub height: u32,
@@ -288,8 +290,9 @@ impl ModelTarget {
     pub fn new(gl: &glow::Context, width: u32, height: u32) -> Self {
         let fbo = unsafe { gl.create_framebuffer() }.expect("create fbo");
         let color_tex = unsafe { gl.create_texture() }.expect("create texture");
+        let mask_tex = unsafe { gl.create_texture() }.expect("create texture");
         let depth_tex = unsafe { gl.create_texture() }.expect("create texture");
-        let target = Self { fbo, color_tex, depth_tex, width, height };
+        let target = Self { fbo, color_tex, mask_tex, depth_tex, width, height };
         target.allocate(gl);
         unsafe {
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
@@ -302,6 +305,14 @@ impl ModelTarget {
             );
             gl.framebuffer_texture_2d(
                 glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT1,
+                glow::TEXTURE_2D,
+                Some(mask_tex),
+                0,
+            );
+            gl.draw_buffers(&[glow::COLOR_ATTACHMENT0, glow::COLOR_ATTACHMENT1]);
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
                 glow::DEPTH_ATTACHMENT,
                 glow::TEXTURE_2D,
                 Some(depth_tex),
@@ -312,12 +323,13 @@ impl ModelTarget {
         target
     }
 
-    /// (Re)allocate both textures at the current `width` x `height`.
+    /// (Re)allocate every attachment at the current `width` x `height`.
     fn allocate(&self, gl: &glow::Context) {
         let (w, h) = (self.width as i32, self.height as i32);
         unsafe {
             for (tex, internal, format, ty) in [
                 (self.color_tex, glow::RGBA8, glow::RGBA, glow::UNSIGNED_BYTE),
+                (self.mask_tex, glow::R8, glow::RED, glow::UNSIGNED_BYTE),
                 (
                     self.depth_tex,
                     glow::DEPTH_COMPONENT24,
@@ -350,7 +362,7 @@ impl ModelTarget {
         }
     }
 
-    /// Resize both attachments (no-op when unchanged).
+    /// Resize every attachment (no-op when unchanged).
     pub fn resize(&mut self, gl: &glow::Context, width: u32, height: u32) {
         if width == self.width && height == self.height {
             return;

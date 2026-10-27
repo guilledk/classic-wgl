@@ -710,6 +710,8 @@ impl Gfx {
     /// `alpha_test` selects the `meshAlphaTest` program (cuts texels with
     /// alpha below 0.01); without it nothing is discarded and the draw keeps
     /// early depth testing.  Programs switch only when `alpha_test` does.
+    /// `ghost: false` marks its pixels in the model target's ghost mask, so
+    /// the ghost composite never draws them over what occludes them.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_model_instance(
         &self,
@@ -721,6 +723,7 @@ impl Gfx {
         team: Option<&TeamTint>,
         emissive: &[EmissiveRect],
         alpha_test: bool,
+        ghost: bool,
     ) {
         let gl = &self.gl;
         let which = alpha_test as usize;
@@ -738,6 +741,7 @@ impl Gfx {
             None => s.uniform_1f(gl, "use_texture", 0.0),
         }
         s.uniform_vec4(gl, "base_color", base_color);
+        s.uniform_1f(gl, "no_ghost", if ghost { 0.0 } else { 1.0 });
         match team {
             Some(t) => {
                 s.uniform_1f(gl, "use_team", 1.0);

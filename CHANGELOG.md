@@ -313,6 +313,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- A deck model no longer shows through what stands on it.  The model
+  ghost pass redrew every model's occluded pixels at 40% over the sprites
+  in front, so a landing pad's deck showed through containers and the
+  mule on it (a sprite's `ghost_group` cannot stop a model ghost).
+  `Model.ghost` (default `true`; `"ghost": false` in state.json) opts a
+  floor or deck out: it marks the model target's new ghost mask, which
+  the ghost composite skips (#170).
 - Fewer holes in the tilt warp.  A pixel neither direction neighbour
   covers now tries a third source: at a large tilt residual (past a
   quarter of a level step) the adjacent tilt level's frame of the nearer
