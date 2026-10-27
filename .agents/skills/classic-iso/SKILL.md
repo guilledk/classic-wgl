@@ -230,6 +230,15 @@ slope corners.  (The mouse-to-iso solve and pathfinder still use `bilinear_heigh
 - **Footprint collider construction:**  each footprint vertex is
   height-adjusted in world space.
 - **Debug footprint rendering:**  same vertex → world-space transform.
+- **Raised floors (`floor` module, `set_floor_rect`):** axis-aligned tile
+  rects at a fixed world height, for decks above the terrain (the landing
+  pad).  What stands on the ground samples `ground` = `max(terrain, floor)`:
+  vehicle wheel contacts (`TerrainSnapshot::ground`; each wheel steps up on
+  its own, the body height / pitch / roll follow), teleport, turret aim,
+  wheel dust and `sprite_fit_terrain` (`Engine::ground_at`).  Everything
+  else keeps the terrain: rendering, picking, pathfinding, and every
+  `frame_offset` altitude, which stays relative to the terrain because the
+  sprite model re-adds `sample_height_mesh` (#174).
 
 ---
 

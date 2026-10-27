@@ -139,12 +139,21 @@ struct TerrainSnapshot {
     size_x: i32,
     size_y: i32,
     heights: Vec<f32>,
+    /// Raised floors (`set_floor_rect`).
+    floors: Vec<crate::floor::FloorRect>,
 }
 
 impl TerrainSnapshot {
-    /// Terrain height in **world metres** (the unit the vehicle sim now lives in).
+    /// Terrain height in **world metres** (the unit the vehicle sim now lives
+    /// in): the reference of every `frame_offset` altitude (the sprite model
+    /// re-adds it).
     fn height(&self, x: f32, y: f32) -> f32 {
         sample_height_mesh(&self.heights, self.size_x, self.size_y, x, y)
+    }
+
+    /// The ground a wheel stands on: the terrain raised to any floor rect.
+    fn ground(&self, x: f32, y: f32) -> f32 {
+        crate::floor::ground_height(&self.floors, self.height(x, y), x, y)
     }
 }
 

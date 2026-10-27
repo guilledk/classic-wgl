@@ -162,6 +162,8 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `vehicle_goto` | `(name_ptr, name_len, tx: i32, ty: i32) -> i32` | set a vehicle's destination; the host runs A* and stores the waypoints |
 | `vehicle_stop` | `(name_ptr, name_len) -> i32` | stop a vehicle, clearing its movement path |
 | `vehicle_face` | `(name_ptr, name_len, heading_deg: f64) -> i32` | face tile heading `heading_deg` (0 = East, 90 = South), dropping the path: a `pivot_turn` vehicle turns in place at its turn rate, any other snaps next step; `1` ok, `0` unknown, `-1` airborne / non-finite |
+| `set_floor_rect` | `(id: i32, x0: f64, y0: f64, x1: f64, y1: f64, z_m: f64) -> i32` | set / replace raised floor `id`: tiles `[x0, x1] × [y0, y1]` (either corner order, axis-aligned, edges included) whose ground stands at world height `z_m`; vehicle wheel contacts (so body height, pitch, roll), their dust and `sprite_fit_terrain` rest on `max(terrain, z_m)` there, each wheel on its own; terrain rendering and pathfinding are untouched; `0` for a non-finite value |
+| `clear_floor_rect` | `(id: i32) -> i32` | remove raised floor `id`; `0` when there is none |
 | `vehicle_reverse_to` | `(name_ptr, name_len, x: f64, y: f64) -> i32` | back straight to tile point `(x, y)` keeping the heading (no steering; the sideways offset is not corrected, so line up with `vehicle_face` first), at `reverse_speed` (else `speed`); `1` ok, `0` unknown, `-1` airborne / non-finite / not behind |
 | `vehicle_spawn` | `(def_ptr, def_len, name_ptr, name_len, x: f64, y: f64) -> i32` | spawn a vehicle of a declared definition at `(x, y)` |
 | `bench_mode` | `() -> i32` | what to run: `0` interactive, `1` full benchmark, `2` short (`CLASSIC_BENCH=full\|short`, web `?bench[=short]`) |

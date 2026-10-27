@@ -70,7 +70,10 @@ impl Engine {
         let dir = (Vec3::Z - travel * DUST_BACK_LEAN).normalize();
         let speed_mul = w.speed_mps / DUST_REF_SPEED;
         for (i, suffix) in WHEEL_SUFFIXES.iter().enumerate() {
-            let Some(contact) = self.iso_to_world(w.wheel_xy[i][0], w.wheel_xy[i][1], 0.0) else {
+            let [wx, wy] = w.wheel_xy[i];
+            // On a raised floor the dust rises from the floor, not the terrain.
+            let lift = self.ground_at(wx, wy) - self.height_at(wx, wy);
+            let Some(contact) = self.iso_to_world(wx, wy, lift) else {
                 continue;
             };
             let name = format!("{body}Dust{suffix}");

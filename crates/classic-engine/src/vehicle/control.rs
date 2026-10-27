@@ -46,7 +46,7 @@ impl Engine {
                 let wx = x + ox;
                 let wy = y + oy;
                 wheel_xy[i] = [wx, wy];
-                let gh = terrain.height(wx, wy);
+                let gh = terrain.ground(wx, wy);
                 v.wheel_h[i] = gh;
                 v.wheel_v[i] = 0.0;
                 wheel_z[i] = gh;

@@ -106,6 +106,7 @@ impl Engine {
             )),
             vehicle_path_entities: HashMap::new(),
             preview_paths: HashMap::new(),
+            floor_rects: Default::default(),
             preview_probe: None,
             next_task_id: 0,
             guest_worker: None,

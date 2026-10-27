@@ -39,6 +39,7 @@ impl Engine {
             size_x: tm.size_x,
             size_y: tm.size_y,
             heights: tm.height_data.clone(),
+            floors: self.floor_list(),
         })
     }
 
@@ -480,7 +481,7 @@ impl Engine {
                 let wx = x + ox;
                 let wy = y + oy;
                 wheel_xy[i] = [wx, wy];
-                wheel_ground[i] = terrain.height(wx, wy);
+                wheel_ground[i] = terrain.ground(wx, wy);
             }
 
             // -- body plane (chassis) ---------------------------------------
@@ -561,6 +562,7 @@ impl Engine {
             // and compresses at most `wheel_travel_up` above.  Anything beyond
             // that is absorbed by the body plane (lift + tilt) instead.
             let mut wheel_altitude = [0.0f32; 4];
+            let mut wheel_lift = [0.0f32; 4];
             let mut wheel_z = [0.0f32; 4];
             for i in 0..4 {
                 // `max`/`min`, not `clamp`: a non-finite plane must not
@@ -574,7 +576,10 @@ impl Engine {
                 // Never sink below the terrain, and never compress above the
                 // travel cap (so wheels never ride over the body).
                 let final_h = v.wheel_h[i].max(wheel_ground[i]).min(plane[i] + v.wheel_travel_up);
-                wheel_altitude[i] = final_h - wheel_ground[i];
+                // The sprite's altitude is over the terrain (its model re-adds
+                // it); the dust contact is over the ground (a floor).
+                wheel_altitude[i] = final_h - terrain.height(wheel_xy[i][0], wheel_xy[i][1]);
+                wheel_lift[i] = final_h - wheel_ground[i];
                 wheel_z[i] = final_h;
             }
 
@@ -594,7 +599,7 @@ impl Engine {
             v.dust_speed = speed_mps;
             let mut grounded = [false; 4];
             for (i, g) in grounded.iter_mut().enumerate() {
-                *g = !airborne && wheel_altitude[i] <= DUST_CONTACT_M;
+                *g = !airborne && wheel_lift[i] <= DUST_CONTACT_M;
             }
 
             VehicleWrite {

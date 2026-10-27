@@ -434,6 +434,20 @@ impl GuestHost {
         self.engine_mut().vehicle_reverse_to(&name, x as f32, y as f32)
     }
 
+    /// Set raised floor `id` (tiles `[x0, x1] × [y0, y1]`, either corner
+    /// order) at world height `z_m`: what stands on the ground there (vehicle
+    /// wheels, their dust, `sprite_fit_terrain`) rests on `max(terrain, z_m)`.
+    /// `0` for a non-finite value.
+    pub fn set_floor_rect(&mut self, id: i32, x0: f64, y0: f64, x1: f64, y1: f64, z_m: f64) -> i32 {
+        let e = self.engine_mut();
+        e.set_floor_rect(id, x0 as f32, y0 as f32, x1 as f32, y1 as f32, z_m as f32) as i32
+    }
+
+    /// Remove raised floor `id`; `0` when there is none.
+    pub fn clear_floor_rect(&mut self, id: i32) -> i32 {
+        self.engine_mut().clear_floor_rect(id) as i32
+    }
+
     /// Set a wheeled vehicle's speed (tiles per second), mutating its
     /// `IsoVehicle.speed` (e.g. slow a loaded LRV).
     pub fn vehicle_set_speed(&mut self, name: &str, speed: f64) -> i32 {

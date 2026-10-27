@@ -202,6 +202,13 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   a box and backs over it without path-following detours.  Both drop
   the path; `vehicle_goto` / `vehicle_stop` / teleport cancel them
   (#172).
+- Raised floors: ABI rows `set_floor_rect(id, x0, y0, x1, y1, z_m)` and
+  `clear_floor_rect(id)` (axis-aligned tile rects).  Inside one, the ground
+  stands at `max(terrain, z_m)` for vehicle wheel contacts (each wheel
+  steps up on its own; body height, pitch and roll follow), their dust and
+  `sprite_fit_terrain`, so a vehicle drives onto a deck that sits above
+  the terrain (the landing pad) instead of through it.  Terrain
+  rendering and pathfinding are unchanged (#174).
 
 ### Changed
 

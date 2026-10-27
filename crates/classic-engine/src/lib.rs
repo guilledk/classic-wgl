@@ -36,6 +36,7 @@ pub mod vehicle;
 
 mod boot_api;
 mod dir_blend;
+pub mod floor;
 mod hooks;
 mod lifecycle;
 mod model;
@@ -372,6 +373,8 @@ pub struct Engine {
     /// Candidate vehicle path waypoints, keyed by vehicle name, computed by the
     /// non-mutating `vehicle_probe` and drawn by the demo overlay as a preview.
     pub preview_paths: HashMap<String, Vec<[i32; 2]>>,
+    /// Raised floors by id (`set_floor_rect`): see [`floor`].
+    pub floor_rects: std::collections::BTreeMap<i32, floor::FloorRect>,
     /// The single in-flight (or cached) vehicle reachability probe, if any.
     preview_probe: Option<vehicle::PreviewProbe>,
     /// Next background-task id handed to a guest.
