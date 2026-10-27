@@ -434,6 +434,16 @@ pub struct VehicleDef {
     /// gentle turns.
     #[serde(default)]
     pub turn_cost: f32,
+    /// Turning radius (metres) a pose route (`vehicle_goto_pose`) plans its
+    /// arcs at.  `None` (the default) takes the follower's own, `speed /
+    /// turn_rate` at plan time; a radius under that is raised to it (the
+    /// follower could not drive it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_radius_m: Option<f32>,
+    /// Seconds a pose route stands at each gear change (a cusp) before
+    /// pulling away.  `0` (the default): it changes gear as it stops.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub gear_change_s: f32,
     /// Steering-tire parts, in `[fl, fr, …]` order, matched to `parts` wheels by
     /// index (`tires[0]` steers `parts[1]`, the front-left wheel).  Empty = no
     /// steering.  A tire shares its wheel's ground-origin anchor (the steering
@@ -517,6 +527,8 @@ impl Default for VehicleDef {
             steer_rate_deg_per_sec: 0.0,
             reverse_speed: 0.0,
             turn_cost: 0.0,
+            turn_radius_m: None,
+            gear_change_s: 0.0,
             tires: Vec::new(),
             parts: Vec::new(),
             dust_effect: None,
@@ -600,6 +612,10 @@ pub struct VehicleOverrides {
     pub reverse_speed: Option<f32>,
     #[serde(default)]
     pub turn_cost: Option<f32>,
+    #[serde(default)]
+    pub turn_radius_m: Option<f32>,
+    #[serde(default)]
+    pub gear_change_s: Option<f32>,
     /// Opt a scene's copy of the vehicle into wheel dust (see
     /// [`VehicleDef::dust_effect`]).
     #[serde(default)]
@@ -628,6 +644,12 @@ impl VehicleOverrides {
         }
         if let Some(v) = self.turn_cost {
             def.turn_cost = v;
+        }
+        if let Some(v) = self.turn_radius_m {
+            def.turn_radius_m = Some(v);
+        }
+        if let Some(v) = self.gear_change_s {
+            def.gear_change_s = v;
         }
         if let Some(v) = &self.dust_effect {
             def.dust_effect = Some(v.clone());
@@ -998,6 +1020,20 @@ mod tests {
         def.touchdown_effect = None;
         let out = serde_json::to_value(&def).unwrap();
         assert!(out.get("dust_effect").is_none() && out.get("touchdown_effect").is_none());
+        assert!(out.get("turn_radius_m").is_none() && out.get("gear_change_s").is_none());
+
+        // The pose-route tunables: authored, and overridden per scene.
+        let mut authored = serde_json::to_value(VehicleDef::default()).unwrap();
+        authored["turn_radius_m"] = 2.0.into();
+        authored["gear_change_s"] = 0.25.into();
+        let mut def: VehicleDef = serde_json::from_value(authored).unwrap();
+        assert_eq!((def.turn_radius_m, def.gear_change_s), (Some(2.0), 0.25));
+        let ov: VehicleOverrides = serde_json::from_value(serde_json::json!({
+            "turn_radius_m": 3.0, "gear_change_s": 0.0
+        }))
+        .unwrap();
+        ov.apply_to(&mut def);
+        assert_eq!((def.turn_radius_m, def.gear_change_s), (Some(3.0), 0.0));
     }
 
     /// A texture manifest entry without `frames` leaves it `None` (backward

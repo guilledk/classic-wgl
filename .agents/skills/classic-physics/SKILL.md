@@ -448,16 +448,22 @@ lattice, on the pathfinder worker like any vehicle search (the query's
 
 - **State:** cell × 16 headings (22.5°) × the gear it arrived in.
 - **Primitives** from each heading: straight, or a 22.5° arc of the
-  turning radius (`1.3 · speed / turn_rate`: the follower's own, with a
-  margin) left or right then a short straight, forward and (when
+  turning radius (the follower's own, `speed / turn_rate`, or the def's
+  `turn_radius_m` when wider: `control::pose_turn_radius`) left or right
+  then a short straight, forward and (when
   `reverse_speed > 0`) backward; a `pivot_turn` vehicle also turns 22.5° in
   place.  Lengths are picked so the end rounds onto a cell centre.  Each
   primitive's swept body (the body rectangle along the motion, and along
   the chords the follower will drive between its waypoints) is rasterized
   once into row spans; the first move ignores the cells under the body
   where it stands.
-- **Cost:** length (backward ×2), `turn_cost` per 45°, 3 tiles per gear
-  change.  Heuristic: the larger of the straight line and the goal's
+- **Cost** (in time, as tiles of forward driving): length, a backward
+  tile at `1.5 · speed / reverse_speed` (`POSE_REVERSE_PENALTY`: a mule
+  that reverses as fast as it drives backs up where that saves a third of
+  the drive; one reversing at 0.9 of 2.4 pays 4× and turns round
+  instead), `turn_cost` per 45°, and per gear change 1.5 tiles
+  (`POSE_GEAR_COST`, the easing in and out) plus the def's
+  `gear_change_s` at speed (`PoseGoal::gear_cost`).  Heuristic: the larger of the straight line and the goal's
   8-connected distance field over the window's open cells (scaled by
   `cos 22.5°`, so it never exceeds the straight line between two cells),
   weighted 1.1 (`HEURISTIC_WEIGHT`: a route within 10% of the cheapest,
@@ -482,7 +488,11 @@ lattice, on the pathfinder worker like any vehicle search (the query's
   (the heading turns so heading + π bends toward the target, the wheels
   steering as in reverse); on the last run it pursues a virtual waypoint 3
   tiles past the goal along its heading, so it arrives lined up (tests hold
-  it within half a 16-direction step); it eases into cusps and the goal.
+  it within half a 16-direction step).  It pursues one planned radius
+  ahead (`POSE_LOOKAHEAD`; the plain follower 1.5), so it holds arcs drawn
+  at its own radius, eases over the last 0.75 tile into a cusp or the
+  goal, to half speed at most (`POSE_EASE_*`), and stands the def's
+  `gear_change_s` at each cusp (`IsoVehicle::gear_wait`; `0`: none).
   A `pivot_turn` vehicle then turns in place onto the exact heading (the
   mule, front-steered, arcs and backs up instead: it has no pivot).
 - **Blocks:** a vehicle block cutting a pose route re-plans it as a pose

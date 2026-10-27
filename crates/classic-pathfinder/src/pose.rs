@@ -47,8 +47,6 @@ use crate::GridCell;
 /// Headings of the lattice (22.5° apart).
 const HEADINGS: usize = 16;
 const STEP: f32 = core::f32::consts::TAU / HEADINGS as f32;
-/// Cost of a gear change (tiles of driving).
-const SWITCH_COST: f32 = 3.0;
 /// The weight on the heuristic: a route at most this much costlier than
 /// the cheapest, found without expanding the band of near-equal states a
 /// long drive off the lattice's headings leaves (the turn costs the
@@ -72,6 +70,8 @@ pub struct PoseGoal {
     pub reverse: bool,
     /// Cost multiplier of a backward tile (≥ 1).
     pub reverse_cost: f32,
+    /// Cost of a gear change (tiles of driving: the stop and the pull-away).
+    pub gear_cost: f32,
 }
 
 /// The bit a pose route sets in a waypoint's `y` when the segment into it is
@@ -436,6 +436,7 @@ pub(crate) fn find_pose_cached(
     }
     let r = goal.turn_radius.max(0.5);
     let reverse_cost = goal.reverse_cost.max(1.0);
+    let gear_cost = goal.gear_cost.max(0.0);
     let prims = cache.get(body, r, goal.reverse, pivot, turn_cost.max(0.0) * 0.5);
     let blocked = Blocked::new(walkable, size_x, size_y);
 
@@ -558,7 +559,7 @@ pub(crate) fn find_pose_cached(
             }
             let mut cost = prim.cost * if prim.reverse { reverse_cost } else { 1.0 };
             if !at_start && prim.reverse != back && prim.end != (0, 0) {
-                cost += SWITCH_COST;
+                cost += gear_cost;
             }
             let nk = (k as i32 + prim.dk).rem_euclid(HEADINGS as i32) as usize;
             // a pivot keeps the gear it stood in
@@ -595,6 +596,7 @@ mod tests {
             turn_radius: 2.6,
             reverse,
             reverse_cost: 2.0,
+            gear_cost: 3.0,
         }
     }
 

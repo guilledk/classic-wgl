@@ -302,6 +302,7 @@ impl PathfinderWorker {
                     p.turn_radius,
                     if p.reverse { 1.0 } else { 0.0 },
                     p.reverse_cost,
+                    p.gear_cost,
                 ] {
                     arr.push(&JsValue::from_f64(v as f64));
                 }

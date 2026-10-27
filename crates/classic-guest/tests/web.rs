@@ -313,6 +313,7 @@ async fn pathfinder_worker_closes_a_querys_rects_for_that_search_only() {
         turn_radius: 1.0,
         reverse: true,
         reverse_cost: 2.0,
+        gear_cost: 3.0,
     };
     let wall = vec![[4, 0, 4, 7]];
     let cases = [

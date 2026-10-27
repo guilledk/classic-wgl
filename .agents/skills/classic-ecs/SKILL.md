@@ -202,7 +202,9 @@ categories:
   the sheet/ceiling it maps against), `reversing` + `reverse_speed` (whether the
   vehicle is backing up and how fast), and `turn_cost` (the A\* per-45° turn
   penalty).  These are **not** serialized — they are set at spawn from
-  `VehicleDef` (`steer_rate_deg_per_sec`, `reverse_speed`, `turn_cost`, `steer_*`)
+  `VehicleDef` (`steer_rate_deg_per_sec`, `reverse_speed`, `turn_cost`, `steer_*`;
+  the pose-route tunables `turn_radius_m` → `turn_radius` in tiles and
+  `gear_change_s`, with the runtime `gear_wait`)
   or by the runtime tuning panel, and reset by `vehicle_teleport`.
   `update_one_vehicle` integrates `steer` toward the pure-pursuit heading error
   at `steer_rate` (so the tires sweep, not snap) and flips `reversing` via

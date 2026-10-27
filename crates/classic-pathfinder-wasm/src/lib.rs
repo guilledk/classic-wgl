@@ -49,7 +49,8 @@ pub extern "C" fn set_closed(ptr: *const i32, count: i32) {
 }
 
 /// Set (`has != 0`) or clear the next `find_vehicle`'s pose goal (tile
-/// point, tile headings in radians, turning radius in tiles).
+/// point, tile headings in radians, turning radius in tiles, the reverse
+/// cost multiplier and the gear-change cost in tiles).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn set_pose_goal(
@@ -61,6 +62,7 @@ pub extern "C" fn set_pose_goal(
     turn_radius: f32,
     reverse: i32,
     reverse_cost: f32,
+    gear_cost: f32,
 ) {
     let goal = (has != 0).then_some(PoseGoal {
         x,
@@ -70,6 +72,7 @@ pub extern "C" fn set_pose_goal(
         turn_radius,
         reverse: reverse != 0,
         reverse_cost,
+        gear_cost,
     });
     *POSE.lock().unwrap_or_else(|p| p.into_inner()) = goal;
 }

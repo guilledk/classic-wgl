@@ -12,7 +12,7 @@
 //     footprint: [[dx, dy], …], body: [rear, front, right, left] | null,
 //     pivot, pitchMax, rollMax, wheelbaseM, trackM, safeFallM, jumpCost,
 //     turnCost, pose: [x, y, heading, startHeading, turnRadius, reverse,
-//     reverseCost] | null, closed: Int32Array }                — run a vehicle search
+//     reverseCost, gearCost] | null, closed: Int32Array }                — run a vehicle search
 //     (a non-null `body` is a turned body rectangle and `footprint` is unused;
 //     a non-null `pose` drives to that pose and `to` is unused; `closed` is
 //     flat [x0, y0, x1, y1, …] tile rects blocked for this search only)
@@ -80,9 +80,9 @@ function handle(msg) {
         var fpp = copyInto(fp);
         var body = msg.body || [0, 0, 0, 0];
         // a pose goal [x, y, heading, startHeading, turnRadius, reverse,
-        // reverseCost] turns this into a pose search
-        var pose = msg.pose || [0, 0, 0, 0, 0, 0, 0];
-        exports.set_pose_goal(msg.pose ? 1 : 0, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]);
+        // reverseCost, gearCost] turns this into a pose search
+        var pose = msg.pose || [0, 0, 0, 0, 0, 0, 0, 0];
+        exports.set_pose_goal(msg.pose ? 1 : 0, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6], pose[7]);
         var closed = msg.closed || new Int32Array(0);
         var cp = copyInto(closed);
         exports.set_closed(cp, closed.length / 4);
