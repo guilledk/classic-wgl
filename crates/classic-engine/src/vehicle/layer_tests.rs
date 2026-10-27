@@ -6,7 +6,7 @@ use classic_core::components::{
 };
 use classic_core::tilemap::TILE_M;
 use classic_core::types::{FrameTable, VehicleDef};
-use classic_core::vehicle_def::ClipDef;
+use classic_core::vehicle_def::{ClipDef, LayerKind};
 
 use super::kinematics::wrap_pi;
 use super::layers::{chassis_to_tile, clip_frame, contact_offsets, layer_poses};
@@ -1047,4 +1047,64 @@ fn the_flat_tilt_warp_needs_an_anchor_depth_sheet_and_respects_the_opt_out() {
     face(&mut engine, 0);
     assert_eq!(blend(&engine, "tank.crane").tilt, [0.0; 3]);
     assert!(blend(&engine, "tank.crate").tilt.iter().any(|v| v.abs() > 1e-3));
+}
+
+/// The rover (a `tilt_interp` hull) on a ramp of `deg` degrees rising
+/// toward East, facing tile heading `dir` of 16, left to settle.
+fn rover_on_ramp(deg: f32, dir: u32, hull_tilt_interp: bool) -> Engine {
+    let mut engine = spawn_rover();
+    engine.frame_tables.get_mut("roverHull").unwrap().tilt_interp = hull_tilt_interp;
+    let rise = deg.to_radians().tan() * TILE_M;
+    let tm = engine.names["tilemap"];
+    engine.world.get::<&mut classic_core::components::Tilemap>(tm).unwrap().height_data =
+        (0..25 * 25).map(|i| (i % 25) as f32 * rise).collect();
+    engine.world.get::<&mut IsoVehicle>(engine.names["rover"]).unwrap().direction = dir;
+    assert!(engine.vehicle_teleport("rover", 12.0, 12.0));
+    for _ in 0..90 {
+        engine.time.delta = 1.0 / 30.0;
+        engine.update_vehicles();
+    }
+    engine
+}
+
+#[test]
+fn a_tilt_interp_hull_leans_to_the_terrain_itself() {
+    // 0..20° ramps, uphill (pitch) and across (roll): the chassis and the
+    // hull's drawn tilt both read the slope within 1° (no dead zone)
+    for deg in [0.0f32, 3.0, 7.0, 10.0, 13.7, 17.0, 20.0] {
+        for (dir, pitch_axis) in [(0, true), (4, false), (8, true), (12, false)] {
+            let engine = rover_on_ramp(deg, dir, true);
+            let v =
+                IsoVehicle::clone(&engine.world.get::<&IsoVehicle>(engine.names["rover"]).unwrap());
+            // East uphill: facing East pitches up, West down; facing South
+            // East is the left side (left-up roll), North the right
+            let sign = if dir == 0 || dir == 4 { 1.0 } else { -1.0 };
+            let (along, across) = if pitch_axis { (v.pitch, v.roll) } else { (v.roll, v.pitch) };
+            let err = (along.to_degrees() - sign * deg).abs();
+            assert!(err < 1.0, "{deg}° dir {dir}: {:.2}° along", along.to_degrees());
+            assert!(across.to_degrees().abs() < 1.0, "{deg}° dir {dir}: {across} across");
+            // the hull draws it: residual from its nearest level to the slope
+            let def = engine.vehicles["rover"].clone();
+            let hull = def.layers.iter().find(|l| l.kind == LayerKind::Hull).unwrap();
+            let pick = classic_core::vehicle_def::pick_tilt(
+                hull.pitch, hull.roll, v.heading, v.pitch, v.roll, true,
+            );
+            let drawn = if pitch_axis { pick.drawn.0 } else { pick.drawn.1 };
+            assert!((drawn.to_degrees() - sign * deg).abs() < 1.0, "{deg}° dir {dir}: drawn");
+            let blend =
+                engine.world.get::<&IsoSprite>(engine.names["rover"]).unwrap().dir_blend.unwrap();
+            assert!(
+                blend.tilt.iter().zip(pick.residual).all(|(a, b)| (a - b).abs() < 1e-5),
+                "{deg}° dir {dir}: the hull warps to the chassis tilt"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_hull_drawn_from_its_levels_keeps_the_dead_zone() {
+    // no `tilt_interp`: half a 20° step (10°) of the slope is absorbed
+    let engine = rover_on_ramp(13.7, 0, false);
+    let v = IsoVehicle::clone(&engine.world.get::<&IsoVehicle>(engine.names["rover"]).unwrap());
+    assert!((v.pitch.to_degrees() - 3.7).abs() < 0.5, "{}", v.pitch.to_degrees());
 }

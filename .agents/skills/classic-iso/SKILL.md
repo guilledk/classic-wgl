@@ -761,6 +761,15 @@ velocity cone all turn with it; `Engine::fx_emit_oriented`); the rest return 1 /
 - **Hull roll**: nothing assumes one roll level.  `roll_levels` comes from
   the hull axis, and the tilt dead zone is the finer half-step of the hull's
   pitch and roll axes.
+- **Continuous tilt** (`Engine::hull_tilt_continuous`): a v2 vehicle whose
+  hull sheet warps tilt (`tilt_interp` + `dir_interp`) has **no** dead zone:
+  its chassis pitch / roll targets are the terrain fit itself (the wheel
+  contacts' slope), smoothed only by the spring, and the hull draws them
+  exactly (clamped to its baked range).  Riding layers, flat-warped layers,
+  sockets, lights and cargo all read that tilt.  A 13.7° ramp gives 13.66–
+  13.87° along it (padtest, the four headings), where the dead zone left
+  3.7°.  v1 vehicles and hulls drawn from their levels keep the dead zone,
+  which stops a snapping hull flickering between levels.
 - **Posed sprites** (`sprite_pose.rs`): a frame table may carry `axes`
   (`SpriteAxes {directions, pitch, roll}`; without it the sheet has
   `frames.len()` directions).
