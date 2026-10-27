@@ -51,6 +51,26 @@ pub enum TestAction {
     /// reaches the guest's click handling.
     #[serde(rename = "click")]
     Click { x: f32, y: f32, button: u32 },
+    /// A full click (as `click`) at iso tile `(tx, ty)` (terrain height),
+    /// projected through the current camera.
+    #[serde(rename = "clickIso")]
+    ClickIso {
+        tx: f32,
+        ty: f32,
+        #[serde(default)]
+        button: u32,
+    },
+    /// A full click (as `click`) on entity `name`'s screen-projected ground
+    /// anchor (exact name, else the bare part of an `ns::name`).
+    #[serde(rename = "clickEntity")]
+    ClickEntity {
+        name: String,
+        #[serde(default)]
+        button: u32,
+    },
+    /// Move the pointer (hover only) to iso tile `(tx, ty)`; it stays there.
+    #[serde(rename = "moveIso")]
+    MoveIso { tx: f32, ty: f32 },
     /// Drive vehicle `name` (an exact name, else the bare part of an
     /// `ns::name`) to tile point `(x, y)` facing tile heading `heading`
     /// degrees (`Engine::vehicle_goto_pose`); the route installs when the
@@ -387,11 +407,35 @@ fn run_frame(
                         engine.set_enabled(e, true);
                     }
                 }
+                // Mouse actions go through `scripted_input`, applied after the
+                // platform snapshot next frame, so selection, picking, hover
+                // and the guest see them as real input.
                 TestAction::MouseMove { x, y } => {
-                    let (vw, vh) = engine.viewport_size();
-                    engine.input.mouse_pos = glam::Vec2::new(*x, *y);
-                    engine.input.mouse_axis.x = ((*x / vw) - 0.5) * 2.0;
-                    engine.input.mouse_axis.y = ((*y / vh) - 0.5) * 2.0;
+                    engine.scripted_input.move_to(glam::Vec2::new(*x, *y));
+                }
+                TestAction::MoveIso { tx, ty } => match engine.iso_to_screen_px(*tx, *ty) {
+                    Some((sx, sy)) => engine.scripted_input.move_to(glam::Vec2::new(sx, sy)),
+                    None => classic_core::cl_info!(Chan::Test, "  [moveIso] no tilemap"),
+                },
+                TestAction::ClickIso { tx, ty, button } => {
+                    match engine.iso_to_screen_px(*tx, *ty) {
+                        Some((sx, sy)) => {
+                            engine.scripted_input.click(glam::Vec2::new(sx, sy), *button as usize)
+                        }
+                        None => classic_core::cl_info!(Chan::Test, "  [clickIso] no tilemap"),
+                    }
+                }
+                TestAction::ClickEntity { name, button } => {
+                    let name = resolve_scenario_name(engine, name);
+                    match entity_screen_px(engine, &name) {
+                        Some((sx, sy)) => {
+                            engine.scripted_input.click(glam::Vec2::new(sx, sy), *button as usize)
+                        }
+                        None => classic_core::cl_info!(
+                            Chan::Test,
+                            "  [clickEntity] '{name}' has no screen point"
+                        ),
+                    }
                 }
                 TestAction::VehicleGotoPose { name, x, y, heading } => {
                     let name = resolve_scenario_name(engine, name);
@@ -408,16 +452,11 @@ fn run_frame(
                 TestAction::Click { x, y, button } => {
                     engine.scripted_input.click(glam::Vec2::new(*x, *y), *button as usize);
                 }
+                // The same full click as `click` (it used to write the input
+                // after the update closures, which the next frame's platform
+                // snapshot overwrote before anything read it).
                 TestAction::MouseClick { x, y, button } => {
-                    engine.input.mouse_pos = glam::Vec2::new(*x, *y);
-                    let b = *button as usize;
-                    if b < 3 {
-                        engine.input.mouse_down[b] = true;
-                        engine.input.mouse_pressed[b] = true;
-                    }
-                    if b == 0 {
-                        engine.input.frame_had_click = true;
-                    }
+                    engine.scripted_input.click(glam::Vec2::new(*x, *y), *button as usize);
                 }
                 // Delivered next frame: the runner runs after the update
                 // closures, and `frame` rebuilds `input` from the platform.
@@ -440,10 +479,7 @@ fn run_frame(
                 TestAction::SetMouseIso { tx, ty } => {
                     if let Some((sx, sy)) = crate::render_order::iso_to_screen_px(engine, *tx, *ty)
                     {
-                        let (vw, vh) = engine.viewport_size();
-                        engine.input.mouse_pos = glam::Vec2::new(sx, sy);
-                        engine.input.mouse_axis.x = ((sx / vw) - 0.5) * 2.0;
-                        engine.input.mouse_axis.y = ((sy / vh) - 0.5) * 2.0;
+                        engine.scripted_input.move_to(glam::Vec2::new(sx, sy));
                     }
                 }
                 TestAction::SetEntityPos { name, x, y, z } => {
@@ -791,6 +827,15 @@ fn assert_ui_text_centered(engine: &Engine, state: &DemoStateRef, tolerance: f32
     true
 }
 
+/// The screen pixel of entity `name`'s ground anchor: its `Transform`
+/// tile position at terrain height (a vehicle's, a sprite's) projected
+/// through the current camera.
+fn entity_screen_px(engine: &Engine, name: &str) -> Option<(f32, f32)> {
+    let &e = engine.names.get(name)?;
+    let p = engine.world.get::<&Transform>(e).ok()?.position;
+    engine.iso_to_screen_px(p.x, p.y)
+}
+
 /// Resolve an entity name: exact, else the first (sorted) whose bare
 /// (post-`::`) name matches.
 fn resolve_scenario_name(engine: &Engine, name: &str) -> String {
@@ -961,6 +1006,179 @@ mod tests {
         let down: Vec<u64> = seen.borrow().iter().filter(|s| s.2).map(|s| s.0).collect();
         assert_eq!(pressed, [3], "pressed once, the frame after the step");
         assert_eq!(down, [3, 4, 5], "held until the release step's next frame");
+    }
+
+    /// Run `steps` over `engine` for `frames` frames, an update closure (the
+    /// guest) logging `(frame, pressed 0, released 0, pointer)` each frame.
+    #[allow(clippy::type_complexity)]
+    fn run_mouse_steps(
+        engine: &mut classic_engine::Engine,
+        steps: &str,
+        frames: u32,
+    ) -> Vec<(u64, bool, bool, glam::Vec2)> {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let steps: Vec<TestStep> = serde_json::from_str(steps).unwrap();
+        let seen: Rc<RefCell<Vec<(u64, bool, bool, glam::Vec2)>>> = Rc::default();
+        let log = Rc::clone(&seen);
+        engine.on_update(move |e| {
+            log.borrow_mut().push((
+                e.frame_number(),
+                e.input.was_mouse_pressed(0),
+                e.input.was_mouse_released(0),
+                e.input.mouse_pos,
+            ));
+        });
+        let state: super::DemoStateRef = Rc::default();
+        let runner = Rc::new(RefCell::new(super::TestRunner::default()));
+        engine.on_update(move |e| super::run_frame(e, &state, &mut runner.borrow_mut(), &steps));
+        let mut platform = engine.input.clone();
+        for _ in 0..frames {
+            engine.frame(&mut platform, 640.0, 360.0, 1.0 / 60.0);
+        }
+        let out = seen.borrow().clone();
+        out
+    }
+
+    /// A scenario click selects a `Selectable` (RTS point-select on the
+    /// release), as a player's does.  Before, `mouseClick` wrote the input
+    /// after the update closures and the next frame's platform snapshot
+    /// overwrote it, so no click ever selected anything.
+    #[test]
+    fn scenario_clicks_select_like_a_player() {
+        for action in ["click", "mouseClick"] {
+            let mut engine = classic_engine::Engine::new_for_test();
+            engine.set_guest_flag("rts_selection", true);
+            assert!(engine.spawn_named("unit"));
+            let e = engine.names["unit"];
+            engine
+                .world
+                .insert_one(e, classic_core::components::Selectable { priority: 0, group: 0 })
+                .unwrap();
+            assert!(engine.spawn_collider("unit", 100.0, 100.0, 20.0, 20.0));
+            let steps = format!(
+                r#"[{{ "frame": 2, "assertions": [], "log": "click", "actions": [
+                    {{ "{action}": {{ "x": 110, "y": 110, "button": 0 }} }} ] }}]"#
+            );
+            run_mouse_steps(&mut engine, &steps, 6);
+            assert_eq!(engine.selected_names(), vec!["unit".to_string()], "{action}");
+        }
+    }
+
+    /// A scripted click reaches the guest's click read on the frame after
+    /// the step (pressed), and the release on the one after; the pointer
+    /// stays where it clicked.
+    #[test]
+    fn a_scenario_click_reaches_the_guest_on_the_next_frames() {
+        let mut engine = classic_engine::Engine::new_for_test();
+        let seen = run_mouse_steps(
+            &mut engine,
+            r#"[{ "frame": 3, "assertions": [], "log": "click", "actions": [
+                { "click": { "x": 40, "y": 50, "button": 0 } } ] }]"#,
+            8,
+        );
+        let pressed: Vec<u64> = seen.iter().filter(|s| s.1).map(|s| s.0).collect();
+        let released: Vec<u64> = seen.iter().filter(|s| s.2).map(|s| s.0).collect();
+        assert_eq!((pressed, released), (vec![4], vec![5]));
+        assert!(seen.iter().filter(|s| s.0 >= 4).all(|s| s.3 == glam::Vec2::new(40.0, 50.0)));
+    }
+
+    /// `mouseMove` (and `moveIso`) hover: the pointer moves from the next
+    /// frame on and stays, with no button.
+    #[test]
+    fn a_scenario_move_hovers_and_stays() {
+        let mut engine = classic_engine::Engine::new_for_test();
+        let seen = run_mouse_steps(
+            &mut engine,
+            r#"[{ "frame": 2, "assertions": [], "log": "move", "actions": [
+                    { "mouseMove": { "x": 12, "y": 34 } } ] },
+                { "frame": 5, "assertions": [], "log": "move again", "actions": [
+                    { "mouseMove": { "x": 56, "y": 78 } } ] }]"#,
+            8,
+        );
+        assert!(seen.iter().all(|s| !s.1 && !s.2), "no button");
+        let at = |f: u64| seen.iter().find(|s| s.0 == f).unwrap().3;
+        assert_eq!(at(3), glam::Vec2::new(12.0, 34.0));
+        assert_eq!(at(5), glam::Vec2::new(12.0, 34.0), "stays");
+        assert_eq!(at(6), glam::Vec2::new(56.0, 78.0));
+        assert_eq!(
+            engine.input.mouse_axis,
+            glam::Vec2::new(56.0 / 320.0 - 1.0, 78.0 / 180.0 - 1.0)
+        );
+    }
+
+    /// `clickEntity` / `clickIso` / `moveIso` land on the camera projection
+    /// of the entity's ground anchor or the tile.
+    #[test]
+    fn world_mouse_steps_project_through_the_camera() {
+        use classic_core::components::{Role, RoleKind, Tilemap, Transform};
+        let mut engine = classic_engine::Engine::new_for_test();
+        let tm = Tilemap {
+            position: glam::Vec3::ZERO,
+            scale: glam::Vec3::new(45.0, 45.0, 1.0),
+            size_x: 16,
+            size_y: 16,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0; 256],
+            height_data: vec![1.0; 289],
+            height_scale: 14.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: glam::Vec3::ZERO,
+            selection_iso_begin: glam::Vec3::splat(-1.0),
+            selection_iso_end: glam::Vec3::splat(-1.0),
+            blend: None,
+        };
+        let t = engine.world.spawn((
+            tm,
+            Role::new(RoleKind::Tilemap),
+            Transform::new(glam::Vec3::ZERO, glam::Vec3::ONE),
+        ));
+        engine.names.insert("tilemap".into(), t);
+        assert!(engine.spawn_named("ns::crate"));
+        let c = engine.names["ns::crate"];
+        engine
+            .world
+            .insert_one(c, Transform::new(glam::Vec3::new(6.5, 9.5, 0.0), glam::Vec3::ONE))
+            .unwrap();
+        let seen = run_mouse_steps(
+            &mut engine,
+            r#"[{ "frame": 2, "assertions": [], "log": "entity", "actions": [
+                    { "clickEntity": { "name": "crate" } } ] },
+                { "frame": 6, "assertions": [], "log": "tile", "actions": [
+                    { "clickIso": { "tx": 3.5, "ty": 4.5 } } ] },
+                { "frame": 10, "assertions": [], "log": "hover", "actions": [
+                    { "moveIso": { "tx": 8.0, "ty": 2.0 } } ] }]"#,
+            13,
+        );
+        let at = |f: u64| seen.iter().find(|s| s.0 == f).unwrap();
+        let px = |x, y| {
+            let (sx, sy) = engine.iso_to_screen_px(x, y).unwrap();
+            glam::Vec2::new(sx, sy)
+        };
+        assert!(at(3).1 && at(3).3 == px(6.5, 9.5), "clickEntity: {:?}", at(3));
+        assert!(at(7).1 && at(7).3 == px(3.5, 4.5), "clickIso: {:?}", at(7));
+        assert!(!at(11).1 && at(11).3 == px(8.0, 2.0), "moveIso: {:?}", at(11));
+    }
+
+    #[test]
+    fn world_mouse_steps_parse() {
+        let steps: Vec<TestStep> = serde_json::from_str(
+            r#"[{ "frame": 2, "assertions": [], "log": "w", "actions": [
+                { "clickIso": { "tx": 3.5, "ty": 4.5 } },
+                { "clickEntity": { "name": "mule", "button": 2 } },
+                { "moveIso": { "tx": 1, "ty": 2 } } ] }]"#,
+        )
+        .expect("world mouse steps parse");
+        assert!(matches!(steps[0].actions[0], TestAction::ClickIso { button: 0, .. }));
+        assert!(
+            matches!(&steps[0].actions[1], TestAction::ClickEntity { name, button: 2 } if name == "mule")
+        );
+        assert!(matches!(steps[0].actions[2], TestAction::MoveIso { .. }));
     }
 
     #[test]
