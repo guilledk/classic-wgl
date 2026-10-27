@@ -90,6 +90,10 @@ pub enum TestAction {
         #[serde(default)]
         repeat: i32,
     },
+    /// Log a vehicle's pose on the `test` channel: tile position, heading
+    /// and chassis pitch / roll (degrees).
+    #[serde(rename = "logVehicle")]
+    LogVehicle { name: String },
     #[serde(rename = "keyPress")]
     KeyPress { key: String, pressed: bool },
     #[serde(rename = "wheel")]
@@ -453,6 +457,27 @@ fn run_frame(
                             "  [clickEntity] '{name}' has no screen point (named: {})",
                             engine.names.contains_key(&name)
                         ),
+                    }
+                }
+                TestAction::LogVehicle { name } => {
+                    let name = resolve_scenario_name(engine, name);
+                    let pose = engine.names.get(&name).and_then(|&e| {
+                        let v =
+                            engine.world.get::<&classic_core::components::IsoVehicle>(e).ok()?;
+                        let p = engine.world.get::<&Transform>(e).ok()?.position;
+                        Some((p, v.heading, v.pitch, v.roll))
+                    });
+                    match pose {
+                        Some((p, h, pitch, roll)) => classic_core::cl_info!(
+                            Chan::Test,
+                            "  [logVehicle] {name} at ({:.2}, {:.2}) heading {:.1} pitch {:.2} roll {:.2}",
+                            p.x,
+                            p.y,
+                            h.to_degrees(),
+                            pitch.to_degrees(),
+                            roll.to_degrees()
+                        ),
+                        None => classic_core::cl_info!(Chan::Test, "  [logVehicle] no vehicle {name}"),
                     }
                 }
                 TestAction::VehiclePlay { name, layer, clip, speed, repeat } => {

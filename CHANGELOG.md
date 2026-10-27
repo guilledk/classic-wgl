@@ -441,6 +441,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- A vehicle whose hull warps its tilt leans to the terrain.  The chassis
+  tilt kept a dead zone of half a tilt step, there so a hull drawn from
+  its baked levels does not flicker between them; with `tilt_interp` the
+  hull draws any tilt, yet the mule on padtest's 13.7° ramp leaned 3.7°
+  (20° levels: 10° absorbed).  A v2 hull on a `tilt_interp` sheet now
+  takes the terrain fit itself, smoothed by the spring alone (13.7° on
+  that ramp); its riding layers, sockets, lights and cargo follow.  v1
+  vehicles and hulls drawn from their levels keep the dead zone.  A
+  `logVehicle {name}` scenario action logs a vehicle's pose and tilt
+  (#188).
+
 - Vehicle path followers no longer cut a route's corners onto blocked
   cells.  The planners keep the oriented body clear along the route's
   lines, but the pure-pursuit follower aims down the route and grazed the

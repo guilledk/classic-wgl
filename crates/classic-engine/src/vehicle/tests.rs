@@ -2235,3 +2235,37 @@ fn losing_a_blocks_ownership_replans_the_route_through_it() {
         matches!(goto_sync(&mut engine, "lrv", 40, 10), VehicleGotoPoll::Accepted(r) if r.last() == route.last())
     );
 }
+
+#[test]
+fn a_v1_vehicle_keeps_its_tilt_dead_zone() {
+    // a v1 lrv baked at 3 pitch / roll levels (±20°: 10° half steps) on a
+    // 13.7° ramp, even with a `tilt_interp` table on its body texture: the
+    // dead zone stays, so it leans 13.7 - 10 = 3.7°
+    let rise = 13.7f32.to_radians().tan() * classic_core::tilemap::TILE_M;
+    let heights = (0..49 * 49).map(|i| (i % 49) as f32 * rise).collect();
+    let mut engine = engine_with_lrvtest_like_map(Some(heights));
+    let (mut def, anchors) = lrv_def(90.0);
+    (def.pitch_levels, def.roll_levels, def.rows) = (3, 3, 18);
+    insert_lrv(&mut engine, (def, anchors));
+    engine.frame_tables.insert(
+        "lrvBody".into(),
+        classic_core::types::FrameTable {
+            version: 2,
+            sheets: vec![],
+            frames: Default::default(),
+            dir_interp: true,
+            axes: None,
+            tilt_interp: true,
+            companions: vec![],
+        },
+    );
+    assert!(engine.spawn_vehicle("lrv", "lrv", 20.5, 20.5));
+    for _ in 0..90 {
+        engine.time.delta = 1.0 / 30.0;
+        engine.update_vehicles();
+    }
+    let ve = engine.names["lrv"];
+    assert!(!engine.hull_tilt_continuous(ve));
+    let p = engine.world.get::<&IsoVehicle>(ve).unwrap().pitch.to_degrees();
+    assert!((p - 3.7).abs() < 0.5, "v1 pitch {p}");
+}

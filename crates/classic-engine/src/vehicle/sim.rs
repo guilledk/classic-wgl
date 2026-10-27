@@ -335,6 +335,18 @@ impl Engine {
         self.vehicle_teleport(entity_name, x, y)
     }
 
+    /// Whether vehicle `ve` leans continuously: a v2 vehicle whose hull
+    /// sheet warps tilt (`tilt_interp`, with `dir_interp`) draws any tilt
+    /// exactly, so its chassis follows the terrain with no dead zone.  A v1
+    /// vehicle, or a hull drawn from its baked levels only, keeps the dead
+    /// zone (half a tilt step) that stops it flickering between levels.
+    pub(crate) fn hull_tilt_continuous(&self, ve: hecs::Entity) -> bool {
+        let v2 = self.world.get::<&IsoVehicle>(ve).is_ok_and(|v| !v.layers.is_empty());
+        v2 && self.world.get::<&IsoSprite>(ve).is_ok_and(|s| {
+            self.frame_tables.get(&s.texture).is_some_and(|t| t.tilt_interp && t.dir_interp)
+        })
+    }
+
     /// Advance every `IsoVehicle` one step: follow the movement path, sample
     /// terrain under each wheel, integrate the point-mass jump + suspension,
     /// and write the five sprites.
@@ -364,6 +376,7 @@ impl Engine {
         let wheel_handles = self.vehicle_wheel_handles(ve);
         let tire_handles = self.vehicle_tire_handles(ve);
         let guard = self.follow_guard_grid(ve);
+        let continuous_tilt = self.hull_tilt_continuous(ve);
 
         let write = {
             let Some(mut v) = self.world.get::<&mut IsoVehicle>(ve).ok() else { return };
@@ -666,14 +679,18 @@ impl Engine {
             // -- body pitch (angular spring-damper) --------------------------
             // Target = terrain slope along the heading from the instantaneous
             // wheel grounds, dead-zoned so sub-frame slopes stay wheel
-            // compression rather than body tilt (OpenRA-style tilt margin).
+            // compression rather than body tilt (OpenRA-style tilt margin):
+            // a hull drawn from tilt levels only.  A hull whose sheet warps
+            // tilt (`tilt_interp`) draws the exact tilt, so it leans to the
+            // terrain itself, smoothed by the spring alone.
             // Airborne, the body noses down instead of tracking.
+            let dead_zone = if continuous_tilt { 0.0 } else { v.tilt_dead_zone };
             let pitch_target = if airborne {
                 AIRBORNE_PITCH
             } else {
                 let front = (wheel_ground[0] + wheel_ground[1]) * 0.5;
                 let rear = (wheel_ground[2] + wheel_ground[3]) * 0.5;
-                soft_deadzone(((front - rear) / v.wheelbase_m.max(1e-4)).atan(), v.tilt_dead_zone)
+                soft_deadzone(((front - rear) / v.wheelbase_m.max(1e-4)).atan(), dead_zone)
             };
             let (pitch, pitch_vel) = step_spring(v.pitch, v.pitch_vel, pitch_target, delta);
             v.pitch = pitch;
@@ -687,7 +704,7 @@ impl Engine {
             } else {
                 let left = (wheel_ground[0] + wheel_ground[2]) * 0.5;
                 let right = (wheel_ground[1] + wheel_ground[3]) * 0.5;
-                soft_deadzone(((left - right) / v.track_m.max(1e-4)).atan(), v.tilt_dead_zone)
+                soft_deadzone(((left - right) / v.track_m.max(1e-4)).atan(), dead_zone)
             };
             let (roll, roll_vel) = step_spring(v.roll, v.roll_vel, roll_target, delta);
             v.roll = roll;
