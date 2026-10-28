@@ -154,12 +154,25 @@ fn build_pathfinder() -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("classic-pathfinder-wasm build failed");
     }
-    let wasm = root.join("target/wasm32-unknown-unknown/release/classic_pathfinder_wasm.wasm");
+    let wasm = target_dir(&root).join("wasm32-unknown-unknown/release/classic_pathfinder_wasm.wasm");
     let dst = root.join("crates/classic-worker/src/pathfinder_worker/pathfinder.wasm");
     fs::copy(&wasm, &dst)
         .with_context(|| format!("copy {} -> {}", wasm.display(), dst.display()))?;
     println!("staged {}", dst.display());
     Ok(())
+}
+
+/// Cargo's target dir: `CARGO_TARGET_DIR` (relative to the repo root) or
+/// `<root>/target`.  A shared target dir is how worktrees reuse one build.
+fn target_dir(root: &Path) -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
+    if target.is_absolute() {
+        target
+    } else {
+        root.join(target)
+    }
 }
 
 /// Blocking GET of `url` into raw bytes (ureq).

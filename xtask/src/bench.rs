@@ -180,7 +180,7 @@ pub fn cmd_bench(args: &[String]) -> anyhow::Result<()> {
 }
 
 /// Build the release desktop binary; returns its path.
-fn build_release(root: &Path) -> anyhow::Result<PathBuf> {
+pub(crate) fn build_release(root: &Path) -> anyhow::Result<PathBuf> {
     let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .current_dir(root)
         .args(["build", "--release", "-p", "classic-desktop"])
@@ -189,11 +189,7 @@ fn build_release(root: &Path) -> anyhow::Result<PathBuf> {
     if !status.success() {
         bail!("cargo build --release -p classic-desktop failed");
     }
-    let target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target"));
-    let target = if target.is_absolute() { target } else { root.join(target) };
-    Ok(target.join("release/classic-desktop"))
+    Ok(super::target_dir(root).join("release/classic-desktop"))
 }
 
 /// Run the binary once.  With the idle gate on, other processes are watched

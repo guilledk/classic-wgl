@@ -451,6 +451,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- `cargo xtask build-pathfinder` (and so `trunk build`'s pre-build hook)
+  copied `pathfinder.wasm` from `<repo>/target` even when `CARGO_TARGET_DIR`
+  pointed the build elsewhere, failing with "No such file or directory" in
+  any worktree sharing a target dir.
+
 - Game UI fixes (#191's follow-ups, found moving the EMRLV demo onto it).
   `UIManager::resize` widened every container on the root to the
   viewport, so a guest button built in `init` went 1280 px wide when the
