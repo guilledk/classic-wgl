@@ -574,11 +574,15 @@ WarpTexel blendAt(highp vec2 q, out bool covered) {
             highp vec4 r2 = texelFetch(blend_thirds, ivec2(2, row), 0);
             highp vec4 r3 = texelFetch(blend_thirds, ivec2(3, row), 0);
             highp vec3 tilt = vec3(r2.zw, r3.x);
-            WarpTexel c = r3.y > 0.5
-                ? warpDirection(tex_sampler_b, depth_sampler_b, normal_sampler_b, r0, r1, r2.xy,
-                                -vInterp.w, tilt, rangeM, q)
-                : warpDirection(tex_sampler, depth_sampler, normal_sampler, r0, r1, r2.xy,
-                                -vInterp.z, tilt, rangeM, q);
+            // WebGL forbids `?:` on structs: branch instead.
+            WarpTexel c;
+            if (r3.y > 0.5) {
+                c = warpDirection(tex_sampler_b, depth_sampler_b, normal_sampler_b, r0, r1, r2.xy,
+                                  -vInterp.w, tilt, rangeM, q);
+            } else {
+                c = warpDirection(tex_sampler, depth_sampler, normal_sampler, r0, r1, r2.xy,
+                                  -vInterp.z, tilt, rangeM, q);
+            }
             if (c.ok) {
                 return c;
             }
@@ -594,7 +598,10 @@ WarpTexel blendAt(highp vec2 q, out bool covered) {
         return b;
     }
     if (abs(a.depth - b.depth) >= WARP_MERGE_M) {
-        return a.depth < b.depth ? a : b;
+        if (a.depth < b.depth) {
+            return a;
+        }
+        return b;
     }
     highp float t = clamp(vInterp.z / max(vInterp.z - vInterp.w, 1e-6), 0.0, 1.0);
     WarpTexel m;

@@ -441,6 +441,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- The web build boots again.  `sheet.frag#INTERP` used `?:` on a
+  `WarpTexel` struct (#157, #168), which desktop GL accepts but WebGL
+  rejects ("ternary operator is not allowed for structures"), so the
+  sprite programs failed to compile at boot.  Both are now `if` / `else`.
+  The web tests compile and link every built-in shader program under
+  WebGL in headless Chromium (`builtin_shaders_compile_under_webgl`), so a
+  shader that only boots natively fails the gate.  A bare `?rom=lunar` (as
+  the README documents) now selects the registry's `lunar`, as
+  `rom:lunar` does, instead of fetching a page-relative path
+  (`classic_platform::parse_rom_selector`) (#189).
+
 - A vehicle whose hull warps its tilt leans to the terrain.  The chassis
   tilt kept a dead zone of half a tilt step, there so a hull drawn from
   its baked levels does not flicker between them; with `tilt_interp` the

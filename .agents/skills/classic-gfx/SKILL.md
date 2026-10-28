@@ -624,7 +624,16 @@ Uniform setters (`uniform_mat4`, `uniform_vec4`, `uniform_1f`, `uniform_1i`,
 `uniform_bool`) silently skip if the uniform is not found.  Attribute lookups
 via `s.attr(name)` panic on missing attributes.
 
-All shader sources are embedded at compile time (GLSL 300 es).  A standalone
+All shader sources are embedded at compile time (GLSL 300 es).  **They must
+also pass WebGL's rules**, which ANGLE enforces on the web and a desktop
+driver does not: no `?:` whose operands are structs or arrays (branch with
+`if` instead), and so on.  The web test
+`builtin_shaders_compile_under_webgl` (`classic-guest/tests/web.rs`, run in
+headless Chromium by the gate's web-tests step) compiles and links every
+`builtin_shaders()` program, each `file#DEFINE` variant as the engine
+resolves it, on a real WebGL 2 context; a native-only boot no longer hides a
+web-only shader error (#189: two struct ternaries in `sheet.frag#INTERP`
+broke the live web build).  A standalone
 `ShaderSourceRegistry`
 (`resolve_vertex` / `resolve_fragment`) maps manifest URL strings to embedded
 sources by the filename's last `/`-segment (via `shader_filename`), not a

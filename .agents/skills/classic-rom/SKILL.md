@@ -43,7 +43,7 @@ directory.  Line numbers are as of the `wkt/project_circle_position` tip
 | `manifest.rs` | `RomManifest`, `CodeEntry`, `GridEntry`, `DEFAULT_STATE_ENTRY` |
 | `resource.rs` | `ResourceKind` (11 kinds), `ResourceSet` (`Arc<[u8]>` per name per kind), `from_archive` / `from_loader` |
 | `loader.rs` | `AssetLoader` trait, `AssetBytes`, `EmbeddedAssetLoader`, `FsAssetLoader` (native) |
-| `source.rs` | `RomSource {Embedded, Url, Path, Data}`, `parse_rom_spec` (the `CLASSIC_ROM` / `?rom=` grammar), `DEFAULT_ROM` |
+| `source.rs` | `RomSource {Embedded, Url, Path, Data}`, `parse_rom_spec` (the `CLASSIC_ROM` / `?rom=` grammar), `DEFAULT_ROM`; the apps resolve through `classic_platform::parse_rom_selector`, which reads a bare registry name (`?rom=lunar`: no `/`, `\\`, `.` or `:`) as `rom:<name>` |
 | `loaded.rs` | `LoadedRom`, `LoadedRoms`: the dependency DAG (§3) |
 | `boot.rs` | `BootEvent`, `BootSink`, `NullBootSink` / `VecBootSink` / `TeeBootSink` |
 

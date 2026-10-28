@@ -31,9 +31,29 @@ pub fn static_lookup<'a>(table: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Op
     move |name: &str| table.iter().find(|(n, _)| *n == name).map(|(_, l)| (*l).to_string())
 }
 
+/// Parse a ROM selector, reading a bare registry name as `rom:<name>`.
+///
+/// A bare value is a path to [`classic_rom::parse_rom_spec`], so
+/// `?rom=lunar` fetched a page-relative `lunar` (404 on GitHub Pages) where
+/// the README documents it as the scene name.  A bare value with no path
+/// separator or extension (`lunar`, not `lunar.rom` or `./lunar`) that the
+/// app registry knows is that named ROM; anything else parses as before.
+pub fn parse_rom_selector(spec: &str, index: &dyn Fn(&str) -> Option<String>) -> RomSource {
+    let parsed = classic_rom::parse_rom_spec(spec);
+    let name = spec.trim();
+    let bare = !name.contains(['/', '\\', '.', ':']);
+    match parsed {
+        RomSource::Path(_) if bare && index(name).is_some() => {
+            RomSource::Embedded(name.to_string())
+        }
+        other => other,
+    }
+}
+
 /// Resolve the source (not the bytes) for a ROM selector.
 ///
-/// Named ROMs (`rom:<name>`, or the empty default `demo`) are dispatched
+/// Named ROMs (`rom:<name>`, a bare registry name, or the empty default
+/// `demo`) are dispatched
 /// through `index`, which maps a name to a `http(s)://` URL or a filesystem
 /// path (a bare value is a path on native and a page-relative URL on web).
 /// Non-`rom:` selectors pass through unchanged.
@@ -41,7 +61,7 @@ pub fn resolve_rom_source(
     spec: &str,
     index: &dyn Fn(&str) -> Option<String>,
 ) -> anyhow::Result<RomSource> {
-    match classic_rom::parse_rom_spec(spec) {
+    match parse_rom_selector(spec, index) {
         RomSource::Embedded(name) => {
             let location = index(&name)
                 .ok_or_else(|| anyhow::anyhow!("unknown ROM `{name}` (not in the app registry)"))?;
@@ -143,7 +163,7 @@ pub fn resolve_roms(
         rom_from_bytes(&bytes, name, sink)
     };
 
-    let mut loaded = match classic_rom::parse_rom_spec(spec) {
+    let mut loaded = match parse_rom_selector(spec, index) {
         RomSource::Embedded(name) => classic_rom::LoadedRoms::resolve(&name, named_load),
         other => {
             let total = source_total(&other);
@@ -302,7 +322,7 @@ pub async fn resolve_roms_async(
 ) -> anyhow::Result<classic_rom::LoadedRoms> {
     sink.on_event(BootEvent::ResolveStarted { spec: spec.to_string() });
 
-    match classic_rom::parse_rom_spec(spec) {
+    match parse_rom_selector(spec, index) {
         RomSource::Embedded(name) => {
             classic_rom::LoadedRoms::resolve_async(&name, |n| {
                 let index_url = index_url.to_string();
@@ -642,5 +662,36 @@ mod tests {
         assert_eq!(parsed, std::collections::BTreeSet::from(["common", "scene"]));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod selector_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_bare_registry_name_is_that_named_rom() {
+        let table = [("lunar", "https://classic-roms.com/lunar.rom"), ("demo", "demo.rom")];
+        let index = static_lookup(&table);
+        assert_eq!(parse_rom_selector("lunar", &index), RomSource::Embedded("lunar".into()));
+        assert_eq!(parse_rom_selector(" lunar ", &index), RomSource::Embedded("lunar".into()));
+        assert_eq!(parse_rom_selector("rom:lunar", &index), RomSource::Embedded("lunar".into()));
+        assert_eq!(
+            resolve_rom_source("lunar", &index).unwrap(),
+            RomSource::Url("https://classic-roms.com/lunar.rom".into())
+        );
+        // paths, files and URLs, and names the registry lacks, stay as they were
+        assert_eq!(parse_rom_selector("lunar.rom", &index), RomSource::Path("lunar.rom".into()));
+        assert_eq!(
+            parse_rom_selector("./lunar", &index),
+            RomSource::Path(PathBuf::from("./lunar"))
+        );
+        assert_eq!(parse_rom_selector("moon", &index), RomSource::Path("moon".into()));
+        assert_eq!(
+            parse_rom_selector("https://x.org/lunar", &index),
+            RomSource::Url("https://x.org/lunar".into())
+        );
+        assert_eq!(parse_rom_selector("", &index), RomSource::Embedded("demo".into()));
     }
 }
