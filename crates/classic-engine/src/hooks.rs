@@ -57,6 +57,19 @@ impl Engine {
         (self.last_vw, self.last_vh)
     }
 
+    /// The managed UI's root, created on first use: the game UI.  A guest's
+    /// `ui_*` calls build on it from `init` on, with or without the dev HUD
+    /// (`host_features`, which adds its own panels to the same root) and
+    /// under `CLASSIC_NO_UI` (which hides the dev layer only).  Sized to
+    /// the viewport once one is known (the 1280 × 720 reference before the
+    /// first frame); a resize re-lays it out (`frame`).
+    pub fn game_ui(&mut self) -> &mut ui::UIManager {
+        let (vw, vh) = self.viewport_size();
+        let (vw, vh) = if vw > 0.5 && vh > 0.5 { (vw, vh) } else { (1280.0, 720.0) };
+        let world = &mut self.world;
+        self.ui.get_or_insert_with(|| ui::UIManager::new(vw, vh, world))
+    }
+
     pub fn load_state(&mut self, json: &str) -> Result<(), anyhow::Error> {
         let ns = self.namespace.clone();
         self.load_state_in(&ns, json).map(|_| ())
@@ -1300,6 +1313,7 @@ impl Engine {
             return false;
         }
         let entity = {
+            self.game_ui();
             let Some(ui) = self.ui.as_mut() else { return false };
             ui.spawn_container(&mut self.world, w, h, color)
         };
@@ -1321,6 +1335,7 @@ impl Engine {
             return false;
         }
         let entity = {
+            self.game_ui();
             let Some(ui) = self.ui.as_mut() else { return false };
             ui.spawn_sdf_text(&mut self.world, text, scale, max_width, color, justify)
         };
@@ -1336,6 +1351,7 @@ impl Engine {
             return false;
         }
         let (entity, pid) = {
+            self.game_ui();
             let Some(ui) = self.ui.as_mut() else { return false };
             let entity = ui.spawn_button(
                 &mut self.world,
@@ -1350,6 +1366,10 @@ impl Engine {
                     sdf_text: true,
                     hover: true,
                     click_priority: 1,
+                    // Consume the click (`ui_consumed_click`), so a click on
+                    // a guest button neither selects nor commands what lies
+                    // under it; the guest hears it through `poll_event`.
+                    click_action: Some(Box::new(|| true)),
                     ..Default::default()
                 },
             );
@@ -1377,6 +1397,7 @@ impl Engine {
             return false;
         }
         let entity = {
+            self.game_ui();
             let Some(ui) = self.ui.as_mut() else { return false };
             ui.spawn_array(&mut self.world, vertical, align, spacing, color)
         };
@@ -1398,6 +1419,7 @@ impl Engine {
             return false;
         }
         let entity = {
+            self.game_ui();
             let Some(ui) = self.ui.as_mut() else { return false };
             ui.spawn_padding(&mut self.world, top, right, bottom, left, color)
         };
@@ -1419,6 +1441,7 @@ impl Engine {
             return false;
         }
         let entity = {
+            self.game_ui();
             let Some(ui) = self.ui.as_mut() else { return false };
             ui.spawn_sprite(&mut self.world, texture, w, h, frame, tile_set_size)
         };
@@ -1436,6 +1459,7 @@ impl Engine {
     ) -> bool {
         let Some(&p) = self.names.get(parent) else { return false };
         let Some(&c) = self.names.get(child) else { return false };
+        self.game_ui();
         let Some(ui) = self.ui.as_mut() else { return false };
         ui.container_add_child(&mut self.world, p, c, self_anchor, child_anchor);
         true
@@ -1449,6 +1473,7 @@ impl Engine {
         child_anchor: UiAnchor,
     ) -> bool {
         let Some(&c) = self.names.get(name) else { return false };
+        self.game_ui();
         let Some(ui) = self.ui.as_mut() else { return false };
         ui.root_add_child(&mut self.world, c, self_anchor, child_anchor);
         true

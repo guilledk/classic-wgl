@@ -22,6 +22,13 @@ render component (`RectRender` or `SpriteRender`), and a `UiNode` layout
 component. The `UIManager` owns the root container, tracks named elements, and
 orchestrates the layout pipeline.
 
+There is one `UIManager` (`Engine::ui`), the **game UI**: `Engine::game_ui`
+creates it on first use (a guest's `ui_*` call, from `init` on), sized to the
+viewport or the 1280 × 720 reference before the first frame.  The dev HUD
+(`classic-demo` `editor::init_ui`, `host_features` only, skipped under
+`CLASSIC_NO_UI`) takes the existing root and adds its panels to it, so the
+game UI never depends on the dev layer.
+
 `UIManager` fields:
 - `root` — the top-level container entity, sized to the viewport
 - `elements` — `HashMap<String, Entity>` mapping generated names to entities

@@ -143,7 +143,7 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `set_text` | `(name, text) -> i32` | update a named SDF text label's string |
 | `ui_container` | `(name, w, h, r, g, b, a) -> i32` | spawn a UIManager-managed container (responsive layout) |
 | `ui_text` | `(name, text, scale, max_width, r, g, b, a, justify) -> i32` | spawn a UIManager-managed SDF text |
-| `ui_button` | `(name, text, w, h, r, g, b, a) -> i32` | spawn a button (hover + click → event queue, auto-subscribed) |
+| `ui_button` | `(name, text, w, h, r, g, b, a) -> i32` | spawn a button (hover + click → event queue, auto-subscribed); it consumes its click (`ui_consumed_click`), so nothing under it is selected or commanded |
 | `ui_array` | `(name, vertical, align, spacing, r, g, b, a) -> i32` | spawn a stacking array container |
 | `ui_padding` | `(name, top, right, bottom, left, r, g, b, a) -> i32` | spawn a padding wrapper |
 | `ui_sprite` | `(name, texture, w, h, frame, tsx, tsy) -> i32` | spawn a texture-sprite UI element |
@@ -340,6 +340,12 @@ confined to `GuestHost::engine`/`engine_mut`.
 - `init_engine` reads `rom.resources.code().get("main")` and builds limits from
   `rom.manifest.trusted`; runs the guest on every frame (not gated by
   `host_features`).
+- **The game UI** (`Engine::game_ui`): the managed UI's root is created on a
+  guest's first `ui_*` call, so a game builds its UI from `init` on with no
+  dev HUD, without `host_features`, and under `CLASSIC_NO_UI` (which hides
+  the dev layer only).  With `host_features` the dev HUD (`editor::init_ui`)
+  adds its own panels to the same root afterwards; it never replaces the
+  guest's.
 - The guest `#![no_std]` cdylib crates are compiled and bundled into each ROM by
   the `classic-roms` repo (its `xtask`), which injects
   `code: [{name:"main", src:"/code/<scene>.wasm"}]` + `trusted: true`; the

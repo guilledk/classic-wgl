@@ -397,7 +397,7 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
 | `CLASSIC_GOLDEN_LAYOUT` | Emit the text layout map (`baseline.layout.txt`); `0` disables | on with `CLASSIC_GOLDEN` |
 | `CLASSIC_SHADOWS` | `0` disables the directional shadow map | on |
 | `CLASSIC_SHADOW_DEBUG` | Render raw sun visibility (white lit / black occluded) | off |
-| `CLASSIC_NO_UI` | Skip the demo editor/HUD/overlay layer (clean lit scene) | off |
+| `CLASSIC_NO_UI` | Skip the demo editor/HUD/overlay layer, the dev UI (clean lit scene); a guest's own managed UI still shows | off |
 | `CLASSIC_DUMP_DIR` | Native dump output dir | `./dump/` |
 | `CLASSIC_LOG` | Channel-gated logging (see `classic-debugging` skill) | off |
 | `CLASSIC_LOADER` | Boot loading-screen mode (`console` / `visual` / `off`; web: `?loader=`) | visual |

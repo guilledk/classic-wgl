@@ -451,6 +451,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- A game's managed UI no longer depends on the dev HUD.  `ui_button`,
+  `ui_add_to_root` and the rest only worked with `host_features`, after
+  guest `init`, and never under `CLASSIC_NO_UI`, because the UI root came
+  from the editor's `init_ui`.  `Engine::game_ui` now creates the root on a
+  guest's first `ui_*` call (from `init` on); the dev HUD adds its panels to
+  the same root.  `CLASSIC_NO_UI` hides the dev layer only.  A guest button
+  now consumes its click (`ui_consumed_click`), so a click on it no longer
+  selects or commands the unit under it (#191).
+
 - The web build boots again.  `sheet.frag#INTERP` used `?:` on a
   `WarpTexel` struct (#157, #168), which desktop GL accepts but WebGL
   rejects ("ternary operator is not allowed for structures"), so the
