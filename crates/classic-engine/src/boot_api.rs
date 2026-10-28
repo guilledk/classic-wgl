@@ -1631,54 +1631,80 @@ impl Engine {
         let name = self.debug_name(entity);
         self.tilemap_gpu
             .insert(name, TilemapGpu { mesh_buf, vertex_count: vcount, tile_tex, blend });
+    }
+}
 
-        // Register updateMousePos: convert screen coords → iso tile coords by
-        // casting the cursor through the world-metre ground plane and
-        // intersecting the ray with the terrain height field.
-        let tm_entity = entity;
-        self.on_update(move |engine| {
-            let (height_data, size_x, size_y, tilemap_pos) = {
-                let tm = engine.world.get::<&Tilemap>(tm_entity).unwrap();
-                let tf = engine.world.get::<&Transform>(tm_entity).unwrap();
-                (tm.height_data.clone(), tm.size_x, tm.size_y, tf.position)
-            };
+impl Engine {
+    /// Project the mouse onto every tilemap with a height field:
+    /// `Tilemap::mouse_iso_pos` becomes the tile point and terrain height
+    /// under the cursor, by casting the cursor through the world-metre
+    /// ground plane and intersecting the ray with the height field.
+    ///
+    /// `frame` runs it before the guests update (so a guest reading
+    /// `mouse_iso`, or a click scripted on this frame, sees this frame's
+    /// pointer) and again after (the camera may have moved).  It used to be
+    /// an update closure registered by `commit_terrain`: a guest that
+    /// commits its terrain in `update` (lunar) had it registered after its
+    /// own closure, so its `mouse_iso` was a frame stale.
+    pub(crate) fn update_mouse_iso(&mut self) {
+        let maps: Vec<hecs::Entity> = self
+            .world
+            .query::<(&Tilemap, &Transform)>()
+            .iter()
+            .filter(|(_, (tm, _))| {
+                tm.height_data.len() == ((tm.size_x + 1) * (tm.size_y + 1)).max(0) as usize
+            })
+            .map(|(e, _)| e)
+            .collect();
+        for tm_entity in maps {
+            self.update_mouse_iso_on(tm_entity);
+        }
+    }
 
-            // Un-project the mouse to the world-metre ground plane (`z = 0`)
-            // through the orthographic camera: undo pan/zoom, then intersect the
-            // camera view ray with the ground plane.
-            let mp = engine.input.mouse_pos;
-            let mut screen = Vec3::new(mp.x, mp.y, 0.0);
-            screen += engine.camera.fix();
-            screen /= engine.camera.scale;
-            let (right, up, back) = iso_basis();
-            let view_x = screen.x / PPM_TARGET;
-            let view_y = -screen.y / PPM_TARGET;
-            // world.z = up.z·view_y + back.z·view_z == 0  =>  view_z = -up.z·view_y/back.z.
-            let view_z = -up.z * view_y / back.z;
-            let ground = right * view_x + up * view_y + back * view_z;
+    fn update_mouse_iso_on(&mut self, tm_entity: hecs::Entity) {
+        let Ok(tm) = self.world.get::<&Tilemap>(tm_entity) else { return };
+        let Ok(tf) = self.world.get::<&Transform>(tm_entity) else { return };
+        let (height_data, size_x, size_y, tilemap_pos) =
+            (&tm.height_data, tm.size_x, tm.size_y, tf.position);
 
-            // Cast the orthographic camera ray from the near depth plane into
-            // the scene and intersect it with the terrain height field.  The
-            // first surface the ray hits is the one the camera actually sees —
-            // a slope in front occludes terrain behind it.  Colliders can later
-            // stop the same ray.  The height field is authored in the tilemap's
-            // local frame, so the ray is shifted by the tilemap's world offset.
-            let ray = iso_camera_ray(screen.truncate());
-            let local_ray = Ray::new(ray.origin - tilemap_pos, ray.dir);
-            let hit =
-                raycast_terrain(local_ray, &height_data, size_x, size_y, DEPTH_NEAR - DEPTH_FAR)
-                    .unwrap_or(ground - tilemap_pos);
+        // Un-project the mouse to the world-metre ground plane (`z = 0`)
+        // through the orthographic camera: undo pan/zoom, then intersect the
+        // camera view ray with the ground plane.
+        let mp = self.input.mouse_pos;
+        let mut screen = Vec3::new(mp.x, mp.y, 0.0);
+        // the view the frame draws: the camera over this viewport (as
+        // `world_to_screen_matrix`; `camera.size` is only set when drawing)
+        let (vw, vh) = self.viewport_size();
+        screen += self.camera.position * self.camera.scale - Vec3::new(vw, vh, 0.0) / 2.0;
+        screen /= self.camera.scale;
+        let (right, up, back) = iso_basis();
+        let view_x = screen.x / PPM_TARGET;
+        let view_y = -screen.y / PPM_TARGET;
+        // world.z = up.z·view_y + back.z·view_z == 0  =>  view_z = -up.z·view_y/back.z.
+        let view_z = -up.z * view_y / back.z;
+        let ground = right * view_x + up * view_y + back * view_z;
 
-            // `mouse_iso_pos` becomes a full (x, y, z) where (x, y) are tile
-            // coordinates and `z` the terrain height (metres) under the cursor.
-            let tx = hit.x / TILE_M;
-            let ty = -hit.y / TILE_M;
-            let z = hit.z;
+        // Cast the orthographic camera ray from the near depth plane into
+        // the scene and intersect it with the terrain height field.  The
+        // first surface the ray hits is the one the camera actually sees —
+        // a slope in front occludes terrain behind it.  Colliders can later
+        // stop the same ray.  The height field is authored in the tilemap's
+        // local frame, so the ray is shifted by the tilemap's world offset.
+        let ray = iso_camera_ray(screen.truncate());
+        let local_ray = Ray::new(ray.origin - tilemap_pos, ray.dir);
+        let hit = raycast_terrain(local_ray, height_data, size_x, size_y, DEPTH_NEAR - DEPTH_FAR)
+            .unwrap_or(ground - tilemap_pos);
 
-            if let Ok(mut tm) = engine.world.get::<&mut Tilemap>(tm_entity) {
-                tm.mouse_iso_pos = Vec3::new(tx, ty, z);
-            }
-        });
+        // `mouse_iso_pos` becomes a full (x, y, z) where (x, y) are tile
+        // coordinates and `z` the terrain height (metres) under the cursor.
+        let tx = hit.x / TILE_M;
+        let ty = -hit.y / TILE_M;
+        let z = hit.z;
+
+        drop((tm, tf));
+        if let Ok(mut tm) = self.world.get::<&mut Tilemap>(tm_entity) {
+            tm.mouse_iso_pos = Vec3::new(tx, ty, z);
+        }
     }
 }
 

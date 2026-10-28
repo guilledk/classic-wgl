@@ -451,6 +451,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- `mouse_iso` reads this frame's pointer.  The mouse-to-tile projection was
+  an update closure `commit_terrain` registered, so in lunar (which commits
+  its terrain in `update`) it ran after the guest's closure: `mouse_iso` was
+  a frame stale and a scripted `clickIso` / `clickEntity` with no hover
+  before it read the previous pointer.  `frame` now projects the pointer
+  before the guests update and again after them (`Engine::update_mouse_iso`),
+  for every tilemap with a height field, and re-commits no longer stack
+  closures (#192).
+
 - A game's managed UI no longer depends on the dev HUD.  `ui_button`,
   `ui_add_to_root` and the rest only worked with `host_features`, after
   guest `init`, and never under `CLASSIC_NO_UI`, because the UI root came

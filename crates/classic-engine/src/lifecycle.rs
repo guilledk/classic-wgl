@@ -200,6 +200,9 @@ impl Engine {
                 um.resize(&mut self.world, vw, vh);
             }
         }
+        // This frame's pointer on the terrain, before anything reads it
+        // (the selection press below, the guests' `mouse_iso`).
+        self.update_mouse_iso();
 
         // Offscreen FBO for headless/golden runs.
         if let Some(gfx) = self.gfx.as_mut() {
@@ -319,8 +322,7 @@ impl Engine {
         // Take-restore dance: closures fire with &mut Engine, but the Vec
         // is owned by Engine. Taking means closures can call on_update()
         // without borrow conflicts. Restoring preserves them for next frame.
-        // Closures registered *during* the loop (e.g. the tilemap's mouse-iso
-        // solve, installed lazily by `commit_terrain`) land in the emptied
+        // Closures registered *during* the loop land in the emptied
         // `self.update_fns`; append them before restoring so they survive.
         // Handlers use iter_mut(), NOT std::mem::take — they must survive
         // across frames (click, enter, exit, selection).
@@ -331,6 +333,8 @@ impl Engine {
         }
         fns.append(&mut self.update_fns);
         self.update_fns = fns;
+        // Again after the guests: the camera may have moved under the cursor.
+        self.update_mouse_iso();
 
         // Wheeled-vehicle simulation runs after the guest update closures
         // (so a `vehicle_goto` issued this frame is honoured) and before the
