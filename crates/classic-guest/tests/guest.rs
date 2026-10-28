@@ -1288,6 +1288,93 @@ fn guest_subscribe_and_poll_wiring() {
     );
 }
 
+/// A guest that builds a button in `init` (the game UI, no dev HUD) and
+/// counts the clicks `poll_event` reports into `g`'s x.
+const BUTTON_GUEST: &str = r#"(module
+    (import "env" "ui_button" (func $button
+        (param i32 i32 i32 i32 f64 f64 f64 f64 f64 f64) (result i32)))
+    (import "env" "ui_add_to_root" (func $root (param i32 i32 i32 i32) (result i32)))
+    (import "env" "poll_event" (func $poll (param i32 i32) (result i32)))
+    (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+    (memory (export "memory") 1)
+    (data (i32.const 0) "g")
+    (data (i32.const 8) "go")
+    (data (i32.const 16) "Go")
+    (global $clicks (mut f64) (f64.const 0))
+    (global $built (mut f64) (f64.const 0))
+    (func (export "init")
+        (global.set $built (f64.convert_i32_s (i32.and
+            (call $button (i32.const 8) (i32.const 2) (i32.const 16) (i32.const 2)
+                (f64.const 200) (f64.const 100)
+                (f64.const 0.2) (f64.const 0.6) (f64.const 0.2) (f64.const 1))
+            (call $root (i32.const 8) (i32.const 2) (i32.const 4) (i32.const 4))))))
+    (func (export "update") (param f64)
+        (block $done (loop $next
+            (br_if $done (i32.le_s (call $poll (i32.const 64) (i32.const 256)) (i32.const 0)))
+            (if (i32.eqz (i32.load (i32.const 64)))
+                (then (global.set $clicks (f64.add (global.get $clicks) (f64.const 1)))))
+            (br $next)))
+        (drop (call $set (i32.const 0) (i32.const 1)
+            (global.get $clicks) (global.get $built) (f64.const 0)))))"#;
+
+#[test]
+fn a_guest_button_built_in_init_works_without_the_dev_hud() {
+    // No `engine.ui` set up front (no host features, no dev HUD): the
+    // guest's `ui_button` in `init` creates the game UI root.  A click on
+    // the button reaches the guest's `poll_event`, sets
+    // `ui_consumed_click`, and does not select the unit under it.
+    with_each_runtime(BUTTON_GUEST, &GuestLimits::default(), |rt| {
+        let mut engine = Engine::new_for_test();
+        engine.spawn_named("g");
+        assert!(engine.ui.is_none(), "no dev HUD");
+        rt.init(&mut engine).unwrap();
+        assert!(engine.ui.is_some() && engine.has_name("go"), "the game UI root, from init");
+        engine.set_guest_flag("rts_selection", true);
+        assert!(engine.spawn_named("unit"));
+        let unit = engine.names["unit"];
+        engine
+            .world
+            .insert_one(unit, classic_core::components::Selectable { priority: 0, group: 0 })
+            .unwrap();
+        assert!(engine.spawn_collider("unit", 600.0, 320.0, 80.0, 80.0));
+        let consumed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::clone(&consumed);
+        engine.on_update(move |e| seen.set(seen.get() || e.guest_flag("ui_consumed_click")));
+        let mut platform = engine.input.clone();
+        for frame in 0..6 {
+            if frame == 1 {
+                // the button's centre: the root's middle at 1280 x 720
+                engine.scripted_input.click(glam::Vec2::new(640.0, 360.0), 0);
+            }
+            engine.frame(&mut platform, 1280.0, 720.0, 1.0 / 60.0);
+            rt.update(&mut engine, 1.0 / 60.0).unwrap();
+        }
+        let (clicks, built, _) = engine.get_pos("g").unwrap();
+        assert_eq!(built, 1.0, "ui_button and ui_add_to_root from init");
+        assert_eq!(clicks, 1.0, "one click event");
+        assert!(consumed.get(), "ui_consumed_click set");
+        assert!(engine.selected_names().is_empty(), "the button kept the click from the unit");
+    });
+    // the control: with no button there, the same click selects the unit
+    let mut engine = Engine::new_for_test();
+    engine.set_guest_flag("rts_selection", true);
+    assert!(engine.spawn_named("unit"));
+    let unit = engine.names["unit"];
+    engine
+        .world
+        .insert_one(unit, classic_core::components::Selectable { priority: 0, group: 0 })
+        .unwrap();
+    assert!(engine.spawn_collider("unit", 600.0, 320.0, 80.0, 80.0));
+    let mut platform = engine.input.clone();
+    for frame in 0..6 {
+        if frame == 1 {
+            engine.scripted_input.click(glam::Vec2::new(640.0, 360.0), 0);
+        }
+        engine.frame(&mut platform, 1280.0, 720.0, 1.0 / 60.0);
+    }
+    assert_eq!(engine.selected_names(), vec!["unit".to_string()]);
+}
+
 #[test]
 fn spawn_collider_and_pick() {
     let mut engine = Engine::new_for_test();

@@ -56,8 +56,10 @@ pub struct EnvConfig {
     pub golden_dir: String,
     /// CLASSIC_SHADOWS: `0` disables the directional shadow map (default on).
     pub shadows: bool,
-    /// CLASSIC_NO_UI: skip the demo layer's editor/HUD/overlay prefabs so a
-    /// capture shows only the lit scene.  Diagnostic + lighting-golden aid.
+    /// CLASSIC_NO_UI: skip the demo layer's editor/HUD/overlay prefabs (the
+    /// dev UI) so a capture shows only the lit scene.  Diagnostic +
+    /// lighting-golden aid.  A game's own managed UI (`Engine::game_ui`,
+    /// the guest's `ui_*`) still shows: it is part of the game.
     pub no_ui: bool,
     /// CLASSIC_SHADOW_DEBUG: render the raw shadow visibility factor (white =
     /// lit, black = occluded) instead of shaded albedo.  Bring-up diagnostic:
