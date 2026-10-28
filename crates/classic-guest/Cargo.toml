@@ -33,3 +33,6 @@ web-sys.workspace = true
 # Must pair with the locked `wasm-bindgen` (see flake.nix).
 wasm-bindgen-test = "=0.3.77"
 wasm-bindgen-futures.workspace = true
+# `builtin_shaders_compile_under_webgl` compiles every shader in Chromium.
+classic-gfx = { path = "../classic-gfx" }
+glow.workspace = true

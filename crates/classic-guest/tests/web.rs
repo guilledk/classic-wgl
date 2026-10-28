@@ -390,3 +390,37 @@ async fn transcoder_worker_answers_each_request_by_id() {
         assert_eq!(parse_result(&reply), None);
     }
 }
+
+#[wasm_bindgen_test]
+fn builtin_shaders_compile_under_webgl() {
+    use wasm_bindgen::JsCast;
+
+    // Every built-in program (each `file#DEFINE` variant as the engine
+    // resolves it) compiles and links on a real WebGL 2 context: ANGLE
+    // enforces WebGL's GLSL rules (no `?:` on structs, ...), which a
+    // desktop GL driver does not, so a shader that boots native can still
+    // fail the web boot.
+    let canvas: web_sys::HtmlCanvasElement = web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .create_element("canvas")
+        .unwrap()
+        .dyn_into()
+        .unwrap();
+    let ctx: web_sys::WebGl2RenderingContext =
+        canvas.get_context("webgl2").unwrap().expect("WebGL 2").dyn_into().unwrap();
+    let gl = glow::Context::from_webgl2_context(ctx);
+    let sources = classic_gfx::ShaderSourceRegistry::builtin();
+    let mut failed = Vec::new();
+    let shaders = classic_gfx::builtin_shaders();
+    assert!(shaders.len() > 10);
+    for s in &shaders {
+        let vs = sources.resolve_vertex(s.vertex);
+        let fs = sources.resolve_fragment(s.fragment);
+        if let Err(e) = classic_gfx::Shader::compile(&gl, &vs, &fs, s.attr, s.unif) {
+            failed.push(format!("{} ({} + {}): {e}", s.name, s.vertex, s.fragment));
+        }
+    }
+    assert!(failed.is_empty(), "WebGL rejects:\n{}", failed.join("\n"));
+}

@@ -384,7 +384,7 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
 | Var | Purpose | Default |
 |---|---|---|
 | `CLASSIC_TEST` | Enable e2e test runner | off |
-| `CLASSIC_ROM` | ROM to boot: `rom:<name>` (embedded `demo`/`lunar`), a file path, or an `http(s)://` URL | `rom:demo` |
+| `CLASSIC_ROM` | ROM to boot: `rom:<name>` (embedded `demo`/`lunar`; a bare registry name such as `lunar` reads the same), a file path, or an `http(s)://` URL | `rom:demo` |
 | `CLASSIC_FRAMES` | Max frames in headless mode (web: `?frames=N`) | unlimited |
 | `CLASSIC_FIXED_DT` | Fixed delta time, auto 1/60 under test (web: `?fixed_dt=`) | real dt |
 | `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Forced viewport | window size |
