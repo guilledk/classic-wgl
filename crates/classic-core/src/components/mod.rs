@@ -1082,6 +1082,10 @@ pub struct UiNode {
     pub scroll_y: f32,
     pub clip_rect: Vec4,
     pub kind: UiKind,
+    /// A child of the root that spans the viewport's width: a resize keeps
+    /// it as wide as the viewport (the dev HUD's top bar).  Set on a root
+    /// child exactly as wide as the viewport when it is resized.
+    pub fill_width: bool,
 }
 
 impl Default for UiNode {
@@ -1096,6 +1100,7 @@ impl Default for UiNode {
             scroll_y: 0.0,
             clip_rect: Vec4::ZERO,
             kind: UiKind::Container,
+            fill_width: false,
         }
     }
 }

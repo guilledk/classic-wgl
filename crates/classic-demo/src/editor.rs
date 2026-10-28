@@ -38,6 +38,9 @@ pub fn init_ui(engine: &mut Engine) {
 
     // Top bar
     let top_bar = ui.spawn_container(&mut engine.world, vp_w, 68.0, [0.0, 0.0, 0.0, 0.5]);
+    if let Ok(mut node) = engine.world.get::<&mut classic_core::components::UiNode>(top_bar) {
+        node.fill_width = true; // spans the viewport through resizes
+    }
     ui.root_add_child(&mut engine.world, top_bar, UiAnchor::TopCenter, UiAnchor::TopCenter);
 
     // FPS counter (left)

@@ -1100,7 +1100,6 @@ mod tests {
     fn scenario_clicks_select_like_a_player() {
         for action in ["click", "mouseClick"] {
             let mut engine = classic_engine::Engine::new_for_test();
-            engine.set_guest_flag("rts_selection", true);
             assert!(engine.spawn_named("unit"));
             let e = engine.names["unit"];
             engine

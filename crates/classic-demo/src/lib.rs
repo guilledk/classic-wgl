@@ -27,6 +27,8 @@ pub mod state;
 pub mod testing;
 
 #[cfg(test)]
+mod game_ui_tests;
+#[cfg(test)]
 mod lockstep_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod module_cache;

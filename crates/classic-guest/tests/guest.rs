@@ -1329,7 +1329,6 @@ fn a_guest_button_built_in_init_works_without_the_dev_hud() {
         assert!(engine.ui.is_none(), "no dev HUD");
         rt.init(&mut engine).unwrap();
         assert!(engine.ui.is_some() && engine.has_name("go"), "the game UI root, from init");
-        engine.set_guest_flag("rts_selection", true);
         assert!(engine.spawn_named("unit"));
         let unit = engine.names["unit"];
         engine
@@ -1357,7 +1356,6 @@ fn a_guest_button_built_in_init_works_without_the_dev_hud() {
     });
     // the control: with no button there, the same click selects the unit
     let mut engine = Engine::new_for_test();
-    engine.set_guest_flag("rts_selection", true);
     assert!(engine.spawn_named("unit"));
     let unit = engine.names["unit"];
     engine

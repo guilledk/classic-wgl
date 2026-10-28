@@ -187,17 +187,31 @@ child is anchored `MidCenter → MidCenter` within the container.
 ## 6. Layout Pipeline
 
 ### mark_dirty()
-Sets `dirty = true`.
+Sets `dirty = true`.  Child attaches, `ui_set_size` / `ui_set_anchor`, viewport
+resizes and `Engine::set_enabled` on a UI element (show / hide) mark it.
 
 ### refresh_layout(world)
-Calls `measure_and_position(root, world)` unconditionally, then sets
-`dirty = false`.  (The `if dirty` guard lives in the caller, `Engine::frame`,
+Two passes over the root tree, then `dirty = false`:
+`measure_and_position(root)` (bottom-up: every node sized from its children,
+each node's children positioned inside it) and `place(root)` (top-down: with
+the sizes final, each node's children placed at its *final* position, then
+theirs).  The bottom-up pass positions a node's children before the node
+itself moves, so without the top-down one a button's label lagged one layout
+behind its button: at the screen's corner after a create, a resize or a size
+change (#193).  (The `if dirty` guard lives in the caller, `Engine::frame`,
 not inside `refresh_layout`.)  Only the root tree is refreshed — standalone
 containers must use `layout_standalone()`.
 
+### resize(world, vw, vh)
+Resizes the root and, of its direct Container children, only the full-width
+ones: `UiNode::fill_width` (the dev top bar sets it), or exactly as wide as
+the old viewport (which then sets the flag).  Any other container keeps its
+size: every root container used to be stretched, so a guest's `ui_button`
+went 1280 px wide when the dev HUD adopted the root (#193).
+
 ### layout_standalone(entity, world)
-Runs `measure_and_position()` on an entity NOT in the root tree. Used after
-manually setting a container's position.
+Runs both passes on an entity NOT in the root tree. Used after manually
+setting a container's position.
 
 ### measure_and_position(entity, world)
 Dispatches by `UiKind`:
