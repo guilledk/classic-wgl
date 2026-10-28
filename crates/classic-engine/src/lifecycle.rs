@@ -54,7 +54,12 @@ impl Engine {
             subscribed: HashSet::new(),
             guest_events: VecDeque::new(),
             guest_hover: None,
-            guest_flags: HashMap::new(),
+            // RTS selection is on unless something turns it off (the dev
+            // editor while a terrain-paint tool owns the drag): it used to
+            // start off and only the dev HUD's update closure turned it on,
+            // so a game without the dev layer (`CLASSIC_NO_UI`, or no
+            // `host_features`) selected nothing.
+            guest_flags: HashMap::from([("rts_selection".to_string(), true)]),
             scroll_speed: 600.0,
             input: InputState::new(),
             scripted_input: Default::default(),
@@ -1876,6 +1881,14 @@ impl Engine {
             self.set_enabled(child, enabled);
         }
 
+        // A shown or hidden UI element changes its parent's layout (arrays
+        // stack only enabled children) and must be placed where its parent
+        // is now: re-lay the tree out.
+        if self.world.get::<&classic_core::components::UiNode>(entity).is_ok() {
+            if let Some(ui) = self.ui.as_mut() {
+                ui.mark_dirty();
+            }
+        }
         // Sync collider enabled state with physics
         for pid in &pids {
             self.physics.set_collider_enabled(*pid, enabled);

@@ -144,6 +144,7 @@ impl UIManager {
                 scroll_y: 0.0,
                 clip_rect: Vec4::ZERO,
                 kind: UiKind::Container,
+                fill_width: false,
             },
         ))
     }
@@ -185,6 +186,7 @@ impl UIManager {
                 scroll_y: 0.0,
                 clip_rect: Vec4::ZERO,
                 kind: UiKind::SdfText,
+                fill_width: false,
             },
         ));
         self.elements.insert(name, e);
@@ -215,6 +217,7 @@ impl UIManager {
                 scroll_y: 0.0,
                 clip_rect: Vec4::ZERO,
                 kind: UiKind::Array { vertical, align, spacing },
+                fill_width: false,
             },
         ));
         self.elements.insert(name, e);
@@ -249,6 +252,7 @@ impl UIManager {
                 scroll_y: 0.0,
                 clip_rect: Vec4::ZERO,
                 kind: UiKind::Grid { columns, col_gap, row_gap, row_align },
+                fill_width: false,
             },
         ));
         self.elements.insert(name, e);
@@ -280,6 +284,7 @@ impl UIManager {
                 scroll_y: 0.0,
                 clip_rect: Vec4::ZERO,
                 kind: UiKind::Padding { top, right, bottom, left },
+                fill_width: false,
             },
         ));
         self.elements.insert(name, e);
@@ -320,6 +325,7 @@ impl UIManager {
                 scroll_y: 0.0,
                 clip_rect: Vec4::ZERO,
                 kind: UiKind::Sprite,
+                fill_width: false,
             },
         ));
         self.elements.insert(name, e);
@@ -363,6 +369,7 @@ impl UIManager {
                 scroll_y: 0.0,
                 clip_rect: Vec4::ZERO,
                 kind: UiKind::Sprite,
+                fill_width: false,
             },
         ));
         self.elements.insert(name, e);
@@ -533,6 +540,7 @@ impl UIManager {
 
     /// Resize the root container for a new viewport.
     pub fn resize(&mut self, world: &mut World, vp_w: f32, vp_h: f32) {
+        let old_w = self.viewport_w;
         self.viewport_w = vp_w;
         self.viewport_h = vp_h;
         if let Ok(mut tf) = world.get::<&mut Transform>(self.root) {
@@ -543,15 +551,23 @@ impl UIManager {
             node.size = Vec2::new(vp_w, vp_h);
         }
 
-        // Resize full-width child containers (top bar) to match new viewport.
+        // Resize the full-width child containers (the dev top bar) to the
+        // new viewport: those flagged `fill_width`, and those exactly as wide
+        // as the old one.  Any other container (a guest's button) keeps its
+        // size; every container of the root used to be stretched.
         let children: Vec<hecs::Entity> = world
             .get::<&UiNode>(self.root)
             .map(|n| n.children.iter().map(|c| c.entity).collect())
             .unwrap_or_default();
         for child_e in &children {
             if let Ok(mut child_node) = world.get::<&mut UiNode>(*child_e) {
-                if child_node.kind == UiKind::Container && child_node.parent == Some(self.root) {
+                let full = child_node.fill_width || (child_node.size.x - old_w).abs() < 0.5;
+                if child_node.kind == UiKind::Container
+                    && child_node.parent == Some(self.root)
+                    && full
+                {
                     child_node.size.x = vp_w;
+                    child_node.fill_width = true;
                 }
             }
         }
@@ -562,6 +578,7 @@ impl UIManager {
     /// Refresh the full layout tree.
     pub fn refresh_layout(&mut self, world: &mut World) {
         self.measure_and_position(self.root, world);
+        self.place(self.root, world);
         self.dirty = false;
     }
 
@@ -570,21 +587,47 @@ impl UIManager {
     /// to run UiKind-aware layout (array stacking, padding, anchor-based children).
     pub fn layout_standalone(&self, entity: hecs::Entity, world: &mut World) {
         self.measure_and_position(entity, world);
+        self.place(entity, world);
     }
 
+    /// The bottom-up pass: size every node from its children (recursively)
+    /// and position each node's children inside it.  A node's children are
+    /// placed before the node itself is, so their own children sit where
+    /// the node *was*; [`Self::place`] then corrects that top-down.
     fn measure_and_position(&self, entity: hecs::Entity, world: &mut World) {
+        self.layout_node(entity, world, true);
+    }
+
+    /// The top-down pass: with every size known, place each node's children
+    /// at its final position, then theirs.  Without it a button's label
+    /// lagged one layout behind its button (at the screen's corner after
+    /// a create, a resize or a size change, until something else re-laid
+    /// the tree out).
+    fn place(&self, entity: hecs::Entity, world: &mut World) {
+        self.layout_node(entity, world, false);
+        let children: Vec<hecs::Entity> = world
+            .get::<&UiNode>(entity)
+            .map(|n| n.children.iter().map(|c| c.entity).collect())
+            .unwrap_or_default();
+        for child in children {
+            self.place(child, world);
+        }
+    }
+
+    /// Lay out one node: with `measure`, its subtree first (bottom-up).
+    fn layout_node(&self, entity: hecs::Entity, world: &mut World, measure: bool) {
         let kind =
             world.get::<&UiNode>(entity).map(|n| n.kind.clone()).unwrap_or(UiKind::Container);
 
         match kind {
             UiKind::Array { .. } => {
-                self.layout_array(entity, world);
+                self.layout_array(entity, world, measure);
             }
             UiKind::Grid { .. } => {
-                self.layout_grid(entity, world);
+                self.layout_grid(entity, world, measure);
             }
             UiKind::Padding { .. } => {
-                self.layout_padding(entity, world);
+                self.layout_padding(entity, world, measure);
             }
             _ => {
                 let children: Vec<(hecs::Entity, UiAnchor, UiAnchor)> = world
@@ -599,8 +642,10 @@ impl UIManager {
                 if children.is_empty() {
                     return;
                 }
-                for (child_entity, _sa, _ca) in &children {
-                    self.measure_and_position(*child_entity, world);
+                if measure {
+                    for (child_entity, _sa, _ca) in &children {
+                        self.measure_and_position(*child_entity, world);
+                    }
                 }
                 for (child_entity, self_anchor, child_anchor) in &children {
                     Self::set_child_position(
@@ -616,7 +661,7 @@ impl UIManager {
     }
 
     /// Layout for UIArray: measure children, resize self, stack along main axis.
-    fn layout_array(&self, entity: hecs::Entity, world: &mut World) {
+    fn layout_array(&self, entity: hecs::Entity, world: &mut World, measure: bool) {
         let (vertical, align, spacing) = match world.get::<&UiNode>(entity).unwrap().kind.clone() {
             UiKind::Array { vertical, align, spacing } => (vertical, align, spacing),
             _ => return,
@@ -627,8 +672,10 @@ impl UIManager {
             .map(|n| n.children.iter().map(|c| c.entity).collect())
             .unwrap_or_default();
 
-        for &child in &children {
-            self.measure_and_position(child, world);
+        if measure {
+            for &child in &children {
+                self.measure_and_position(child, world);
+            }
         }
 
         let mut total_main = 0.0_f32;
@@ -694,7 +741,7 @@ impl UIManager {
 
     /// Layout for UIGrid: measure children, size self to a row-major grid of
     /// `columns` columns, and position each child in its cell.
-    fn layout_grid(&self, entity: hecs::Entity, world: &mut World) {
+    fn layout_grid(&self, entity: hecs::Entity, world: &mut World, measure: bool) {
         let (columns, col_gap, row_gap, row_align) =
             match world.get::<&UiNode>(entity).unwrap().kind.clone() {
                 UiKind::Grid { columns, col_gap, row_gap, row_align } => {
@@ -709,8 +756,10 @@ impl UIManager {
             .map(|n| n.children.iter().map(|c| c.entity).collect())
             .unwrap_or_default();
 
-        for &child in &children {
-            self.measure_and_position(child, world);
+        if measure {
+            for &child in &children {
+                self.measure_and_position(child, world);
+            }
         }
 
         let enabled: Vec<(hecs::Entity, f32, f32)> = children
@@ -786,7 +835,7 @@ impl UIManager {
     }
 
     /// Layout for UIPadding: resize self around the single child, position child at offset.
-    fn layout_padding(&self, entity: hecs::Entity, world: &mut World) {
+    fn layout_padding(&self, entity: hecs::Entity, world: &mut World, measure: bool) {
         let (top, right, bottom, left) = match world.get::<&UiNode>(entity).unwrap().kind.clone() {
             UiKind::Padding { top, right, bottom, left } => (top, right, bottom, left),
             _ => return,
@@ -797,8 +846,10 @@ impl UIManager {
             .map(|n| n.children.iter().map(|c| c.entity).collect())
             .unwrap_or_default();
 
-        for &child in &children {
-            self.measure_and_position(child, world);
+        if measure {
+            for &child in &children {
+                self.measure_and_position(child, world);
+            }
         }
 
         let Some(&child_entity) = children.iter().find(|&&e| world.get::<&Disabled>(e).is_err())

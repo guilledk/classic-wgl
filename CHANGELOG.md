@@ -451,6 +451,19 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- Game UI fixes (#191's follow-ups, found moving the EMRLV demo onto it).
+  `UIManager::resize` widened every container on the root to the
+  viewport, so a guest button built in `init` went 1280 px wide when the
+  dev HUD adopted the root; only full-width children (`UiNode::fill_width`,
+  the dev top bar) stretch now.  The layout positioned a node's children
+  before the node itself moved, so a button's SDF label lagged a layout
+  behind it (at the screen's corner after a create, a show or a size
+  change); a top-down `place` pass now follows the measuring one, and
+  showing or hiding a UI element re-lays the tree out.  And RTS selection
+  started off, turned on only by the dev HUD's update, so under
+  `CLASSIC_NO_UI` (or without `host_features`) nothing could be selected:
+  `rts_selection` now defaults on (#193).
+
 - `mouse_iso` reads this frame's pointer.  The mouse-to-tile projection was
   an update closure `commit_terrain` registered, so in lunar (which commits
   its terrain in `update`) it ran after the guest's closure: `mouse_iso` was
