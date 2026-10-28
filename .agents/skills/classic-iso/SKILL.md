@@ -244,14 +244,22 @@ slope corners.  (The mouse-to-iso solve and pathfinder still use `bilinear_heigh
 
 ## 5. Mouse-to-Iso (ground-plane ray + height-field intersect)
 
-Registered in `commit_terrain` as an `on_update` closure.  Runs every frame and
+`Engine::update_mouse_iso` (`boot_api.rs`), called by `frame` for every
+tilemap with a height field: once **before** the guests update (after the
+input snapshot, scripted input and the resize, before the selection press),
+so a guest's `mouse_iso` and a click scripted on this frame read this frame's
+pointer, and again after the update closures (the camera may have moved).  It
 stores the result in `Tilemap.mouse_iso_pos` as `(x, y, z)` — `x/y` in tiles,
-`z` the terrain height (metres) under the cursor.
+`z` the terrain height (metres) under the cursor.  Until #192 it was an
+`on_update` closure `commit_terrain` registered, so a guest that commits its
+terrain in `update` (lunar) had it run after its own closure and read the
+previous frame's pointer; and every re-commit added another closure.
 
 ### Algorithm
 
-1. **Un-project to the ground plane.**  Undo pan/zoom
-   (`screen += camera.fix(); screen /= camera.scale`), then intersect the camera
+1. **Un-project to the ground plane.**  Undo pan/zoom over the viewport
+   (`screen += camera.position · scale − viewport / 2; screen /= scale`, the
+   inverse of `world_to_screen_matrix`), then intersect the camera
    view ray with the world-metre ground plane `z = 0`:
 
    ```text

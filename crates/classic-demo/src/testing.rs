@@ -1217,6 +1217,74 @@ mod tests {
         assert!(!at(11).1 && at(11).3 == px(8.0, 2.0), "moveIso: {:?}", at(11));
     }
 
+    /// A 16 x 16 tilemap at height 1 m (the `Tilemap` role), for the
+    /// world-aimed mouse tests.
+    fn engine_with_tilemap() -> classic_engine::Engine {
+        use classic_core::components::{Role, RoleKind, Tilemap, Transform};
+        let mut engine = classic_engine::Engine::new_for_test();
+        let tm = Tilemap {
+            position: glam::Vec3::ZERO,
+            scale: glam::Vec3::new(45.0, 45.0, 1.0),
+            size_x: 16,
+            size_y: 16,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0; 256],
+            height_data: vec![1.0; 289],
+            height_scale: 14.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: glam::Vec3::ZERO,
+            selection_iso_begin: glam::Vec3::splat(-1.0),
+            selection_iso_end: glam::Vec3::splat(-1.0),
+            blend: None,
+        };
+        let t = engine.world.spawn((
+            tm,
+            Role::new(RoleKind::Tilemap),
+            Transform::new(glam::Vec3::ZERO, glam::Vec3::ONE),
+        ));
+        engine.names.insert("tilemap".into(), t);
+        engine
+    }
+
+    /// A click scripted with no hover before it reads its own tile through
+    /// `mouse_iso` on the frame it lands, whatever was registered first: the
+    /// projection runs before the guests' update (it used to be an update
+    /// closure `commit_terrain` registered, so a guest committing its terrain
+    /// in `update`, as lunar does, read the previous frame's pointer).
+    #[test]
+    fn a_scripted_click_reads_its_own_tile_on_the_frame_it_lands() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut engine = engine_with_tilemap();
+        // the guest's closure, registered before anything else
+        type Log = Vec<(u64, bool, Option<(f32, f32)>)>;
+        let seen: Rc<RefCell<Log>> = Rc::default();
+        let log = Rc::clone(&seen);
+        engine.on_update(move |e| {
+            log.borrow_mut().push((e.frame_number(), e.input.was_mouse_pressed(0), e.mouse_iso()));
+        });
+        run_mouse_steps(
+            &mut engine,
+            r#"[{ "frame": 2, "assertions": [], "log": "a", "actions": [
+                    { "clickIso": { "tx": 3.5, "ty": 4.5 } } ] },
+                { "frame": 6, "assertions": [], "log": "b", "actions": [
+                    { "clickIso": { "tx": 11.25, "ty": 12.75 } } ] }]"#,
+            9,
+        );
+        let seen = seen.borrow();
+        let presses: Vec<_> = seen.iter().filter(|s| s.1).collect();
+        assert_eq!(presses.len(), 2, "{seen:?}");
+        for (p, want) in presses.iter().zip([(3.5f32, 4.5f32), (11.25, 12.75)]) {
+            let (x, y) = p.2.expect("a tilemap under the pointer");
+            assert!((x - want.0).abs() < 0.02 && (y - want.1).abs() < 0.02, "{p:?} vs {want:?}");
+        }
+    }
+
     #[test]
     fn world_mouse_steps_parse() {
         let steps: Vec<TestStep> = serde_json::from_str(
