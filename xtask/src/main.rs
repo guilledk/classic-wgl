@@ -20,8 +20,13 @@
 //!   cargo xtask bench [--rom <path>] [--short] [--runs N] [--out <file>]
 //!                                              # per-section frame report of a bench ROM (see bench.rs)
 //!   cargo xtask bench-compare <a.json> <b.json> # per-section deltas against a noise floor
+//!   cargo xtask capture native --frames <list> [--rom <spec>] [--scenario <file>] [--dt <s>]
+//!                                              # hardware-GPU headless frame captures + contact sheet (see capture/)
+//!   cargo xtask capture web [--dist <dir>] [--roms <dir>] [--script <file>] [--dt <s>]
+//!                                              # scripted GPU headless-Chromium run + screenshots + console
 
 mod bench;
+mod capture;
 
 use std::fs;
 use std::io::Read;
@@ -70,9 +75,10 @@ fn main() -> anyhow::Result<()> {
         "check-patterns" => return cmd_check_patterns(),
         "bench" => return bench::cmd_bench(&args),
         "bench-compare" => return bench::cmd_bench_compare(&args),
+        "capture" => return capture::cmd_capture(&args),
         "fetch-roms" | "all" => {}
         other => anyhow::bail!(
-            "unknown command `{other}` (expected fetch-roms, lock-roms, check-roms, release, check-version, check-patterns, bench, bench-compare, or build-pathfinder)"
+            "unknown command `{other}` (expected fetch-roms, lock-roms, check-roms, release, check-version, check-patterns, bench, bench-compare, capture, or build-pathfinder)"
         ),
     }
 
@@ -154,12 +160,26 @@ fn build_pathfinder() -> anyhow::Result<()> {
     if !status.success() {
         anyhow::bail!("classic-pathfinder-wasm build failed");
     }
-    let wasm = root.join("target/wasm32-unknown-unknown/release/classic_pathfinder_wasm.wasm");
+    let wasm =
+        target_dir(&root).join("wasm32-unknown-unknown/release/classic_pathfinder_wasm.wasm");
     let dst = root.join("crates/classic-worker/src/pathfinder_worker/pathfinder.wasm");
     fs::copy(&wasm, &dst)
         .with_context(|| format!("copy {} -> {}", wasm.display(), dst.display()))?;
     println!("staged {}", dst.display());
     Ok(())
+}
+
+/// Cargo's target dir: `CARGO_TARGET_DIR` (relative to the repo root) or
+/// `<root>/target`.  A shared target dir is how worktrees reuse one build.
+fn target_dir(root: &Path) -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
+    if target.is_absolute() {
+        target
+    } else {
+        root.join(target)
+    }
 }
 
 /// Blocking GET of `url` into raw bytes (ureq).

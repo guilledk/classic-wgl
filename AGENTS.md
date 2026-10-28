@@ -53,6 +53,11 @@ cargo xtask release patch            # bump version + freeze changelog (prints c
 cargo xtask bench --rom <bench.rom> [--short] [--runs N] [--out r.json]
                                      # per-section wall/CPU/GPU report (headless 4K, idle-gated)
 cargo xtask bench-compare a.json b.json   # per-section deltas against a noise floor
+
+# Captures and web smoke tests (see the `classic-testing` skill §11) — the ONLY way to
+# look at frames: hardware GPU, fixed dt, listed frames only, JPEG contact sheet
+cargo xtask capture native --rom rom:lunar --scenario tests/scenarios/rocket.test.json --dt 0.05 --frames 221-230
+cargo xtask capture web --rom rom:lunar --dt 0.05 --script <steps> [--roms <classic-roms>/roms/out]
 ```
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt` + `cargo clippy` + `cargo test` + `wasm check` +
@@ -347,9 +352,11 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
   explicit `CLASSIC_FIXED_DT` — without `CLASSIC_TEST` the idle animator advances on
   real delta and lands on a different frame each run:
   `CLASSIC_ROM=rom:lunar CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 CLASSIC_GOLDEN=check CLASSIC_GOLDEN_DIR=tests/golden/lunar cargo run -p classic-desktop`
-  Under `LIBGL_ALWAYS_SOFTWARE=1`, llvmpipe's multithreaded rasterizer can race on
-  the sprite ghost-pass depth rendering; pin it to one thread with `LP_NUM_THREADS=0`
-  (CI does this — see `.github/workflows/ci.yml`).
+  Locally these run on the GPU.  CI has no GPU and runs them under llvmpipe
+  (`LIBGL_ALWAYS_SOFTWARE=1`), pinned to one thread with `LP_NUM_THREADS=0` because
+  its multithreaded rasterizer races on the sprite ghost-pass depth rendering (see
+  `.github/workflows/ci.yml`); reproduce a CI-only failure with `cargo xtask capture
+  native --software`, never by setting the variables by hand.
 - **Pixel golden**: `CLASSIC_GOLDEN_PNG=1 CLASSIC_GOLDEN=check` compares a pixel buffer
   against `tests/golden/baseline/baseline.png` (not run in CI by default — software-
   rasteriser version-dependent).

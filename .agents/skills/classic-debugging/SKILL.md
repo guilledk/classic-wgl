@@ -458,14 +458,14 @@ survived a full session of "verification" this way.
    Lambert term or point lights to hide behind.  Add `CLASSIC_NO_UI=1` to drop
    the editor/HUD layer.
 3. **Render to a scratch dir and look at the PNG.**  Aggregate metrics cannot
-   distinguish "subtle" from "absent":
+   distinguish "subtle" from "absent" (on the GPU, through the capture helper —
+   `classic-testing` §11):
    ```bash
-   CLASSIC_ROM=rom:lrvtest CLASSIC_TEST=render_order CLASSIC_HEADLESS=1 \
-   CLASSIC_FRAMES=45 CLASSIC_FIXED_DT=0.016666668 CLASSIC_WIDTH=1280 \
-   CLASSIC_HEIGHT=720 CLASSIC_NO_UI=1 CLASSIC_SHADOW_DEBUG=1 \
-   CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=/tmp/shot CLASSIC_GOLDEN_PNG=1 \
-   LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 cargo run -p classic-desktop
+   cargo xtask capture native --rom rom:lrvtest --scenario tests/scenarios/render_order.test.json \
+     --no-ui --env CLASSIC_SHADOW_DEBUG=1 --frames 44 --out /tmp/shot
    ```
+   (`render_order`'s colour assertions fail under `CLASSIC_SHADOW_DEBUG`, so the
+   run exits non-zero; the frame and sheet are still written.)
 4. **A/B against `CLASSIC_SHADOWS=0`** and count changed pixels.  Use
    `-alpha off`, or ImageMagick silently under-reports:
    ```bash

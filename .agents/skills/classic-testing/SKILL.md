@@ -10,8 +10,15 @@ description: >
     Trigger phrases: "CLASSIC_TEST", "end-to-end test", "golden trace",
     "golden check", "headless EGL", "test scenario", "TestAction",
     "AssertKind", "build_test_scenario", "CLASSIC_TEST_FILE",
-    "mock GL", "test_should_close", "golden_capture_frame".
+    "mock GL", "test_should_close", "golden_capture_frame",
+    "capture", "screenshot", "contact sheet", "smoke test", "llvmpipe",
+    "SwiftShader", "LIBGL_ALWAYS_SOFTWARE".  Section 11 is the capture policy:
+    every capture goes through `cargo xtask capture`, on the GPU.
 ---
+
+> **Capturing frames or screenshots?**  Read §11 first: `cargo xtask capture`,
+> hardware GPU, fixed dt, only the frames you need.  Never
+> `LIBGL_ALWAYS_SOFTWARE` outside CI parity.
 
 # classic-testing
 
@@ -106,8 +113,9 @@ tile coordinates for spatial assertions; its meaning varies by assertion kind.
 `PixelAtEntity` is the render-order / depth-occlusion assertion (per-texture
 depth maps, ghost pass).  It reads the previous frame's framebuffer (the test
 runner runs before `begin_frame`), so schedule it after the scene settles.
-It needs a real GL depth-test driver — under Mesa llvmpipe the depth test is
-broken, so ghost/occlusion assertions cannot be validated headless.
+It needs a real GL depth-test driver — validate ghost/occlusion assertions
+headless on the GPU (`cargo xtask capture native`, §11); do not trust an
+llvmpipe-only result for them.
 
 On failure, each assertion logs a diagnostic line via the `Test` instrument
 channel.  The test result string is pushed to the runner's `results` vector
@@ -242,7 +250,8 @@ When adding a new end-to-end test scenario, follow this workflow:
 
 6. **Commit the scenario file and updated golden baselines** together.
 
-7. **Check CI** — the golden job in CI runs with libEGL + Mesa llvmpipe.
+7. **Check CI** — the golden job in CI runs with libEGL + Mesa llvmpipe (the
+   runner has no GPU; locally the same steps run on the GPU, see §7).
    Flaky tests that pass locally but fail in CI usually indicate an
    uninitialized default or nondeterminism in the render loop (check
    that `begin_frame` always resets state, and that entity spawning
@@ -288,20 +297,18 @@ move on the frame clock).
 
 ```bash
 # look at the lighting reference
-CLASSIC_ROM=rom:lighttest CLASSIC_TEST=lighttest CLASSIC_NO_UI=1 \
-CLASSIC_HEADLESS=1 CLASSIC_FRAMES=62 CLASSIC_FIXED_DT=0.016666668 \
-CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
-CLASSIC_GOLDEN=update CLASSIC_GOLDEN_DIR=/tmp/lit CLASSIC_GOLDEN_PNG=1 \
-LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0 cargo run -p classic-desktop
+cargo xtask capture native --rom rom:lighttest --scenario tests/scenarios/lighttest.test.json \
+  --no-ui --frames 61 --out /tmp/lit
 ```
 
 Whenever you re-baseline a trace golden, regenerate and look at its PNG as
 well: `basetest-lit`'s trace was re-baselined twice after its containers
 vanished, and the trace could not see it.
 
-`LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=0` are required for goldens (llvmpipe's
-multithreaded rasteriser races on the sprite ghost-pass depth rendering) and
-must **not** be used for interactive runs.
+The trace goldens and the colour assertions hold on the GPU and on CI's
+llvmpipe alike, so run them on the GPU locally.  `LP_NUM_THREADS=0` matters
+only *under* llvmpipe (its multithreaded rasteriser races on the sprite
+ghost-pass depth rendering): CI sets it, and so does `capture --software`.
 
 ## 5c. Writing assertions that can actually fail
 
@@ -432,11 +439,12 @@ cat > /tmp/fx.test.json <<'JSON'
   { "frame": 220, "actions": [], "assertions": [], "log": "end" }
 ]
 JSON
-CLASSIC_ROM=rom:lunar CLASSIC_TEST=review CLASSIC_TEST_FILE=/tmp/fx.test.json \
-CLASSIC_HEADLESS=1 CLASSIC_FIXED_DT=0.05 CLASSIC_WIDTH=1280 CLASSIC_HEIGHT=720 \
-CLASSIC_GOLDEN_PNG=120,180,200,220 CLASSIC_GOLDEN_DIR=/tmp/fx \
-LIBGL_ALWAYS_SOFTWARE=1 cargo run -p classic-desktop
+cargo xtask capture native --rom rom:lunar --scenario /tmp/fx.test.json \
+  --dt 0.05 --frames 120,180,200,220 --out /tmp/fx
 ```
+
+That is the helper (§11) setting exactly these variables, on the GPU, plus a
+contact sheet; do not spell the env out by hand.
 
 ### Common golden mismatch causes
 
@@ -457,9 +465,10 @@ LIBGL_ALWAYS_SOFTWARE=1 cargo run -p classic-desktop
   in spawn order.  This is the expected re-baseline, not a rendering
   regression.  How to tell: the `expected` vs `actual` lines differ only in
   the `"name":"e#N"` field (everything else matches byte-for-byte).
-- **Mesa version drift**: pixel golden is sensitive to Mesa version.
-  Match your local `LIBGL_ALWAYS_SOFTWARE=1` renderer to CI's llvmpipe
-  version.  When updating baselines, always regenerate both trace and
+- **Mesa version drift**: the *pixel* golden is sensitive to the renderer and
+  the Mesa version (trace goldens are not: they read identically on the GPU
+  and on llvmpipe).  Compare a pixel baseline only against one taken on the
+  same renderer; for CI's llvmpipe that means `capture native --software`.  When updating baselines, always regenerate both trace and
   pixel baselines from the same run.
 
 ## 7. Headless EGL CI
@@ -489,7 +498,9 @@ The CI golden job runs in a headless environment with no window system:
 
 ### Running locally
 
-Install Mesa development libraries, then:
+Inside `nix develop`, on the GPU (do not copy CI's `LIBGL_ALWAYS_SOFTWARE` /
+`LP_NUM_THREADS`: the steps give identical results on both renderers, and
+the GPU is ~6x faster — §11):
 
 ```
 CLASSIC_HEADLESS=1 CLASSIC_FRAMES=60 CLASSIC_TEST=all CLASSIC_GOLDEN=check cargo run -p classic-desktop
@@ -657,3 +668,142 @@ tilemap), so it exercises the whole pack path without a guest.  Extending this
 to a `pixelAtEntity` assertion on `cornerBuilding` needs a `CLASSIC_TEST`
 scenario referencing that entity (the hardcoded scenario is demo-specific) —
 see §3 for the `pixelAtEntity` semantics and §4 for scenario authoring.
+
+## 11. Captures: `cargo xtask capture`, on the GPU, at a fixed step
+
+Every frame capture, visual review and web smoke test goes through **one
+helper**, `cargo xtask capture` (`xtask/src/capture/`), run inside
+`nix develop` (which already carries `chromium` and `trunk`).  It exists
+because agents kept copying an old `LIBGL_ALWAYS_SOFTWARE=1` recipe: llvmpipe
+burns every core and is ~10x slower than the GPU this machine has, and the
+SwiftShader web runs were slower still.
+
+### The rules
+
+1. **Use the helper.**  No hand-rolled `CLASSIC_GOLDEN_PNG` env recipes, no
+   ad-hoc CDP/Python smoke scripts.  If it lacks a feature, add it there.
+2. **Hardware GPU by default.**  Never set `LIBGL_ALWAYS_SOFTWARE`,
+   `--use-angle=swiftshader` or `LP_NUM_THREADS` yourself.  Software is for
+   CI parity only (reproducing an llvmpipe-only CI failure): pass
+   `--software` and **say why in the report**.  The helper falls back to
+   software on its own only when there is no `/dev/dri/renderD*` (CI), and it
+   **fails** when a software renderer shows up without `--software`.
+3. **Fixed dt, unpaced.**  Native captures run synchronous workers with no
+   wall-clock pacing: never add `CLASSIC_WORKERS=threaded` to a capture (it
+   paces every frame to `--dt` in real time — 3-10x slower — and is not
+   deterministic; it is for profiling).  Pick the coarsest `--dt` the
+   scenario's frame numbers allow (`rocket`: 0.05, padtest scenarios: 0.1).
+4. **Only the frames you need, at the smallest size that answers the
+   question.**  Pixels are read back only on the listed `--frames`; the
+   default 1280x720 is for layout/UI questions — use `--size 640x360` when you
+   only need to see whether a thing is there (on the GPU that saves little,
+   4.3 s vs 4.8 s for the lunar capture, as boot dominates; under
+   `--software` it is most of the cost).  Read `sheet.jpg` (a JPEG
+   contact sheet, at most 1400 px wide), not N full-size PNGs.
+5. **Web smoke tests use GPU Chromium with `?fixed_dt=`** (the helper's
+   default).  Keep the default 60 fps cap when taking screenshots:
+   `--uncapped` (no vsync / frame-rate limit) steps fastest but the
+   compositor falls behind and screenshots lag the sim by up to ~1 s.
+6. **Never capture while a perf measurement runs** (`cargo xtask bench`,
+   `CLASSIC_PERF`, a `bench-compare` A/B): a capture saturates the GPU and a
+   core and contaminates the numbers (`bench`'s idle gate retries a
+   contaminated run; a hand-run `CLASSIC_PERF` has no gate at all).  Run
+   captures one at a time.
+7. **Report the renderer string and the capture wall time** — the helper
+   prints both (`capture: renderer: …`, `capture: wall …`) and writes them to
+   `capture.json`.
+
+### Native
+
+```bash
+# lunar boot -> touchdown, then 10 frames (the `rocket` scenario's framing)
+cargo xtask capture native --rom rom:lunar --scenario tests/scenarios/rocket.test.json \
+  --dt 0.05 --frames 221-230 --out /tmp/rocket
+# an unpublished ROM straight from classic-roms
+cargo xtask capture native --rom ../classic-roms/roms/out/padtest.rom \
+  --rom-dir ../classic-roms/roms/out --scenario /tmp/attack.test.json \
+  --dt 0.1 --frames 0-330:30 --out /tmp/attack
+```
+
+`--frames` takes lists, ranges and steps (`7,15,22`, `221-230`, `0-300:30`);
+the run stops after the last one.  `--no-ui` drops the dev UI, `--env K=V`
+passes anything else, `--bin` reuses a built binary.  Outputs: `frame_*.png`,
+`sheet.jpg`, `run.log`, `capture.json`.
+
+### Web
+
+```bash
+cargo xtask capture web --rom rom:lunar --dt 0.05 --script /tmp/lunar.script --out /tmp/web
+```
+
+With no `--dist` it runs `trunk build --release` itself; with `--roms <dir>`
+(a classic-roms `roms/out`, `roms.json` included) every
+`https://classic-roms.com/<file>` the page requests is answered from that dir
+when the file is there, and `--rom roms/<name>.rom` boots a ROM from it by
+relative URL.  The page loads with `?fixed_dt=<dt>&loader=console`
+(`--query k=v` adds or overrides parameters).  A script is one step per line:
+
+```text
+wait-log classic-demo initialized 120   # a console line containing the text (| = or)
+wait-log rocket down 180
+wait-frames 10                          # rendered frames, counted in the page
+click 1028 428                          # move, press, release, two frames apart
+key d KeyD 30                           # hold for 30 frames
+move 760 600 / wheel 640 360 -120 / sleep 1.5 / eval <js>
+shot td01                               # -> td01.png, a tile on sheet.jpg
+```
+
+The run fails on any console `error:` / exception / `boot failed` / panic,
+and every console line lands in `console.log`.
+
+### Measured on this machine (AMD Radeon 680M, Mesa 26.2.3; 2026-10-28)
+
+Same captures in each mode: lunar boot -> touchdown + 10 frames at 1280x720
+(native: `rocket` scenario, dt 0.05, frames 221-230; web: 10 shots after
+the touchdown log) and the padtest EMRLV attack (native: 331 frames at dt
+0.1, 15 frames; web: select, arm, fire, 15 shots).  CPU is user + system
+over all processes.
+
+| Mode | lunar wall | lunar CPU | padtest wall | padtest CPU |
+|---|---|---|---|---|
+| native, `LIBGL_ALWAYS_SOFTWARE=1` (llvmpipe, all cores) | 47.0 s | 422 s | 35.0 s | 312 s |
+| native, llvmpipe `LP_NUM_THREADS=0` (CI parity) | 222.7 s | 222 s | — | — |
+| native, GPU, `CLASSIC_WORKERS=threaded` (paced) | 14.6 s | 4.6 s | 36.0 s | 4.0 s |
+| native, GPU, fixed dt, unpaced (`capture native`) | **4.8 s** | 4.5 s | **3.8 s** | 3.6 s |
+| web, SwiftShader, real time | 123.5 s | 1528 s | 84.1 s | 974 s |
+| web, GPU (ANGLE Vulkan), real time | 21.6 s | 15.6 s | 40.3 s | 21.4 s |
+| web, GPU, `?fixed_dt=` (`capture web`) | **14.9 s** | 12.7 s | **15.8 s** | 12.2 s |
+| web, GPU, `?fixed_dt=`, `--uncapped` | 9.2 s | 11.8 s | — | — |
+
+Native GPU time is ~80% boot (ROM decode + transcode + guest compile): the
+231 frames themselves take about a second.  The old `smoke.py` SwiftShader
+lunar run was 92.5 s / 1034 CPU-s for a single screenshot.
+
+The CI golden job's five steps (debug binary, the same env as
+`.github/workflows/ci.yml`) produce byte-identical results on the GPU and
+under llvmpipe — the same trace diffs and the same sampled pixel colours —
+in 60 s instead of 352 s (`rocket` alone: 20 s vs 229 s).  So run gates on
+the GPU locally; llvmpipe is only for what CI alone shows.
+
+### Chromium on NixOS
+
+The validated flags (the helper's `GPU_FLAGS`):
+`--headless=new --enable-gpu --ignore-gpu-blocklist --use-angle=vulkan
+--enable-features=Vulkan` (+ `--disable-gpu-vsync --disable-frame-rate-limit`
+under `--uncapped`), giving
+`ANGLE (AMD, Vulkan 1.4.354 (AMD Radeon 680M (RADV REMBRANDT) …), radv)`.
+No `LD_LIBRARY_PATH` / `VK_ICD_FILENAMES` tweak is needed: the NixOS
+chromium wrapper finds `/run/opengl-driver`.  What does not work here:
+
+- **Plain `--headless=new`** (no GPU flags) silently gives SwiftShader.
+- **`--use-gl=egl`**: "Requested GL implementation (gl=egl-gles2,angle=none)
+  not found" — no WebGL2 at all.
+- **`--use-angle=gl-egl`** (radeonsi through ANGLE's GLES backend): WebGL2
+  comes up, but the engine's boot panics with `compile shader: "link
+  failed: "`.  `--use-angle=gl` (desktop GL) reports radeonsi too but was not
+  carried further; Vulkan is the supported backend.
+- **The visual loader on the GPU** (`?loader=visual`, the page default) can
+  panic `texture 'lunar-common::lunar-common_atlas_2' not found` in
+  `draw_shadow_sprite_batches`: the scene draws before the async basis atlas
+  upload lands.  The helper defaults to `?loader=console`; that race is an
+  engine bug, not a capture problem.

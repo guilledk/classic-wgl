@@ -127,9 +127,10 @@ cargo fmt --all -- --check    # formatting
 cargo clippy --all-targets -- -D warnings
 ```
 
-The headless e2e + golden harness runs under `LIBGL_ALWAYS_SOFTWARE=1` and
-`EGL_PLATFORM=surfaceless` — see [`AGENTS.md`](AGENTS.md) for the exact
-invocations and the full `CLASSIC_*` environment-variable reference.
+The headless e2e + golden harness runs on the GPU locally (surfaceless EGL) and
+under llvmpipe in CI, which has no GPU — see [`AGENTS.md`](AGENTS.md) for the exact
+invocations and the full `CLASSIC_*` environment-variable reference.  Frame
+captures and web smoke tests go through `cargo xtask capture native|web`.
 
 ## GLSL resources
 

@@ -222,9 +222,14 @@ impl HeadlessPlatform {
             };
 
             let ver = gl.version();
+            // The renderer names the driver actually in use (`AMD Radeon ...
+            // (radeonsi ...)` vs `llvmpipe ...`): `cargo xtask capture` reads
+            // this line to report it and to refuse an unrequested software
+            // rasteriser.
+            let renderer = gl.get_parameter_string(glow::RENDERER);
             classic_core::cl_info!(
                 classic_core::instrument::Chan::Platform,
-                "headless: GL vendor={} version={}.{}",
+                "headless: GL renderer={renderer} vendor={} version={}.{}",
                 ver.vendor_info,
                 ver.major,
                 ver.minor,

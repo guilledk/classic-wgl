@@ -10,6 +10,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `cargo xtask capture native|web`: one capture helper for frames and web
+  smoke tests, on the hardware GPU by default.  `native` runs the release
+  desktop binary headless at a fixed dt, unpaced, writing only the listed
+  `--frames`; `web` serves a dist (answering `classic-roms.com` requests
+  from a local `--roms` dir), drives GPU headless Chromium (ANGLE Vulkan)
+  over CDP through a click/key/wait/shot script with `?fixed_dt=`, and
+  records the console.  Both print the renderer string and the wall and CPU
+  time, finish with a JPEG contact sheet (at most 1400 px wide), and refuse a
+  software rasteriser unless `--software` asks for one.  Agents had been
+  capturing under llvmpipe / SwiftShader: the lunar touchdown capture drops
+  from 47 s and 422 CPU-s to 4.8 s natively, and from 124 s to 15 s on the
+  web.  The headless platform now logs `GL renderer=` next to the vendor
+  (#194).
+
 - `fx_emit_to(effect, x, y, z, tx, ty, tz)` and
   `vehicle_socket_fx_to(name, socket, effect, x, y, z)` (guest imports,
   `Engine::fx_emit_to` / `Engine::vehicle_socket_fx_to`): a one-shot fired
@@ -450,6 +464,11 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
   `grid_overflow` (#150).
 
 ### Fixed
+
+- `cargo xtask build-pathfinder` (and so `trunk build`'s pre-build hook)
+  copied `pathfinder.wasm` from `<repo>/target` even when `CARGO_TARGET_DIR`
+  pointed the build elsewhere, failing with "No such file or directory" in
+  any worktree sharing a target dir (#194).
 
 - Game UI fixes (#191's follow-ups, found moving the EMRLV demo onto it).
   `UIManager::resize` widened every container on the root to the
