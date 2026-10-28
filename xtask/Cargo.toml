@@ -9,6 +9,9 @@ ureq.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 anyhow.workspace = true
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+image = { workspace = true, features = ["jpeg"] }
+base64.workspace = true
 
 [[bin]]
 name = "xtask"
