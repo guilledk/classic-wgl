@@ -133,6 +133,8 @@ Host imports (declared once in the ABI table, `classic_core::abi_manifest`;
 | `light_set` | `(handle: i32, x,y,z, r,g,b, intensity, radius: f64) -> i32` | overwrite an active pooled light by handle (`1` ok, `0` bad handle) |
 | `light_release` | `(handle: i32) -> i32` | release a pooled light back to the free-list (`1` ok, `0` bad handle) |
 | `fx_emit` | `(effect_ptr, effect_len, x,y,z, dx,dy,dz, scale: f64) -> i32` | fire a one-shot effect (see §3c); `1` ok, `0` unknown effect |
+| `fx_emit_to` | `(effect_ptr, effect_len, x,y,z, tx,ty,tz: f64) -> i32` | fire a one-shot from `(x, y, z)` **at** `(tx, ty, tz)` (world metres): its frame's `x` at the target, `z` as near world up as that allows, scale 1; every arc ribbon ends exactly at the target (a tracer at any range), particles / lights / spawn shapes as authored.  `0` unknown effect or `from == to` |
+| `vehicle_socket_fx_to` | `(name_ptr, name_len, socket_ptr, socket_len, effect_ptr, effect_len, x,y,z: f64) -> i32` | `fx_emit_to` from a vehicle socket: oriented from the socket toward the world point (`z` as near the socket's up as allowed), the ribbons stretched to it; the muzzle flash and sparks keep their authored size (unlike scaling `vehicle_socket_fx`).  `0` unknown vehicle / socket / effect |
 | `emitter_spawn` | `(effect_ptr, effect_len, x,y,z, dx,dy,dz, scale: f64) -> i32` | spawn a continuous emitter; returns a handle, `-1` for an unknown effect or a full pool (256) |
 | `emitter_set` | `(handle: i32, x,y,z, dx,dy,dz, scale, rate, intensity: f64) -> i32` | move/steer/drive an emitter by handle (`rate` 0 pauses spawning); `1` ok, `0` bad handle |
 | `emitter_release` | `(handle: i32) -> i32` | release an emitter (its live particles finish); `1` ok, `0` bad handle |

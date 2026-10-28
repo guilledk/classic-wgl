@@ -178,6 +178,9 @@ struct Instance {
     /// its ribbons and releases its lights at once.  `Emitter.enabled =
     /// false` is not hiding: it only stops spawning (natural death).
     hidden_at: Option<f64>,
+    /// A one-shot fired *at* a point (`fx_emit_to`): every arc ribbon of it
+    /// ends there, whatever its authored `end` (world metres).
+    ribbon_to: Option<Vec3>,
     layers: Vec<LayerRt>,
 }
 
@@ -372,6 +375,7 @@ impl ParticleSystem {
             emitting: true,
             source_alive: true,
             hidden_at: None,
+            ribbon_to: None,
             layers,
         }
     }
@@ -416,6 +420,20 @@ impl ParticleSystem {
         let mut inst = self.new_instance(id, name, fx, Source::OneShot, frame);
         inst.tint = tint;
         self.push_instance(inst);
+        true
+    }
+
+    /// Fire a one-shot effect from `pos` at the world point `to`: `basis`
+    /// orients it (its `x` toward `to`), at scale 1, and every arc ribbon of
+    /// it is stretched to end at `to`; particles, lights and spawn shapes
+    /// stay as authored.
+    pub fn emit_to(&mut self, effect: &str, pos: Vec3, basis: Mat3, to: Vec3) -> bool {
+        if !self.emit_framed(effect, pos, basis, basis.x_axis, 1.0, [1.0; 3]) {
+            return false;
+        }
+        if let Some(inst) = self.instances.last_mut() {
+            inst.ribbon_to = Some(to);
+        }
         true
     }
 
@@ -672,6 +690,17 @@ impl Engine {
     /// world-axis frame.
     pub fn fx_emit_oriented(&mut self, effect: &str, pos: Vec3, basis: Mat3, scale: f32) -> bool {
         self.particles.emit_framed(effect, pos, basis, basis.x_axis, scale, [1.0; 3])
+    }
+
+    /// Fire a one-shot effect from `from` at the world point `to` (metres):
+    /// its frame's `x` points at `to` (its `z` as near world up as that
+    /// allows), at scale 1, and its arc ribbons end exactly at `to` (a
+    /// tracer reaching its target at any range); particles, lights and
+    /// spawn shapes keep their authored size.  `false` for an unknown
+    /// effect or `from == to`.
+    pub fn fx_emit_to(&mut self, effect: &str, from: Vec3, to: Vec3) -> bool {
+        let Some(basis) = basis_toward(to - from, Vec3::Z) else { return false };
+        self.particles.emit_to(effect, from, basis, to)
     }
 
     fn fx_emit_tinted(
@@ -1118,6 +1147,7 @@ impl Engine {
                     inst.id,
                     li as u64,
                     &inst.frame,
+                    inst.ribbon_to,
                     inst.emitting,
                     age,
                     clock,
@@ -1252,6 +1282,7 @@ fn update_ribbon(
     id: u64,
     layer: u64,
     frame: &SpawnFrame,
+    to: Option<Vec3>,
     emitting: bool,
     age: f32,
     clock: f64,
@@ -1269,7 +1300,8 @@ fn update_ribbon(
                 r.regen = regen;
                 let mut rng = SplitMix64::keyed(id, regen as u64, 0x2000 + layer);
                 let a = frame.pos;
-                let b = a + frame.basis * Vec3::from_array(def.end) * frame.scale;
+                let b =
+                    to.unwrap_or_else(|| a + frame.basis * Vec3::from_array(def.end) * frame.scale);
                 r.strands = bolt(&mut rng, a, b, def.depth, def.jitter, def.branches);
                 r.flicker = 0.65 + 0.35 * rng.f32();
             }
@@ -1456,3 +1488,12 @@ impl ParticleSystem {
 
 #[cfg(test)]
 mod tests;
+
+/// A right-handed frame whose `x` is along `forward` and whose `z` is as
+/// near `up` as that allows (world `y` when `forward` is vertical).  `None`
+/// for a zero `forward`.
+pub(crate) fn basis_toward(forward: Vec3, up: Vec3) -> Option<Mat3> {
+    let x = forward.try_normalize()?;
+    let z = (up - x * up.dot(x)).try_normalize().or_else(|| (Vec3::Y - x * x.y).try_normalize())?;
+    Some(Mat3::from_cols(x, z.cross(x), z))
+}

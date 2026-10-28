@@ -557,6 +557,40 @@ fn guest_vehicle_block_imports_wired() {
 }
 
 #[test]
+fn guest_fx_to_imports_wired() {
+    // No effect library and no vehicle: both answer `0` on every runtime.
+    with_each_runtime(
+        r#"(module
+            (import "env" "fx_emit_to" (func $to (param i32 i32 f64 f64 f64 f64 f64 f64) (result i32)))
+            (import "env" "vehicle_socket_fx_to"
+                (func $sto (param i32 i32 i32 i32 i32 i32 f64 f64 f64) (result i32)))
+            (import "env" "set_pos" (func $set (param i32 i32 f64 f64 f64) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "g")
+            (data (i32.const 8) "fx::rail")
+            (data (i32.const 24) "emrlv")
+            (data (i32.const 32) "muzzle")
+            (func (export "update") (param f64)
+                (drop (call $set (i32.const 0) (i32.const 1)
+                    (f64.convert_i32_s (call $to (i32.const 8) (i32.const 8)
+                        (f64.const 0) (f64.const 0) (f64.const 0)
+                        (f64.const 9) (f64.const 0) (f64.const 0)))
+                    (f64.convert_i32_s (call $sto (i32.const 24) (i32.const 5)
+                        (i32.const 32) (i32.const 6) (i32.const 8) (i32.const 8)
+                        (f64.const 9) (f64.const 0) (f64.const 0)))
+                    (f64.const 4)))))"#,
+        &GuestLimits::default(),
+        |rt| {
+            let mut engine = Engine::new_for_test();
+            install_test_tilemap(&mut engine);
+            engine.spawn_named("g");
+            rt.update(&mut engine, 0.016).unwrap();
+            assert_eq!(engine.get_pos("g"), Some((0.0, 0.0, 4.0)));
+        },
+    );
+}
+
+#[test]
 fn guest_selection_and_speed_imports_wired() {
     with_each_runtime(
         r#"(module
