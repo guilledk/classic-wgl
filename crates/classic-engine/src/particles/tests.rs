@@ -859,3 +859,104 @@ fn socket_fx_follows_turret_yaw_and_gun_pitch() {
         }
     }
 }
+
+const RAIL_FX: &[u8] = br#"{"effects":[{"name":"rail","layers":[
+  {"type":"ribbon","name":"tracer","mode":"arc","duration":1.0,"end":[9,0,0],
+   "depth":4,"jitter":0.06,"branches":0},
+  {"type":"particles","name":"sparks","max":64,"spawn":{"burst":8},
+   "velocity":{"speed":[5,5],"cone":0.0},"motion":{"gravity":0.0},"life":[1,1]},
+  {"type":"light","name":"flash","duration":1.0,"peak":2,"radius":3,"offset":[0.3,0,0]}]}]}"#;
+
+/// The last one-shot's tracer span (start, end), its live sparks' velocities
+/// and the light nearest `near` (position, radius; earlier shots' lights
+/// linger, cleared instances do not release them).
+fn rail_shot(e: &mut Engine, near: Vec3) -> ((Vec3, Vec3), Vec<Vec3>, (Vec3, f32)) {
+    e.update_particles(1.0 / 60.0);
+    let inst = e.particles.instances.last().expect("the one-shot instance");
+    let (mut tracer, mut sparks) = (None, Vec::new());
+    for l in &inst.layers {
+        match l {
+            LayerRt::Ribbon(r) => {
+                let pts = &r.strands[0].points;
+                tracer = Some((pts[0], *pts.last().unwrap()));
+            }
+            LayerRt::Particles(pr) => {
+                sparks.extend(
+                    pr.ring
+                        .records()
+                        .iter()
+                        .filter(|r| r.life > 0.0)
+                        .map(|r| Vec3::from_array(r.v0)),
+                );
+            }
+            LayerRt::Light(_) => {}
+        }
+    }
+    let flash = e
+        .gather_lights()
+        .into_iter()
+        .min_by(|a, b| (a.position - near).length().total_cmp(&(b.position - near).length()))
+        .expect("the flash light");
+    (tracer.expect("a tracer"), sparks, (flash.position, flash.radius))
+}
+
+#[test]
+fn fx_to_a_point_stretches_only_the_ribbon_to_reach_it() {
+    let mut e = engine();
+    e.register_effects("fx", EffectLibrary::from_json(RAIL_FX).unwrap());
+    let def: classic_core::types::VehicleDef = serde_json::from_value(serde_json::json!({
+        "version": 2, "name": "tank", "directions": 16,
+        "layers": [
+            { "name": "hull", "kind": "hull", "texture": "tankHull" },
+            { "name": "turret", "kind": "turret", "texture": "tankTurret",
+              "offset": [0.0, 0.0, 1.2] }
+        ],
+        "sockets": { "muzzle": { "layer": "turret", "offset": [2.5, 0.0, 0.6] } }
+    }))
+    .unwrap();
+    e.vehicles.insert("tank".into(), def);
+    assert!(e.spawn_vehicle("tank", "tank", 16.0, 16.0));
+    e.time.delta = 1.0 / 60.0;
+    e.update_vehicles();
+    let (origin, _) = e.vehicle_socket_frame("tank", "muzzle").unwrap();
+    // the authored shot: a 9 m tracer, 8 sparks at 5 m/s, a 3 m flash 0.3 m out
+    e.particles.instances.clear();
+    assert!(e.vehicle_socket_fx("tank", "muzzle", "fx::rail"));
+    let (_, sparks0, (_, radius0)) = rail_shot(&mut e, origin + Vec3::X * 0.3);
+    assert_eq!(sparks0.len(), 8);
+    for (d, dir) in [
+        (3.0f32, Vec3::X),
+        (9.0, Vec3::new(0.0, -1.0, 0.0)),
+        (25.0, Vec3::new(-0.6, 0.6, -0.3)),
+        (60.0, Vec3::new(0.2, 0.9, 0.4)),
+        (14.0, Vec3::new(0.05, 0.0, -1.0)),
+    ] {
+        let fwd = dir.normalize();
+        let target = origin + fwd * d;
+        e.particles.instances.clear();
+        assert!(e.vehicle_socket_fx_to("tank", "muzzle", "fx::rail", target));
+        let ((a, b), sparks, (flash, radius)) = rail_shot(&mut e, origin + fwd * 0.3);
+        assert!((a - origin).length() < 1e-4, "{d} m: from the socket");
+        assert!((b - target).length() < 1e-3, "{d} m {dir}: the tracer ends at the target {b}");
+        // the rest as authored: count, speed, along the shot; the flash's
+        // size and offset
+        assert_eq!(sparks.len(), sparks0.len());
+        for v in sparks {
+            assert!((v.length() - 5.0).abs() < 1e-3 && (v.normalize() - fwd).length() < 1e-3);
+        }
+        assert!((flash - (origin + fwd * 0.3)).length() < 1e-3, "{d} m: the flash 0.3 m out");
+        assert_eq!(radius, radius0);
+    }
+    // the guest's frame-free form, world point to world point
+    let (from, to) = (Vec3::new(3.0, -4.0, 1.0), Vec3::new(-8.0, 6.0, 2.5));
+    e.particles.instances.clear();
+    assert!(e.fx_emit_to("fx::rail", from, to));
+    let ((a, b), sparks, _) = rail_shot(&mut e, from);
+    assert!((a - from).length() < 1e-4 && (b - to).length() < 1e-3);
+    assert!(sparks.iter().all(|v| (v.normalize() - (to - from).normalize()).length() < 1e-3));
+    // straight up, and the refusals
+    assert!(e.fx_emit_to("fx::rail", from, from + Vec3::Z * 5.0));
+    assert!(!e.fx_emit_to("fx::rail", from, from), "no direction");
+    assert!(!e.fx_emit_to("fx::nope", from, to));
+    assert!(!e.vehicle_socket_fx_to("tank", "nope", "fx::rail", to));
+}

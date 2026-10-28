@@ -130,6 +130,9 @@ macro_rules! for_each_host_import {
             vehicle_emissive(name: str, strength: f64) -> i32 [native web worker];
             vehicle_socket_pos(name: str, socket: str) -> triple_opt [native web worker];
             vehicle_socket_fx(name: str, socket: str, effect: str) -> i32 [native web worker];
+            vehicle_socket_fx_to(
+                name: str, socket: str, effect: str, x: f64, y: f64, z: f64
+            ) -> i32 [native web worker];
 
             // ---- Models (glTF `Model` entities, world metres, +Z up) -----
             model_node_pos(name: str, node: str) -> triple_opt [native web worker];
@@ -178,6 +181,9 @@ macro_rules! for_each_host_import {
             fx_emit(
                 effect: str, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, scale: f64
             ) -> i32 [native web worker tier3_trap];
+            fx_emit_to(
+                effect: str, x: f64, y: f64, z: f64, tx: f64, ty: f64, tz: f64
+            ) -> i32 [native web worker];
             emitter_spawn(
                 effect: str, x: f64, y: f64, z: f64, dx: f64, dy: f64, dz: f64, scale: f64
             ) -> i32 [native web worker tier3_trap];
@@ -993,9 +999,9 @@ mod tests {
 
     #[test]
     fn backend_subset_sizes() {
-        assert_eq!(imports_for(Backend::Native).count(), 143);
-        assert_eq!(imports_for(Backend::Web).count(), 143);
-        assert_eq!(imports_for(Backend::Worker).count(), 143);
+        assert_eq!(imports_for(Backend::Native).count(), 145);
+        assert_eq!(imports_for(Backend::Web).count(), 145);
+        assert_eq!(imports_for(Backend::Worker).count(), 145);
         assert_eq!(imports_for(Backend::Tier3).count(), 23);
         assert_eq!(imports_for(Backend::Tier3Trap).count(), 28);
     }

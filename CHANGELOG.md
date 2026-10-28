@@ -10,6 +10,16 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `fx_emit_to(effect, x, y, z, tx, ty, tz)` and
+  `vehicle_socket_fx_to(name, socket, effect, x, y, z)` (guest imports,
+  `Engine::fx_emit_to` / `Engine::vehicle_socket_fx_to`): a one-shot fired
+  *at* a world point, oriented toward it, at scale 1, with its arc ribbons
+  ending exactly there.  `rail_flash`'s tracer `end` is a fixed 9 m in the
+  effect frame, scaling `vehicle_socket_fx` grew the flash, sparks and
+  light with it, and `fx_emit` has no orientation, so the EMRLV had to park
+  9 m of tracer from its aim point.  Particles, lights and spawn shapes stay
+  as authored (#190).
+
 - Riding layers without tilt axes lean with the hull.  The mule's robot
   arm (its `tool` layer, baked level to save sheet pages) turned with the
   heading but never pitched or rolled; the engine only tilted layers that

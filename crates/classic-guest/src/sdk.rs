@@ -608,6 +608,24 @@ impl GuestHost {
     }
 
     /// Fire a one-shot effect at a vehicle socket (along its forward axis).
+    /// Fire a one-shot effect from a vehicle socket at world-metre point
+    /// `(x, y, z)`: oriented from the socket toward it, at scale 1, its arc
+    /// ribbons stretched to end there (a tracer reaching its aim point);
+    /// particles and lights as authored.  `0` for an unknown vehicle,
+    /// socket or effect, or a target at the socket.
+    pub fn vehicle_socket_fx_to(
+        &mut self,
+        name: &str,
+        socket: &str,
+        effect: &str,
+        x: f64,
+        y: f64,
+        z: f64,
+    ) -> i32 {
+        let name = self.resolve(name);
+        self.engine_mut().vehicle_socket_fx_to(&name, socket, effect, vec3(x, y, z)) as i32
+    }
+
     pub fn vehicle_socket_fx(&mut self, name: &str, socket: &str, effect: &str) -> i32 {
         let name = self.resolve(name);
         self.engine_mut().vehicle_socket_fx(&name, socket, effect) as i32
@@ -892,6 +910,25 @@ impl GuestHost {
         // Effect names resolve against every loaded library (exact `ns::name`,
         // else by bare name), so the guest's string passes through verbatim.
         self.engine_mut().fx_emit(effect, vec3(x, y, z), emit_dir(dx, dy, dz), scale as f32) as i32
+    }
+
+    /// Fire a one-shot effect from world-metre `(x, y, z)` at `(tx, ty, tz)`:
+    /// its frame's `x` toward the target (`z` as near world up as that
+    /// allows), at scale 1, its arc ribbons ending at the target; particles
+    /// and lights as authored.  `1`, or `0` for an unknown effect or a
+    /// target at the origin.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fx_emit_to(
+        &mut self,
+        effect: &str,
+        x: f64,
+        y: f64,
+        z: f64,
+        tx: f64,
+        ty: f64,
+        tz: f64,
+    ) -> i32 {
+        self.engine_mut().fx_emit_to(effect, vec3(x, y, z), vec3(tx, ty, tz)) as i32
     }
 
     /// Spawn a continuous emitter of `effect` (same frame as [`fx_emit`]).

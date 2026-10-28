@@ -96,4 +96,26 @@ impl Engine {
         };
         self.fx_emit_oriented(effect, pos, basis, 1.0)
     }
+
+    /// Fire a one-shot effect from a vehicle socket at the world point
+    /// `target` (metres, +Z up): oriented from the socket toward it (its
+    /// `x` at the target, its `z` as near the socket's up as that allows),
+    /// at scale 1, with its arc ribbons stretched to end at the target, so
+    /// a tracer reaches its aim point at any range; the muzzle flash,
+    /// sparks and light keep their authored size.
+    pub fn vehicle_socket_fx_to(
+        &mut self,
+        vehicle: &str,
+        socket: &str,
+        effect: &str,
+        target: Vec3,
+    ) -> bool {
+        let Some((pos, socket_basis)) = self.vehicle_socket_frame(vehicle, socket) else {
+            return false;
+        };
+        let Some(basis) = crate::particles::basis_toward(target - pos, socket_basis.z_axis) else {
+            return false;
+        };
+        self.particles.emit_to(effect, pos, basis, target)
+    }
 }
