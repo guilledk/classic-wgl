@@ -754,7 +754,8 @@ impl Gfx {
             if b.count == 0 {
                 continue;
             }
-            self.texture(&b.texture).bind(gl, 0);
+            let Some(t) = self.texture_or_skip(&b.texture) else { continue };
+            t.bind(gl, 0);
             gpu.bind_range(gl, b.first);
             unsafe {
                 gl.draw_elements_instanced(
@@ -771,10 +772,20 @@ impl Gfx {
         draws
     }
 
-    /// Bind a batch's textures on the instanced sheet program `s`.
-    fn bind_sprite_batch_textures(&self, s: &crate::Shader, b: &SpriteBatch) {
+    /// Bind a batch's textures on the instanced sheet program `s`.  `false`
+    /// (nothing bound) when its sheet or blend sheet is not resident: the
+    /// caller skips the batch.
+    fn bind_sprite_batch_textures(&self, s: &crate::Shader, b: &SpriteBatch) -> bool {
         let gl = &self.gl;
-        self.texture(&b.texture).bind(gl, 0);
+        let Some(sheet) = self.texture_or_skip(&b.texture) else { return false };
+        let blend = match &b.blend {
+            Some(bt) => match self.texture_or_skip(&bt.texture) {
+                Some(t) => Some((bt, t)),
+                None => return false,
+            },
+            None => None,
+        };
+        sheet.bind(gl, 0);
         match b.depth_map.as_deref().and_then(|d| self.textures.get(d)) {
             Some(dt) => {
                 dt.bind(gl, 1);
@@ -794,8 +805,8 @@ impl Gfx {
             }
             None => s.uniform_1f(gl, "use_normal_map", 0.0),
         }
-        if let Some(bt) = &b.blend {
-            self.texture(&bt.texture).bind(gl, BLEND_UNITS[0]);
+        if let Some((bt, t)) = blend {
+            t.bind(gl, BLEND_UNITS[0]);
             if let Some(dt) = bt.depth_map.as_deref().and_then(|d| self.textures.get(d)) {
                 dt.bind(gl, BLEND_UNITS[1]);
             }
@@ -804,6 +815,7 @@ impl Gfx {
             }
             unsafe { gl.active_texture(glow::TEXTURE0) };
         }
+        true
     }
 
     /// Start the ghost-id pass: blit the scene depth into the id target and
@@ -905,7 +917,9 @@ impl Gfx {
                 let s = programs.select(self, b.blend.is_some(), |s| {
                     self.bind_instanced_view(s, camera, world_matrix, settings);
                 });
-                self.bind_sprite_batch_textures(s, b);
+                if !self.bind_sprite_batch_textures(s, b) {
+                    continue;
+                }
                 unsafe { gl.depth_mask(b.depth_map.is_some()) };
                 gpu.bind_range(gl, b.first);
                 unsafe {
@@ -1054,7 +1068,9 @@ impl Gfx {
                     ids,
                 );
             });
-            self.bind_sprite_batch_textures(s, b);
+            if !self.bind_sprite_batch_textures(s, b) {
+                continue;
+            }
             // The stencil reference: the batch's group on the stencil
             // fallback, else a constant (0: the ids carry the groups, and the
             // model ghost composite only tests `NOTEQUAL 255`).

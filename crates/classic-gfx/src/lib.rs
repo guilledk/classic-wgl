@@ -43,8 +43,8 @@ mod basis_web;
 use classic_core::components::Light;
 use glam::Mat4;
 use glow::HasContext;
-use std::cell::Cell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use buffer::build_quad;
@@ -194,6 +194,11 @@ pub struct Gfx {
     particle_pass: particle_pass::ParticlePassState,
     /// Instanced iso sprites (see `sprite_batch`).
     sprite_batch: sprite_batch::SpriteBatchState,
+    /// Texture names a draw asked for before they were resident (see
+    /// [`Gfx::texture_or_skip`]), so each is logged once.
+    missing_textures: RefCell<HashSet<String>>,
+    /// Draws skipped for a missing texture since start-up.
+    missing_texture_skips: Cell<u64>,
     vao: glow::VertexArray,
 }
 
@@ -225,6 +230,8 @@ impl Gfx {
             particle_sampler,
             particle_pass: Default::default(),
             sprite_batch: Default::default(),
+            missing_textures: RefCell::default(),
+            missing_texture_skips: Cell::new(0),
             vao,
         }
     }
@@ -425,8 +432,35 @@ impl Gfx {
         self.shaders.get(name).unwrap_or_else(|| panic!("shader '{name}' not found"))
     }
 
+    /// The texture `name`, panicking when it is absent.  Draw paths use
+    /// [`Gfx::texture_or_skip`] instead: a drawable can exist before its texture
+    /// is resident (the async `.basis` upload of a booting scene).
     pub fn texture(&self, name: &str) -> &GlTexture {
         self.textures.get(name).unwrap_or_else(|| panic!("texture '{name}' not found"))
+    }
+
+    /// The texture `name`, or `None` when it is not resident (yet): the caller
+    /// skips that draw.  Each missing name is logged once, at debug level, and
+    /// every skip is counted ([`Gfx::missing_texture_skips`]).
+    pub fn texture_or_skip(&self, name: &str) -> Option<&GlTexture> {
+        let t = self.textures.get(name);
+        if t.is_none() {
+            self.missing_texture_skips.set(self.missing_texture_skips.get() + 1);
+            if self.missing_textures.borrow_mut().insert(name.to_string()) {
+                log::debug!("texture '{name}' is not resident: skipping its draws");
+            }
+        }
+        t
+    }
+
+    /// Draws skipped by [`Gfx::texture_or_skip`] since start-up.
+    pub fn missing_texture_skips(&self) -> u64 {
+        self.missing_texture_skips.get()
+    }
+
+    /// Whether a draw ever asked for `name` while it was not resident.
+    pub fn texture_was_missing(&self, name: &str) -> bool {
+        self.missing_textures.borrow().contains(name)
     }
 
     // -- frame begin -------------------------------------------------------
