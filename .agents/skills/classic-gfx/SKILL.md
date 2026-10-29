@@ -36,8 +36,11 @@ pub struct Gfx {
     pub shaders: HashMap<String, Shader>,
     pub textures: HashMap<String, GlTexture>,
     pub quad: QuadBuffers,              // shared unit-quad VBO/IBO
-    pub viewport_w: f32,
+    pub viewport_w: f32,                // logical points (projection)
     pub viewport_h: f32,
+    pub viewport_px_w: u32,             // physical pixels (GL viewport)
+    pub viewport_px_h: u32,
+    pub pixel_ratio: f32,
     pub render_target: Option<GlFrameBuffer>,
     vao: glow::VertexArray,             // single persistent VAO
 }
@@ -64,6 +67,32 @@ Textures and shaders are keyed by name string (from the manifest).
 
 The projection/camera/model preamble shared by every draw is factored into the
 private `Gfx::bind_view(s, camera, model, ignore_cam)` helper.
+
+### Logical vs physical units (display scale)
+
+`Gfx` keeps two sizes.  The **logical** `viewport_w/h` (points) feed the
+projection, the camera and every screen coordinate (UI, picks, traces).
+The **physical** `viewport_px_w/h` (= logical × `pixel_ratio`, set together
+by `Gfx::resize(w, h, ratio)`) feed `glViewport` on the default
+framebuffer, `main_target_size` (and through it the light grid tiles, the
+particle half-res target, the ghost-id target and the bloom chain), and
+pixel readback.  An offscreen `render_target` is physical too (the engine
+sizes it `FrameSize::physical()`).  Rules:
+
+- A new GL size, viewport or readback uses the physical size or
+  `main_target_size()`, never `viewport_w as i32`.
+- A logical rect becomes GL pixels through `scissor_rect(clip, viewport_h,
+  ratio)` / `Gfx::scissor_logical` (y flip, then × ratio).
+  `sprite_batch::target_rect` already scales by `main / viewport`.
+- `read_pixel_rgba(sx, sy)` takes logical points and reads the physical
+  pixel at the point's centre.
+- Two passes are deliberately ratio-independent, so a 2x frame downscaled
+  matches 1x.  The model pixelation target sizes for `zoom × ratio`
+  (sprite texel density).  Bloom's half / quarter levels derive from
+  `main / ratio` (`bloom_base_size`), and the bright pass spreads its taps
+  by the ratio.
+- At ratio 1 every path is the old code, value for value (goldens
+  unchanged).
 
 ---
 

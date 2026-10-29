@@ -725,6 +725,16 @@ cargo xtask capture native --rom ../classic-roms/roms/out/padtest.rom \
   --dt 0.1 --frames 0-330:30 --out /tmp/attack
 ```
 
+`--pixel-ratio <r>` renders at a display scale.  `--size` stays the
+physical drawable, so `--size 2560x1440 --pixel-ratio 2` is a HiDPI
+1280×720-point view.  Natively that is `CLASSIC_PIXEL_RATIO`; on the web it
+is the emulated `devicePixelRatio`, with a CSS window of `size / r`
+(`--query pixel_ratio=2` pins it through the page instead).  Scenario and
+`click` coordinates stay in logical points.  Note: the demo inspector
+(`Backquote`) pauses the simulation, and the pause also skips the
+`CLASSIC_TEST` runner.  Scenario steps scheduled while it is open never
+run, so drive inspector clicks with a web `click` step.
+
 `--frames` takes lists, ranges and steps (`7,15,22`, `221-230`, `0-300:30`);
 the run stops after the last one.  `--no-ui` drops the dev UI, `--env K=V`
 passes anything else, `--bin` reuses a built binary.  Outputs: `frame_*.png`,

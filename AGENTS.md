@@ -409,7 +409,8 @@ See the `classic-debugging` skill §6.
 | `CLASSIC_ROM` | ROM to boot: `rom:<name>` (embedded `demo`/`lunar`; a bare registry name such as `lunar` reads the same), a file path, or an `http(s)://` URL | `rom:demo` |
 | `CLASSIC_FRAMES` | Max frames in headless mode (web: `?frames=N`) | unlimited |
 | `CLASSIC_FIXED_DT` | Fixed delta time, auto 1/60 under test (web: `?fixed_dt=`) | real dt |
-| `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Forced viewport | window size |
+| `CLASSIC_WIDTH` / `CLASSIC_HEIGHT` | Forced drawable, in physical pixels (the view is `size / CLASSIC_PIXEL_RATIO` logical points) | window size |
+| `CLASSIC_PIXEL_RATIO` | Pin the display scale, i.e. physical pixels per logical point (web: `?pixel_ratio=`); `2` with `CLASSIC_WIDTH=2560 CLASSIC_HEIGHT=1440` renders a 2x 1280×720 view headless | the display's scale factor / `devicePixelRatio`; 1 under headless / golden / test |
 | `CLASSIC_HEADLESS` | Surfaceless EGL, no window | off |
 | `CLASSIC_OFFSCREEN` | Render to FBO | off |
 | `CLASSIC_GOLDEN` | `check` or `update` golden trace | off |

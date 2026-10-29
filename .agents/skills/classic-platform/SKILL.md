@@ -28,7 +28,8 @@ pub trait Platform {
 }
 ```
 
-The callback receives `(gl, input, vw, vh, delta, should_close)`. The platform
+The callback receives `(gl, input, size, delta, should_close)`, where `size`
+is a `FrameSize { width, height, pixel_ratio }` (see §1b). The platform
 takes ownership and drives the event loop — `run_loop` is the terminal call
 that blocks until the window closes. Three backends implement this trait:
 `NativePlatform`, `WebPlatform`, `HeadlessPlatform`.
@@ -40,6 +41,38 @@ returns `&self.gl`); `NativePlatform` returns `unimplemented!()` for both, and
 interacts through `run_loop`. These accessors exist for potential headless FBO
 capture or toolkit integration but are mostly dead code in the current main
 loop path.
+
+## 1b. Display scale: logical points vs physical pixels
+
+The engine works in **logical points**.  A 4K screen at scale 2 is a
+1920×1080-point view drawn into 3840×2160 pixels.  Every platform converts
+once, at the boundary:
+
+- `FrameSize::from_physical(pw, ph, ratio)` gives the frame's logical
+  `width`/`height`, and `physical()` rounds back to the exact drawable.
+  `InputState::mouse_pos` / `mouse_axis` are logical (`to_logical`,
+  `set_mouse_pos`).
+- **Ratio source, in order:** `CLASSIC_PIXEL_RATIO` / `?pixel_ratio=` (the
+  apps pass `EnvConfig::pixel_ratio_override()`).  Then 1 under headless /
+  golden / `CLASSIC_TEST`, so traces never depend on the machine.  Then the
+  display: native `Window::scale_factor()` (updated on
+  `ScaleFactorChanged`), web `window.devicePixelRatio` (re-read on
+  `resize`).  `clamp_pixel_ratio` replaces a non-finite ratio with 1 and
+  floors it at `MIN_PIXEL_RATIO` (0.5).
+- **Native** opens the window at `LogicalSize(1280, 720)` and divides
+  `CursorMoved` and `PixelDelta` wheel input by the ratio.  On X11, winit
+  reads the scale from `Xft.dpi` (or `WINIT_X11_SCALE_FACTOR`).
+- **Web** sets the canvas backing store to CSS size × ratio and pins the
+  CSS size on the element's style.  `clientX/Y` and the pointer-lock
+  `movementX/Y` are CSS pixels, which are already logical; the mouse clamp
+  reads the canvas size live, which fixes the old stale-`cw`/`ch` clamp
+  after a resize.
+- **Headless:** `HeadlessPlatform::new(w, h)` takes physical pixels, and
+  `.with_pixel_ratio(r)` makes frames `w / r` × `h / r` points.
+- The engine side: `Engine::frame_sized(input, size, dt)` =
+  `set_pixel_ratio` + `frame(input, w, h, dt)`; `Engine::pixel_ratio()`;
+  `viewport_size()` stays logical.  Only GL-side sizes multiply (see
+  `classic-gfx` "Logical vs physical units").
 
 ## 2. Native Backend (NativePlatform)
 
@@ -68,7 +101,11 @@ The native backend uses `winit::event_loop::EventLoop::run_app()` with an
   clamped to 0.1s max (`frame_delta`). Calls `on_frame`. Then `input.end_frame()`,
   `request_redraw()`, `swap_buffers()` (continuous rendering).
 
-- **CursorMoved**: Clamps `mouse_pos` to viewport bounds, computes
+- **ScaleFactorChanged**: Updates the pixel ratio (unless pinned); the
+  `Resized` that follows carries the new physical size.
+
+- **CursorMoved**: Converts the physical position to logical points,
+  clamps `mouse_pos` to the logical viewport, computes
   `mouse_axis` as normalized device coordinates `[-1, 1]`.
 
 - **MouseInput**: Left=idx 0, Right=idx 1, Middle=idx 2. Press sets both
@@ -106,8 +143,9 @@ and `trunk` for the build pipeline.
    disables the half-res particle pass — `classic-gfx` §19)
 3. Wraps it in `glow::Context::from_webgl2_context()`
 4. Creates `Rc<RefCell<InputState>>` shared across all event closures
-5. Sets canvas pixel dimensions to `window.innerWidth/innerHeight`
-6. Registers a `resize` listener that updates canvas dimensions
+5. Sets the canvas backing store to `innerWidth/innerHeight × pixel ratio`
+   (CSS size pinned on the style; §1b)
+6. Registers a `resize` listener that re-reads the ratio and re-sizes
 
 ### Input event wiring
 All event closures use `Rc<RefCell<InputState>>` for shared mutable state. Each
@@ -122,13 +160,11 @@ closure is created with `Closure::wrap`, registered with
 
 - **mousemove**: When `focused` (pointer-locked), accumulates
   `e.movement_x()/movement_y()` deltas onto `mouse_pos`; otherwise updates
-  `mouse_pos` from `client_x/y` clamped to canvas dimensions. Computes
-  `mouse_axis` in `[-1, 1]`. NOTE: The `cw`/`ch` values are captured from
-  `canvas.width/height` at the time the closure is created. The resize handler
-  updates the canvas element but does NOT update the closures' captured
-  variables. After a resize, mouse position clamping may use stale dimensions.
+  `mouse_pos` from `client_x/y` (CSS px = logical points), clamped to the
+  canvas's live logical size via `set_mouse_pos`, which also computes
+  `mouse_axis` in `[-1, 1]`.
 
-- **wheel**: Accumulates `mouse_wheel -= e.delta_y() * 2.0 / canvas_height`.
+- **wheel**: Accumulates `mouse_wheel -= e.delta_y() * 2.0 / logical_height`.
   Note the sign: web wheel delta is inverted relative to native (scroll-up
   produces positive delta_y on native but negative on web before the
   subtraction flips it).
@@ -296,12 +332,6 @@ individual loose assets — both desktop and web embed whole `.rom` archives via
   takes ownership of the platform and captures everything needed before the
   frame callback. They exist to satisfy the trait contract but the native
   accessors would panic if invoked.
-
-- **Web resize and mouse position** — The `mousemove` closure captures
-  `cw`/`ch` from the canvas dimensions at construction time. The `resize`
-  listener updates the canvas element's pixel size but does not update the
-  closures' captured variables. After a browser resize, mouse position
-  clamping uses stale canvas dimensions until page reload.
 
 - **`frame_had_click` persistence** — Set on `mousedown` but never cleared by
   `end_frame()`. External code (the engine's click dispatch logic) must
