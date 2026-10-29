@@ -1272,4 +1272,53 @@ mod tests {
         e.world.get::<&mut Model>(rocket).unwrap().clip = Some("nope".into());
         assert_eq!(e.model_clip_time("rocket"), -1.0, "a clip the glb lacks");
     }
+
+    #[test]
+    fn sim_pause_holds_model_clips_and_transient_lights() {
+        // The demo's model system: `update_models` as a sim closure.
+        let mut e = Engine::new_for_test();
+        e.on_sim_update(|e| {
+            let dt = e.time.delta;
+            e.update_models(dt);
+        });
+        e.load_model_glb("landing", &tiny_glb("landing")).unwrap();
+        let rocket = e.world.spawn((
+            Transform::new(Vec3::new(2.0, 2.0, 0.0), Vec3::ONE),
+            Model::new("landing", "tilemap"),
+        ));
+        e.names.insert("rocket".into(), rocket);
+        assert!(e.start_model_clip("rocket", "landing", false));
+        let light = Light {
+            kind: LightKind::Point,
+            position: Vec3::ZERO,
+            color: [1.0; 3],
+            intensity: 1.0,
+            radius: 1.0,
+            dir: Vec3::ZERO,
+            cone_angle: 0.0,
+            parent: None,
+            node: None,
+        };
+        let flash = e.spawn_light(light, Some(0.1)).unwrap();
+        let mut platform = e.input.clone();
+        let dt = 1.0 / 64.0; // exact in binary: the clip times compare equal
+        for _ in 0..4 {
+            e.frame(&mut platform, 640.0, 360.0, dt);
+        }
+        assert_eq!(e.model_clip_time("rocket"), 4.0 * dt);
+
+        e.set_sim_paused(true);
+        for _ in 0..20 {
+            e.frame(&mut platform, 640.0, 360.0, dt);
+        }
+        assert_eq!(e.model_clip_time("rocket"), 4.0 * dt, "a paused clip holds");
+        assert!(e.light_handles.get(&e.world, flash).is_some(), "a paused flash holds");
+
+        e.set_sim_paused(false);
+        for _ in 0..4 {
+            e.frame(&mut platform, 640.0, 360.0, dt);
+        }
+        assert_eq!(e.model_clip_time("rocket"), 8.0 * dt, "resumes where it stopped");
+        assert!(e.light_handles.get(&e.world, flash).is_none(), "and the flash runs out");
+    }
 }

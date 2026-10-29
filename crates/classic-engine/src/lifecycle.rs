@@ -22,7 +22,8 @@ use glow::HasContext;
 use crate::dir_blend::{packed_geometry, DirChoice};
 use crate::{
     env_config, fields, golden, inventory_ui, light, particles, selection, shadow, DrawKind,
-    Engine, GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, RTS_DRAG_THRESHOLD_PX, SELECTION_COLOR,
+    Engine, GuestEvent, IsoDraw, IsoUv, SdfTextGpu, Time, UpdateKind, RTS_DRAG_THRESHOLD_PX,
+    SELECTION_COLOR,
 };
 
 impl Engine {
@@ -134,6 +135,7 @@ impl Engine {
             test_failed: false,
             golden_capture_frame: 55, // default: one frame after default scenario's last step (54)
             update_fns: Vec::new(),
+            sim_paused: false,
             trace: None,
             tilemap_gpu: HashMap::new(),
             sdf_text_gpu: HashMap::new(),
@@ -332,9 +334,17 @@ impl Engine {
         // `self.update_fns`; append them before restoring so they survive.
         // Handlers use iter_mut(), NOT std::mem::take — they must survive
         // across frames (click, enter, exit, selection).
+        // A paused simulation skips the `Sim` entries; the host ones (camera,
+        // cursor, editor, HUD) run on in the same order.
         classic_gfx::perf::phase("update");
+        // Read once: a host closure toggling the pause takes effect next frame,
+        // so one frame never steps half its simulation.
+        let paused = self.sim_paused;
         let mut fns = std::mem::take(&mut self.update_fns);
-        for f in fns.iter_mut() {
+        for (kind, f) in fns.iter_mut() {
+            if paused && *kind == UpdateKind::Sim {
+                continue;
+            }
             f(self);
         }
         fns.append(&mut self.update_fns);
@@ -344,19 +354,24 @@ impl Engine {
 
         // Wheeled-vehicle simulation runs after the guest update closures
         // (so a `vehicle_goto` issued this frame is honoured) and before the
-        // render list is built.
+        // render list is built.  Vehicles, particles and the test runner are
+        // simulation: a paused frame holds them where they are.
         classic_gfx::perf::phase("vehicles");
-        self.update_vehicles();
+        if !paused {
+            self.update_vehicles();
+        }
 
         // Particles after every mover (models posed, vehicles stepped) so
         // attached emitters spawn from this frame's positions.  A scene
         // without emitters never creates an instance (a no-op).
         classic_gfx::perf::phase("particles_update");
-        self.update_particles(delta);
+        if !paused {
+            self.update_particles(delta);
+        }
 
         classic_gfx::perf::phase("test_runner");
         // ---- CLASSIC_TEST automated test runner (registered by the demo) ----
-        if env_config::EnvConfig::get().test_active() {
+        if env_config::EnvConfig::get().test_active() && !paused {
             let mut runner = self.test_runner.take();
             if let Some(r) = runner.as_mut() {
                 r(self);
@@ -566,7 +581,11 @@ impl Engine {
 
         // Decay transient lights and gather the active set for the UBO upload.
         classic_gfx::perf::phase("lights");
-        self.light_handles.decay(&mut self.world, delta);
+        // (a paused simulation holds transient lights, like the particles
+        // that spawn them)
+        if !paused {
+            self.light_handles.decay(&mut self.world, delta);
+        }
         let lights = self.gather_lights();
         classic_gfx::perf::phase("render_list");
         classic_gfx::perf::count("lights", lights.len() as u64);

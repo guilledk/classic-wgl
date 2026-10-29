@@ -2269,3 +2269,87 @@ fn a_v1_vehicle_keeps_its_tilt_dead_zone() {
     let p = engine.world.get::<&IsoVehicle>(ve).unwrap().pitch.to_degrees();
     assert!((p - 3.7).abs() < 0.5, "v1 pitch {p}");
 }
+
+/// The body's sim state (vehicle, transform, sprite) and the particle stats,
+/// as one comparable snapshot.
+fn sim_snapshot(engine: &Engine) -> String {
+    let body = engine.names["lrv"];
+    let veh = engine.world.get::<&IsoVehicle>(body).unwrap();
+    let tf = engine.world.get::<&classic_core::Transform>(body).unwrap();
+    let sprite = engine.world.get::<&IsoSprite>(body).unwrap();
+    format!("{:?} {:?} {:?} {:?}", *veh, *tf, *sprite, engine.particle_stats())
+}
+
+#[test]
+fn sim_pause_holds_vehicles_particles_and_sim_closures() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let mut engine = dusty_engine(Some("t::dust"), None);
+    let (host, sim) = (Rc::new(Cell::new(0u32)), Rc::new(Cell::new(0u32)));
+    let (h, s) = (Rc::clone(&host), Rc::clone(&sim));
+    engine.on_update(move |_| h.set(h.get() + 1));
+    engine.on_sim_update(move |_| s.set(s.get() + 1));
+    let mut platform = engine.input.clone();
+    let mut frames = |engine: &mut Engine, n: usize| {
+        for _ in 0..n {
+            engine.frame(&mut platform, 640.0, 360.0, 1.0 / 60.0);
+        }
+    };
+
+    drive_to(&mut engine, 15, 2);
+    frames(&mut engine, 20);
+    assert!(engine.particle_stats().live > 0, "driving raises dust");
+    assert_eq!((host.get(), sim.get()), (20, 20));
+    assert!(!engine.sim_paused());
+
+    engine.set_sim_paused(true);
+    assert!(engine.sim_paused());
+    let frozen = sim_snapshot(&engine);
+    frames(&mut engine, 30);
+    assert_eq!(sim_snapshot(&engine), frozen, "a paused frame steps nothing");
+    assert_eq!((host.get(), sim.get()), (50, 20), "host closures run on, sim ones hold");
+
+    engine.set_sim_paused(false);
+    frames(&mut engine, 5);
+    assert_ne!(sim_snapshot(&engine), frozen, "resuming carries on driving");
+    assert_eq!((host.get(), sim.get()), (55, 25));
+}
+
+#[test]
+fn an_unpaused_frame_keeps_the_registration_order() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut engine = Engine::new_for_test();
+    let order: Rc<RefCell<Vec<&str>>> = Rc::default();
+    for (sim, tag) in [(false, "h0"), (true, "s0"), (false, "h1"), (true, "s1")] {
+        let o = Rc::clone(&order);
+        let f = move |_: &mut Engine| o.borrow_mut().push(tag);
+        if sim {
+            engine.on_sim_update(f);
+        } else {
+            engine.on_update(f);
+        }
+    }
+    // A closure registered mid-frame survives the take/restore dance, keeping
+    // its kind.
+    let o = Rc::clone(&order);
+    let mut registered = false;
+    engine.on_update(move |e| {
+        if !registered {
+            registered = true;
+            let o = Rc::clone(&o);
+            e.on_sim_update(move |_| o.borrow_mut().push("late"));
+        }
+    });
+    let mut platform = engine.input.clone();
+    engine.frame(&mut platform, 640.0, 360.0, 1.0 / 60.0);
+    engine.frame(&mut platform, 640.0, 360.0, 1.0 / 60.0);
+    assert_eq!(*order.borrow(), ["h0", "s0", "h1", "s1", "h0", "s0", "h1", "s1", "late"]);
+
+    order.borrow_mut().clear();
+    engine.set_sim_paused(true);
+    engine.frame(&mut platform, 640.0, 360.0, 1.0 / 60.0);
+    assert_eq!(*order.borrow(), ["h0", "h1"], "the late sim closure pauses too");
+}

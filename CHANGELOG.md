@@ -10,6 +10,14 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- A simulation pause: `Engine::set_sim_paused` / `sim_paused`, and
+  `Engine::on_sim_update` for gameplay closures.  While paused, `frame()`
+  skips the sim closures, vehicle and particle stepping, transient-light
+  decay and the `CLASSIC_TEST` runner; input, camera, the host
+  `on_update` closures, UI and rendering run on.  Sim and host closures
+  share one list, so an unpaused frame keeps its order.  classic-demo's
+  guest update, animator and model system are now sim closures.
+
 - `cargo xtask capture web --url <base>` drives a deployed site (e.g.
   https://guilledk.github.io/) with the same script steps, `throttle` and
   failure detection: no build, no server, the base's own query kept, and

@@ -65,6 +65,16 @@ use glam::{Mat4, Vec2};
 
 type UpdateFn = Box<dyn FnMut(&mut Engine)>;
 
+/// Which side of the simulation pause an `update_fns` entry sits on: a
+/// `Host` closure (input, camera, editor, HUD) runs every frame; a `Sim`
+/// closure (the guests, animator, model clips) is skipped while
+/// [`Engine::set_sim_paused`] holds the simulation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateKind {
+    Host,
+    Sim,
+}
+
 /// Screen-space drag distance below which a selection gesture is a click
 /// (point-select) rather than a drag box.
 const RTS_DRAG_THRESHOLD_PX: f32 = 4.0;
@@ -422,7 +432,13 @@ pub struct Engine {
     pub test_should_close: bool,
     pub test_failed: bool,
     pub golden_capture_frame: u64,
-    update_fns: Vec<UpdateFn>,
+    /// The per-frame update closures, in registration order, each tagged
+    /// host or sim (one list, so an unpaused frame keeps the exact order).
+    update_fns: Vec<(UpdateKind, UpdateFn)>,
+    /// Simulation pause (`set_sim_paused`): skips the `Sim` closures and the
+    /// engine-stepped simulation (vehicles, particles, transient-light decay,
+    /// the `CLASSIC_TEST` runner) while input, camera, UI and render run on.
+    sim_paused: bool,
     #[allow(dead_code)]
     trace: Option<golden::TraceCollector>,
     tilemap_gpu: HashMap<String, TilemapGpu>,

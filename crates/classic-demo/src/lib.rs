@@ -77,9 +77,9 @@ impl Default for CompiledModules {
 
 /// Install a single ROM guest runtime: instantiate the ROM's compiled guest
 /// module against the given namespace, run its optional one-shot `init` hook
-/// synchronously (before the first frame), and register a per-frame `on_update`
-/// closure that runs `update(dt)` and — once, after the first update — the
-/// optional `start` hook.
+/// synchronously (before the first frame), and register a per-frame
+/// `on_sim_update` closure that runs `update(dt)` and — once, after the first
+/// update — the optional `start` hook (held while the simulation is paused).
 pub fn init_guest(
     e: &mut Engine,
     state: &DemoStateRef,
@@ -140,7 +140,8 @@ fn install_guest_runtime(
     let rt: Rc<RefCell<Box<dyn GuestRuntime>>> = Rc::new(RefCell::new(rt));
     state.borrow_mut().guests.push(rt.clone());
     let mut started = false;
-    e.on_update(move |engine| {
+    // Simulation: a paused engine holds the guest (its `init`/`update`/`start`).
+    e.on_sim_update(move |engine| {
         let dt = engine.time.delta as f64;
         let mut guest = rt.borrow_mut();
         if !initialized {

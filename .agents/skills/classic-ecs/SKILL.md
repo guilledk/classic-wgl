@@ -3,13 +3,15 @@ name: classic-ecs
 description: >
     Entity Component System patterns and camera math for classic-wgl's
     Rust port.  Covers hecs entity spawning, Transform, component
-    definitions, the bidirectional registry, update_fns closure system,
+    definitions, the bidirectional registry, update_fns closure system
+    (host vs sim closures and the simulation pause),
     set_enabled with collider sync, is_disabled parent-chain walk,
     Rc<Cell>/Rc<RefCell> shared state pattern, and 2D camera math
     (fix formula, matrix order, zoom).
     Trigger phrases: "Transform", "Disabled", "set_enabled",
     "is_disabled", "Rc<Cell>", "Rc<RefCell>", "hecs", "update_fns",
-    "on_update", "registry", "ComponentReg", "subsumes", "camera fix",
+    "on_update", "on_sim_update", "set_sim_paused", "pause",
+    "registry", "ComponentReg", "subsumes", "camera fix",
     "camera matrix", "zoom", "orthographic".
 compatibility: hecs 0.10, glam 0.29
 metadata:
@@ -400,7 +402,8 @@ closures through a small hook surface:
 
 | Method | Hook field | When it runs |
 |--------|-----------|--------------|
-| `on_update(f)` | `update_fns` | every frame, in registration order |
+| `on_update(f)` | `update_fns` (`Host`) | every frame, in registration order |
+| `on_sim_update(f)` | `update_fns` (`Sim`) | same list and order, skipped while the sim is paused |
 | `on_pre_update(f)` | `pre_update_hooks` | every frame, *before* `on_update` closures |
 | `on_selection_end(f)` | `selection_end_hooks` | after a selection drag ends |
 | `add_overlay(f)` | `overlay_hooks` | in the GL draw phase, after the main render list |
@@ -410,7 +413,7 @@ closures through a small hook surface:
 
 ```rust
 pub fn on_update(&mut self, f: impl FnMut(&mut Engine) + 'static) {
-    self.update_fns.push(Box::new(f));
+    self.update_fns.push((UpdateKind::Host, Box::new(f)));
 }
 ```
 
@@ -419,10 +422,15 @@ pub fn on_update(&mut self, f: impl FnMut(&mut Engine) + 'static) {
 Every frame, the engine takes the vector, iterates, then restores it:
 
 ```rust
+let paused = self.sim_paused;
 let mut fns = std::mem::take(&mut self.update_fns);
-for f in fns.iter_mut() {
+for (kind, f) in fns.iter_mut() {
+    if paused && *kind == UpdateKind::Sim {
+        continue;
+    }
     f(self);
 }
+fns.append(&mut self.update_fns); // closures registered mid-frame
 self.update_fns = fns;
 ```
 
@@ -437,6 +445,29 @@ Closures execute in registration order.  The camera WASD/zoom closure is
 registered by `init_camera_wasd()` early in the boot sequence.  Tilemap
 mouse-position code is registered inside `commit_terrain()`.  Since each runs
 in order, later closures see camera state already updated for this frame.
+
+### Sim vs host updates (the simulation pause)
+
+`Engine::set_sim_paused(true)` freezes gameplay while the player can still
+look around: `frame()` skips every `on_sim_update` closure, vehicle and
+particle stepping, transient-light (TTL) decay and the `CLASSIC_TEST`
+runner.  Input, the pre-update hooks, the `on_update` closures, the
+pointer/selection pass, wheel decay, UI and rendering keep running;
+`time.delta` stays the real frame time and nothing rewinds, so resuming
+carries on from the frozen state.  `frame()` reads the flag once, before
+the update closures: a host closure that toggles it takes effect next frame.
+
+Pick the hook by what the closure advances:
+
+- **`on_sim_update`** — anything that moves gameplay state forward in
+  time: the ROM guest's `update` (classic-demo `init_guest`), the animator
+  (`init_animator_system`), model clips (`init_model_system`).
+- **`on_update`** — anything the player drives or reads: camera, cursor,
+  editor widgets and their sync, HUD text, debug toggles.
+
+Both kinds share one list, so an unpaused frame runs them in exactly the
+registration order (goldens unchanged).  The guest background worker and
+in-flight pathfinding jobs are untouched by the pause.
 
 ### capture patterns
 

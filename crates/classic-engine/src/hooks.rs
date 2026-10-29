@@ -14,11 +14,37 @@ use classic_core::tilemap::{bilinear_height, sample_height_mesh, PPM_TARGET, TIL
 use classic_core::{RoleKind, SpriteRender, Transform};
 use glam::{Mat4, Vec3};
 
-use crate::{ui, Engine, GuestEvent};
+use crate::{ui, Engine, GuestEvent, UpdateKind};
 
 impl Engine {
+    /// Register a host update closure, run every frame in registration order
+    /// (input, camera, editor, HUD: anything that must keep running while the
+    /// simulation is paused).
     pub fn on_update(&mut self, f: impl FnMut(&mut Engine) + 'static) {
-        self.update_fns.push(Box::new(f));
+        self.update_fns.push((UpdateKind::Host, Box::new(f)));
+    }
+
+    /// Register a simulation update closure: it shares `on_update`'s list and
+    /// order, but is skipped while [`Engine::set_sim_paused`] holds the
+    /// simulation (the guests, the animator, model clips: anything that
+    /// advances gameplay state).
+    pub fn on_sim_update(&mut self, f: impl FnMut(&mut Engine) + 'static) {
+        self.update_fns.push((UpdateKind::Sim, Box::new(f)));
+    }
+
+    /// Pause or resume the simulation.  While paused, `frame()` skips the
+    /// `on_sim_update` closures, vehicle and particle stepping, transient-light
+    /// decay and the `CLASSIC_TEST` runner; input, the pre-update hooks, the
+    /// host closures, selection, camera, UI and rendering keep running.
+    /// `time.delta` stays the real frame time and nothing rewinds: resuming
+    /// carries on from the frozen state.
+    pub fn set_sim_paused(&mut self, paused: bool) {
+        self.sim_paused = paused;
+    }
+
+    /// Whether the simulation is paused (see [`Engine::set_sim_paused`]).
+    pub fn sim_paused(&self) -> bool {
+        self.sim_paused
     }
 
     /// Register a pre-update callback, run every frame *before* the

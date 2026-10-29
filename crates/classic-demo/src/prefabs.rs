@@ -181,8 +181,7 @@ fn rest_frame(sequence: &[u32], repeat: bool) -> f32 {
 
 /// Register the animator system: advances all `Animator` counters and
 /// pushes frame changes to their target IsoSprite / IsoAgent components.
-/// Register the animator system: advances all `Animator` counters and
-/// pushes frame changes to their target IsoSprite / IsoAgent components.
+/// Simulation (`on_sim_update`): a paused engine holds every animation.
 ///
 /// Allocation-light: animations are looked up in place (no per-frame map of
 /// every animation), a write borrows its `AnimationData`, and a sprite's
@@ -207,7 +206,7 @@ pub fn init_animator_system(engine: &mut Engine) {
     }
 
     let mut name_buf = String::new();
-    engine.on_update(move |engine| {
+    engine.on_sim_update(move |engine| {
         let _perf = classic_gfx::perf::scope("animator");
         let delta = engine.time.delta;
         let Engine { world, animations, names, frame_tables, .. } = engine;
@@ -333,9 +332,10 @@ pub fn init_animator_system(engine: &mut Engine) {
 /// once per frame, so the draw path and `gather_lights` (a light parented to a
 /// model tracks its animated rig origin) see this frame's pose.  Registered
 /// right after the animator system so a model clip and a light animation
-/// started together by the guest stay in lockstep.
+/// started together by the guest stay in lockstep (and pause together: both
+/// are `on_sim_update` closures).
 pub fn init_model_system(engine: &mut Engine) {
-    engine.on_update(|engine| {
+    engine.on_sim_update(|engine| {
         let delta = engine.time.delta;
         engine.update_models(delta);
     });
