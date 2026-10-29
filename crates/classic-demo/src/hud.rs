@@ -657,9 +657,10 @@ pub fn draw_debug_overlay(engine: &mut Engine, state: &DemoStateRef) {
         cross_buf.delete(&gfx.gl);
     }
 
-    // Iso compass rose (always visible).
+    // Iso compass rose: always on, except while the inspector is open (it
+    // sits under the tree panel, and overlays draw after the UI).
     let sguard = state.borrow();
-    if let Some(buf) = sguard.iso_compass_buf.as_ref() {
+    if let Some(buf) = sguard.iso_compass_buf.as_ref().filter(|_| !sguard.inspector.open) {
         let Some(gfx) = engine.gfx.as_mut() else { return };
         let cx: f32 = 100.0;
         let cy: f32 = 155.0;

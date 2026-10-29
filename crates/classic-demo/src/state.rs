@@ -78,6 +78,8 @@ pub struct DemoState {
     /// topological order (deps first).  Held so the runtimes outlive the
     /// `on_update` closures that borrow them.
     pub guests: Vec<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
+    /// The entity inspector (`Backquote`): open flag, selection, tree state.
+    pub inspector: crate::inspector::InspectorState,
 }
 
 impl Default for DemoState {
@@ -98,6 +100,7 @@ impl Default for DemoState {
             test_light_handle: None,
             debug_lights: false,
             guests: Vec::new(),
+            inspector: crate::inspector::InspectorState::default(),
         }
     }
 }

@@ -321,6 +321,40 @@ load-bearing (the loader is registry-driven).
 3. **Navigation broken**: verify the inlined `IsometricNavMesh.data` grid has
    walkable tiles where expected
 
+### Entity inspector (`Backquote`)
+
+The live counterpart of a dump, in the running game (`classic-demo`
+`inspector/`; installed with the dev HUD, so `host_features` scenes, not
+under `CLASSIC_NO_UI`).  `Backquote` (`` ` ``; winit `KeyCode` / web
+`event.code` `"Backquote"`, bound nowhere else) pauses the simulation
+(`Engine::set_sim_paused`, the same frame) and opens two panels; pressing
+it again closes them and resumes.
+
+- **Tree** (left): the loaded ROMs, deps first.  A ROM expands to
+  **Assets** by kind (textures, fonts, animations, vehicles, models, data,
+  code, grids, from its manifest) and **Entities** (`name_order` filtered by
+  the ROM's namespace, 50 per page; names no ROM claims sit under **Other
+  entities**).  Rows click to expand / select; the wheel scrolls the panel
+  under the pointer instead of zooming.  The entity lists rebuild when the
+  entity count or `nav_version` moves, or on **Refresh**.
+- **Detail** (right): a ROM's manifest facts and per-kind resource counts +
+  bytes; an asset's source, bytes, uploaded `texture_size`, format and
+  depth / normal / frames companions; an entity's iso tile + terrain
+  height, world point (`named_world_point`) and screen point
+  (`Engine::world_to_screen`), the assets and entities its components name
+  (clickable, resolved with `resolve_resource`), and its registry dump as
+  compact JSON (long arrays elided).
+- **Pick**: while open, a click on the world that no panel or game UI
+  button takes runs `Engine::pick_at` and selects + reveals the entity
+  (outlined by its selection footprint).  The editor's rubber band, tile
+  paint and RTS select do not see that click.
+
+While open, only the simulation stops: camera, mouse iso, UI and rendering
+run on, guest events queue (and arrive on resume), and background worker
+jobs finish and wait.  The `CLASSIC_TEST` runner is simulation too, so a
+scenario that opens the inspector must queue every later click in the same
+step (scripted clicks play one after another, without the runner).
+
 ### CLASSIC_UI_DEBUG
 
 Set `CLASSIC_UI_DEBUG=1` to dump UI entity positions every frame (first 120

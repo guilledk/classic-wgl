@@ -20,6 +20,7 @@
 
 pub mod editor;
 pub mod hud;
+pub mod inspector;
 pub mod lighting;
 pub mod prefabs;
 pub mod render_order;
@@ -398,6 +399,8 @@ fn finish_init_engine(
         {
             e.add_overlay(hud::draw_rts_rubber_band);
         }
+        // Last, over the whole HUD: closed until `Backquote`.
+        inspector::install(e, &state);
     } else if let Some(nav) = e.entity_by_role(classic_core::RoleKind::NavMesh) {
         // The nav-mesh overlay is an editor view: `init_editor_mode_control`
         // shows it only in nav-edit mode.  Without the editor nothing would

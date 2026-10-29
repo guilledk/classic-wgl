@@ -10,6 +10,15 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- An entity inspector in classic-demo: `Backquote` pauses the simulation
+  and opens a ROM → assets / entities tree (entities paged by namespace)
+  and a detail panel (a ROM's manifest and resource sizes; an asset's
+  source, bytes and texture facts; an entity's tile, world and screen
+  position, related assets and its components); a click in the world
+  picks the entity under it.  Installed with the dev HUD, closed by
+  default.  `Engine::world_to_screen` projects a world-metre point to
+  screen pixels, and `Engine::selectable_footprint` is public.
+
 - A simulation pause: `Engine::set_sim_paused` / `sim_paused`, and
   `Engine::on_sim_update` for gameplay closures.  While paused, `frame()`
   skips the sim closures, vehicle and particle stepping, transient-light

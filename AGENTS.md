@@ -107,7 +107,8 @@ crates/
                            (sdk.rs) bridging guest imports to the engine
   classic-demo/           application/prefab layer: init_engine(gl, &Rom) bootstrap, DemoState +
                           EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs, hud.rs,
-                          testing.rs, scenes/ (demo + lunar assemblers)
+                          inspector/ (the Backquote entity inspector), testing.rs, scenes/
+                          (demo + lunar assemblers)
 apps/
   desktop/                native binary: include_bytes! demo.rom/lunar.rom, Rom::load, winit loop
   web/                    wasm cdylib: wasm-bindgen main, trunk build, canvas pointer-lock
@@ -385,6 +386,20 @@ single line may opt out with a trailing `xtask-allow` comment stating why.
   re-baselining the goldens — never publish without re-pinning in the same
   change, or `cargo xtask check-roms` (the CI golden job) fails fast the moment
   the bucket diverges from the committed lockfile.
+
+## Debug tools
+
+In a running game with the dev HUD (`host_features`, not `CLASSIC_NO_UI`):
+
+| Key | Does |
+|---|---|
+| `Backquote` | Entity inspector: pauses the simulation and opens a ROM → assets / entities tree, a detail panel (transforms, components, related assets) and click-to-pick in the world; again to close + resume (`classic-demo/src/inspector/`) |
+| `KeyF` | Footprint polygons + the tile grid |
+| `Shift+KeyL` | Light markers (an X at each light, a Z line down to the terrain) |
+| `F9` | Dump `state.json` (`CLASSIC_DUMP_DIR`, a download on the web) |
+| `F10` | Save the world as a packed ROM |
+
+See the `classic-debugging` skill §6.
 
 ## CLASSIC_* environment variables
 
