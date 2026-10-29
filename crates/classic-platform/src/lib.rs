@@ -213,10 +213,13 @@ pub mod native;
 #[cfg(feature = "native")]
 pub use native::NativePlatform;
 
-#[cfg(feature = "native")]
+// Headless EGL needs no window system (libEGL is `dlopen`ed at runtime), so
+// it is built on every native target, `native` feature or not: engine tests
+// use it for a real GL context and skip when libEGL is absent.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod headless;
 
-#[cfg(feature = "native")]
+#[cfg(not(target_arch = "wasm32"))]
 pub use headless::HeadlessPlatform;
 
 // ---------------------------------------------------------------------------

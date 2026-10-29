@@ -125,8 +125,8 @@ impl Gfx {
         region: SpriteRegion<'_>,
     ) {
         let gl = &self.gl;
+        let Some(t) = self.texture_or_skip(texture_name) else { return };
         let s = self.shader("shadowSprite");
-        let t = self.texture(texture_name);
 
         s.bind(gl);
         t.bind(gl, 0);

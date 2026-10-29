@@ -163,8 +163,8 @@ impl Gfx {
         settings: &RenderSettings,
     ) {
         let gl = &self.gl;
+        let Some(t) = self.texture_or_skip(texture_name) else { return };
         let s = self.shader("imageSheet");
-        let t = self.texture(texture_name);
 
         s.bind(gl);
         t.bind(gl, 0);
@@ -238,8 +238,8 @@ impl Gfx {
         ignore_cam: bool,
     ) {
         let gl = &self.gl;
+        let Some(t) = self.texture_or_skip(atlas_name) else { return };
         let s = self.shader("sdf");
-        let t = self.texture(atlas_name);
 
         s.bind(gl);
         t.bind(gl, 0);
@@ -292,8 +292,8 @@ impl Gfx {
         outline_radius: f32,
     ) {
         let gl = &self.gl;
+        let Some(t) = self.texture_or_skip(texture_name) else { return };
         let s = self.shader("imageSheet");
-        let t = self.texture(texture_name);
 
         s.bind(gl);
         t.bind(gl, 0);
@@ -574,8 +574,8 @@ impl Gfx {
         vertex_buffer: &GlBuffer,
     ) {
         let gl = &self.gl;
+        let Some(tset) = self.texture_or_skip(tileset_name) else { return };
         let s = self.shader("isoTilemap");
-        let tset = self.texture(tileset_name);
 
         s.bind(gl);
 

@@ -45,6 +45,8 @@ mod render;
 mod render_tests;
 mod sprite_batches;
 mod sprite_pose;
+#[cfg(test)]
+mod texture_race_tests;
 
 pub use classic_core::fields;
 
@@ -223,6 +225,13 @@ pub struct Engine {
     /// runs to compile the full catalog (with manifest overrides) once a ROM
     /// manifest is available.
     gfx_full: bool,
+    /// Draw only the UI layer (UI rects, UI sprites, SDF text): no terrain,
+    /// iso sprites, models, world sprites, shadows or particles.  The visual
+    /// boot loader sets it while installed: the boot spawns a scene's
+    /// entities before its `.basis` sheets are uploaded (an awaited Worker
+    /// transcode on the web, a budgeted stage natively), and the loader's
+    /// opaque backdrop hides the scene anyway.
+    pub world_hidden: bool,
     pub world: hecs::World,
     pub camera: Camera,
     pub time: Time,

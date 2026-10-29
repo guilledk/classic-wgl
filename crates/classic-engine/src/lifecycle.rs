@@ -41,6 +41,7 @@ impl Engine {
         Self {
             gfx: None,
             gfx_full: false,
+            world_hidden: false,
             world: hecs::World::new(),
             camera: Camera::new(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0)),
             time: Time::default(),
@@ -530,6 +531,10 @@ impl Engine {
             }
             items.push((tf.position.z, e, DrawKind::SdfText));
         }
+        if self.world_hidden {
+            let world = &self.world;
+            items.retain(|(_, e, k)| draws_while_world_hidden(world, *e, k));
+        }
         // Descending sort by sort-key (z-order or iso-order).
         // Uses sort_by (not sort_unstable_by) for deterministic golden traces.
         items.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -650,6 +655,12 @@ impl Engine {
                     (td, anchor_px, iso_sprite.texture.clone(), None)
                 }
             };
+            // A packed frame resolves to its own sheet, which may not be resident
+            // yet even though the frame table is (it is metadata, hydrated before
+            // the `.basis` sheets): skip it like the uniform-grid path above.
+            if self.gfx.as_ref().is_none_or(|g| !g.textures.contains_key(&sheet_name)) {
+                continue;
+            }
 
             let model = Self::compute_iso_sprite_model(
                 &iso_sprite,
@@ -1231,7 +1242,9 @@ impl Engine {
             ppm: PPM_TARGET,
             shadow: None,
         };
-        self.particles.draw(gfx, &cam, &particle_settings, self.trace.as_mut());
+        if !self.world_hidden {
+            self.particles.draw(gfx, &cam, &particle_settings, self.trace.as_mut());
+        }
 
         classic_gfx::perf::phase("bloom");
         // Bloom (before the UI): only on frames with something emissive on
@@ -1923,5 +1936,18 @@ impl Engine {
 impl Default for Engine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Whether a render-list item still draws under [`Engine::world_hidden`]: the
+/// screen-space UI layer only (UI sprites, and rects / SDF text that ignore
+/// the camera).  Terrain, iso sprites, models and world sprites / labels wait
+/// for the scene.
+fn draws_while_world_hidden(world: &hecs::World, e: hecs::Entity, kind: &DrawKind) -> bool {
+    match kind {
+        DrawKind::UiSprite => true,
+        DrawKind::UiRect => world.get::<&RectRender>(e).is_ok_and(|r| r.ignore_cam),
+        DrawKind::SdfText => world.get::<&SdfTextRender>(e).is_ok_and(|t| t.ignore_cam),
+        DrawKind::Sprite | DrawKind::Tilemap | DrawKind::IsoSprite | DrawKind::Model => false,
     }
 }

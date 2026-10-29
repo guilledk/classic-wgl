@@ -740,7 +740,8 @@ With no `--dist` it runs `trunk build --release` itself; with `--roms <dir>`
 (a classic-roms `roms/out`, `roms.json` included) every
 `https://classic-roms.com/<file>` the page requests is answered from that dir
 when the file is there, and `--rom roms/<name>.rom` boots a ROM from it by
-relative URL.  The page loads with `?fixed_dt=<dt>&loader=console`
+relative URL.  The page loads with `?fixed_dt=<dt>&loader=visual&boot_log=1`
+(the loading screen a player sees, its boot events mirrored to the console)
 (`--query k=v` adds or overrides parameters).  A script is one step per line:
 
 ```text
@@ -750,6 +751,7 @@ wait-frames 10                          # rendered frames, counted in the page
 click 1028 428                          # move, press, release, two frames apart
 key d KeyD 30                           # hold for 30 frames
 move 760 600 / wheel 640 360 -120 / sleep 1.5 / eval <js>
+throttle 6                              # CDP CPU throttling: a 6x slower device
 shot td01                               # -> td01.png, a tile on sheet.jpg
 ```
 
@@ -802,8 +804,11 @@ chromium wrapper finds `/run/opengl-driver`.  What does not work here:
   comes up, but the engine's boot panics with `compile shader: "link
   failed: "`.  `--use-angle=gl` (desktop GL) reports radeonsi too but was not
   carried further; Vulkan is the supported backend.
-- **The visual loader on the GPU** (`?loader=visual`, the page default) can
-  panic `texture 'lunar-common::lunar-common_atlas_2' not found` in
-  `draw_shadow_sprite_batches`: the scene draws before the async basis atlas
-  upload lands.  The helper defaults to `?loader=console`; that race is an
-  engine bug, not a capture problem.
+- **The visual loader race (fixed in #195).**  Before #195 the visual loader
+  (`?loader=visual`, the page default) could panic `texture
+  'lunar-common::lunar-common_atlas_2' not found` in
+  `draw_shadow_sprite_batches`: the boot spawns the scene before its `.basis`
+  sheets land, and a loader frame between the two drew it.  The loader now
+  hides the scene (`Engine::world_hidden`) and every draw path skips a
+  missing texture instead of panicking, so the helper defaults to the
+  visual loader again, matching players.

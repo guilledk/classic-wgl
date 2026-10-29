@@ -75,6 +75,11 @@ pub struct HeadlessPlatform {
 }
 
 impl HeadlessPlatform {
+    /// The GL context, shared (tests drive frames without `run_loop`).
+    pub fn gl(&self) -> Rc<glow::Context> {
+        self.gl.clone()
+    }
+
     pub fn new(width: u32, height: u32) -> Result<Self, String> {
         unsafe {
             let lib =

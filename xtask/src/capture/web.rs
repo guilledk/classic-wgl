@@ -55,7 +55,7 @@ usage: cargo xtask capture web [options]
   --roms <dir>         fulfil classic-roms.com/<file> from <dir> when present (e.g. classic-roms roms/out)
   --script <file>      scenario script, one step per line (# comments)
   --step <step>        one script step (repeatable; appended after --script)
-  --query <k=v>        extra URL query parameter (repeatable), e.g. loader=visual
+  --query <k=v>        extra URL query parameter (repeatable), e.g. loader=console
   --timeout <s>        overall budget (default 300)
   --chromium <path>    Chromium binary (default: chromium on PATH)
   --uncapped           no vsync / frame-rate cap: max sim throughput, but screenshots lag the sim
@@ -67,6 +67,7 @@ script steps:
   move <x> <y> | click <x> <y> [right] | wheel <x> <y> <dy>
   key <key> [code] [hold_frames]
   shot <name>                               screenshot -> <out>/<name>.png
+  throttle <rate>                           CDP CPU throttling (4 = a 4x slower device)
   eval <js>";
 
 struct WebOpts {
@@ -422,6 +423,9 @@ fn run_step(
             fs::write(&path, base64::engine::general_purpose::STANDARD.decode(data)?)?;
             shots.push((name.to_string(), path));
         }
+        "throttle" => {
+            cdp.call("Emulation.setCPUThrottlingRate", json!({ "rate": f(0)? }))?;
+        }
         "eval" => {
             let v = cdp.eval(rest)?;
             cdp.record(format!("eval: {v}"));
@@ -431,14 +435,16 @@ fn run_step(
     Ok(())
 }
 
-/// The page URL: the ROM, the fixed step, the console loader (boot events in
-/// the console; the visual loader is opt-in via `--query loader=visual`),
-/// then the caller's extra parameters.
+/// The page URL: the ROM, the fixed step, the visual loader a player gets
+/// (`boot_log` mirrors its boot events to the console, so `wait-log` and
+/// `console.log` still see them; `--query loader=console` drops the loading
+/// screen), then the caller's extra parameters.
 fn page_url(port: u16, c: &Common, query: &[String]) -> String {
     let mut params: Vec<(String, String)> = vec![
         ("rom".into(), c.rom.clone()),
         ("fixed_dt".into(), c.dt.to_string()),
-        ("loader".into(), "console".into()),
+        ("loader".into(), "visual".into()),
+        ("boot_log".into(), "1".into()),
     ];
     for q in query {
         let (k, v) = q.split_once('=').unwrap_or((q, ""));
@@ -811,10 +817,13 @@ mod tests {
         c.dt = 0.05;
         assert_eq!(
             page_url(8080, &c, &[]),
-            "http://127.0.0.1:8080/?rom=rom:lunar&fixed_dt=0.05&loader=console"
+            "http://127.0.0.1:8080/?rom=rom:lunar&fixed_dt=0.05&loader=visual&boot_log=1"
         );
-        let url = page_url(1, &c, &["loader=visual".into(), "perf".into()]);
-        assert_eq!(url, "http://127.0.0.1:1/?rom=rom:lunar&fixed_dt=0.05&loader=visual&perf");
+        let url = page_url(1, &c, &["loader=console".into(), "perf".into()]);
+        assert_eq!(
+            url,
+            "http://127.0.0.1:1/?rom=rom:lunar&fixed_dt=0.05&boot_log=1&loader=console&perf"
+        );
     }
 
     #[test]
