@@ -36,6 +36,8 @@ pub mod vehicle;
 
 mod boot_api;
 mod dir_blend;
+#[cfg(test)]
+mod display_scale_tests;
 pub mod floor;
 mod hooks;
 mod lifecycle;
@@ -447,6 +449,11 @@ pub struct Engine {
     sdf_text_gpu: HashMap<hecs::Entity, SdfTextGpu>,
     last_vw: f32,
     last_vh: f32,
+    /// Physical pixels per logical point for the coming frames (the display
+    /// scale; see [`Engine::set_pixel_ratio`]).
+    pixel_ratio: f32,
+    /// The ratio the gfx viewport was last sized for.
+    last_pixel_ratio: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

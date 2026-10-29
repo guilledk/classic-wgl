@@ -20,10 +20,15 @@ pub struct EnvConfig {
     /// CLASSIC_FIXED_DT (web: `?fixed_dt=`): override delta per frame.
     /// Auto-defaults to 1/60 when CLASSIC_TEST is set.
     pub fixed_dt: Option<f32>,
-    /// CLASSIC_WIDTH: forced logical viewport width.
+    /// CLASSIC_WIDTH: forced drawable width in physical pixels (the logical
+    /// view is `width / pixel ratio`; identical at ratio 1).
     pub forced_width: Option<f32>,
-    /// CLASSIC_HEIGHT: forced logical viewport height.
+    /// CLASSIC_HEIGHT: forced drawable height in physical pixels.
     pub forced_height: Option<f32>,
+    /// CLASSIC_PIXEL_RATIO (web: `?pixel_ratio=`): pin the display scale
+    /// (physical pixels per logical point) instead of reading the display;
+    /// see [`EnvConfig::pixel_ratio_override`].
+    pub pixel_ratio: Option<f32>,
     /// CLASSIC_UI_DEBUG: dump UI entity positions each frame (first 120 frames).
     pub ui_debug: bool,
     /// CLASSIC_GOLDEN: `check` / `update` / `none`.
@@ -112,6 +117,9 @@ static CONFIG: LazyLock<EnvConfig> = LazyLock::new(|| {
             .or_else(|| if test_active { Some(1.0 / 60.0) } else { None }),
         forced_width: read("CLASSIC_WIDTH").parse().ok(),
         forced_height: read("CLASSIC_HEIGHT").parse().ok(),
+        pixel_ratio: env_or_query("CLASSIC_PIXEL_RATIO", "pixel_ratio")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map(|r| classic_platform::clamp_pixel_ratio(r as f64)),
         ui_debug: read_bool("CLASSIC_UI_DEBUG"),
         golden_mode,
         golden_png: read_bool("CLASSIC_GOLDEN_PNG"),
@@ -184,6 +192,18 @@ impl EnvConfig {
         !self.golden_mode.is_empty()
     }
 
+    /// The pixel ratio a platform must use instead of the display's scale:
+    /// `CLASSIC_PIXEL_RATIO` / `?pixel_ratio=` when set, else 1 for the
+    /// deterministic paths (headless / golden / test, whose traces and
+    /// layouts must not depend on the machine's display), else `None`
+    /// (follow the display: `scale_factor`, `devicePixelRatio`).
+    pub fn pixel_ratio_override(&self) -> Option<f32> {
+        pixel_ratio_override(
+            self.pixel_ratio,
+            self.headless || self.golden_active() || self.test_active(),
+        )
+    }
+
     /// The loader mode to use, forced to [`LoaderMode::Off`] for the
     /// deterministic boot paths (headless / golden / test), where the loading
     /// screen must never render.
@@ -194,6 +214,11 @@ impl EnvConfig {
             self.loader_mode
         }
     }
+}
+
+/// [`EnvConfig::pixel_ratio_override`]'s rule.
+fn pixel_ratio_override(explicit: Option<f32>, deterministic: bool) -> Option<f32> {
+    explicit.or(deterministic.then_some(1.0))
 }
 
 fn read(key: &str) -> String {
@@ -253,7 +278,17 @@ fn default_loader_threads() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_frame_list;
+    use super::{parse_frame_list, pixel_ratio_override};
+
+    #[test]
+    fn pixel_ratio_override_pins_the_deterministic_paths() {
+        // An explicit ratio always wins; a test / golden / headless run is
+        // pinned to 1; an interactive run follows the display.
+        assert_eq!(pixel_ratio_override(Some(2.0), true), Some(2.0));
+        assert_eq!(pixel_ratio_override(Some(1.5), false), Some(1.5));
+        assert_eq!(pixel_ratio_override(None, true), Some(1.0));
+        assert_eq!(pixel_ratio_override(None, false), None);
+    }
 
     #[test]
     fn golden_png_frame_lists() {

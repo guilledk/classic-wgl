@@ -164,13 +164,35 @@ pub struct ShadowSettings {
     pub debug: bool,
 }
 
+/// A top-left-origin logical-point clip rect `(x, y, w, h)` as a GL scissor
+/// box `[x, y, w, h]` in physical pixels (bottom-left origin) for a view
+/// `viewport_h` points tall at `pixel_ratio`.  At ratio 1 it is the plain
+/// y-flip the SDF text clip always used (truncating, as before).
+pub fn scissor_rect(clip: glam::Vec4, viewport_h: f32, pixel_ratio: f32) -> [i32; 4] {
+    let r = pixel_ratio;
+    [
+        (clip.x * r) as i32,
+        ((viewport_h - clip.y - clip.w) * r) as i32,
+        (clip.z * r) as i32,
+        (clip.w * r) as i32,
+    ]
+}
+
 pub struct Gfx {
     pub gl: Rc<glow::Context>,
     pub shaders: HashMap<String, Shader>,
     pub textures: HashMap<String, GlTexture>,
     pub quad: QuadBuffers,
+    /// The view in **logical points** (the projection, the camera and every
+    /// screen-space coordinate).  See [`Gfx::resize`].
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// The default framebuffer in **physical pixels** (`viewport × ratio`):
+    /// `glViewport`, render-target sizes, scissor rects, pixel readback.
+    pub viewport_px_w: u32,
+    pub viewport_px_h: u32,
+    /// Physical pixels per logical point (the display scale; 1 headless).
+    pub pixel_ratio: f32,
     pub render_target: Option<GlFrameBuffer>,
     lights: LightBuffer,
     /// Screen-tile light lists for the lit fragment shaders (see `light_grid`).
@@ -218,6 +240,9 @@ impl Gfx {
             quad,
             viewport_w: 1920.0,
             viewport_h: 1080.0,
+            viewport_px_w: 1920,
+            viewport_px_h: 1080,
+            pixel_ratio: 1.0,
             render_target: None,
             lights,
             light_grid,
@@ -283,10 +308,25 @@ impl Gfx {
         Mat4::orthographic_rh(0.0, self.viewport_w, self.viewport_h, 0.0, -10000.0, 10000.0)
     }
 
-    /// Resize the viewport (called on window/canvas resize).
-    pub fn resize(&mut self, w: f32, h: f32) {
+    /// Resize the viewport (called on window/canvas resize): `w`x`h` logical
+    /// points drawn at `pixel_ratio` physical pixels per point.
+    pub fn resize(&mut self, w: f32, h: f32, pixel_ratio: f32) {
+        let r = if pixel_ratio.is_finite() && pixel_ratio > 0.0 { pixel_ratio } else { 1.0 };
         self.viewport_w = w;
         self.viewport_h = h;
+        self.pixel_ratio = r;
+        self.viewport_px_w = (w * r).round().max(0.0) as u32;
+        self.viewport_px_h = (h * r).round().max(0.0) as u32;
+    }
+
+    /// Clip GL drawing to a logical-point rect (see [`scissor_rect`]); pair
+    /// with `glDisable(SCISSOR_TEST)`.
+    pub fn scissor_logical(&self, clip: glam::Vec4) {
+        let [x, y, w, h] = scissor_rect(clip, self.viewport_h, self.pixel_ratio);
+        unsafe {
+            self.gl.enable(glow::SCISSOR_TEST);
+            self.gl.scissor(x, y, w, h);
+        }
     }
 
     // -- resource management -----------------------------------------------
@@ -477,7 +517,7 @@ impl Gfx {
                 gl.viewport(0, 0, rt.width as i32, rt.height as i32);
             } else {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                gl.viewport(0, 0, self.viewport_w as i32, self.viewport_h as i32);
+                gl.viewport(0, 0, self.viewport_px_w as i32, self.viewport_px_h as i32);
             }
             gl.bind_vertex_array(Some(self.vao));
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
@@ -494,5 +534,22 @@ impl Gfx {
             gl.disable(glow::SCISSOR_TEST);
             gl.disable(glow::STENCIL_TEST);
         }
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::scissor_rect;
+    use glam::Vec4;
+
+    #[test]
+    fn scissor_rect_flips_and_scales() {
+        let clip = Vec4::new(10.0, 20.0, 300.0, 100.0);
+        // Ratio 1: the old `(x, vh - y - h, w, h)` truncation, unchanged.
+        assert_eq!(scissor_rect(clip, 720.0, 1.0), [10, 600, 300, 100]);
+        assert_eq!(scissor_rect(clip, 720.0, 2.0), [20, 1200, 600, 200]);
+        assert_eq!(scissor_rect(clip, 720.0, 1.5), [15, 900, 450, 150]);
+        let frac = Vec4::new(10.5, 20.25, 300.5, 100.5);
+        assert_eq!(scissor_rect(frac, 720.0, 1.0), [10, 599, 300, 100]);
     }
 }

@@ -83,6 +83,21 @@ impl Engine {
         (self.last_vw, self.last_vh)
     }
 
+    /// Physical pixels per logical point (the display scale).  Everything the
+    /// engine hands out — [`Engine::viewport_size`], the mouse, UI layout,
+    /// picks, `world_to_screen` — is in logical points; only GL-side sizes
+    /// (the drawable, render targets, scissor) multiply by this.
+    pub fn pixel_ratio(&self) -> f32 {
+        self.pixel_ratio
+    }
+
+    /// Set the display scale for the coming frames (the platform's
+    /// [`classic_platform::FrameSize::pixel_ratio`]; [`Engine::frame_sized`]
+    /// does it).  Sanitised like the platforms do; 1 by default.
+    pub fn set_pixel_ratio(&mut self, pixel_ratio: f32) {
+        self.pixel_ratio = classic_platform::clamp_pixel_ratio(pixel_ratio as f64);
+    }
+
     /// The managed UI's root, created on first use: the game UI.  A guest's
     /// `ui_*` calls build on it from `init` on, with or without the dev HUD
     /// (`host_features`, which adds its own panels to the same root) and

@@ -184,7 +184,7 @@ impl Gfx {
                 gl.viewport(0, 0, rt.width as i32, rt.height as i32);
             } else {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                gl.viewport(0, 0, self.viewport_w as i32, self.viewport_h as i32);
+                gl.viewport(0, 0, self.viewport_px_w as i32, self.viewport_px_h as i32);
             }
         }
     }

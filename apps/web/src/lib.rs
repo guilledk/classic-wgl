@@ -165,7 +165,9 @@ async fn run() -> anyhow::Result<()> {
     // Canvas-first: create the WebGL2 context *before* fetching the ROM, so the
     // GL loading screen can draw while the archive streams in (mirrors the
     // desktop window-first boot).  There is no DOM overlay anymore.
-    let platform = match WebPlatform::new("glCanvas") {
+    // `?pixel_ratio=` pins the display scale; else `devicePixelRatio`.
+    let pixel_ratio = classic_engine::env_config::EnvConfig::get().pixel_ratio;
+    let platform = match WebPlatform::new("glCanvas", pixel_ratio) {
         Ok(p) => p,
         Err(e) => {
             log::error!("WebGL2 init failed: {e:?}");
@@ -176,7 +178,6 @@ async fn run() -> anyhow::Result<()> {
     if classic_engine::env_config::EnvConfig::get().perf.is_some() {
         classic_gfx::perf::attach_webgl2(platform.webgl2().clone());
     }
-    let (vw, vh) = platform.viewport();
 
     // Set up the GL layer, embedded font and loading screen up front so the
     // loader renders from frame 0, then draw one frame before the (awaited)
@@ -185,7 +186,7 @@ async fn run() -> anyhow::Result<()> {
     let mut boot = InterleavedBoot::new(loader);
     let mut engine = boot.engine(gl.clone());
     let mut no_input = classic_platform::InputState::new();
-    boot.draw_loader(&mut engine, &mut no_input, vw, vh, 0.0);
+    boot.draw_loader(&mut engine, &mut no_input, platform.viewport(), 0.0);
 
     let boot_start = classic_platform::BootTimer::start();
     let loaded = match resolve_web_roms(&spec, sink.as_ref()).await {
@@ -204,7 +205,7 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
     boot.start(BootPipeline::new(loaded, Some(Box::new(classic_demo::DemoFinish::default()))));
-    boot.draw_loader(&mut engine, &mut no_input, vw, vh, 0.0);
+    boot.draw_loader(&mut engine, &mut no_input, platform.viewport(), 0.0);
 
     // Hydrate the engine incrementally, a time-budgeted slice per animation
     // frame (drawing the loader each frame) so the browser stays responsive
@@ -221,7 +222,7 @@ async fn run() -> anyhow::Result<()> {
             BootFrame::Booted => break,
             BootFrame::Failed(err) => return Err(anyhow::anyhow!(err)),
         }
-        boot.draw_loader(&mut engine, &mut no_input, vw, vh, 0.0);
+        boot.draw_loader(&mut engine, &mut no_input, platform.viewport(), 0.0);
         next_frame().await;
     }
     sink.on_event(classic_rom::BootEvent::BootComplete { elapsed: boot_start.elapsed_duration() });
@@ -230,8 +231,8 @@ async fn run() -> anyhow::Result<()> {
     // (`?perf`) logs its final summary when the loop stops.
     let max_frames = classic_engine::env_config::EnvConfig::get().max_frames;
     let mut frames: u64 = 0;
-    platform.run_loop(move |_gl, input, vw, vh, delta, should_close| {
-        engine.frame(input, vw, vh, delta);
+    platform.run_loop(move |_gl, input, view, delta, should_close| {
+        engine.frame_sized(input, view, delta);
         frames += 1;
         if engine.test_should_close || max_frames.is_some_and(|n| frames >= n) {
             *should_close = true;

@@ -14,7 +14,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 use std::time::Instant;
 
-use crate::{InputState, Platform};
+use crate::{FrameSize, InputState, Platform};
 use glow::HasContext;
 
 type EGLDisplay = *mut c_void;
@@ -68,6 +68,8 @@ pub struct HeadlessPlatform {
     gl: Rc<glow::Context>,
     width: u32,
     height: u32,
+    /// Physical pixels per logical point (1 unless `with_pixel_ratio`).
+    pixel_ratio: f32,
     _egl_lib: libloading::Library,
     _display: EGLDisplay,
     _context: EGLContext,
@@ -80,6 +82,15 @@ impl HeadlessPlatform {
         self.gl.clone()
     }
 
+    /// Render `width`x`height` *physical* pixels at `pixel_ratio` points per
+    /// pixel, so frames see a `width / ratio` x `height / ratio` logical view
+    /// (a headless 2x render: 2560x1440 at ratio 2 lays out like 1280x720).
+    pub fn with_pixel_ratio(mut self, pixel_ratio: f32) -> Self {
+        self.pixel_ratio = crate::clamp_pixel_ratio(pixel_ratio as f64);
+        self
+    }
+
+    /// A `width`x`height` physical-pixel pbuffer at pixel ratio 1.
     pub fn new(width: u32, height: u32) -> Result<Self, String> {
         unsafe {
             let lib =
@@ -244,6 +255,7 @@ impl HeadlessPlatform {
                 gl: Rc::new(gl),
                 width,
                 height,
+                pixel_ratio: 1.0,
                 _egl_lib: lib,
                 _display: display,
                 _context: context,
@@ -304,13 +316,13 @@ impl Platform for HeadlessPlatform {
         &self.gl
     }
 
-    fn viewport(&self) -> (f32, f32) {
-        (self.width as f32, self.height as f32)
+    fn viewport(&self) -> FrameSize {
+        FrameSize::from_physical(self.width, self.height, self.pixel_ratio)
     }
 
     fn run_loop<F>(self, mut on_frame: F)
     where
-        F: FnMut(Rc<glow::Context>, &mut InputState, f32, f32, f32, &mut bool) + 'static,
+        F: FnMut(Rc<glow::Context>, &mut InputState, FrameSize, f32, &mut bool) + 'static,
     {
         let max_frames: Option<u64> =
             std::env::var("CLASSIC_FRAMES").ok().and_then(|v| v.parse().ok());
@@ -318,8 +330,7 @@ impl Platform for HeadlessPlatform {
         let mut input = InputState::new();
         let mut should_close = false;
         let mut prev_time = Instant::now();
-        let w = self.width as f32;
-        let h = self.height as f32;
+        let view = self.viewport();
         let gl = self.gl.clone();
 
         while !should_close {
@@ -327,7 +338,7 @@ impl Platform for HeadlessPlatform {
             let delta = crate::frame_delta((now - prev_time).as_secs_f32());
             prev_time = now;
 
-            on_frame(gl.clone(), &mut input, w, h, delta, &mut should_close);
+            on_frame(gl.clone(), &mut input, view, delta, &mut should_close);
             input.end_frame();
 
             if let Some(limit) = max_frames {

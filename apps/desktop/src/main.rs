@@ -135,14 +135,17 @@ fn main() {
 
         let w = config.forced_width.unwrap_or(1280.0) as u32;
         let h = config.forced_height.unwrap_or(720.0) as u32;
-        let platform =
-            classic_platform::headless::HeadlessPlatform::new(w, h).expect("headless platform");
+        // `CLASSIC_WIDTH`/`HEIGHT` are the drawable's physical pixels; at
+        // `CLASSIC_PIXEL_RATIO` r the frames lay out `w / r` x `h / r` points.
+        let platform = classic_platform::headless::HeadlessPlatform::new(w, h)
+            .expect("headless platform")
+            .with_pixel_ratio(config.pixel_ratio_override().unwrap_or(1.0));
         let mut loaded = Some(loaded);
         let mut engine: Option<classic_engine::Engine> = None;
         let test_failed = Rc::new(Cell::new(false));
         let tf = test_failed.clone();
 
-        platform.run_loop(move |gl, input, vw, vh, delta, should_close| {
+        platform.run_loop(move |gl, input, view, delta, should_close| {
             if let Some(loaded) = loaded.take() {
                 classic_core::cl_info!(
                     classic_core::instrument::Chan::Platform,
@@ -153,13 +156,14 @@ fn main() {
                 sink.on_event(BootEvent::BootComplete { elapsed: boot_start.elapsed() });
                 sampler.take();
                 if let Some(gfx) = e.gfx.as_mut() {
-                    gfx.set_render_target(vw as u32, vh as u32);
+                    let (pw, ph) = view.physical();
+                    gfx.set_render_target(pw, ph);
                 }
                 engine = Some(e);
             }
             if let Some(e) = engine.as_mut() {
                 let t0 = std::time::Instant::now();
-                e.frame(input, vw, vh, delta);
+                e.frame_sized(input, view, delta);
                 // Threaded workers advance in wall time: pace the frames to
                 // the fixed step so they see the frame rate a player does.
                 if config.workers_threaded {
@@ -203,13 +207,16 @@ fn main() {
     let max_frames: Option<u64> = std::env::var("CLASSIC_FRAMES").ok().and_then(|v| v.parse().ok());
     let mut frame_count: u64 = 0;
 
-    let platform = classic_platform::native::NativePlatform::new();
+    // The window follows the display's scale factor (logical points on a
+    // HiDPI screen) unless `CLASSIC_PIXEL_RATIO` pins it.
+    let platform = classic_platform::native::NativePlatform::new()
+        .with_pixel_ratio(config.pixel_ratio_override());
     let mut engine: Option<classic_engine::Engine> = None;
     let mut booted = false;
     let test_failed = Rc::new(Cell::new(false));
     let tf = test_failed.clone();
 
-    platform.run_loop(move |gl, input, vw, vh, delta, should_close| {
+    platform.run_loop(move |gl, input, view, delta, should_close| {
         // Esc aborts the in-flight load and stops the process (the detached
         // boot thread dies with it).
         if !booted && input.was_key_pressed("Escape") {
@@ -239,7 +246,7 @@ fn main() {
             }
         }
         if !booted {
-            boot.draw_loader(e, input, vw, vh, delta);
+            boot.draw_loader(e, input, view, delta);
             return;
         }
         if let Some(limit) = max_frames {
@@ -253,7 +260,7 @@ fn main() {
             }
             frame_count += 1;
         }
-        e.frame(input, vw, vh, delta);
+        e.frame_sized(input, view, delta);
         if e.test_should_close {
             *should_close = true;
         }

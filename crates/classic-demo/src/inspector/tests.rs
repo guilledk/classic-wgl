@@ -514,3 +514,21 @@ mod preview {
         assert!(detail_has(&state, "3D preview deferred"));
     }
 }
+
+#[test]
+fn at_pixel_ratio_2_rows_and_picks_land_on_the_same_points() {
+    // A HiDPI frame is the same logical view: the platform hands the engine
+    // points and only GL multiplies, so the inspector's layout, row hits and
+    // world pick are unchanged.
+    let (mut engine, state) = fixture();
+    engine.set_pixel_ratio(2.0);
+    frame(&mut engine);
+    press_toggle(&mut engine);
+    assert_eq!(engine.pixel_ratio(), 2.0);
+    assert_eq!(engine.viewport_size(), (VW, VH));
+    let at = tree_row(&mut engine, &state, "[+] common");
+    click(&mut engine, at);
+    assert_eq!(state.borrow().inspector.selection, Some(Selection::Rom(0)));
+    click(&mut engine, Vec2::new(615.0, 355.0));
+    assert_eq!(state.borrow().inspector.selected_entity(), Some("demo::probe"));
+}

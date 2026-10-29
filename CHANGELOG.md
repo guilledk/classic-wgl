@@ -10,6 +10,28 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- Display scale: the engine now runs in logical points on HiDPI screens,
+  so a 4K desktop at scale 2 shows the 1280×720-point window at full
+  resolution instead of everything at half size.  Each platform converts
+  once.  Native opens the window at `LogicalSize(1280, 720)` and follows
+  `Window::scale_factor` (`ScaleFactorChanged`).  Web sizes the canvas
+  backing store to CSS size × `devicePixelRatio`, re-read on `resize`.
+  Frames get a `FrameSize` (logical size + `pixel_ratio`) and a
+  logical-point mouse; the `Platform` callback, `Platform::viewport`,
+  `WebPlatform::new` and `InterleavedBoot::draw_loader` take it.
+  `CLASSIC_PIXEL_RATIO` / `?pixel_ratio=` pin the ratio, and headless,
+  golden and `CLASSIC_TEST` runs pin it to 1 (traces unchanged).
+  `CLASSIC_WIDTH` / `HEIGHT` are the physical drawable, so
+  `CLASSIC_WIDTH=2560 CLASSIC_HEIGHT=1440 CLASSIC_PIXEL_RATIO=2` renders a
+  2x 1280×720 view headless (`cargo xtask capture --pixel-ratio`).  `Gfx`
+  keeps the logical `viewport_w/h` (projection, camera) beside the
+  physical `viewport_px_w/h` and `pixel_ratio` (`glViewport`, targets,
+  readback; `Gfx::resize` takes the ratio).  Clip rects scale through
+  `scissor_rect` / `Gfx::scissor_logical`.  The model pixelation target
+  and the bloom levels follow the logical view, so they look the same at
+  any scale.  Added `Engine::pixel_ratio` / `set_pixel_ratio` /
+  `frame_sized`.
+
 - A sprite pose preview in classic-demo's entity inspector: the selected
   sprite's frame drawn into the detail panel, with direction / pitch /
   roll steppers for a sheet with pose axes (a posed sprite, every layer

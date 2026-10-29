@@ -3,7 +3,10 @@
 //! Applied after the particle phase and before the UI: the main target's
 //! colour is bright-passed into a half-res target (soft-knee luminance
 //! threshold), blurred (separable Gaussian) at half and quarter resolution,
-//! and added back onto the main target.  An offscreen main target (headless,
+//! and added back onto the main target.  The half / quarter levels are
+//! sized from the *logical* view (`main / pixel_ratio`), so the glow spans
+//! the same points at any display scale (a 2x screen's bright pass
+//! downsamples 4x, its taps spread to cover the wider footprint).  An offscreen main target (headless,
 //! golden runs) is sampled directly through a `LINEAR` sampler object; only
 //! the default framebuffer (a window, a canvas), which cannot be sampled, is
 //! first blitted to a texture.  Everything is
@@ -20,6 +23,7 @@ use crate::{Gfx, GlFrameBuffer};
 pub struct BloomTargets {
     width: u32,
     height: u32,
+    pixel_ratio: f32,
     src: Option<GlFrameBuffer>,
     half: [GlFrameBuffer; 2],
     quarter: [GlFrameBuffer; 2],
@@ -44,19 +48,29 @@ fn set_linear(gl: &glow::Context, tex: glow::Texture) {
     }
 }
 
+/// The logical-point size the bloom levels are derived from: the `w`x`h`
+/// physical main target over `pixel_ratio` (exactly `w`x`h` at ratio 1).
+pub fn bloom_base_size(w: u32, h: u32, pixel_ratio: f32) -> (u32, u32) {
+    let r = if pixel_ratio.is_finite() && pixel_ratio > 0.0 { pixel_ratio } else { 1.0 };
+    let base = |d: u32| ((d as f32 / r).round() as u32).max(1);
+    (base(w), base(h))
+}
+
 impl BloomTargets {
-    fn new(gl: &glow::Context, w: u32, h: u32) -> Self {
+    fn new(gl: &glow::Context, w: u32, h: u32, pixel_ratio: f32) -> Self {
+        let (lw, lh) = bloom_base_size(w, h, pixel_ratio);
         Self {
             width: w,
             height: h,
+            pixel_ratio,
             src: None,
-            half: [linear_target(gl, w / 2, h / 2), linear_target(gl, w / 2, h / 2)],
-            quarter: [linear_target(gl, w / 4, h / 4), linear_target(gl, w / 4, h / 4)],
+            half: [linear_target(gl, lw / 2, lh / 2), linear_target(gl, lw / 2, lh / 2)],
+            quarter: [linear_target(gl, lw / 4, lh / 4), linear_target(gl, lw / 4, lh / 4)],
         }
     }
 
-    fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
+    fn key(&self) -> (u32, u32, f32) {
+        (self.width, self.height, self.pixel_ratio)
     }
 }
 
@@ -72,8 +86,9 @@ impl Gfx {
         if w < 4 || h < 4 {
             return;
         }
-        if self.bloom.as_ref().map(|b| b.size()) != Some((w, h)) {
-            self.bloom = Some(BloomTargets::new(&self.gl, w, h));
+        let ratio = self.pixel_ratio;
+        if self.bloom.as_ref().map(|b| b.key()) != Some((w, h, ratio)) {
+            self.bloom = Some(BloomTargets::new(&self.gl, w, h, ratio));
         }
         // The scene colour: the offscreen main target's own texture, else a
         // copy of the default framebuffer.
@@ -121,7 +136,14 @@ impl Gfx {
         }
 
         let thr = self.shader("bloomThreshold");
-        let pass = |target: &GlFrameBuffer, src: glow::Texture, (sw, sh): (u32, u32), t: f32| {
+        // `spread`: the tap offset in source texels over 0.5 (the scene ->
+        // half pass spreads by the pixel ratio, a 2x screen being a 4x
+        // downsample there).
+        let pass = |target: &GlFrameBuffer,
+                    src: glow::Texture,
+                    (sw, sh): (u32, u32),
+                    t: f32,
+                    spread: f32| {
             target.bind(gl);
             unsafe {
                 gl.viewport(0, 0, target.width as i32, target.height as i32);
@@ -130,7 +152,11 @@ impl Gfx {
             }
             thr.bind(gl);
             thr.uniform_1i(gl, "src_tex", BLOOM_UNIT_A as i32);
-            thr.uniform_vec2(gl, "src_texel", &[0.5 / sw as f32, 0.5 / sh as f32]);
+            thr.uniform_vec2(
+                gl,
+                "src_texel",
+                &[0.5 * spread / sw as f32, 0.5 * spread / sh as f32],
+            );
             thr.uniform_1f(gl, "threshold", t);
             thr.uniform_1f(gl, "knee", knee);
             self.draw_post_quad(thr);
@@ -140,12 +166,12 @@ impl Gfx {
         // the copy's texture is (the bright pass's 4 taps cover 16 texels).
         crate::perf::phase("bloom_bright");
         unsafe { gl.bind_sampler(BLOOM_UNIT_A, Some(self.particle_sampler)) };
-        pass(&b.half[0], scene, (w, h), threshold);
+        pass(&b.half[0], scene, (w, h), threshold, ratio.max(1.0));
         unsafe { gl.bind_sampler(BLOOM_UNIT_A, None) };
         crate::perf::phase("bloom_blur");
         self.blur(&b.half[0], &b.half[1]);
         let half = &b.half[0];
-        pass(&b.quarter[0], half.texture, (half.width, half.height), -1.0);
+        pass(&b.quarter[0], half.texture, (half.width, half.height), -1.0, 1.0);
         self.blur(&b.quarter[0], &b.quarter[1]);
         self.blur(&b.quarter[0], &b.quarter[1]);
 
@@ -206,5 +232,18 @@ impl Gfx {
                 0,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bloom_base_size;
+
+    #[test]
+    fn bloom_levels_follow_the_logical_view() {
+        assert_eq!(bloom_base_size(1280, 720, 1.0), (1280, 720));
+        assert_eq!(bloom_base_size(2560, 1440, 2.0), (1280, 720));
+        assert_eq!(bloom_base_size(1920, 1080, 1.5), (1280, 720));
+        assert_eq!(bloom_base_size(3, 3, 4.0), (1, 1));
     }
 }

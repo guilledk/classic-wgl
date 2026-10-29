@@ -184,21 +184,21 @@ impl InterleavedBoot {
         }
     }
 
-    /// Render the loading screen (a no-op without a loader or once booted).
+    /// Render the loading screen (a no-op without a loader or once booted),
+    /// laid out in `size`'s logical points.
     pub fn draw_loader(
         &self,
         engine: &mut Engine,
         input: &mut InputState,
-        vw: f32,
-        vh: f32,
+        size: classic_platform::FrameSize,
         delta: f32,
     ) {
         if self.booted {
             return;
         }
         if let Some(loader) = &self.loader {
-            loader.sync(engine, vw, vh);
-            engine.frame(input, vw, vh, delta);
+            loader.sync(engine, size.width, size.height);
+            engine.frame_sized(input, size, delta);
         }
     }
 }

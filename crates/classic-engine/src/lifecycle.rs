@@ -15,7 +15,7 @@ use classic_core::sdf_builder::build_sdf_glyph_buffer;
 use classic_core::tilemap::{PPM_TARGET, TILE_M};
 use classic_core::{Camera, RoleKind, SpriteRender, Transform};
 use classic_gfx::{GlBuffer, IsoSpritePass, RenderSettings, SpriteRegion};
-use classic_platform::InputState;
+use classic_platform::{FrameSize, InputState};
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use glow::HasContext;
 
@@ -141,9 +141,20 @@ impl Engine {
             sdf_text_gpu: HashMap::new(),
             last_vw: 0.0,
             last_vh: 0.0,
+            pixel_ratio: 1.0,
+            last_pixel_ratio: 0.0,
         }
     }
 
+    /// Run one frame of a platform's [`FrameSize`]: [`Engine::set_pixel_ratio`]
+    /// then [`Engine::frame`] at its logical size.
+    pub fn frame_sized(&mut self, input: &mut InputState, size: FrameSize, delta: f32) {
+        self.set_pixel_ratio(size.pixel_ratio);
+        self.frame(input, size.width, size.height, delta);
+    }
+
+    /// Run one frame of a `vw`x`vh` **logical-point** view (at the current
+    /// [`Engine::pixel_ratio`]; the drawable is `vw × ratio` pixels).
     pub fn frame(&mut self, input: &mut InputState, vw: f32, vh: f32, delta: f32) {
         // The frame profiler (`CLASSIC_PERF`): off unless configured, and
         // then bracketing every frame (see `classic_gfx::perf`).
@@ -169,8 +180,10 @@ impl Engine {
 
     fn frame_inner(&mut self, input: &mut InputState, vw: f32, vh: f32, delta: f32) {
         let config = env_config::EnvConfig::get();
-        let vw = config.forced_width.unwrap_or(vw);
-        let vh = config.forced_height.unwrap_or(vh);
+        // `CLASSIC_WIDTH`/`HEIGHT` force the drawable (physical pixels).
+        let ratio = self.pixel_ratio;
+        let vw = config.forced_width.map_or(vw, |w| w / ratio);
+        let vh = config.forced_height.map_or(vh, |h| h / ratio);
         let delta = config.fixed_dt.unwrap_or(delta);
 
         classic_core::cl_every!(
@@ -197,12 +210,16 @@ impl Engine {
         }
         let mp = self.input.mouse_pos;
 
-        if (vw - self.last_vw).abs() > 0.5 || (vh - self.last_vh).abs() > 0.5 {
+        if (vw - self.last_vw).abs() > 0.5
+            || (vh - self.last_vh).abs() > 0.5
+            || ratio != self.last_pixel_ratio
+        {
             self.last_vw = vw;
             self.last_vh = vh;
+            self.last_pixel_ratio = ratio;
             self.physics.resize_screen(vw, vh);
             if let Some(gfx) = self.gfx.as_mut() {
-                gfx.resize(vw, vh);
+                gfx.resize(vw, vh, ratio);
             }
             if let Some(ref mut um) = self.ui {
                 um.resize(&mut self.world, vw, vh);
@@ -212,15 +229,14 @@ impl Engine {
         // (the selection press below, the guests' `mouse_iso`).
         self.update_mouse_iso();
 
-        // Offscreen FBO for headless/golden runs.
+        // Offscreen FBO for headless/golden runs, at the physical size.
         if let Some(gfx) = self.gfx.as_mut() {
             let need_offscreen = config.offscreen || config.headless;
+            let (w, h) = FrameSize { width: vw, height: vh, pixel_ratio: ratio }.physical();
             if need_offscreen && gfx.render_target.is_none() {
-                gfx.set_render_target(vw as u32, vh as u32);
+                gfx.set_render_target(w, h);
             } else if need_offscreen {
                 if let Some(ref mut rt) = gfx.render_target {
-                    let w = vw as u32;
-                    let h = vh as u32;
                     if rt.width != w || rt.height != h {
                         rt.resize(&gfx.gl, w, h);
                     }
@@ -1591,15 +1607,7 @@ impl Engine {
                         .map(|n| n.clip_rect)
                         .filter(|r| *r != Vec4::ZERO);
                     if let Some(r) = clip {
-                        unsafe {
-                            gfx.gl.enable(glow::SCISSOR_TEST);
-                            gfx.gl.scissor(
-                                r.x as i32,
-                                (vh2 - r.y - r.w) as i32,
-                                r.z as i32,
-                                r.w as i32,
-                            );
-                        }
+                        gfx.scissor_logical(r);
                     }
 
                     if let Some(ref mut t) = self.trace {

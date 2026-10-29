@@ -14,10 +14,13 @@ impl Gfx {
 
     /// Read a single RGBA pixel (normalized `[0, 1]`) from the current render
     /// target (offscreen FBO, or the default framebuffer when none is set).
-    /// Screen coordinates are top-left origin, matching the engine's screen
-    /// space; the GL bottom-left origin is flipped internally.
+    /// Screen coordinates are top-left origin logical points, matching the
+    /// engine's screen space (the physical pixel at the point's centre is
+    /// read); the GL bottom-left origin is flipped internally.
     pub fn read_pixel_rgba(&self, sx: i32, sy: i32) -> Option<[f32; 4]> {
         let gl = &self.gl;
+        let to_px = |v: i32| ((v as f32 + 0.5) * self.pixel_ratio).floor() as i32;
+        let (sx, sy) = if sx < 0 || sy < 0 { (sx, sy) } else { (to_px(sx), to_px(sy)) };
         let (w, h) = match &self.render_target {
             Some(rt) => {
                 rt.bind(gl);
@@ -25,7 +28,7 @@ impl Gfx {
             }
             None => {
                 unsafe { gl.bind_framebuffer(glow::FRAMEBUFFER, None) };
-                (self.viewport_w as i32, self.viewport_h as i32)
+                (self.viewport_px_w as i32, self.viewport_px_h as i32)
             }
         };
         if sx < 0 || sy < 0 || sx >= w || sy >= h {

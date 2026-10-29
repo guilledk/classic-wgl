@@ -4,14 +4,14 @@
 //!
 //! web-sys WebGL2 backend for wasm32.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
 
-use crate::{InputState, Platform};
+use crate::{FrameSize, InputState, Platform};
 
 pub struct WebPlatform {
     canvas: HtmlCanvasElement,
@@ -19,10 +19,21 @@ pub struct WebPlatform {
     /// The raw context behind `gl` (for APIs glow does not cover).
     raw: WebGl2RenderingContext,
     input: Rc<RefCell<InputState>>,
+    /// Physical pixels per logical (CSS) point: the pinned ratio, else
+    /// `window.devicePixelRatio`, re-read on every `resize`.
+    pixel_ratio: Rc<Cell<f32>>,
+}
+
+/// The canvas's current view: its backing store is `CSS size × ratio`
+/// physical pixels, its logical size the CSS size.
+fn canvas_size(canvas: &HtmlCanvasElement, pixel_ratio: f32) -> FrameSize {
+    FrameSize::from_physical(canvas.width(), canvas.height(), pixel_ratio)
 }
 
 impl WebPlatform {
-    pub fn new(canvas_id: &str) -> Result<Self, JsValue> {
+    /// Bind the canvas `canvas_id`.  `pixel_ratio` pins the display scale
+    /// (`?pixel_ratio=`); `None` follows `window.devicePixelRatio`.
+    pub fn new(canvas_id: &str, pixel_ratio: Option<f32>) -> Result<Self, JsValue> {
         let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
         let document = window.document().ok_or_else(|| JsValue::from_str("no document"))?;
         let canvas = document
@@ -55,36 +66,30 @@ impl WebPlatform {
 
         let input = Rc::new(RefCell::new(InputState::new()));
 
-        // Sync canvas pixel dimensions to the CSS layout size
-        // (must run before input handlers so mousemove captures the correct
-        // canvas dimensions).
+        // Size the canvas backing store to `CSS size × pixel ratio` (the CSS
+        // size stays the window's inner size, pinned on the element's style
+        // so a larger backing store never grows the layout).  Re-run on
+        // `resize`, which also fires when the browser zoom or the display's
+        // devicePixelRatio changes.
+        let pinned = pixel_ratio.map(|r| crate::clamp_pixel_ratio(r as f64));
+        let pixel_ratio = Rc::new(Cell::new(1.0f32));
         {
             let canvas_for_resize = canvas.clone();
-            let resize = || {
-                let w = web_sys::window()
-                    .and_then(|w| w.inner_width().ok())
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(1024.0) as u32;
-                let h = web_sys::window()
-                    .and_then(|w| w.inner_height().ok())
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(768.0) as u32;
-                canvas_for_resize.set_width(w);
-                canvas_for_resize.set_height(h);
+            let ratio = Rc::clone(&pixel_ratio);
+            let resize = move || {
+                let Some(w) = web_sys::window() else { return };
+                let css_w = w.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1024.0);
+                let css_h = w.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(768.0);
+                let r = pinned.unwrap_or_else(|| crate::clamp_pixel_ratio(w.device_pixel_ratio()));
+                ratio.set(r);
+                let style = canvas_for_resize.style();
+                let _ = style.set_property("width", &format!("{css_w}px"));
+                let _ = style.set_property("height", &format!("{css_h}px"));
+                canvas_for_resize.set_width(crate::to_physical(css_w as f32, r).max(1));
+                canvas_for_resize.set_height(crate::to_physical(css_h as f32, r).max(1));
             };
             resize();
-            let c = Closure::wrap(Box::new(move || {
-                let w = web_sys::window()
-                    .and_then(|w| w.inner_width().ok())
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(1024.0) as u32;
-                let h = web_sys::window()
-                    .and_then(|w| w.inner_height().ok())
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(768.0) as u32;
-                canvas_for_resize.set_width(w);
-                canvas_for_resize.set_height(h);
-            }) as Box<dyn FnMut()>);
+            let c = Closure::wrap(Box::new(resize) as Box<dyn FnMut()>);
             window.add_event_listener_with_callback("resize", c.as_ref().unchecked_ref()).ok();
             c.forget();
         }
@@ -124,32 +129,35 @@ impl WebPlatform {
             c.forget();
         }
         {
-            let cw = canvas.width() as f32;
-            let ch = canvas.height() as f32;
+            // `clientX/Y` and the pointer-lock `movementX/Y` are CSS pixels,
+            // i.e. logical points already; the bounds are read live so a
+            // resize never leaves a stale clamp.
+            let canvas_for_move = canvas.clone();
+            let ratio = Rc::clone(&pixel_ratio);
             let inp = Rc::clone(&input);
             let c = Closure::wrap(Box::new(move |e: web_sys::MouseEvent| {
                 let mut i = inp.borrow_mut();
                 let s = i.mouse_sensitivity;
-                if i.focused {
+                let view = canvas_size(&canvas_for_move, ratio.get());
+                let pos = if i.focused {
                     // Pointer locked: clientX/Y are frozen; accumulate
                     // movement deltas to track a virtual cursor position.
-                    i.mouse_pos.x = (i.mouse_pos.x + e.movement_x() as f32 * s).clamp(0.0, cw);
-                    i.mouse_pos.y = (i.mouse_pos.y + e.movement_y() as f32 * s).clamp(0.0, ch);
+                    i.mouse_pos + glam::Vec2::new(e.movement_x() as f32, e.movement_y() as f32) * s
                 } else {
-                    i.mouse_pos.x = (e.client_x() as f32 * s).clamp(0.0, cw);
-                    i.mouse_pos.y = (e.client_y() as f32 * s).clamp(0.0, ch);
-                }
-                i.mouse_axis.x = (i.mouse_pos.x / cw - 0.5) * 2.0;
-                i.mouse_axis.y = (i.mouse_pos.y / ch - 0.5) * 2.0;
+                    glam::Vec2::new(e.client_x() as f32, e.client_y() as f32) * s
+                };
+                crate::set_mouse_pos(&mut i, pos, view.width, view.height);
             }) as Box<dyn FnMut(_)>);
             canvas.add_event_listener_with_callback("mousemove", c.as_ref().unchecked_ref()).ok();
             c.forget();
         }
         {
-            let ch = canvas.height() as f32;
+            let canvas_for_wheel = canvas.clone();
+            let ratio = Rc::clone(&pixel_ratio);
             let inp = Rc::clone(&input);
             let c = Closure::wrap(Box::new(move |e: web_sys::WheelEvent| {
                 let mut i = inp.borrow_mut();
+                let ch = canvas_size(&canvas_for_wheel, ratio.get()).height.max(1.0);
                 i.mouse_wheel -= (e.delta_y() as f32 * 2.0) / ch;
                 e.prevent_default();
             }) as Box<dyn FnMut(_)>);
@@ -200,7 +208,7 @@ impl WebPlatform {
             c.forget();
         }
 
-        Ok(Self { canvas, gl, raw, input })
+        Ok(Self { canvas, gl, raw, input, pixel_ratio })
     }
 
     /// The WebGL2 context, cloned for async engine bootstrap before `run_loop`.
@@ -231,13 +239,13 @@ impl Platform for WebPlatform {
     fn gl_context(&self) -> &glow::Context {
         &self.gl
     }
-    fn viewport(&self) -> (f32, f32) {
-        (self.canvas.width() as f32, self.canvas.height() as f32)
+    fn viewport(&self) -> FrameSize {
+        canvas_size(&self.canvas, self.pixel_ratio.get())
     }
 
     fn run_loop<F>(self, on_frame: F)
     where
-        F: FnMut(Rc<glow::Context>, &mut InputState, f32, f32, f32, &mut bool) + 'static,
+        F: FnMut(Rc<glow::Context>, &mut InputState, FrameSize, f32, &mut bool) + 'static,
     {
         let platform = Rc::new(RefCell::new(self));
 
@@ -257,8 +265,7 @@ impl Platform for WebPlatform {
             let mut should_close = false;
             {
                 let mut inp = platform.input.borrow_mut();
-                let vw = platform.canvas.width() as f32;
-                let vh = platform.canvas.height() as f32;
+                let view = platform.viewport();
                 let mut prev = pt.borrow_mut();
                 // Clamped like native/headless: an unclamped rAF gap (a
                 // slow software-GL frame, a tab resuming) was one huge step.
@@ -268,7 +275,7 @@ impl Platform for WebPlatform {
                     0.016
                 };
                 *prev = timestamp;
-                (f2.borrow_mut())(gl, &mut inp, vw, vh, real_delta, &mut should_close);
+                (f2.borrow_mut())(gl, &mut inp, view, real_delta, &mut should_close);
                 inp.end_frame();
             }
             if should_close {

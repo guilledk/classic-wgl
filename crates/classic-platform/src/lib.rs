@@ -133,6 +133,76 @@ impl BootTimer {
 }
 
 // ---------------------------------------------------------------------------
+// Display scale (logical points vs physical pixels)
+// ---------------------------------------------------------------------------
+
+/// The smallest display scale a backend accepts (a smaller or non-finite
+/// value from a display, `CLASSIC_PIXEL_RATIO` or `?pixel_ratio=` is
+/// clamped up to it / replaced by 1).
+pub const MIN_PIXEL_RATIO: f32 = 0.5;
+
+/// Sanitise a display scale: non-finite or non-positive -> 1, else at least
+/// [`MIN_PIXEL_RATIO`].
+pub fn clamp_pixel_ratio(ratio: f64) -> f32 {
+    if ratio.is_finite() && ratio > 0.0 {
+        (ratio as f32).max(MIN_PIXEL_RATIO)
+    } else {
+        1.0
+    }
+}
+
+/// A frame's view size.  The engine works in **logical points**: `width` /
+/// `height`, the mouse position and every layout / camera / pick
+/// coordinate.  The drawable is `pixel_ratio` physical pixels per point
+/// (`physical()`), so a 4K screen at scale 2 renders a 1920x1080-point view
+/// at full resolution instead of a half-size one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameSize {
+    pub width: f32,
+    pub height: f32,
+    pub pixel_ratio: f32,
+}
+
+impl FrameSize {
+    /// The logical size of a `pw`x`ph` physical drawable at `pixel_ratio`
+    /// (sanitised through [`clamp_pixel_ratio`]).
+    pub fn from_physical(pw: u32, ph: u32, pixel_ratio: f32) -> Self {
+        let r = clamp_pixel_ratio(pixel_ratio as f64);
+        Self { width: pw as f32 / r, height: ph as f32 / r, pixel_ratio: r }
+    }
+
+    /// A logical size at scale 1 (headless tests, the old callers).
+    pub fn logical(width: f32, height: f32) -> Self {
+        Self { width, height, pixel_ratio: 1.0 }
+    }
+
+    /// The physical drawable size in pixels (logical × ratio, rounded).
+    pub fn physical(&self) -> (u32, u32) {
+        (to_physical(self.width, self.pixel_ratio), to_physical(self.height, self.pixel_ratio))
+    }
+}
+
+/// A logical length as whole physical pixels (rounded; recovers the exact
+/// drawable size [`FrameSize::from_physical`] divided out).
+pub fn to_physical(logical: f32, pixel_ratio: f32) -> u32 {
+    (logical * pixel_ratio).round().max(0.0) as u32
+}
+
+/// A physical-pixel position (a window event) as logical points.
+pub fn to_logical(physical: Vec2, pixel_ratio: f32) -> Vec2 {
+    physical / pixel_ratio
+}
+
+/// Set `input`'s mouse position from a logical-point position, clamped to the
+/// `w`x`h` logical view, and derive `mouse_axis` (`[-1, 1]`).
+pub fn set_mouse_pos(input: &mut InputState, pos: Vec2, w: f32, h: f32) {
+    let (w, h) = (w.max(1.0), h.max(1.0));
+    input.mouse_pos = Vec2::new(pos.x.clamp(0.0, w), pos.y.clamp(0.0, h));
+    input.mouse_axis =
+        Vec2::new((input.mouse_pos.x / w - 0.5) * 2.0, (input.mouse_pos.y / h - 0.5) * 2.0);
+}
+
+// ---------------------------------------------------------------------------
 // Platform trait
 // ---------------------------------------------------------------------------
 
@@ -145,13 +215,62 @@ pub trait Platform {
 
     fn window(&self) -> &Self::Window;
     fn gl_context(&self) -> &glow::Context;
-    fn viewport(&self) -> (f32, f32);
+    /// The current view size in logical points (plus its pixel ratio).
+    fn viewport(&self) -> FrameSize;
 
     /// Run the main event loop.
-    /// The callback receives `(gl, input, vw, vh, delta, should_close)`.
+    /// The callback receives `(gl, input, size, delta, should_close)`, with
+    /// `size` and `input`'s mouse in logical points (see [`FrameSize`]).
     fn run_loop<F>(self, on_frame: F)
     where
-        F: FnMut(Rc<glow::Context>, &mut InputState, f32, f32, f32, &mut bool) + 'static;
+        F: FnMut(Rc<glow::Context>, &mut InputState, FrameSize, f32, &mut bool) + 'static;
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn physical_to_logical_at_common_ratios() {
+        for (r, lw, lh) in [(1.0, 2560.0, 1440.0), (1.5, 2560.0 / 1.5, 960.0), (2.0, 1280.0, 720.0)]
+        {
+            let s = FrameSize::from_physical(2560, 1440, r);
+            assert_eq!(s.pixel_ratio, r);
+            assert!((s.width - lw).abs() < 1e-3 && (s.height - lh).abs() < 1e-3, "{r}: {s:?}");
+            assert_eq!(s.physical(), (2560, 1440), "round trip at {r}");
+        }
+        // 4K at 1.5 has a fractional logical width; the drawable is exact.
+        let s = FrameSize::from_physical(3840, 2160, 1.5);
+        assert_eq!((s.width, s.height), (2560.0, 1440.0));
+        let s = FrameSize::from_physical(1921, 1081, 1.5);
+        assert_eq!(s.physical(), (1921, 1081));
+    }
+
+    #[test]
+    fn pixel_ratio_is_sanitised() {
+        assert_eq!(clamp_pixel_ratio(2.0), 2.0);
+        assert_eq!(clamp_pixel_ratio(0.25), MIN_PIXEL_RATIO);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(clamp_pixel_ratio(bad), 1.0, "{bad}");
+        }
+    }
+
+    #[test]
+    fn mouse_converts_to_clamped_logical_points() {
+        let mut input = InputState::new();
+        for (r, phys, want) in [
+            (1.0, Vec2::new(640.0, 360.0), Vec2::new(640.0, 360.0)),
+            (1.5, Vec2::new(960.0, 540.0), Vec2::new(640.0, 360.0)),
+            (2.0, Vec2::new(1280.0, 720.0), Vec2::new(640.0, 360.0)),
+        ] {
+            set_mouse_pos(&mut input, to_logical(phys, r), 1280.0, 720.0);
+            assert_eq!(input.mouse_pos, want, "{r}");
+            assert_eq!(input.mouse_axis, Vec2::ZERO, "{r}");
+        }
+        set_mouse_pos(&mut input, to_logical(Vec2::new(9000.0, -5.0), 2.0), 1280.0, 720.0);
+        assert_eq!(input.mouse_pos, Vec2::new(1280.0, 0.0));
+        assert_eq!(input.mouse_axis, Vec2::new(1.0, -1.0));
+    }
 }
 
 // ---------------------------------------------------------------------------

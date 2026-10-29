@@ -39,6 +39,9 @@ struct Common {
     out: Option<PathBuf>,
     width: u32,
     height: u32,
+    /// `--pixel-ratio`: physical pixels per logical point (`--size` is the
+    /// physical drawable either way).
+    pixel_ratio: f64,
     dt: f64,
     /// `--dt` was given (web `--url` runs are real time unless it is).
     dt_set: bool,
@@ -76,6 +79,13 @@ fn parse_common(c: &mut Common, args: &[String], i: &mut usize) -> anyhow::Resul
             c.width = w.parse()?;
             c.height = h.parse()?;
         }
+        "--pixel-ratio" => {
+            c.pixel_ratio = val()?.parse()?;
+            anyhow::ensure!(
+                c.pixel_ratio.is_finite() && c.pixel_ratio >= 0.5,
+                "--pixel-ratio takes a ratio >= 0.5"
+            );
+        }
         "--dt" => {
             c.dt = val()?.parse()?;
             c.dt_set = true;
@@ -98,6 +108,7 @@ fn common_defaults(rom: &str) -> Common {
         out: None,
         width: 1280,
         height: 720,
+        pixel_ratio: 1.0,
         dt: 1.0 / 60.0,
         dt_set: false,
         rom: rom.to_string(),
@@ -112,6 +123,9 @@ fn common_defaults(rom: &str) -> Common {
 const COMMON_HELP: &str = "\
   --out <dir>          output dir (default target/capture/<mode>-<unix time>)
   --size <WxH>         viewport (default 1280x720; use the smallest that answers the question)
+  --pixel-ratio <r>    display scale (default 1): --size stays the physical drawable, the view
+                       lays out size/r logical points (native: CLASSIC_PIXEL_RATIO; web: the
+                       emulated devicePixelRatio).  2560x1440 at 2 is a HiDPI 1280x720
   --dt <s>             fixed simulation step (default 1/60; scenario frame numbers assume theirs;
                        web --url: real time unless given)
   --rom <spec>         rom:<name>, a .rom path, or a URL
@@ -119,6 +133,15 @@ const COMMON_HELP: &str = "\
   --sheet-width <px>   contact-sheet width (default 1400)
   --cols <n>           contact-sheet columns (default: near-square, at most 4)
   --no-sheet           skip the contact sheet";
+
+impl Common {
+    /// The CSS (logical) viewport a browser gets for the physical `--size`
+    /// at `--pixel-ratio`.
+    fn css_size(&self) -> (u32, u32) {
+        let css = |d: u32| ((d as f64 / self.pixel_ratio).round() as u32).max(1);
+        (css(self.width), css(self.height))
+    }
+}
 
 /// The output dir: `--out`, or a fresh `target/capture/<mode>-<stamp>`.
 fn out_dir(c: &Common, root: &Path, mode: &str) -> anyhow::Result<PathBuf> {
@@ -368,6 +391,7 @@ fn native(args: &[String]) -> anyhow::Result<()> {
         .env("CLASSIC_FRAMES", total.to_string())
         .env("CLASSIC_WIDTH", c.width.to_string())
         .env("CLASSIC_HEIGHT", c.height.to_string())
+        .env("CLASSIC_PIXEL_RATIO", c.pixel_ratio.to_string())
         .env("CLASSIC_GOLDEN_PNG", &list)
         .env("CLASSIC_GOLDEN_DIR", &out)
         .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()));
@@ -390,10 +414,11 @@ fn native(args: &[String]) -> anyhow::Result<()> {
     let log = fs::File::create(&log_path)?;
     cmd.stdout(Stdio::from(log.try_clone()?)).stderr(Stdio::from(log));
     eprintln!(
-        "capture: native {rom} dt={} {}x{} frames={list} ({total} run) -> {}",
+        "capture: native {rom} dt={} {}x{} @{}x frames={list} ({total} run) -> {}",
         c.dt,
         c.width,
         c.height,
+        c.pixel_ratio,
         out.display()
     );
     let cpu0 = children_cpu_secs();
@@ -437,6 +462,7 @@ fn native(args: &[String]) -> anyhow::Result<()> {
         "software": software,
         "dt": c.dt,
         "size": [c.width, c.height],
+        "pixel_ratio": c.pixel_ratio,
         "frames": frames,
         "total_frames": total,
         "wall_s": wall,

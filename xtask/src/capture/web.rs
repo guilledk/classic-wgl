@@ -211,7 +211,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         "--no-first-run".into(),
         "--remote-debugging-port=0".into(),
         format!("--user-data-dir={}", profile.display()),
-        format!("--window-size={},{}", c.width, c.height),
+        format!("--window-size={},{}", c.css_size().0, c.css_size().1),
         "--disk-cache-size=1".into(),
     ];
     flags.extend((if software { SOFTWARE_FLAGS } else { GPU_FLAGS }).iter().map(|s| s.to_string()));
@@ -285,6 +285,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         "bundle": run.bundle,
         "dt": c.dt,
         "size": [c.width, c.height],
+        "pixel_ratio": c.pixel_ratio,
         "steps": steps,
         "shots": run.shots.iter().map(|(_, p)| p).collect::<Vec<_>>(),
         "wall_s": wall,
@@ -363,7 +364,12 @@ fn drive(
         cdp.call("Page.addScriptToEvaluateOnNewDocument", json!({ "source": FRAME_COUNTER_JS }))?;
         cdp.call(
             "Emulation.setDeviceMetricsOverride",
-            json!({ "width": c.width, "height": c.height, "deviceScaleFactor": 1, "mobile": false }),
+            json!({
+                "width": c.css_size().0,
+                "height": c.css_size().1,
+                "deviceScaleFactor": c.pixel_ratio,
+                "mobile": false
+            }),
         )?;
         cdp.call("Page.navigate", json!({ "url": url }))?;
         let renderer = cdp.eval(RENDERER_JS)?;

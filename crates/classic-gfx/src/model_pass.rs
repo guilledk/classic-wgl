@@ -94,7 +94,7 @@ impl Gfx {
     pub(crate) fn main_target_size(&self) -> (u32, u32) {
         match &self.render_target {
             Some(rt) => (rt.width, rt.height),
-            None => (self.viewport_w as u32, self.viewport_h as u32),
+            None => (self.viewport_px_w, self.viewport_px_h),
         }
     }
 
@@ -109,7 +109,7 @@ impl Gfx {
                 }
                 None => {
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                    gl.viewport(0, 0, self.viewport_w as i32, self.viewport_h as i32);
+                    gl.viewport(0, 0, self.viewport_px_w as i32, self.viewport_px_h as i32);
                 }
             }
         }
@@ -120,7 +120,9 @@ impl Gfx {
     /// [`Gfx::draw_model`] afterwards, then call [`Gfx::end_model_pass`].
     pub fn begin_model_pass(&mut self, zoom: f32) {
         let (w, h) = self.main_target_size();
-        let (tw, th) = model_target_size(w, h, zoom);
+        // `zoom` is sprite texels per logical point; the target pixelates to
+        // sprite texel density, i.e. `zoom × ratio` physical pixels.
+        let (tw, th) = model_target_size(w, h, zoom * self.pixel_ratio);
         self.pass_target.set((tw, th));
         match self.model_target.as_mut() {
             Some(t) => t.resize(&self.gl, tw, th),
