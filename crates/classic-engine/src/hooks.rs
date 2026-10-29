@@ -415,14 +415,18 @@ impl Engine {
         let tm_tf = self.world.get::<&Transform>(tm_entity).ok()?;
 
         let h = bilinear_height(&tm.height_data, tm.size_x, tm.size_y, x, y);
-        let world = iso_world_pos(x, y, h) + tm_tf.position;
-        let view = iso_camera_matrix().transform_point3(world);
-        let screen = Vec3::new(view.x * PPM_TARGET, -view.y * PPM_TARGET, 0.0);
+        Some(self.world_to_screen(iso_world_pos(x, y, h) + tm_tf.position))
+    }
 
+    /// Project a world-metre point (light space, `+Z` up: what
+    /// [`Engine::iso_to_world`] returns) to screen pixels (top-left origin)
+    /// through the current camera and last-frame viewport.
+    pub fn world_to_screen(&self, p: Vec3) -> (f32, f32) {
+        let view = iso_camera_matrix().transform_point3(p);
+        let screen = Vec3::new(view.x * PPM_TARGET, -view.y * PPM_TARGET, 0.0);
         let (vw, vh) = self.viewport_size();
-        let cam = self.world_to_screen_matrix(vw, vh);
-        let screen = cam.transform_point3(screen);
-        Some((screen.x, screen.y))
+        let screen = self.world_to_screen_matrix(vw, vh).transform_point3(screen);
+        (screen.x, screen.y)
     }
 
     /// Convert an iso tile coordinate to a **world-metre** point (Blender

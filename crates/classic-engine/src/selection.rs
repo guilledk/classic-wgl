@@ -170,8 +170,9 @@ impl Engine {
     /// The footprint corners (iso tile space, relative to the sprite position)
     /// used to build a selectable entity's collider: the `IsoSprite.footprint`
     /// when present, else the vehicle's `path_footprint` AABB, else a default
-    /// unit diamond.
-    fn selectable_footprint(&self, entity: hecs::Entity) -> Vec<Vec2> {
+    /// unit diamond.  Public so a debug view can outline exactly the shape a
+    /// click hits.
+    pub fn selectable_footprint(&self, entity: hecs::Entity) -> Vec<Vec2> {
         if let Ok(s) = self.world.get::<&IsoSprite>(entity) {
             if !s.footprint.is_empty() {
                 return s.footprint.clone();

@@ -715,6 +715,56 @@ mod tests {
         assert!(empty.iso_to_world(0.0, 0.0, 0.0).is_none());
     }
 
+    /// `world_to_screen` is the camera half of `iso_to_screen_px`: a tile's
+    /// ground point lands on the same pixel through either, under a panned and
+    /// zoomed camera, and lifting the point moves it straight up the screen.
+    #[test]
+    fn world_to_screen_matches_iso_to_screen_px() {
+        let mut engine = Engine::new_for_test();
+        let tilemap = Tilemap {
+            position: Vec3::ZERO,
+            scale: Vec3::new(45.0, 45.0, 1.0),
+            size_x: 4,
+            size_y: 4,
+            tile_set: "tileset".into(),
+            tile_pixel_size: [32, 32],
+            max_tile: 16,
+            tiles_grid: None,
+            heights_grid: None,
+            data: vec![0u32; 16],
+            height_data: vec![1.0f32; 25],
+            height_scale: 64.0,
+            tile_set_pixel_size: [0, 0],
+            tiles_per_row: 0,
+            mouse_iso_pos: Vec3::ZERO,
+            selection_iso_begin: Vec3::new(-1.0, -1.0, -1.0),
+            selection_iso_end: Vec3::new(-1.0, -1.0, -1.0),
+            blend: None,
+        };
+        engine.world.spawn((
+            tilemap,
+            Transform::new(Vec3::ZERO, Vec3::new(45.0, 45.0, 1.0)),
+            Role::new(RoleKind::Tilemap),
+        ));
+        engine.last_vw = 1280.0;
+        engine.last_vh = 720.0;
+        engine.camera.position = Vec3::new(120.0, -40.0, 0.0);
+        engine.camera.scale = Vec3::new(0.5, 0.5, 1.0);
+
+        for (x, y) in [(0.0, 0.0), (1.5, 2.25), (3.0, 1.0)] {
+            let want = engine.iso_to_screen_px(x, y).unwrap();
+            let got = engine.world_to_screen(engine.iso_to_world(x, y, 0.0).unwrap());
+            assert!(
+                (got.0 - want.0).abs() < 1e-3 && (got.1 - want.1).abs() < 1e-3,
+                "tile ({x}, {y}): {got:?} vs {want:?}"
+            );
+        }
+        let ground = engine.world_to_screen(engine.iso_to_world(1.0, 1.0, 0.0).unwrap());
+        let lifted = engine.world_to_screen(engine.iso_to_world(1.0, 1.0, 2.0).unwrap());
+        assert!((ground.0 - lifted.0).abs() < 1e-3, "height moves only screen y");
+        assert!(lifted.1 < ground.1, "up is up the screen: {lifted:?} vs {ground:?}");
+    }
+
     /// The world-quad sprite model must place the ground anchor at
     /// `iso_world_pos(x, y, h + altitude) + drift + tilemap.position`: the
     /// `frame_offset` drift in world x/y, the altitude in world z.
