@@ -14,12 +14,13 @@
 //! that are rewritten from a `Vec<Row>` at the current scroll offset, and
 //! one screen collider whose click is mapped back to a row by the pointer's
 //! y.  The colliders are plain physics colliders (no UI hover tint), enabled
-//! only while open.  A preview box under the detail header is reserved for a
-//! sprite selection ([`InspectorState::preview_rect`]); the sprite-preview
-//! layer draws into it.
+//! only while open.  A preview box under the detail header shows a sprite
+//! selection ([`InspectorState::preview_rect`]): [`preview`] draws its frame
+//! there, with pose steppers for a sheet with pose axes.
 
 mod detail;
 mod pick;
+mod preview;
 mod tree;
 
 #[cfg(test)]
@@ -36,6 +37,7 @@ use classic_core::components::{
 use classic_engine::Engine;
 use glam::{Vec2, Vec3, Vec4};
 
+pub use preview::{PoseAxis, PreviewState};
 pub use tree::{AssetKind, Group};
 
 use crate::state::DemoStateRef;
@@ -67,9 +69,13 @@ const Z_INNER: f32 = -1605.0;
 const Z_TEXT: f32 = -1610.0;
 const PANEL_COLOR: [f32; 4] = [0.04, 0.05, 0.08, 0.96];
 const PREVIEW_COLOR: [f32; 4] = [0.12, 0.13, 0.17, 1.0];
+/// Pose stepper rows in the preview box (direction, pitch, roll).
+const STEPPER_ROWS: usize = 3;
 const TITLE_COLOR: [f32; 4] = [1.0, 0.6, 0.3, 1.0];
-/// Click priorities: the panels over any game UI, the backdrop under all.
+/// Click priorities: the panels over any game UI (the preview's steppers
+/// over their panel), the backdrop under all.
 const PANEL_PRIORITY: i32 = 100;
+const PREVIEW_PRIORITY: i32 = 101;
 const BACKDROP_PRIORITY: i32 = -100;
 
 /// What the inspector has selected.
@@ -202,6 +208,7 @@ pub fn max_scroll(len: usize, visible: usize) -> usize {
 enum Hit {
     Tree,
     Detail,
+    Preview,
     World,
 }
 
@@ -212,6 +219,8 @@ struct Panels {
     detail_bg: hecs::Entity,
     preview_bg: hecs::Entity,
     preview_label: hecs::Entity,
+    /// Per stepper row: its `[-]`, value and `[+]` texts.
+    preview_steps: Vec<[hecs::Entity; 3]>,
     tree_title: hecs::Entity,
     detail_title: hecs::Entity,
     tree_rows: Vec<hecs::Entity>,
@@ -219,6 +228,7 @@ struct Panels {
     tree_pid: u32,
     detail_pid: u32,
     backdrop_pid: u32,
+    preview_pid: u32,
     /// Whether the preview box is shown (tracked to toggle it on change only).
     preview_shown: bool,
 }
@@ -249,6 +259,8 @@ pub struct InspectorState {
     panels: Option<Panels>,
     /// Set by the colliders' click handlers, consumed by the pre-update hook.
     hits: Rc<Cell<Option<Hit>>>,
+    /// The sprite preview's pose.
+    pub preview: PreviewState,
 }
 
 impl InspectorState {
@@ -362,6 +374,10 @@ pub fn install(engine: &mut Engine, state: &DemoStateRef) {
         let s = state.clone();
         engine.add_overlay(move |e| pick::draw_selection(e, &s));
     }
+    {
+        let s = state.clone();
+        engine.add_overlay(move |e| preview::draw(e, &s));
+    }
 }
 
 fn spawn_text(
@@ -437,6 +453,12 @@ fn spawn_panels(engine: &mut Engine, hits: &Rc<Cell<Option<Hit>>>) -> Panels {
         );
     }
     let preview_label = spawn_text(engine, preview_bg, TEXT_SCALE, tree::DIM);
+    let preview_steps: Vec<[hecs::Entity; 3]> = (0..STEPPER_ROWS)
+        .map(|_| {
+            [tree::LINK, tree::WHITE, tree::LINK]
+                .map(|color| spawn_text(engine, preview_bg, TEXT_SCALE, color))
+        })
+        .collect();
     let tree_title = spawn_text(engine, tree_bg, TITLE_SCALE, TITLE_COLOR);
     let detail_title = spawn_text(engine, detail_bg, TITLE_SCALE, TITLE_COLOR);
     let tree_rows =
@@ -448,6 +470,7 @@ fn spawn_panels(engine: &mut Engine, hits: &Rc<Cell<Option<Hit>>>) -> Panels {
         detail_bg,
         preview_bg,
         preview_label,
+        preview_steps,
         tree_title,
         detail_title,
         tree_rows,
@@ -455,10 +478,13 @@ fn spawn_panels(engine: &mut Engine, hits: &Rc<Cell<Option<Hit>>>) -> Panels {
         tree_pid: spawn_collider(engine, hits, Hit::Tree, PANEL_PRIORITY),
         detail_pid: spawn_collider(engine, hits, Hit::Detail, PANEL_PRIORITY),
         backdrop_pid: spawn_collider(engine, hits, Hit::World, BACKDROP_PRIORITY),
+        preview_pid: spawn_collider(engine, hits, Hit::Preview, PREVIEW_PRIORITY),
         preview_shown: false,
     };
     // Last-spawned first, so each hide is a pop off its archetype's end.
-    let mut all = vec![tree_bg, detail_bg, preview_bg, preview_label, tree_title, detail_title];
+    let mut all = vec![tree_bg, detail_bg, preview_bg, preview_label];
+    all.extend(panels.preview_steps.iter().flatten());
+    all.extend([tree_title, detail_title]);
     all.extend(panels.tree_rows.iter().chain(&panels.detail_rows));
     for &e in all.iter().rev() {
         let _ = engine.world.insert_one(e, Disabled);
@@ -479,7 +505,8 @@ fn set_open(engine: &mut Engine, state: &DemoStateRef, open: bool) {
     engine.set_enabled(p.detail_bg, open);
     // `set_enabled` showed the preview box with its panel; the sync re-hides it.
     p.preview_shown = open;
-    for pid in [p.tree_pid, p.detail_pid, p.backdrop_pid] {
+    // Likewise the steppers' collider.
+    for pid in [p.tree_pid, p.detail_pid, p.backdrop_pid, p.preview_pid] {
         engine.physics.set_collider_enabled(pid, open);
     }
     if open {
@@ -518,6 +545,17 @@ fn pre_update(engine: &mut Engine, state: &DemoStateRef) {
                     st.detail_rows.get(st.detail_scroll + i).and_then(|r| r.action.clone())
                 {
                     st.apply(engine, action);
+                }
+            }
+        }
+        Some(Hit::Preview) => {
+            if let Some(r) = st.preview_rect() {
+                let axes = st.preview.axes().map(|a| preview::stepper_axes(&a)).unwrap_or_default();
+                let layout = preview::box_layout(r, &axes);
+                if let Some((axis, delta)) = preview::hit(&layout, mouse) {
+                    if st.preview.step(axis, delta) {
+                        st.detail_age = u32::MAX;
+                    }
                 }
             }
         }
@@ -601,6 +639,30 @@ fn place_title(engine: &mut Engine, e: hecs::Entity, text: &str, at: Vec2, clip:
     }
 }
 
+/// Write the preview box's frame line and stepper rows.
+fn sync_preview(engine: &mut Engine, p: &Panels, st: &PreviewState, name: &str, r: Rect) {
+    let steps = st.stepper_text();
+    let layout = preview::box_layout(r, &steps.iter().map(|(a, _)| *a).collect::<Vec<_>>());
+    let label = preview::label(engine, name, st);
+    place_title(engine, p.preview_label, &label, layout.label, r);
+    for (i, texts) in p.preview_steps.iter().enumerate() {
+        let row = steps.get(i).zip(layout.steppers.get(i));
+        let [minus, value, plus] = *texts;
+        match row {
+            Some(((_, text), &(_, m, at, pl))) => {
+                place_title(engine, minus, "[-]", Vec2::new(m.x + 2.0, m.y), r);
+                place_title(engine, value, text, at, r);
+                place_title(engine, plus, "[+]", Vec2::new(pl.x + 2.0, pl.y), r);
+            }
+            None => {
+                for e in [minus, value, plus] {
+                    place_title(engine, e, "", Vec2::new(r.x, r.y), r);
+                }
+            }
+        }
+    }
+}
+
 /// Host update: rebuild what changed and place the panels.
 fn sync(engine: &mut Engine, state: &DemoStateRef) {
     let mut s = state.borrow_mut();
@@ -626,6 +688,10 @@ fn sync(engine: &mut Engine, state: &DemoStateRef) {
             }
         }
     }
+    let selected = st.selected_entity().map(str::to_string);
+    if st.preview.follow(engine, selected.as_deref()) {
+        st.detail_age = u32::MAX;
+    }
     st.detail_age = st.detail_age.saturating_add(1);
     if st.detail_age > DETAIL_REFRESH_FRAMES {
         st.detail_age = 0;
@@ -642,6 +708,7 @@ fn sync(engine: &mut Engine, state: &DemoStateRef) {
                 };
                 let mut rows = detail::build(engine, &sel, count);
                 if let Selection::Entity(name) = &sel {
+                    rows.extend(preview::rows(engine, name, &st.preview));
                     if st.components.as_ref().is_none_or(|(n, _)| n != name) {
                         st.components = Some((name.clone(), detail::component_rows(engine, name)));
                     }
@@ -673,13 +740,16 @@ fn sync(engine: &mut Engine, state: &DemoStateRef) {
         engine.physics.sync_collider_rect(p.backdrop_pid, 0.0, 0.0, vw, vh);
         if let Some(r) = layout.preview {
             place_box(engine, p.preview_bg, r);
-            let at = Vec2::new(r.x + PAD, r.y + PAD);
-            place_title(engine, p.preview_label, "sprite preview", at, r);
+            engine.physics.sync_collider_rect(p.preview_pid, r.x, r.y, r.w, r.h);
         }
     }
     if preview != p.preview_shown {
         p.preview_shown = preview;
         engine.set_enabled(p.preview_bg, preview);
+        engine.physics.set_collider_enabled(p.preview_pid, preview);
+    }
+    if let (Some(r), Some(name)) = (layout.preview, selected.as_deref()) {
+        sync_preview(engine, p, &st.preview, name, r);
     }
 
     let paused = if engine.sim_paused() { "sim paused" } else { "sim running" };

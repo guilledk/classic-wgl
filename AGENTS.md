@@ -393,7 +393,7 @@ In a running game with the dev HUD (`host_features`, not `CLASSIC_NO_UI`):
 
 | Key | Does |
 |---|---|
-| `Backquote` | Entity inspector: pauses the simulation and opens a ROM → assets / entities tree, a detail panel (transforms, components, related assets) and click-to-pick in the world; again to close + resume (`classic-demo/src/inspector/`) |
+| `Backquote` | Entity inspector: pauses the simulation and opens a ROM → assets / entities tree, a detail panel (transforms, components, related assets), click-to-pick in the world and a sprite pose preview (direction / pitch / roll steppers); again to close + resume (`classic-demo/src/inspector/`) |
 | `KeyF` | Footprint polygons + the tile grid |
 | `Shift+KeyL` | Light markers (an X at each light, a Z line down to the terrain) |
 | `F9` | Dump `state.json` (`CLASSIC_DUMP_DIR`, a download on the web) |

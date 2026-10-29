@@ -10,6 +10,19 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- A sprite pose preview in classic-demo's entity inspector: the selected
+  sprite's frame drawn into the detail panel, with direction / pitch /
+  roll steppers for a sheet with pose axes (a posed sprite, every layer
+  of a v2 vehicle stacked as the game places it, a v1 vehicle's body),
+  starting at the pose it draws, and the frame names listed; a `Model`
+  notes its 3D preview is deferred.  The engine adds read-only framing:
+  `Engine::sprite_frame` / `iso_sprite_frame` / `sprite_render_frame`
+  (the renderer's packed frame lookup as a `SpriteFrame` + `FrameRegion`),
+  and `Engine::pose_axes` / `current_pose` / `posed_parts` with `Pose`,
+  `PosePart`, framed by the same code `sprite_pose` and the vehicle layer
+  update run (now shared helpers).  `SpriteAxes::pose_of` inverts
+  `frame_index`.
+
 - An entity inspector in classic-demo: `Backquote` pauses the simulation
   and opens a ROM → assets / entities tree (entities paged by namespace)
   and a detail panel (a ROM's manifest and resource sizes; an asset's

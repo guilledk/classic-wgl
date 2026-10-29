@@ -348,6 +348,26 @@ it again closes them and resumes.
   button takes runs `Engine::pick_at` and selects + reveals the entity
   (outlined by its selection footprint).  The editor's rubber band, tile
   paint and RTS select do not see that click.
+- **Preview** (`inspector/preview.rs`): a sprite entity (`IsoSprite`,
+  `IsoAgent`, `IsoVehicle`, `SpriteRender`) gets a box under the detail
+  header with its frame drawn in, aspect-fit (`gfx.draw_sprite`,
+  screen-space, over the UI).  The frames are the engine's own, read off
+  scratch copies (`Engine::posed_parts`; the entity is never touched):
+  `Engine::sprite_frame` wraps the renderer's packed lookup
+  (`resolve_frame` + `packed_geometry`: sheet texture, UV / trim region,
+  source cell, anchor), so a KTX2 / Basis sheet binds by the same name.
+  When the sheet has pose axes (`Engine::pose_axes`: a posed sprite's
+  `FrameTable::axes`, a v2 vehicle's hull, a v1 body sheet), `[-]` / `[+]`
+  steppers walk direction (wraps), pitch and roll (clamp), starting at
+  the pose the entity draws when selected (`Engine::current_pose`).  A
+  posed sprite frames through `Engine::sprite_pose`'s framing; a v2
+  vehicle steps its chassis pose and every visible layer is framed and
+  placed by `apply_layers`' own per-layer code, painter-sorted by anchor
+  depth (the game resolves overlap per pixel through the depth maps); a
+  v1 vehicle shows its body only.  The detail rows under the box list the
+  pose and each part's frame name and sheet ("sheet not resident" when the
+  texture is not uploaded yet).  Buttons only: no keys are taken.  A
+  `Model` shows "3D preview deferred" (no offscreen glTF path yet).
 
 While open, only the simulation stops: camera, mouse iso, UI and rendering
 run on, guest events queue (and arrive on resume), and background worker

@@ -351,3 +351,166 @@ fn the_wheel_scrolls_the_panel_under_the_pointer_not_the_camera() {
     assert_eq!(state.borrow().inspector.tree_scroll, 3, "three rows down");
     assert_eq!(platform.mouse_wheel, 0.0, "consumed: the camera zoom never sees it");
 }
+
+mod preview {
+    use classic_core::components::IsoSprite;
+    use classic_core::types::FrameTable;
+    use classic_core::vehicle_def::{AngleAxis, SpriteAxes};
+    use classic_engine::Pose;
+
+    use super::super::preview::{box_layout, hit, step, stepper_axes, PoseAxis};
+    use super::super::Rect;
+    use super::*;
+
+    fn axes() -> SpriteAxes {
+        SpriteAxes {
+            directions: 16,
+            pitch: Some(AngleAxis::symmetric(3, 20.0)),
+            roll: Some(AngleAxis::symmetric(3, 20.0)),
+        }
+    }
+
+    #[test]
+    fn steppers_wrap_the_direction_and_clamp_the_tilt() {
+        let a = axes();
+        let p = Pose { dir: 15, pitch: 2, roll: 0 };
+        assert_eq!(step(&a, p, PoseAxis::Dir, 1).dir, 0, "wraps forward");
+        assert_eq!(step(&a, Pose::default(), PoseAxis::Dir, -1).dir, 15, "wraps back");
+        assert_eq!(step(&a, p, PoseAxis::Dir, 33).dir, 0);
+        assert_eq!(step(&a, p, PoseAxis::Pitch, 1).pitch, 2, "clamps at the top level");
+        assert_eq!(step(&a, p, PoseAxis::Pitch, -5).pitch, 0);
+        assert_eq!(step(&a, p, PoseAxis::Roll, -1).roll, 0, "clamps at the bottom level");
+        assert_eq!(step(&a, p, PoseAxis::Roll, 1).roll, 1);
+        // A direction-only sheet steps its direction alone.
+        let flat = SpriteAxes::directions(8);
+        assert_eq!(stepper_axes(&flat), vec![PoseAxis::Dir]);
+        assert_eq!(step(&flat, Pose::default(), PoseAxis::Pitch, 1).pitch, 0);
+        assert_eq!(stepper_axes(&a), vec![PoseAxis::Dir, PoseAxis::Pitch, PoseAxis::Roll]);
+    }
+
+    #[test]
+    fn stepper_buttons_hit_their_axis_and_sign() {
+        let r = Rect { x: 800.0, y: 100.0, w: 420.0, h: 160.0 };
+        let l = box_layout(r, &[PoseAxis::Dir, PoseAxis::Roll]);
+        assert_eq!(l.steppers.len(), 2);
+        let (_, minus, _, plus) = l.steppers[1];
+        let centre = |r: Rect| Vec2::new(r.x + r.w * 0.5, r.y + r.h * 0.5);
+        assert_eq!(hit(&l, centre(minus)), Some((PoseAxis::Roll, -1)));
+        assert_eq!(hit(&l, centre(plus)), Some((PoseAxis::Roll, 1)));
+        assert_eq!(hit(&l, centre(l.sprite)), None, "the sprite area is not a button");
+        assert!(l.sprite.x >= plus.x + plus.w, "the sprite sits right of the steppers");
+        assert!(l.sprite.x + l.sprite.w <= r.x + r.w && l.sprite.y + l.sprite.h <= r.y + r.h);
+        // No steppers: the sprite takes the box's width.
+        assert!(box_layout(r, &[]).sprite.w > l.sprite.w);
+    }
+
+    /// A 16 × 3 × 3 posed sheet of `box_{i}` frames.
+    fn box_table() -> FrameTable {
+        let a = axes();
+        let frames: serde_json::Map<String, serde_json::Value> = (0..a.frame_count())
+            .map(|i| (format!("box_{i}"), json!({"sheet": 0, "rect": [0, 0, 8, 12]})))
+            .collect();
+        let mut t: FrameTable = serde_json::from_value(json!({
+            "version": 2, "dir_interp": true, "axes": a,
+            "sheets": [{"name": "box_sheet", "src": "/res/s.png", "size": [64, 64]}],
+            "frames": frames,
+        }))
+        .unwrap();
+        t.precompute_companions();
+        t
+    }
+
+    fn spawn_box(engine: &mut Engine) {
+        engine.frame_tables.insert("box".into(), box_table());
+        let sprite = IsoSprite {
+            position: Vec3::new(5.0, 5.0, 0.0),
+            scale: Vec3::ONE,
+            texture: "box".into(),
+            tilemap: "demo::tilemap".into(),
+            frame: 0.0,
+            frame_name: None,
+            tile_set_size: Vec2::ONE,
+            anchor: Vec2::new(0.5, 0.8),
+            frame_offset: Vec3::ZERO,
+            footprint: vec![],
+            ghost_group: 0,
+            color: [1.0; 4],
+            dir_blend: None,
+            no_ghost: false,
+            team_tint: None,
+            emissive: None,
+        };
+        let e = engine.world.spawn((sprite, Transform::new(Vec3::new(5.0, 5.0, 0.0), Vec3::ONE)));
+        engine.names.insert("demo::box".into(), e);
+        engine.name_order.push("demo::box".into());
+        // Drawn facing direction 5, pitched up a level, rolled level.
+        let (h, p, r) = Pose { dir: 5, pitch: 2, roll: 1 }.angles(&axes());
+        assert!(engine.sprite_pose("demo::box", h, p, r));
+    }
+
+    fn detail_has(state: &DemoStateRef, text: &str) -> bool {
+        state.borrow().inspector.detail_rows().iter().any(|r| r.text.contains(text))
+    }
+
+    #[test]
+    fn a_posed_sprite_previews_from_its_drawn_pose_and_steps_through_the_engine() {
+        let (mut engine, state) = fixture();
+        spawn_box(&mut engine);
+        press_toggle(&mut engine);
+        {
+            let mut s = state.borrow_mut();
+            s.inspector.apply(&engine, RowAction::Select(Selection::Entity("demo::box".into())));
+        }
+        frame(&mut engine);
+        let r = state.borrow().inspector.preview_rect().expect("a sprite gets the box");
+        assert_eq!(
+            state.borrow().inspector.preview.pose(),
+            Some(Pose { dir: 5, pitch: 2, roll: 1 }),
+            "starts at the drawn pose"
+        );
+        let drawn = |e: &Engine| {
+            e.world.get::<&IsoSprite>(e.names["demo::box"]).unwrap().frame_name.clone().unwrap()
+        };
+        let before = drawn(&engine);
+        assert!(detail_has(&state, &before), "the detail names the drawn frame");
+
+        // `[+]` on the direction, then `[-]` twice on the pitch.
+        let l = box_layout(r, &[PoseAxis::Dir, PoseAxis::Pitch, PoseAxis::Roll]);
+        let centre = |r: Rect| Vec2::new(r.x + r.w * 0.5, r.y + r.h * 0.5);
+        click(&mut engine, centre(l.steppers[0].3));
+        click(&mut engine, centre(l.steppers[1].1));
+        click(&mut engine, centre(l.steppers[1].1));
+        let want = Pose { dir: 6, pitch: 0, roll: 1 };
+        assert_eq!(state.borrow().inspector.preview.pose(), Some(want));
+        frame(&mut engine);
+        assert_eq!(drawn(&engine), before, "stepping never touches the entity");
+        // The previewed frame is the one the engine's own posing draws.
+        let (h, p, rl) = want.angles(&axes());
+        assert!(engine.sprite_pose("demo::box", h, p, rl));
+        let stepped = drawn(&engine);
+        assert_ne!(stepped, before);
+        assert!(detail_has(&state, &stepped), "{stepped}");
+        assert!(detail_has(&state, "dir 6/16  pitch 0/3  roll 1/3"));
+        // Steppers swallow the click: the world pick does not run.
+        assert_eq!(state.borrow().inspector.selected_entity(), Some("demo::box"));
+    }
+
+    #[test]
+    fn a_model_notes_its_preview_is_deferred() {
+        let (mut engine, state) = fixture();
+        let probe = engine.names["demo::probe"];
+        let model: classic_core::components::Model = serde_json::from_value(
+            json!({"position": [3.0, 4.0, 0.0], "model": "m", "tilemap": "demo::tilemap"}),
+        )
+        .unwrap();
+        engine.world.insert_one(probe, model).unwrap();
+        press_toggle(&mut engine);
+        {
+            let mut s = state.borrow_mut();
+            s.inspector.apply(&engine, RowAction::Select(Selection::Entity("demo::probe".into())));
+        }
+        frame(&mut engine);
+        assert!(state.borrow().inspector.preview_rect().is_none());
+        assert!(detail_has(&state, "3D preview deferred"));
+    }
+}
