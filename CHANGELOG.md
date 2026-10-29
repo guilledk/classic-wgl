@@ -465,6 +465,23 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- The visual boot loader could panic the web build with `texture
+  'lunar-common::lunar-common_atlas_2' not found` (in
+  `draw_shadow_sprite_batches`) on slower machines: the boot spawns the
+  scene, whose packed-atlas frames resolve through frame tables hydrated
+  as metadata, before its `.basis` sheets land in the transcoder Worker,
+  and every loader frame between the two drew the whole scene under the
+  loading screen.  The loader now hides the scene while installed
+  (`Engine::world_hidden`: only the screen-space UI layer draws), a packed
+  frame whose sheet is not resident is skipped like the uniform-grid path,
+  and every `Gfx` draw path skips a missing texture
+  (`Gfx::texture_or_skip`, logged once at debug level) instead of
+  panicking.  Reproduced every time at 4x CDP CPU throttling.  Headless
+  EGL now builds without the `native` feature, so engine tests get a real
+  GL context (skipped when libEGL is absent), and `cargo xtask capture
+  web` gains a `throttle` step and defaults to the visual loader again
+  (#195).
+
 - `cargo xtask build-pathfinder` (and so `trunk build`'s pre-build hook)
   copied `pathfinder.wasm` from `<repo>/target` even when `CARGO_TARGET_DIR`
   pointed the build elsewhere, failing with "No such file or directory" in

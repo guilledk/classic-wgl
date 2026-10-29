@@ -385,6 +385,9 @@ impl VisualBootSink {
         if ui_guard.is_some() {
             return;
         }
+        // The scene draws only once the loader is gone: until then its
+        // drawables may reference sheets that are not uploaded yet.
+        engine.world_hidden = true;
 
         let world = &mut engine.world;
         let log = (0..LOG_LINES)
@@ -780,6 +783,7 @@ impl VisualBootSink {
     pub fn uninstall(&self, engine: &mut Engine) {
         let mut ui_guard = self.ui.lock().expect("boot loader poisoned");
         let Some(ui) = ui_guard.take() else { return };
+        engine.world_hidden = false;
         despawn(engine, ui.bg);
         despawn(engine, ui.header_bg);
         despawn(engine, ui.title);
