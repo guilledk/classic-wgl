@@ -174,11 +174,22 @@ pub(super) fn lookahead(
     (lx, ly, path.len())
 }
 
+/// A v1 (sprite-sheet) vehicle body's frame: direction-minor, then roll,
+/// then pitch levels (`(pitch · rolls + roll) · dirs + dir`).
+pub(crate) fn v1_body_frame(
+    v: &classic_core::components::IsoVehicle,
+    dir: u32,
+    pitch: u32,
+    roll: u32,
+) -> u32 {
+    (pitch * v.roll_levels + roll) * v.directions + dir
+}
+
 /// Quantize a signed pitch angle (radians) to a pitch frame index in
 /// `0..pitch_levels`, mapping `[-pitch_max, +pitch_max]` onto the frame range:
 /// `0` = nose-down, `(pitch_levels - 1) / 2` = level (odd counts),
 /// `pitch_levels - 1` = nose-up.
-pub(super) fn pitch_index(angle: f32, pitch_max: f32, pitch_levels: u32) -> u32 {
+pub(crate) fn pitch_index(angle: f32, pitch_max: f32, pitch_levels: u32) -> u32 {
     let levels = pitch_levels.max(1);
     if levels <= 1 {
         return 0;

@@ -70,7 +70,7 @@ pub(crate) fn flat_tilt_warp(l: &VehicleLayerDef, table: &FrameTable) -> bool {
 /// A layer's pose in the vehicle frame: position (metres, `x` forward, `y`
 /// left, `z` up) and yaw relative to the hull (tile radians).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct LayerPose {
+pub(crate) struct LayerPose {
     pub pos: Vec3,
     pub yaw: f32,
 }
@@ -85,7 +85,7 @@ pub(super) fn chassis_to_tile(v: [f32; 2], heading: f32) -> [f32; 2] {
 /// Every layer's pose in the vehicle frame, composing parents (a child's
 /// offset turns with its parent's yaw).  `yaws` are the layers' own yaws
 /// (turrets), indexed like `def.layers`.
-pub(super) fn layer_poses(def: &VehicleDef, yaws: &[f32]) -> Vec<LayerPose> {
+pub(crate) fn layer_poses(def: &VehicleDef, yaws: &[f32]) -> Vec<LayerPose> {
     let n = def.layers.len();
     let mut poses: Vec<Option<LayerPose>> = vec![None; n];
     fn resolve(
@@ -173,6 +173,145 @@ fn layer_clip(l: &VehicleLayerDef, name: &str) -> Option<ClipDef> {
         return Some(ClipDef { start: 0, frames: l.fire_frames, fps: DEFAULT_CLIP_FPS });
     }
     l.clips.get(name).copied()
+}
+
+/// The chassis state a layer's placement and framing read: the body's tile
+/// heading and exact tilt, and the wheel drivers.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Chassis {
+    pub(crate) heading: f32,
+    pub(crate) pitch: f32,
+    pub(crate) roll: f32,
+    pub(crate) odometer_m: f32,
+    pub(crate) turned: f32,
+    pub(crate) steer: f32,
+}
+
+impl Chassis {
+    /// A vehicle's chassis at tile heading `heading`.
+    pub(crate) fn of(v: &IsoVehicle, heading: f32) -> Self {
+        Self {
+            heading,
+            pitch: v.pitch,
+            roll: v.roll,
+            odometer_m: v.odometer_m,
+            turned: v.turned,
+            steer: v.steer,
+        }
+    }
+}
+
+/// A layer's offset from the body's ground point: tile `(x, y)` and metres
+/// `z`.  The chassis offset is tilted by the body pitch / roll about the
+/// body's ground point (as `vehicle_socket_frame` does, so a layer origin and
+/// a zero-offset socket on it agree), then turned by the heading.
+pub(crate) fn layer_offset(pose: LayerPose, c: &Chassis) -> Vec3 {
+    let tilted = super::sockets::rot_pitch(c.pitch) * super::sockets::rot_roll(c.roll) * pose.pos;
+    let t = chassis_to_tile([tilted.x, tilted.y], c.heading);
+    Vec3::new(t[0], t[1], tilted.z)
+}
+
+/// Whether a layer's sheet warps its tilt (`tilt_interp`).
+fn layer_tilt_interp(tables: &HashMap<String, FrameTable>, l: &VehicleLayerDef) -> bool {
+    tables.get(&l.texture).is_some_and(|t| t.tilt_interp)
+}
+
+/// The hull's drawn tilt: its baked level angles (`0` on an axis it lacks),
+/// or the exact chassis tilt when its sheet warps tilt.  What a layer riding
+/// it (cargo, a tool) leans by.
+pub(crate) fn hull_drawn_tilt(
+    tables: &HashMap<String, FrameTable>,
+    def: &VehicleDef,
+    c: &Chassis,
+) -> (f32, f32) {
+    def.layers.iter().find(|l| l.kind == LayerKind::Hull).map_or((0.0, 0.0), |h| {
+        let interp = layer_tilt_interp(tables, h);
+        pick_tilt(h.pitch, h.roll, c.heading, c.pitch, c.roll, interp).drawn
+    })
+}
+
+/// One layer's framing inputs: its def, runtime state, pose in the vehicle
+/// frame and the hull's drawn tilt.
+pub(crate) struct LayerFrame<'a> {
+    pub(crate) def: &'a VehicleDef,
+    pub(crate) layer: &'a VehicleLayerDef,
+    pub(crate) state: &'a VehicleLayerState,
+    pub(crate) pose: LayerPose,
+    pub(crate) hull_tilt: (f32, f32),
+}
+
+impl LayerFrame<'_> {
+    /// Pick this layer's frame from its axes for chassis `c` and write it
+    /// (frame, name, anchor, direction blend) into `sp`.
+    pub(crate) fn apply(
+        &self,
+        tables: &HashMap<String, FrameTable>,
+        anchors: Option<&classic_core::types::VehicleAnchors>,
+        c: &Chassis,
+        sp: &mut IsoSprite,
+    ) {
+        let (def, l, s, pose) = (self.def, self.layer, self.state, self.pose);
+        let layer_heading = c.heading + pose.yaw;
+        let dirs = l.dirs(def.directions);
+        // Whether a riding layer with no tilt axes warps its level frame to
+        // the hull's tilt ([`flat_tilt_warp`]).
+        let flat_warp = tables.get(&l.texture).is_some_and(|t| flat_tilt_warp(l, t));
+        let mut sel = FrameSelect::default();
+        let mut tilt: Option<LayerTilt> = None;
+        match l.kind {
+            LayerKind::Hull => {
+                let interp = layer_tilt_interp(tables, l);
+                let pick = pick_tilt(l.pitch, l.roll, layer_heading, c.pitch, c.roll, interp);
+                (sel.pitch, sel.roll) = (pick.pitch, pick.roll);
+                tilt = Some(LayerTilt { pick, pitch: l.pitch, roll: l.roll, interp });
+            }
+            LayerKind::Wheel | LayerKind::GearSide => {
+                if l.spin_frames > 1 && l.radius_m > 0.0 {
+                    // A right turn (tile heading up) runs the left (+y)
+                    // side forward.
+                    let dist = c.odometer_m + c.turned * pose.pos.y;
+                    let rev = dist / (std::f32::consts::TAU * l.radius_m);
+                    sel.spin = (rev.rem_euclid(1.0) * l.spin_frames as f32) as u32;
+                }
+                sel.steer = l.steer.map_or(0, |a| a.index(c.steer));
+            }
+            LayerKind::Turret => {
+                sel.pitch = l.pitch.map_or(0, |a| a.index(s.pitch));
+                if let Some(cp) = &s.clip {
+                    if let Some(cd) = layer_clip(l, &cp.clip) {
+                        sel.fire = clip_frame(&cd, cp).0;
+                    }
+                }
+            }
+            LayerKind::Tool | LayerKind::Legs | LayerKind::Cargo | LayerKind::Lift => {
+                let interp = layer_tilt_interp(tables, l) || flat_warp;
+                if l.pitch.is_some() || l.roll.is_some() || interp {
+                    let (p, r) = tilt_for_yaw(self.hull_tilt.0, self.hull_tilt.1, pose.yaw);
+                    let pick = pick_tilt(l.pitch, l.roll, layer_heading, p, r, interp);
+                    (sel.pitch, sel.roll) = (pick.pitch, pick.roll);
+                    tilt = Some(LayerTilt { pick, pitch: l.pitch, roll: l.roll, interp });
+                }
+                if let Some(cp) = &s.clip {
+                    if let Some(cd) = layer_clip(l, &cp.clip) {
+                        sel.clip = clip_frame(&cd, cp).0;
+                    }
+                }
+            }
+        }
+        let layer_anchors: Vec<[f32; 2]> = match anchors.and_then(|a| a.parts.get(&l.name)) {
+            Some(a) => anchors_n(a, dirs),
+            None => vec![[0.5, 0.5]; dirs as usize],
+        };
+        let frame_index = |dir: u32, levels: Option<(u32, u32)>| {
+            let mut s2 = sel;
+            s2.dir = dir;
+            if let Some((p, r)) = levels {
+                (s2.pitch, s2.roll) = (p, r);
+            }
+            l.frame_index(def.directions, &s2)
+        };
+        Engine::set_layer_frame(tables, sp, layer_heading, dirs, &layer_anchors, frame_index, tilt);
+    }
 }
 
 impl Engine {
@@ -411,120 +550,25 @@ impl Engine {
             }
         }
         let poses = layer_poses(&def, &v_state.layers.iter().map(|s| s.yaw).collect::<Vec<_>>());
-        // Whether a layer's sheet warps its tilt (`tilt_interp`).
-        let tilt_interp =
-            |l: &VehicleLayerDef| self.frame_tables.get(&l.texture).is_some_and(|t| t.tilt_interp);
-        // Whether a riding layer with no tilt axes warps its level frame to
-        // the hull's tilt ([`flat_tilt_warp`]).
-        let flat_warp = |l: &VehicleLayerDef| {
-            self.frame_tables.get(&l.texture).is_some_and(|t| flat_tilt_warp(l, t))
-        };
-        // The hull's drawn tilt: its baked level angles (`0` on an axis it
-        // lacks), or the exact chassis tilt when its sheet warps tilt.  What a
-        // layer riding it (cargo, a tool) leans by.
-        let hull_tilt =
-            def.layers.iter().find(|l| l.kind == LayerKind::Hull).map_or((0.0, 0.0), |h| {
-                let interp = tilt_interp(h);
-                pick_tilt(h.pitch, h.roll, heading, v_state.pitch, v_state.roll, interp).drawn
-            });
-        // The body tilt the layers ride: the exact chassis tilt (as the
-        // sockets).
-        let (body_pitch, body_roll) = (v_state.pitch, v_state.roll);
+        let chassis = Chassis::of(&v_state, write.heading);
+        let hull_tilt = hull_drawn_tilt(&self.frame_tables, &def, &chassis);
 
         for s in &v_state.layers {
             let Some(l) = def.layers.get(s.def_index) else { continue };
             let Some(&e) = self.names.get(&s.entity) else { continue };
             let pose = poses[s.def_index];
-            let layer_heading = heading + pose.yaw;
-            // Position: the chassis offset tilted by the body pitch / roll
-            // about the body's ground point (as `vehicle_socket_frame` does,
-            // so a layer origin and a zero-offset socket on it agree), then
-            // turned by the heading.
-            let tilted = super::sockets::rot_pitch(body_pitch)
-                * super::sockets::rot_roll(body_roll)
-                * pose.pos;
-            let t = chassis_to_tile([tilted.x, tilted.y], heading);
-            let (lx, ly) = (bx + t[0], by + t[1]);
-            let lz = write.body[2] + tilted.z;
+            let off = layer_offset(pose, &chassis);
+            let (lx, ly) = (bx + off.x, by + off.y);
+            let lz = write.body[2] + off.z;
             if let Ok(mut tf) = self.world.get::<&mut Transform>(e) {
                 tf.position = Vec3::new(lx, ly, lz);
             }
-            let dirs = l.dirs(def.directions);
-            let mut sel = FrameSelect::default();
-            let mut tilt: Option<LayerTilt> = None;
-            match l.kind {
-                LayerKind::Hull => {
-                    let interp = tilt_interp(l);
-                    let pick = pick_tilt(
-                        l.pitch,
-                        l.roll,
-                        layer_heading,
-                        v_state.pitch,
-                        v_state.roll,
-                        interp,
-                    );
-                    (sel.pitch, sel.roll) = (pick.pitch, pick.roll);
-                    tilt = Some(LayerTilt { pick, pitch: l.pitch, roll: l.roll, interp });
-                }
-                LayerKind::Wheel | LayerKind::GearSide => {
-                    if l.spin_frames > 1 && l.radius_m > 0.0 {
-                        // A right turn (tile heading up) runs the left (+y)
-                        // side forward.
-                        let dist = v_state.odometer_m + v_state.turned * pose.pos.y;
-                        let rev = dist / (std::f32::consts::TAU * l.radius_m);
-                        sel.spin = (rev.rem_euclid(1.0) * l.spin_frames as f32) as u32;
-                    }
-                    sel.steer = l.steer.map_or(0, |a| a.index(v_state.steer));
-                }
-                LayerKind::Turret => {
-                    sel.pitch = l.pitch.map_or(0, |a| a.index(s.pitch));
-                    if let Some(c) = &s.clip {
-                        if let Some(cd) = layer_clip(l, &c.clip) {
-                            sel.fire = clip_frame(&cd, c).0;
-                        }
-                    }
-                }
-                LayerKind::Tool | LayerKind::Legs | LayerKind::Cargo | LayerKind::Lift => {
-                    let interp = tilt_interp(l) || flat_warp(l);
-                    if l.pitch.is_some() || l.roll.is_some() || interp {
-                        let (p, r) = tilt_for_yaw(hull_tilt.0, hull_tilt.1, pose.yaw);
-                        let pick = pick_tilt(l.pitch, l.roll, layer_heading, p, r, interp);
-                        (sel.pitch, sel.roll) = (pick.pitch, pick.roll);
-                        tilt = Some(LayerTilt { pick, pitch: l.pitch, roll: l.roll, interp });
-                    }
-                    if let Some(c) = &s.clip {
-                        if let Some(cd) = layer_clip(l, &c.clip) {
-                            sel.clip = clip_frame(&cd, c).0;
-                        }
-                    }
-                }
-            }
-            let layer_anchors: Vec<[f32; 2]> =
-                match anchors.as_ref().and_then(|a| a.parts.get(&l.name)) {
-                    Some(a) => anchors_n(a, dirs),
-                    None => vec![[0.5, 0.5]; dirs as usize],
-                };
-            let frame_index = |dir: u32, levels: Option<(u32, u32)>| {
-                let mut s2 = sel;
-                s2.dir = dir;
-                if let Some((p, r)) = levels {
-                    (s2.pitch, s2.roll) = (p, r);
-                }
-                l.frame_index(def.directions, &s2)
-            };
             let altitude = lz - terrain.height(lx, ly);
             if let Ok(mut sp) = self.world.get::<&mut IsoSprite>(e) {
                 sp.frame_offset.z = altitude;
                 sp.color = s.color;
-                Self::set_layer_frame(
-                    &self.frame_tables,
-                    &mut sp,
-                    layer_heading,
-                    dirs,
-                    &layer_anchors,
-                    frame_index,
-                    tilt,
-                );
+                let frame = LayerFrame { def: &def, layer: l, state: s, pose, hull_tilt };
+                frame.apply(&self.frame_tables, anchors.as_ref(), &chassis, &mut sp);
             }
         }
 

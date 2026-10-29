@@ -11,7 +11,7 @@ use crate::Engine;
 use super::kinematics::{
     advance_suspension, anchors_n, axis_box_half, derive_wheel_offsets, heading_to_dir, lerp_dir2,
     lookahead, path_body, pitch_index, should_reverse, soft_deadzone, steer_index, step_spring,
-    step_steer, straight_steer, wrap_pi,
+    step_steer, straight_steer, v1_body_frame, wrap_pi,
 };
 use super::{
     TerrainSnapshot, VehicleWrite, AIRBORNE_PITCH, COMPRESS_RATIO, DUST_CONTACT_M, GOAL_TOLERANCE,
@@ -23,7 +23,7 @@ impl Engine {
     /// flat frame index, mirroring the animator's `{texture}_{frame}` naming.
     /// Returns `None` when the texture has no frame table, so the uniform-grid
     /// `frame`/`tile_set_size` path takes over.
-    fn frame_name(
+    pub(super) fn frame_name(
         tables: &std::collections::HashMap<String, classic_core::types::FrameTable>,
         texture: &str,
         frame: f32,
@@ -753,8 +753,7 @@ impl Engine {
                 *a = lerp_dir2(&v.wheel_anchors[i], v.heading);
             }
 
-            let body_frame = ((v.pitch_index * v.roll_levels + v.roll_index) * v.directions
-                + v.direction) as f32;
+            let body_frame = v1_body_frame(&v, v.direction, v.pitch_index, v.roll_index) as f32;
 
             // Dust drivers: ground speed (m/s), its change since last frame,
             // and which wheels touch the ground.

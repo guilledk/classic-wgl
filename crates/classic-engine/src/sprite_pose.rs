@@ -46,7 +46,20 @@ impl Engine {
     pub fn sprite_pose(&mut self, name: &str, heading: f32, pitch: f32, roll: f32) -> bool {
         let Some(&e) = self.names.get(name) else { return false };
         let Ok(mut s) = self.world.get::<&mut IsoSprite>(e) else { return false };
-        let Some(table) = self.frame_tables.get(&s.texture) else { return false };
+        Self::pose_sprite(&self.frame_tables, &mut s, heading, pitch, roll)
+    }
+
+    /// [`Engine::sprite_pose`] on a sprite value: frame `s` for tile heading
+    /// `heading` and tilt `(pitch, roll)` through its texture's pose axes.
+    /// `false` (and `s` untouched) without a frame table.
+    pub(crate) fn pose_sprite(
+        tables: &std::collections::HashMap<String, classic_core::types::FrameTable>,
+        s: &mut IsoSprite,
+        heading: f32,
+        pitch: f32,
+        roll: f32,
+    ) -> bool {
+        let Some(table) = tables.get(&s.texture) else { return false };
         let (axes, pick) = Self::sprite_tilt(table, heading, pitch, roll);
         let dirs = axes.directions.max(1);
         let anchors = vec![s.anchor.to_array(); dirs as usize];
@@ -56,15 +69,7 @@ impl Engine {
         };
         let interp = table.tilt_interp && table.dir_interp;
         let tilt = LayerTilt { pick, pitch: axes.pitch, roll: axes.roll, interp };
-        Self::set_layer_frame(
-            &self.frame_tables,
-            &mut s,
-            heading,
-            dirs,
-            &anchors,
-            frame,
-            Some(tilt),
-        );
+        Self::set_layer_frame(tables, s, heading, dirs, &anchors, frame, Some(tilt));
         true
     }
 

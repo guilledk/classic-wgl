@@ -20,6 +20,7 @@ mod kinematics;
 #[cfg(test)]
 mod layer_tests;
 pub(crate) mod layers;
+pub(crate) mod pose_preview;
 mod sim;
 mod sockets;
 #[cfg(test)]

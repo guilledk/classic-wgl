@@ -710,6 +710,17 @@ impl SpriteAxes {
         (pitch.min(p - 1) * r + roll.min(r - 1)) * d + dir % d
     }
 
+    /// The `(dir, pitch, roll)` levels frame index `frame` holds: the inverse
+    /// of [`SpriteAxes::frame_index`] (a frame past the sheet clamps to the
+    /// last pitch level).
+    pub fn pose_of(&self, frame: u32) -> (u32, u32, u32) {
+        let d = self.directions.max(1);
+        let r = self.roll.map_or(1, |a| a.count());
+        let p = self.pitch.map_or(1, |a| a.count());
+        let tilt = frame / d;
+        (frame % d, (tilt / r).min(p - 1), tilt % r)
+    }
+
     /// Frames the sheet must hold.
     pub fn frame_count(&self) -> u32 {
         let r = self.roll.map_or(1, |a| a.count());

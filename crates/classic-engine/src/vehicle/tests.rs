@@ -735,7 +735,7 @@ fn bounded_turn_steers_forward_only() {
 /// Build a minimal LRV vehicle definition (body + 4 wheels, flat anchors)
 /// with a configurable turn rate for movement tests, plus its anchors data
 /// artifact.
-fn lrv_def(turn_rate_deg: f32) -> (VehicleDef, VehicleAnchors) {
+pub(super) fn lrv_def(turn_rate_deg: f32) -> (VehicleDef, VehicleAnchors) {
     let spec: Vec<(&str, &str, [f32; 2])> = vec![
         ("body", "lrvBody", [0.5, 0.7352]),
         ("wheel_fl", "lrvWheelFl", [0.566, 0.618]),
@@ -777,7 +777,7 @@ fn lrv_def(turn_rate_deg: f32) -> (VehicleDef, VehicleAnchors) {
 }
 
 /// Register a test vehicle's def + anchors data artifact in the engine.
-fn insert_lrv(engine: &mut Engine, (def, anchors): (VehicleDef, VehicleAnchors)) {
+pub(super) fn insert_lrv(engine: &mut Engine, (def, anchors): (VehicleDef, VehicleAnchors)) {
     engine.vehicles.insert("lrv".into(), def);
     engine.vehicle_anchors.insert("lrv_anchors".into(), anchors);
 }

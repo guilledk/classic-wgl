@@ -45,10 +45,12 @@ mod render;
 mod render_tests;
 mod sprite_batches;
 mod sprite_pose;
+mod sprite_preview;
 #[cfg(test)]
 mod texture_race_tests;
 
 pub use classic_core::fields;
+pub use sprite_preview::{FrameRegion, Pose, PosePart, SpriteFrame};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
