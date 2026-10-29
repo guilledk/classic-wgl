@@ -45,17 +45,27 @@ const RENDERER_JS: &str =
      if (!gl) return 'no webgl2'; const e = gl.getExtension('WEBGL_debug_renderer_info'); \
      return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER); })()";
 
+/// The page's `.js` / `.wasm` resources, ROM fetches excluded.
+const BUNDLE_JS: &str = "performance.getEntriesByType('resource').map(e => e.name)\
+     .filter(n => /\\.(js|wasm)(\\?|$)/.test(n) && !n.includes('classic-roms.com'))";
+
 /// The script run when none is given: wait for boot, settle, one shot.
 const DEFAULT_SCRIPT: &[&str] =
     &["wait-log classic-demo initialized 180", "wait-frames 30", "shot boot"];
 
 const WEB_HELP: &str = "\
 usage: cargo xtask capture web [options]
+  --url <base>         drive a deployed site (e.g. https://guilledk.github.io/) instead of a local
+                       dist: no build, no server.  Real time unless --dt is given (players run in
+                       real time); the base's own query (`?rom=lunar`) is kept
   --dist <dir>         a `trunk build` output (default: trunk build --release into target/capture-web-dist)
   --roms <dir>         fulfil classic-roms.com/<file> from <dir> when present (e.g. classic-roms roms/out)
   --script <file>      scenario script, one step per line (# comments)
   --step <step>        one script step (repeatable; appended after --script)
   --query <k=v>        extra URL query parameter (repeatable), e.g. loader=console
+  --realtime           no `fixed_dt` (the default with --url)
+  --allow-error <re>   a console error matching this regex is not a failure (repeatable); the
+                       favicon.ico 404 a static host serves is always allowed
   --timeout <s>        overall budget (default 300)
   --chromium <path>    Chromium binary (default: chromium on PATH)
   --uncapped           no vsync / frame-rate cap: max sim throughput, but screenshots lag the sim
@@ -65,7 +75,7 @@ script steps:
   wait-frames <n>                           wait for n rendered frames (rAF)
   sleep <s>
   move <x> <y> | click <x> <y> [right] | wheel <x> <y> <dy>
-  key <key> [code] [hold_frames]
+  key <key> [code] [hold]                   hold: frames (30) or seconds (8.5s)
   shot <name>                               screenshot -> <out>/<name>.png
   throttle <rate>                           CDP CPU throttling (4 = a 4x slower device)
   eval <js>";
@@ -78,6 +88,9 @@ struct WebOpts {
     timeout: Duration,
     chromium: Option<PathBuf>,
     uncapped: bool,
+    url: Option<String>,
+    realtime: bool,
+    allow_errors: Vec<regex::Regex>,
 }
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
@@ -90,6 +103,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         timeout: Duration::from_secs(300),
         chromium: None,
         uncapped: false,
+        url: None,
+        realtime: false,
+        allow_errors: Vec::new(),
     };
     let mut script: Option<PathBuf> = None;
     let mut i = 0;
@@ -109,6 +125,14 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 "--timeout" => o.timeout = Duration::from_secs_f64(val()?.parse()?),
                 "--chromium" => o.chromium = Some(PathBuf::from(val()?)),
                 "--uncapped" => o.uncapped = true,
+                "--url" => o.url = Some(val()?),
+                "--realtime" => o.realtime = true,
+                "--allow-error" => {
+                    let re = val()?;
+                    o.allow_errors.push(
+                        regex::Regex::new(&re).with_context(|| format!("--allow-error {re}"))?,
+                    );
+                }
                 "-h" | "--help" => {
                     println!("{WEB_HELP}\n{}", super::COMMON_HELP);
                     return Ok(());
@@ -136,21 +160,41 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let root = crate::repo_root()?;
     let out = super::out_dir(&c, &root, "web")?;
     let software = super::choose_software(&c);
-    let dist = match &o.dist {
-        Some(d) => fs::canonicalize(d).with_context(|| format!("--dist {}", d.display()))?,
-        None => build_dist(&root)?,
-    };
-    anyhow::ensure!(dist.join("index.html").exists(), "{} has no index.html", dist.display());
+    anyhow::ensure!(
+        o.url.is_none() || o.dist.is_none(),
+        "--url drives a deployed site; it takes no --dist"
+    );
     let roms = match &o.roms {
         Some(r) => Some(fs::canonicalize(r).with_context(|| format!("--roms {}", r.display()))?),
         None => None,
     };
-
-    let listener = TcpListener::bind("127.0.0.1:0").context("bind the dist server")?;
-    let port = listener.local_addr()?.port();
-    let (served, served_roms) = (dist.clone(), roms.clone());
-    std::thread::spawn(move || serve(listener, served, served_roms));
-    let url = page_url(port, &c, &o.query);
+    let url = match &o.url {
+        // A deployed site: nothing to build or serve.  `--roms` still works:
+        // its `classic-roms.com` fetches are answered over CDP `Fetch`.
+        Some(base) => {
+            let fixed_dt = (c.dt_set && !o.realtime).then_some(c.dt);
+            page_url(base, &c, fixed_dt, &o.query)
+        }
+        None => {
+            let dist = match &o.dist {
+                Some(d) => {
+                    fs::canonicalize(d).with_context(|| format!("--dist {}", d.display()))?
+                }
+                None => build_dist(&root)?,
+            };
+            anyhow::ensure!(
+                dist.join("index.html").exists(),
+                "{} has no index.html",
+                dist.display()
+            );
+            let listener = TcpListener::bind("127.0.0.1:0").context("bind the dist server")?;
+            let port = listener.local_addr()?.port();
+            let (served, served_roms) = (dist, roms.clone());
+            std::thread::spawn(move || serve(listener, served, served_roms));
+            let fixed_dt = (!o.realtime).then_some(c.dt);
+            page_url(&format!("http://127.0.0.1:{port}/"), &c, fixed_dt, &o.query)
+        }
+    };
 
     let chromium = match &o.chromium {
         Some(p) => p.clone(),
@@ -210,20 +254,13 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let _ = fs::remove_dir_all(&profile);
 
     fs::write(out.join("console.log"), run.lines.join("\n") + "\n")?;
-    let errors: Vec<&String> = run
-        .lines
-        .iter()
-        .filter(|l| {
-            let body = l.split_once("] ").map(|(_, b)| b).unwrap_or(l);
-            body.starts_with("error:")
-                || body.starts_with("exception:")
-                || body.contains("boot failed")
-                || body.contains("panicked at")
-        })
-        .filter(|l| !l.contains("favicon.ico"))
-        .collect();
+    let errors: Vec<&String> =
+        run.lines.iter().filter(|l| is_failure(l, &o.allow_errors)).collect();
     let renderer = run.renderer.clone();
     println!("capture: renderer: {}", renderer.as_deref().unwrap_or("<unknown>"));
+    for b in &run.bundle {
+        println!("capture: bundle: {b}");
+    }
     println!(
         "capture: wall {wall:.2} s, cpu {cpu:.2} s ({:.0}%), {} shot(s), {} console line(s), {} error(s)",
         100.0 * cpu / wall.max(1e-9),
@@ -245,6 +282,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         "renderer": renderer,
         "software": software,
         "chromium_flags": flags,
+        "bundle": run.bundle,
         "dt": c.dt,
         "size": [c.width, c.height],
         "steps": steps,
@@ -267,6 +305,19 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Whether a console line fails the run: an `error:` / `exception:` line, a
+/// failed boot or a Rust panic, unless an `--allow-error` regex matches it.
+/// The `favicon.ico` 404 every static host without one serves is always
+/// allowed.
+fn is_failure(line: &str, allow: &[regex::Regex]) -> bool {
+    let body = line.split_once("] ").map(|(_, b)| b).unwrap_or(line);
+    let failure = body.starts_with("error:")
+        || body.starts_with("exception:")
+        || body.contains("boot failed")
+        || body.contains("panicked at");
+    failure && !line.contains("favicon.ico") && !allow.iter().any(|re| re.is_match(line))
+}
+
 /// What a drive produced, kept even when it failed part-way.
 #[derive(Default)]
 struct Run {
@@ -274,6 +325,9 @@ struct Run {
     lines: Vec<String>,
     shots: Vec<(String, PathBuf)>,
     renderer: Option<String>,
+    /// The app's `.js` / `.wasm` resources as the page loaded them (hashed
+    /// trunk names, so a deployed build is identifiable).
+    bundle: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -324,6 +378,14 @@ fn drive(
         }
         Ok(())
     })();
+    if let Some(cdp) = run.cdp.as_mut() {
+        if let Ok(v) = cdp.eval(BUNDLE_JS) {
+            run.bundle = v
+                .as_array()
+                .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+        }
+    }
     if let Some(cdp) = run.cdp.as_mut() {
         run.lines = std::mem::take(&mut cdp.lines);
     }
@@ -400,12 +462,17 @@ fn run_step(
         "key" => {
             let key = *a.first().context("key needs a key name")?;
             let code = a.get(1).copied().unwrap_or(key);
-            let hold = a.get(2).map(|h| h.parse::<u64>()).transpose()?.unwrap_or(2);
+            // `30` holds for 30 frames; `8.5s` for 8.5 s (a real-time run's
+            // camera pan depends on wall time, not frames).
+            let hold = a.get(2).copied().unwrap_or("2");
             cdp.call(
                 "Input.dispatchKeyEvent",
                 json!({ "type": "keyDown", "key": key, "code": code }),
             )?;
-            cdp.wait_frames(hold, deadline)?;
+            match hold.strip_suffix('s') {
+                Some(secs) => cdp.pump(Instant::now() + Duration::from_secs_f64(secs.parse()?))?,
+                None => cdp.wait_frames(hold.parse()?, deadline)?,
+            }
             cdp.call(
                 "Input.dispatchKeyEvent",
                 json!({ "type": "keyUp", "key": key, "code": code }),
@@ -435,27 +502,62 @@ fn run_step(
     Ok(())
 }
 
-/// The page URL: the ROM, the fixed step, the visual loader a player gets
-/// (`boot_log` mirrors its boot events to the console, so `wait-log` and
-/// `console.log` still see them; `--query loader=console` drops the loading
-/// screen), then the caller's extra parameters.
-fn page_url(port: u16, c: &Common, query: &[String]) -> String {
-    let mut params: Vec<(String, String)> = vec![
-        ("rom".into(), c.rom.clone()),
-        ("fixed_dt".into(), c.dt.to_string()),
-        ("loader".into(), "visual".into()),
-        ("boot_log".into(), "1".into()),
-    ];
-    for q in query {
-        let (k, v) = q.split_once('=').unwrap_or((q, ""));
-        params.retain(|(pk, _)| pk != k);
-        params.push((k.to_string(), v.to_string()));
+/// The page URL: `base` (a local dist server, or a deployed site via
+/// `--url`) with its query rebuilt, in precedence order:
+///
+/// 1. defaults: `rom`, `fixed_dt` (when `fixed_dt` is `Some`), the visual
+///    loader a player gets, and `boot_log` (mirrors the boot events to the
+///    console, so `wait-log` and `console.log` still see them);
+/// 2. the base's own query (`https://…/?rom=lunar` keeps its ROM);
+/// 3. an explicit `--rom`;
+/// 4. `--query k=v` (`loader=console` drops the loading screen; a bare `k`
+///    sets a flag).
+///
+/// A parameter keeps the position of its first appearance; a later layer only
+/// replaces its value.  A `#fragment` on the base is kept at the end.
+fn page_url(base: &str, c: &Common, fixed_dt: Option<f64>, query: &[String]) -> String {
+    fn set(params: &mut Vec<(String, String)>, k: &str, v: &str) {
+        match params.iter_mut().find(|(pk, _)| pk == k) {
+            Some(p) => p.1 = v.to_string(),
+            None => params.push((k.to_string(), v.to_string())),
+        }
     }
+    let (base, fragment) = match base.split_once('#') {
+        Some((b, f)) => (b, Some(f)),
+        None => (base, None),
+    };
+    let (path, base_query) = base.split_once('?').unwrap_or((base, ""));
+    let mut params: Vec<(String, String)> = Vec::new();
+    set(&mut params, "rom", &c.rom);
+    if let Some(dt) = fixed_dt {
+        set(&mut params, "fixed_dt", &dt.to_string());
+    }
+    set(&mut params, "loader", "visual");
+    set(&mut params, "boot_log", "1");
+    let layer = |params: &mut Vec<(String, String)>, kvs: &mut dyn Iterator<Item = &str>| {
+        for kv in kvs.filter(|s| !s.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            set(params, k, v);
+        }
+    };
+    layer(&mut params, &mut base_query.split('&'));
+    if c.rom_set {
+        set(&mut params, "rom", &c.rom);
+    }
+    layer(&mut params, &mut query.iter().map(String::as_str));
     let qs: Vec<String> = params
         .iter()
         .map(|(k, v)| if v.is_empty() { k.clone() } else { format!("{k}={v}") })
         .collect();
-    format!("http://127.0.0.1:{port}/?{}", qs.join("&"))
+    // `https://host` -> `https://host/`, so the query hangs off the root.
+    let host_only = path.split_once("://").is_some_and(|(_, rest)| !rest.contains('/'));
+    let path = if host_only { format!("{path}/") } else { path.to_string() };
+    let mut url = format!("{path}?{}", qs.join("&"));
+    if let Some(f) = fragment {
+        url.push('#');
+        url.push_str(f);
+    }
+    url
 }
 
 /// `trunk build --release` the web app into `target/capture-web-dist`.
@@ -812,17 +914,84 @@ mod tests {
     use std::io::Read;
 
     #[test]
-    fn url_carries_rom_fixed_dt_and_overrides() {
-        let mut c = crate::capture::common_defaults("rom:lunar");
-        c.dt = 0.05;
+    fn local_url_carries_rom_fixed_dt_and_overrides() {
+        let c = crate::capture::common_defaults("rom:lunar");
         assert_eq!(
-            page_url(8080, &c, &[]),
+            page_url("http://127.0.0.1:8080/", &c, Some(0.05), &[]),
             "http://127.0.0.1:8080/?rom=rom:lunar&fixed_dt=0.05&loader=visual&boot_log=1"
         );
-        let url = page_url(1, &c, &["loader=console".into(), "perf".into()]);
+        let url = page_url(
+            "http://127.0.0.1:1/",
+            &c,
+            Some(0.05),
+            &["loader=console".into(), "perf".into()],
+        );
         assert_eq!(
             url,
-            "http://127.0.0.1:1/?rom=rom:lunar&fixed_dt=0.05&boot_log=1&loader=console&perf"
+            "http://127.0.0.1:1/?rom=rom:lunar&fixed_dt=0.05&loader=console&boot_log=1&perf"
+        );
+    }
+
+    #[test]
+    fn deployed_url_keeps_its_query_and_runs_in_real_time() {
+        let c = crate::capture::common_defaults("rom:lunar");
+        // Real time: no `fixed_dt`; the base's own `rom=` beats the default.
+        assert_eq!(
+            page_url("https://guilledk.github.io/?rom=lunar", &c, None, &[]),
+            "https://guilledk.github.io/?rom=lunar&loader=visual&boot_log=1"
+        );
+        // A bare host gets its root slash; a base without a ROM gets the default.
+        assert_eq!(
+            page_url("https://guilledk.github.io", &c, None, &[]),
+            "https://guilledk.github.io/?rom=rom:lunar&loader=visual&boot_log=1"
+        );
+        // A sub-path and a fragment survive.
+        assert_eq!(
+            page_url("https://host/app/index.html?x=1#top", &c, Some(0.1), &[]),
+            "https://host/app/index.html?rom=rom:lunar&fixed_dt=0.1&loader=visual&boot_log=1&x=1#top"
+        );
+    }
+
+    #[test]
+    fn explicit_rom_beats_the_base_and_query_beats_both() {
+        let mut c = crate::capture::common_defaults("rom:lunar");
+        c.rom = "padtest".into();
+        c.rom_set = true;
+        let base = "https://guilledk.github.io/?rom=lunar&loader=console";
+        assert_eq!(
+            page_url(base, &c, None, &[]),
+            "https://guilledk.github.io/?rom=padtest&loader=console&boot_log=1"
+        );
+        assert_eq!(
+            page_url(base, &c, None, &["rom=demo".into(), "boot_log=".into()]),
+            "https://guilledk.github.io/?rom=demo&loader=console&boot_log"
+        );
+    }
+
+    #[test]
+    fn console_failures_honour_the_allow_list() {
+        let none: Vec<regex::Regex> = Vec::new();
+        assert!(is_failure(
+            "[    5.25] error: panicked at crates/classic-gfx/src/lib.rs:429:51:",
+            &none
+        ));
+        assert!(is_failure("[    1.00] exception: RuntimeError: unreachable", &none));
+        assert!(is_failure(
+            "[    1.00] info: [classic_web ERROR] boot failed: fetch: HTTP 404",
+            &none
+        ));
+        assert!(!is_failure("[    1.00] info: [frame INFO] classic-demo initialized", &none));
+        // The static host's favicon 404 is always allowed.
+        let favicon =
+            "[    0.25] error: Failed to load resource: 404 https://guilledk.github.io/favicon.ico";
+        assert!(!is_failure(favicon, &none));
+        let line = "[    2.00] error: Failed to load resource: 404 https://host/manifest.json";
+        assert!(is_failure(line, &none));
+        let allow = vec![regex::Regex::new(r"404 .*/manifest\.json$").unwrap()];
+        assert!(!is_failure(line, &allow));
+        assert!(
+            is_failure("[    5.25] error: panicked at x", &allow),
+            "an allow-list is not a blanket pass"
         );
     }
 

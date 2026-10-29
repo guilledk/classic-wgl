@@ -749,14 +749,50 @@ wait-log classic-demo initialized 120   # a console line containing the text (| 
 wait-log rocket down 180
 wait-frames 10                          # rendered frames, counted in the page
 click 1028 428                          # move, press, release, two frames apart
-key d KeyD 30                           # hold for 30 frames
+key d KeyD 30                           # hold for 30 frames (`0.8s`: 0.8 s of wall time)
 move 760 600 / wheel 640 360 -120 / sleep 1.5 / eval <js>
 throttle 6                              # CDP CPU throttling: a 6x slower device
 shot td01                               # -> td01.png, a tile on sheet.jpg
 ```
 
-The run fails on any console `error:` / exception / `boot failed` / panic,
-and every console line lands in `console.log`.
+The run fails on any console `error:` / exception / `boot failed` / panic
+(a static host's `favicon.ico` 404 is always allowed; `--allow-error <regex>`
+allows others, never a panic it does not match), and every console line
+lands in `console.log`.  It also prints the page's `.js` / `.wasm` bundle
+(`capture: bundle:`, hashed trunk names), so a report names the build it
+tested.
+
+### Live sites (`--url`)
+
+The deployed site (or any other host) is smoke-tested with the same helper,
+never an ad-hoc CDP script:
+
+```bash
+cargo xtask capture web --url 'https://guilledk.github.io/?rom=lunar' \
+  --size 1400x900 --script /tmp/attack.script --out /tmp/live
+cargo xtask capture web --url 'https://guilledk.github.io/?rom=lunar' \
+  --step 'throttle 4' --script /tmp/touchdown.script --out /tmp/live_t4
+```
+
+- No build and no server: the helper opens `<base>` with the query rebuilt —
+  defaults `rom`, `loader=visual`, `boot_log=1`, then the base's own query
+  (`?rom=lunar` wins over the default ROM), then an explicit `--rom`, then
+  `--query`.
+- **Real time by default**, as players run: no `fixed_dt` unless `--dt` is
+  given (`--realtime` drops it for a local dist too).  Script waits are
+  therefore wall-clock: prefer `wait-log` on a guest log line over
+  `wait-frames`, and hold keys in seconds (`key d KeyD 0.8s`) so a camera
+  pan covers the same distance at any frame rate or `throttle`.
+- `--roms <dir>` still works: the page's `classic-roms.com` fetches are
+  answered from it (`net: local …` in `console.log`), so a deployed build can
+  boot an unpublished ROM set.  A relative `--rom roms/<name>.rom` does not:
+  there is no local server behind a remote base.
+- Same script steps, `throttle`, failure detection, renderer check and
+  report as a local run.
+
+Measured (2026-10-29, live site): lunar boot to touchdown 21.3 s (26.4 s at
+`throttle 4`); select the EMRLV, arm "Attack area" and fire, 50.1 s (54.6 s
+at `throttle 4`); zero console errors.
 
 ### Measured on this machine (AMD Radeon 680M, Mesa 26.2.3; 2026-10-28)
 
@@ -778,8 +814,8 @@ over all processes.
 | web, GPU, `?fixed_dt=`, `--uncapped` | 9.2 s | 11.8 s | — | — |
 
 Native GPU time is ~80% boot (ROM decode + transcode + guest compile): the
-231 frames themselves take about a second.  The old `smoke.py` SwiftShader
-lunar run was 92.5 s / 1034 CPU-s for a single screenshot.
+231 frames themselves take about a second.  The retired ad-hoc CDP smoke
+script on SwiftShader took 92.5 s / 1034 CPU-s for a single screenshot.
 
 The CI golden job's five steps (debug binary, the same env as
 `.github/workflows/ci.yml`) produce byte-identical results on the GPU and

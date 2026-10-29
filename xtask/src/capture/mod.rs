@@ -40,7 +40,11 @@ struct Common {
     width: u32,
     height: u32,
     dt: f64,
+    /// `--dt` was given (web `--url` runs are real time unless it is).
+    dt_set: bool,
     rom: String,
+    /// `--rom` was given (a `--url` base's own `rom=` wins otherwise).
+    rom_set: bool,
     software: bool,
     sheet_width: u32,
     cols: Option<u32>,
@@ -72,8 +76,14 @@ fn parse_common(c: &mut Common, args: &[String], i: &mut usize) -> anyhow::Resul
             c.width = w.parse()?;
             c.height = h.parse()?;
         }
-        "--dt" => c.dt = val()?.parse()?,
-        "--rom" => c.rom = val()?,
+        "--dt" => {
+            c.dt = val()?.parse()?;
+            c.dt_set = true;
+        }
+        "--rom" => {
+            c.rom = val()?;
+            c.rom_set = true;
+        }
         "--software" => c.software = true,
         "--sheet-width" => c.sheet_width = val()?.parse()?,
         "--cols" => c.cols = Some(val()?.parse()?),
@@ -89,7 +99,9 @@ fn common_defaults(rom: &str) -> Common {
         width: 1280,
         height: 720,
         dt: 1.0 / 60.0,
+        dt_set: false,
         rom: rom.to_string(),
+        rom_set: false,
         software: false,
         sheet_width: 1400,
         cols: None,
@@ -100,7 +112,8 @@ fn common_defaults(rom: &str) -> Common {
 const COMMON_HELP: &str = "\
   --out <dir>          output dir (default target/capture/<mode>-<unix time>)
   --size <WxH>         viewport (default 1280x720; use the smallest that answers the question)
-  --dt <s>             fixed simulation step (default 1/60; scenario frame numbers assume theirs)
+  --dt <s>             fixed simulation step (default 1/60; scenario frame numbers assume theirs;
+                       web --url: real time unless given)
   --rom <spec>         rom:<name>, a .rom path, or a URL
   --software           force the software rasteriser (llvmpipe / SwiftShader): CI parity only
   --sheet-width <px>   contact-sheet width (default 1400)
