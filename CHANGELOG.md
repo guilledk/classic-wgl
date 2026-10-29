@@ -10,6 +10,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- `cargo xtask capture web --url <base>` drives a deployed site (e.g.
+  https://guilledk.github.io/) with the same script steps, `throttle` and
+  failure detection: no build, no server, the base's own query kept, and
+  real time unless `--dt` is given (players run in real time; `--realtime`
+  drops `fixed_dt` locally too).  `--roms` keeps answering
+  `classic-roms.com` fetches from a local dir.  `--allow-error <regex>`
+  allows a known console error (the static host's `favicon.ico` 404
+  always is), every run reports the page's `.js` / `.wasm` bundle names,
+  and `key` holds take seconds (`0.8s`).  Live smoke tests used an ad-hoc
+  CDP script before (#196).
+
 - `cargo xtask capture native|web`: one capture helper for frames and web
   smoke tests, on the hardware GPU by default.  `native` runs the release
   desktop binary headless at a fixed dt, unpaced, writing only the listed

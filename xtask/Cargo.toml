@@ -12,6 +12,7 @@ anyhow.workspace = true
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 image = { workspace = true, features = ["jpeg"] }
 base64.workspace = true
+regex = "1"
 
 [[bin]]
 name = "xtask"

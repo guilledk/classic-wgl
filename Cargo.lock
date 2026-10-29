@@ -4212,6 +4212,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "image",
+ "regex",
  "serde_json",
  "sha2",
  "tungstenite",
