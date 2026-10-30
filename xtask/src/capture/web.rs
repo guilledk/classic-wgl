@@ -76,6 +76,8 @@ script steps:
   sleep <s>
   move <x> <y> | click <x> <y> [right] | wheel <x> <y> <dy>
   key <key> [code] [hold]                   hold: frames (30) or seconds (8.5s)
+  key-down <key> [code] | key-up <key> [code]  press / release only (hold a modifier: key-down
+                                            Shift ShiftLeft, key G KeyG, key-up Shift ShiftLeft)
   shot <name>                               screenshot -> <out>/<name>.png
   throttle <rate>                           CDP CPU throttling (4 = a 4x slower device)
   eval <js>";
@@ -483,6 +485,12 @@ fn run_step(
                 "Input.dispatchKeyEvent",
                 json!({ "type": "keyUp", "key": key, "code": code }),
             )?;
+        }
+        "key-down" | "key-up" => {
+            let key = *a.first().with_context(|| format!("{cmd} needs a key name"))?;
+            let code = a.get(1).copied().unwrap_or(key);
+            let kind = if cmd == "key-down" { "keyDown" } else { "keyUp" };
+            cdp.call("Input.dispatchKeyEvent", json!({ "type": kind, "key": key, "code": code }))?;
         }
         "shot" => {
             let name = a.first().copied().unwrap_or("shot");

@@ -764,6 +764,9 @@ wait-log rocket down 180
 wait-frames 10                          # rendered frames, counted in the page
 click 1028 428                          # move, press, release, two frames apart
 key d KeyD 30                           # hold for 30 frames (`0.8s`: 0.8 s of wall time)
+key-down Shift ShiftLeft                # press only (hold a modifier) ...
+key G KeyG 2                            # ... so this is Shift+G (the perf graph) ...
+key-up Shift ShiftLeft                  # ... and release
 move 760 600 / wheel 640 360 -120 / sleep 1.5 / eval <js>
 throttle 6                              # CDP CPU throttling: a 6x slower device
 shot td01                               # -> td01.png, a tile on sheet.jpg
