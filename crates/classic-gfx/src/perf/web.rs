@@ -72,6 +72,10 @@ impl GpuTimer {
         self.0.create_query()
     }
 
+    pub(super) fn delete(&self, q: Query) {
+        self.0.delete_query(Some(&q));
+    }
+
     pub(super) fn begin(&self, q: &Query) {
         self.0.begin_query(TIME_ELAPSED_EXT, q);
     }

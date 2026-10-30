@@ -18,17 +18,23 @@ pub(super) fn now_ms() -> f64 {
 }
 
 /// The JSON-lines output file.
-pub(super) struct Out(BufWriter<File>);
+pub(super) struct Out(Box<dyn Write>);
 
 impl Out {
     pub(super) fn open(path: &str) -> Option<Self> {
         match File::create(path) {
-            Ok(f) => Some(Self(BufWriter::new(f))),
+            Ok(f) => Some(Self(Box::new(BufWriter::new(f)))),
             Err(e) => {
                 log::error!("CLASSIC_PERF: cannot create {path:?}: {e}");
                 None
             }
         }
+    }
+
+    /// Any writer (the unit tests' in-memory sink).
+    #[cfg(test)]
+    pub(super) fn writer(w: impl Write + 'static) -> Self {
+        Self(Box::new(w))
     }
 
     pub(super) fn line(&mut self, s: &str) {
@@ -71,6 +77,10 @@ impl GpuTimer {
 
     pub(super) fn create(&self) -> Option<Query> {
         unsafe { self.0.create_query().ok() }
+    }
+
+    pub(super) fn delete(&self, q: Query) {
+        unsafe { self.0.delete_query(q) };
     }
 
     pub(super) fn begin(&self, q: &Query) {
