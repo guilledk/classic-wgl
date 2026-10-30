@@ -43,10 +43,10 @@ fn spawn(engine: &mut Engine, w: f32, h: f32, name: &str, view: GraphView) -> Gr
         height: h,
         padding: PAD,
         background: FRAME_BG,
-        series: vec![GraphSeriesRef {
-            data: name.into(),
-            style: GraphStyle { color: RED, line_width: 3.0, envelope_alpha: 0.35 },
-        }],
+        series: vec![GraphSeriesRef::new(
+            name,
+            GraphStyle { color: RED, line_width: 3.0, envelope_alpha: 0.35 },
+        )],
         view,
         ..Default::default()
     };

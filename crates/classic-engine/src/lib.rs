@@ -26,6 +26,7 @@ pub mod golden;
 pub mod graph;
 #[cfg(test)]
 mod graph_tests;
+mod graph_ui;
 pub mod handles;
 pub mod inventory;
 pub mod inventory_ui;

@@ -16,13 +16,18 @@
 
 use std::collections::HashMap;
 
-use classic_core::components::{GraphRender, GraphView, Transform, UiNode};
-use classic_core::graph::SeriesBuf;
+use classic_core::components::{GraphAxes, GraphRender, GraphView, Transform, UiNode};
+use classic_core::graph::{nice_ticks, view_to_px, SeriesBuf};
 use classic_gfx::{Gfx, GraphSeriesParams, SeriesGpu};
 use glam::{Mat4, Vec3, Vec4};
 use glow::HasContext;
 
 use crate::golden::{self, GraphTrace, TraceCollector, TraceItemParams};
+use crate::graph_ui::GraphUi;
+pub use crate::graph_ui::{
+    clamp_view_x, format_tick, format_value, pan_view, reset_view, zoom_view, GRAPH_CLICK_PRIORITY,
+    LEGEND_REFRESH_FRAMES,
+};
 use crate::{DrawKind, Engine};
 
 struct GraphSeries {
@@ -38,6 +43,10 @@ pub(crate) struct GraphStore {
     retired: Vec<SeriesGpu>,
     /// Vertices the graph draws emitted this (or the last) frame.
     frame_verts: u64,
+    /// Chrome + interaction of each `Engine::spawn_graph` graph, by plot.
+    pub(crate) ui: HashMap<hecs::Entity, GraphUi>,
+    /// Whether the `graph_ui` pre-update hook is registered.
+    pub(crate) ui_hook: bool,
 }
 
 impl GraphStore {
@@ -136,19 +145,53 @@ pub(crate) fn plot_rect(world: &hecs::World, entity: hecs::Entity) -> Option<Vec
     (r.z >= 1.0 && r.w >= 1.0).then_some(r)
 }
 
+/// Grid lines at the view's nice ticks (`GraphAxes::ticks`), one physical
+/// pixel wide and snapped to the pixel grid, under the series.
+fn draw_grid(gfx: &Gfx, rect: Vec4, view: &GraphView, axes: &GraphAxes) {
+    if !axes.show || axes.grid_color[3] <= 0.0 {
+        return;
+    }
+    let ratio = gfx.pixel_ratio.max(f32::MIN_POSITIVE);
+    let px = 1.0 / ratio;
+    let snap = |v: f64| ((v as f32 * ratio).floor()) / ratio;
+    let (x0, x1) = (rect.x as f64, (rect.x + rect.z) as f64);
+    for x in nice_ticks(view.x_min, view.x_max, axes.ticks.max(1)) {
+        let sx = snap(view_to_px(x, view.x_min, view.x_max, x0, x1));
+        draw_ui_rect(gfx, Vec4::new(sx, rect.y, px, rect.w), &axes.grid_color);
+    }
+    let (y0, y1) = ((rect.y + rect.w) as f64, rect.y as f64);
+    for y in nice_ticks(view.y_min, view.y_max, axes.ticks.max(1)) {
+        let sy = snap(view_to_px(y, view.y_min, view.y_max, y0, y1));
+        draw_ui_rect(gfx, Vec4::new(rect.x, sy, rect.z, px), &axes.grid_color);
+    }
+}
+
+/// A screen-space solid rect `(x, y, w, h)` in logical points.
+fn draw_ui_rect(gfx: &Gfx, r: Vec4, color: &[f32; 4]) {
+    let model = Mat4::from_translation(Vec3::new(r.x, r.y, 0.0))
+        * Mat4::from_scale(Vec3::new(r.z, r.w, 1.0));
+    gfx.draw_rect(&model, &Mat4::IDENTITY, color, true);
+}
+
 /// The view a graph draws this frame (pure).  `follow_tail` slides the x
 /// window (keeping its width) so its right edge is the newest sample of any
-/// series; `auto_y` fits `y` to what the series draw in that window
+/// series (or, while the data is shorter than the window, its left edge the
+/// oldest); `auto_y` fits `y` to what the series draw in that window
 /// (`SeriesBuf::y_range`) plus a 5% margin, a flat signal getting a unit
 /// band.  Without data the view is returned unchanged.
 pub fn resolve_view(view: &GraphView, series: &[&SeriesBuf], plot_w_px: f32) -> GraphView {
     let mut v = *view;
     if v.follow_tail {
-        let newest = series.iter().filter_map(|s| s.x_range()).map(|r| r.1 as f64).reduce(f64::max);
-        if let Some(newest) = newest {
+        let range = series
+            .iter()
+            .filter_map(|s| s.x_range())
+            .map(|(a, b)| (a as f64, b as f64))
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+        if let Some((oldest, newest)) = range {
             let width = if v.x_max > v.x_min { v.x_max - v.x_min } else { 1.0 };
-            v.x_max = newest;
-            v.x_min = newest - width;
+            // Until the data fills the window it grows from the left edge.
+            v.x_min = (newest - width).max(oldest);
+            v.x_max = v.x_min + width;
         }
     }
     if v.auto_y {
@@ -222,6 +265,7 @@ pub(crate) fn draw_graph(
     }
 
     gfx.scissor_logical(rect);
+    draw_grid(gfx, rect, &view, &graph.axes);
     for sref in &graph.series {
         let Some(GraphSeries { buf, gpu: Some(gpu) }) = store.series.get_mut(&sref.data) else {
             continue;
@@ -237,6 +281,12 @@ pub(crate) fn draw_graph(
         store.frame_verts += gfx.draw_graph_series(gpu, buf, &sel, &params);
     }
     unsafe { gfx.gl.disable(glow::SCISSOR_TEST) };
+    // The legend's colour swatches (`Engine::spawn_graph`), unclipped.
+    if let Some(ui) = store.ui.get(&entity) {
+        for (r, color) in &ui.swatches {
+            draw_ui_rect(gfx, *r, color);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -263,6 +313,14 @@ mod tests {
         let v = resolve_view(&view, &[&a, &b], 300.0);
         assert_eq!((v.x_min, v.x_max), (219.0, 249.0));
         assert_eq!((v.y_min, v.y_max), (view.y_min, view.y_max), "y untouched");
+    }
+
+    #[test]
+    fn follow_tail_grows_from_the_oldest_sample_until_the_window_fills() {
+        let a = line(10, 5.0);
+        let view = GraphView { x_min: 0.0, x_max: 600.0, follow_tail: true, ..Default::default() };
+        let v = resolve_view(&view, &[&a], 300.0);
+        assert_eq!((v.x_min, v.x_max), (5.0, 605.0));
     }
 
     #[test]

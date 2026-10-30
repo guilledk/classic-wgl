@@ -20,6 +20,25 @@ pub struct GraphSeriesRef {
     pub data: String,
     #[serde(default)]
     pub style: GraphStyle,
+    /// Legend name (empty: `data`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+
+impl GraphSeriesRef {
+    /// Series `data` drawn in `style`, named `data` in a legend.
+    pub fn new(data: impl Into<String>, style: GraphStyle) -> Self {
+        Self { data: data.into(), style, label: String::new() }
+    }
+
+    /// The legend name: [`GraphSeriesRef::label`], else the data name.
+    pub fn display_name(&self) -> &str {
+        if self.label.is_empty() {
+            &self.data
+        } else {
+            &self.label
+        }
+    }
 }
 
 /// How a series is drawn.

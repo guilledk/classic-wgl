@@ -65,13 +65,28 @@ pub struct GraphOptions {
     /// Frame size in logical points.
     pub width: f32,
     pub height: f32,
-    /// Inset of the plot inside the frame (room for axes / labels), points.
+    /// Inset of the plot inside the frame on every side (room for axes /
+    /// labels), points; see `margins`.
     pub padding: f32,
+    /// Per-side inset `[top, right, bottom, left]`, overriding `padding`
+    /// (tick labels sit in the left / bottom margins, the title in the top
+    /// one and the legend in the right one).
+    pub margins: Option<[f32; 4]>,
     /// Frame (`RectRender`) colour, linear RGBA.
     pub background: [f32; 4],
     pub series: Vec<GraphSeriesRef>,
     pub view: GraphView,
     pub axes: GraphAxes,
+    /// Wheel zoom, drag pan and double-click reset over the plot, and the
+    /// frame takes the clicks under it (`Engine::spawn_graph` only).
+    pub interactive: bool,
+    /// A legend (colour swatch, name, last value per series) in the right
+    /// margin (`Engine::spawn_graph` only).
+    pub legend: bool,
+    /// The frame's z (draw order: lower draws later, on top); `None` = the
+    /// UI layer.  The plot sits half a layer in front, its labels a quarter
+    /// more.
+    pub z: Option<f32>,
 }
 
 impl Default for GraphOptions {
@@ -80,11 +95,22 @@ impl Default for GraphOptions {
             width: 320.0,
             height: 160.0,
             padding: 8.0,
+            margins: None,
             background: [0.05, 0.05, 0.08, 0.85],
             series: Vec::new(),
             view: GraphView::default(),
             axes: GraphAxes::default(),
+            interactive: false,
+            legend: false,
+            z: None,
         }
+    }
+}
+
+impl GraphOptions {
+    /// `[top, right, bottom, left]`: `margins`, else `padding` everywhere.
+    pub fn insets(&self) -> [f32; 4] {
+        self.margins.unwrap_or([self.padding; 4])
     }
 }
 
@@ -233,23 +259,31 @@ impl UIManager {
         e
     }
 
-    /// Create a graph element: a framed plot container (`RectRender`, the
+    /// Create a graph element: a framed plot (a padding container in the
     /// `background` colour, `width` x `height`) holding the plot child (a
-    /// `GraphRender` `padding` points inside the frame on every side, drawn
-    /// just above it).  Anchor the returned `frame` like any container; the
-    /// series are named engine series (`Engine::create_graph_series` /
-    /// `set_graph_data` / `graph_push`).
+    /// `GraphRender` inset by [`GraphOptions::insets`], drawn just above
+    /// it).  Anchor the returned `frame` like any container; the series are
+    /// named engine series (`Engine::create_graph_series` / `set_graph_data`
+    /// / `graph_push`).  This is the bare element (the plot and its grid);
+    /// `Engine::spawn_graph` adds the tick labels, title, legend and
+    /// interaction.
     pub fn spawn_graph(&mut self, world: &mut World, opts: GraphOptions) -> GraphElem {
-        let frame = self.spawn_container(world, opts.width, opts.height, opts.background);
-        let inner = Vec2::new(
-            (opts.width - 2.0 * opts.padding).max(1.0),
-            (opts.height - 2.0 * opts.padding).max(1.0),
-        );
+        let [top, right, bottom, left] = opts.insets();
+        let frame = self.spawn_padding(world, top, right, bottom, left, opts.background);
+        let inner =
+            Vec2::new((opts.width - left - right).max(1.0), (opts.height - top - bottom).max(1.0));
+        if let Ok(mut node) = world.get::<&mut UiNode>(frame) {
+            node.size = Vec2::new(opts.width, opts.height);
+        }
+        let z = opts.z.unwrap_or(self.zlayer as f32);
+        if let Ok(mut tf) = world.get::<&mut Transform>(frame) {
+            tf.position.z = z;
+        }
         let name = self.gen_name("graph");
         let plot = world.spawn((
             // Half a layer in front of the frame: the render list sorts by
             // descending z, so the plot draws after its background.
-            Transform::new(glam::Vec3::new(0.0, 0.0, self.zlayer as f32 - 0.5), glam::Vec3::ONE),
+            Transform::new(glam::Vec3::new(0.0, 0.0, z - 0.5), glam::Vec3::ONE),
             UiNode {
                 parent: None,
                 children: Vec::new(),
@@ -265,7 +299,7 @@ impl UIManager {
             GraphRender { series: opts.series, view: opts.view, axes: opts.axes },
         ));
         self.elements.insert(name, plot);
-        self.container_add_child(world, frame, plot, UiAnchor::MidCenter, UiAnchor::MidCenter);
+        self.container_add_child(world, frame, plot, UiAnchor::TopLeft, UiAnchor::TopLeft);
         GraphElem { frame, plot }
     }
 

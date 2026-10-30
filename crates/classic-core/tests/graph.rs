@@ -336,7 +336,7 @@ fn view_to_px_round_trips() {
 fn graph_component_dumps_names_only() {
     register_all_components();
     let g = GraphRender {
-        series: vec![GraphSeriesRef { data: "perf.frame_ms".into(), style: GraphStyle::default() }],
+        series: vec![GraphSeriesRef::new("perf.frame_ms", GraphStyle::default())],
         ..Default::default()
     };
     let mut world = hecs::World::new();
