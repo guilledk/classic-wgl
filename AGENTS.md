@@ -75,7 +75,8 @@ Cargo.toml               workspace root (11 members)
 crates/
   classic-core/           fundamental types, components, ECS registry, math, collision, tilemap,
                           instrument (CLASSIC_LOG), GJK, quadtree, sdf_builder, model.rs (glTF
-                          parse + clip sampling), plus the
+                          parse + clip sampling), graph.rs (series ring + min/max
+                          pyramid for the graph element), plus the
                           shared ABI marshalling (abi.rs) and field-buffer registry (fields.rs);
                           re-exports `classic-pathfinder` as `pathfinder`
   classic-pathfinder/     #![no_std] A* + footprint/slope/jump vehicle search (single source of

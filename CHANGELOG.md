@@ -10,6 +10,20 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- Graph core, the data half of a graph UI element for large series
+  (no GL yet).  `classic_core::graph::SeriesBuf` is a power-of-two ring
+  of `(x, y)` samples (`from_points` for a static series, `push` to
+  stream, evicting the oldest) with a min/max `Bucket` pyramid that a
+  `push` updates in O(log n).  A bucket only holds surviving samples, so
+  an evicted extreme never lingers.  `select(view, plot_w)` picks the
+  level whose bucket count over the view is about the plot width: a
+  level-0 polyline below 2 points per pixel, else a min/max envelope, in
+  at most two slot ranges.  `y_range` gives auto-Y and `take_dirty` the
+  per-level changed slots for a partial GPU upload.  Also `nice_ticks`
+  (1/2/5 × 10^n), `view_to_px` / `px_to_view`, and a registered `Graph`
+  component (`GraphRender` + `GraphSeriesRef` / `GraphStyle` /
+  `GraphView` / `GraphAxes`) that names engine-held series and never
+  dumps their data.
 - Display scale: the engine now runs in logical points on HiDPI screens,
   so a 4K desktop at scale 2 shows the 1280×720-point window at full
   resolution instead of everything at half size.  Each platform converts

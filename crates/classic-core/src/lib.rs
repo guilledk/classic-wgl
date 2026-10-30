@@ -5,6 +5,7 @@ pub mod collision;
 pub mod components;
 pub mod effects;
 pub mod fields;
+pub mod graph;
 pub mod instrument;
 pub mod inventory;
 pub mod math;
@@ -23,8 +24,8 @@ pub mod quadtree;
 pub mod simplex_noise;
 
 use components::{
-    Animator, IsoAgent, IsoSprite, IsoVehicle, Model, NavMesh, RectRender, Role, SdfTextRender,
-    Selectable, Tilemap,
+    Animator, GraphRender, IsoAgent, IsoSprite, IsoVehicle, Model, NavMesh, RectRender, Role,
+    SdfTextRender, Selectable, Tilemap,
 };
 use inventory::Inventory;
 
@@ -209,6 +210,18 @@ pub fn register_all_components() {
             },
             dump: Some(dump_as::<SdfTextRender>),
             order: 46,
+            subsumes: &[],
+        },
+        ComponentReg {
+            name: "Graph",
+            spawn: |b, v| {
+                let g: GraphRender = serde_json::from_value(v)?;
+                b.add(g);
+                Ok(())
+            },
+            // Series are dumped by name only; the data lives in the engine.
+            dump: Some(dump_as::<GraphRender>),
+            order: 47,
             subsumes: &[],
         },
         ComponentReg {

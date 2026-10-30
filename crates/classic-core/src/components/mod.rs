@@ -5,6 +5,9 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 
+mod graph;
+pub use graph::{GraphAxes, GraphRender, GraphSeriesRef, GraphStyle, GraphView};
+
 /// Transforms position + scale, the basic renderable spatial component.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transform {
