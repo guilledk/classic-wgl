@@ -688,8 +688,14 @@ the field may be absent.
 | `mesh` | draw_model_instance | `mesh.vert` | `mesh.frag` |
 | `modelComposite` | composite_models | `model_composite.vert` | `model_composite.frag` |
 | `shadowDepth` | draw_shadow_tilemap, draw_shadow_model | `shadow_depth.vert` | `shadow_depth.frag` |
+| `graphLine` | draw_graph_series (polyline) | `graph_line.vert` | `graph_line.frag` |
+| `graphEnvelope` | draw_graph_series (envelope) | `graph_envelope.vert` | `graph_envelope.frag` |
 
 `image` and `imageColorize` are compiled but have no public `draw_*` functions.
+
+The graph element (`graph.rs`: per-series level VBOs with seam pads, the
+instanced AA polyline and min/max envelope, `Gfx::draw_graph_series`) has
+its own skill: **`classic-graph`**.
 
 ---
 

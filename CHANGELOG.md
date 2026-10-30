@@ -10,6 +10,22 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- Graph rendering: the graph element now draws.  Each series' pyramid
+  levels mirror into VBOs that upload whole on first use, then only the
+  slots `take_dirty` reports.  Seam pads (a copy of the last slot before
+  the ring, the first two after it) keep a wrapped stream continuous.
+  Level 0 draws as an antialiased polyline (`graphLine`: one instance per
+  segment, miter joins with a limit and a bevel fallback, `fwidth`
+  edges), coarser levels as a min/max envelope (`graphEnvelope`: one
+  trapezoid per bucket pair).  Either is O(plot width) vertices in at
+  most two draws per series, never `gl.LINES`; widths are logical
+  points.  `Engine::create_graph_series` / `set_graph_data` /
+  `graph_push` own the named series.  `DrawKind::Graph` resolves
+  `follow_tail` / `auto_y` each frame and draws in the UI phase,
+  scissored to the plot rect.  `UIManager::spawn_graph` builds a framed
+  plot (`GraphElem { frame, plot }`).  A graph traces as one `"Graph"`
+  item (rect, view, series colours), and the `graph_verts` perf counter
+  counts its vertices.  New `classic-graph` skill.
 - Graph core, the data half of a graph UI element for large series
   (no GL yet).  `classic_core::graph::SeriesBuf` is a power-of-two ring
   of `(x, y)` samples (`from_points` for a static series, `push` to

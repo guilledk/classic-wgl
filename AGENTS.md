@@ -91,7 +91,8 @@ crates/
   classic-terrain/        #![no_std] open terrain/noise toolkit (simplex, fractal combinators, bulk
                           noise fields, and the grid-kernel catalog in kernels.rs) — the reusable
                           primitives ROM guests build map algorithms on
-  classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders
+  classic-gfx/            GL rendering layer: Gfx struct, draw_* fns, GlBuffer, GlFrameBuffer, shaders,
+                          graph.rs (graph series VBOs + instanced AA polyline / min-max envelope)
   classic-platform/       Platform trait: native (winit), web (web-sys), headless (EGL), InputState
   classic-engine/         generic engine: lib.rs (`Engine` struct), lifecycle.rs (new + frame),
                           hooks.rs (hook surface + host API), boot/ (BootPlan, the BootPipeline
@@ -99,7 +100,8 @@ crates/
                           InterleavedBoot — per-frame, optionally fed by a boot thread),
                           boot_api.rs (ROM hydration the pipeline steps through), render.rs,
                           model.rs (3D `Model` clip playback + draw prep),
-                          ui.rs (UIManager), golden.rs (traces), env_config.rs,
+                          ui.rs (UIManager, incl. spawn_graph), golden.rs (traces), env_config.rs,
+                          graph.rs (graph series store, view resolution, DrawKind::Graph),
                           vehicle/ (IsoVehicle sim + spawn API)
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
@@ -468,3 +470,4 @@ Engine skills (in `.agents/skills/`):
 | `classic-debugging` | CLASSIC_LOG channels, JSON format, runtime toggles, debugging playbook |
 | `classic-guest` | WASM guest runtime, ABI (host imports/guest exports), GuestRuntime trait, sandbox (fuel + memory) |
 | `classic-rom` | ROM crate (archive, manifest, `ResourceSet`, `LoadedRoms` DAG), namespacing + reference rewriting, boot hydration of a ROM |
+| `classic-graph` | GPU graph element: `SeriesBuf` ring + min/max pyramid (`slots(k) = (2·cap) >> k`), seam-padded level VBOs, instanced polyline / envelope shaders, `spawn_graph`, `create_graph_series` / `graph_push` |
