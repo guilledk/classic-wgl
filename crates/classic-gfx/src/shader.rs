@@ -261,6 +261,8 @@ impl ShaderSourceRegistry {
         r.override_vertex("particle.vert", shaders::PARTICLE_VERT);
         r.override_vertex("ribbon.vert", shaders::RIBBON_VERT);
         r.override_vertex("post.vert", shaders::POST_VERT);
+        r.override_vertex("graph_line.vert", shaders::GRAPH_LINE_VERT);
+        r.override_vertex("graph_envelope.vert", shaders::GRAPH_ENVELOPE_VERT);
         r.override_fragment("solid.frag", shaders::SOLID_FRAG);
         r.override_fragment("image.frag", shaders::IMAGE_FRAG);
         r.override_fragment("image_colorized.frag", shaders::IMAGE_COLORIZED_FRAG);
@@ -277,6 +279,8 @@ impl ShaderSourceRegistry {
         r.override_fragment("bloom_blur.frag", shaders::BLOOM_BLUR_FRAG);
         r.override_fragment("bloom_composite.frag", shaders::BLOOM_COMPOSITE_FRAG);
         r.override_fragment("particle_composite.frag", shaders::PARTICLE_COMPOSITE_FRAG);
+        r.override_fragment("graph_line.frag", shaders::GRAPH_LINE_FRAG);
+        r.override_fragment("graph_envelope.frag", shaders::GRAPH_ENVELOPE_FRAG);
         r
     }
 
@@ -632,6 +636,39 @@ pub fn builtin_shaders() -> Vec<BuiltinShader> {
             fragment: "particle_composite.frag",
             attr: &["vertex_pos"],
             unif: &["color_tex"],
+        },
+        // Graph element (`graph.rs`): instanced AA polyline segments and
+        // min/max envelope trapezoids read straight from the series VBOs.
+        BuiltinShader {
+            name: "graphLine",
+            vertex: "graph_line.vert",
+            fragment: "graph_line.frag",
+            attr: &crate::graph::LINE_ATTRS,
+            unif: &[
+                "u_origin",
+                "u_scale",
+                "u_offset",
+                "u_target",
+                "u_half_width",
+                "u_first",
+                "u_last",
+                "u_color",
+            ],
+        },
+        BuiltinShader {
+            name: "graphEnvelope",
+            vertex: "graph_envelope.vert",
+            fragment: "graph_envelope.frag",
+            attr: &crate::graph::ENVELOPE_ATTRS,
+            unif: &[
+                "u_origin",
+                "u_scale",
+                "u_offset",
+                "u_target",
+                "u_half_width",
+                "u_color",
+                "u_envelope_alpha",
+            ],
         },
     ]
 }

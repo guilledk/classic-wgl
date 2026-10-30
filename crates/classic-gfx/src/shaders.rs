@@ -31,6 +31,10 @@ pub const BLOOM_THRESHOLD_FRAG: &str = include_str!("shaders/bloom_threshold.fra
 pub const BLOOM_BLUR_FRAG: &str = include_str!("shaders/bloom_blur.frag");
 pub const BLOOM_COMPOSITE_FRAG: &str = include_str!("shaders/bloom_composite.frag");
 pub const PARTICLE_COMPOSITE_FRAG: &str = include_str!("shaders/particle_composite.frag");
+pub const GRAPH_LINE_VERT: &str = include_str!("shaders/graph_line.vert");
+pub const GRAPH_LINE_FRAG: &str = include_str!("shaders/graph_line.frag");
+pub const GRAPH_ENVELOPE_VERT: &str = include_str!("shaders/graph_envelope.vert");
+pub const GRAPH_ENVELOPE_FRAG: &str = include_str!("shaders/graph_envelope.frag");
 
 #[cfg(test)]
 mod tests {

@@ -16,6 +16,7 @@ mod buffer;
 mod draw;
 pub use draw::ModelDraws;
 mod framebuffer;
+pub mod graph;
 mod light;
 mod light_grid;
 mod model_pass;
@@ -51,6 +52,7 @@ use buffer::build_quad;
 
 pub use buffer::{DynamicVb, GlBuffer, ModelMeshGpu, QuadBuffers, MODEL_VERTEX_STRIDE};
 pub use framebuffer::{DepthFramebuffer, GlFrameBuffer, ModelTarget};
+pub use graph::{GraphSeriesParams, SeriesGpu};
 pub use light::{
     pack_lights, LightBuffer, LIGHT_UBO_BINDING, MAX_LIGHTS, SHADOW_MAP_SIZE, SHADOW_MAP_UNIT,
     SHADOW_SPRITE_SLOPE_OFFSET, SHADOW_SPRITE_UNIT_OFFSET,
