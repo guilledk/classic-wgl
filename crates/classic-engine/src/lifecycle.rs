@@ -139,6 +139,7 @@ impl Engine {
             trace: None,
             tilemap_gpu: HashMap::new(),
             sdf_text_gpu: HashMap::new(),
+            graphs: Default::default(),
             last_vw: 0.0,
             last_vh: 0.0,
             pixel_ratio: 1.0,
@@ -562,6 +563,7 @@ impl Engine {
             }
             items.push((tf.position.z, e, DrawKind::SdfText));
         }
+        self.collect_graph_items(&mut items);
         if self.world_hidden {
             let world = &self.world;
             items.retain(|(_, e, k)| draws_while_world_hidden(world, *e, k));
@@ -1649,6 +1651,19 @@ impl Engine {
                         }
                     }
                 }
+                DrawKind::Graph => {
+                    let name = name_by_entity.get(entity).copied().unwrap_or("");
+                    let trace = self.trace.as_mut();
+                    crate::graph::draw_graph(
+                        gfx,
+                        &self.world,
+                        &mut self.graphs,
+                        *entity,
+                        *order,
+                        name,
+                        trace,
+                    );
+                }
                 _ => {}
             }
         }
@@ -1972,7 +1987,7 @@ impl Default for Engine {
 /// for the scene.
 fn draws_while_world_hidden(world: &hecs::World, e: hecs::Entity, kind: &DrawKind) -> bool {
     match kind {
-        DrawKind::UiSprite => true,
+        DrawKind::UiSprite | DrawKind::Graph => true,
         DrawKind::UiRect => world.get::<&RectRender>(e).is_ok_and(|r| r.ignore_cam),
         DrawKind::SdfText => world.get::<&SdfTextRender>(e).is_ok_and(|t| t.ignore_cam),
         DrawKind::Sprite | DrawKind::Tilemap | DrawKind::IsoSprite | DrawKind::Model => false,

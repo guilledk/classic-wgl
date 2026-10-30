@@ -23,6 +23,9 @@ pub mod boot;
 pub mod boot_loader;
 pub mod env_config;
 pub mod golden;
+pub mod graph;
+#[cfg(test)]
+mod graph_tests;
 pub mod handles;
 pub mod inventory;
 pub mod inventory_ui;
@@ -447,6 +450,8 @@ pub struct Engine {
     trace: Option<golden::TraceCollector>,
     tilemap_gpu: HashMap<String, TilemapGpu>,
     sdf_text_gpu: HashMap<hecs::Entity, SdfTextGpu>,
+    /// Named graph series + their GPU mirrors (`graph.rs`).
+    graphs: graph::GraphStore,
     last_vw: f32,
     last_vh: f32,
     /// Physical pixels per logical point for the coming frames (the display
@@ -484,6 +489,8 @@ pub enum DrawKind {
     UiRect,
     UiSprite,
     SdfText,
+    /// A `GraphRender` plot (`graph.rs`), in the UI phase.
+    Graph,
 }
 
 #[cfg(test)]

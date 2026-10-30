@@ -55,6 +55,20 @@ pub struct TraceItem {
     /// trace (hence `#[serde(skip)]`).
     #[serde(skip)]
     pub screen: Option<[f32; 4]>,
+    /// A `"Graph"` item's resolved view and series (absent on every other
+    /// kind, so existing traces are unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<GraphTrace>,
+}
+
+/// What a `"Graph"` trace item records beyond the plot rect: the view it
+/// drew (after `follow_tail` / `auto_y`) and each series' colour, in order.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct GraphTrace {
+    /// `[x_min, x_max, y_min, y_max]`.
+    pub view: [f64; 4],
+    /// One linear RGBA colour per series.
+    pub series: Vec<[f32; 4]>,
 }
 
 /// A complete render trace for one capture point (tag + frame).
@@ -138,7 +152,16 @@ impl TraceCollector {
             depth: p.depth.map(|s| s.to_string()),
             normal: p.normal.map(|s| s.to_string()),
             screen: p.screen,
+            graph: None,
         });
+    }
+
+    /// Push a `"Graph"` item: `p` plus its [`GraphTrace`].
+    pub fn push_graph(&mut self, p: TraceItemParams<'_>, graph: GraphTrace) {
+        self.push(p);
+        if let Some(item) = self.items.last_mut() {
+            item.graph = Some(graph);
+        }
     }
 
     pub fn finish(self) -> RenderTrace {
@@ -358,6 +381,7 @@ mod tests {
             depth: None,
             normal: None,
             screen: Some([1.0, 2.0, 3.0, 4.0]),
+            graph: None,
         };
         let json = serde_json::to_string(&item).expect("serialize");
         assert!(!json.contains("screen"), "screen must not leak into the JSONL: {json}");
@@ -377,6 +401,7 @@ mod tests {
             depth: None,
             normal: None,
             screen: Some([10.0, 20.0, 30.0, 40.0]),
+            graph: None,
         };
         let trace = RenderTrace {
             tag: "baseline".into(),

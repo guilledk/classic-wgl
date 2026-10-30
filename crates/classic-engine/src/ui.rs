@@ -15,8 +15,8 @@ use hecs::World;
 use classic_core::collision::{HandlerKind, PhysicsProvider};
 use classic_core::components::TextJustify;
 use classic_core::components::{
-    Disabled, RectRender, SdfTextRender, SpriteRender, Transform, UiAlign, UiAnchor, UiChild,
-    UiKind, UiNode,
+    Disabled, GraphAxes, GraphRender, GraphSeriesRef, GraphView, RectRender, SdfTextRender,
+    SpriteRender, Transform, UiAlign, UiAnchor, UiChild, UiKind, UiNode,
 };
 
 struct UiColliderEntry {
@@ -57,6 +57,45 @@ impl Default for ButtonOptions {
             click_action: None,
         }
     }
+}
+
+/// Options for [`UIManager::spawn_graph`].
+#[derive(Clone, Debug)]
+pub struct GraphOptions {
+    /// Frame size in logical points.
+    pub width: f32,
+    pub height: f32,
+    /// Inset of the plot inside the frame (room for axes / labels), points.
+    pub padding: f32,
+    /// Frame (`RectRender`) colour, linear RGBA.
+    pub background: [f32; 4],
+    pub series: Vec<GraphSeriesRef>,
+    pub view: GraphView,
+    pub axes: GraphAxes,
+}
+
+impl Default for GraphOptions {
+    fn default() -> Self {
+        Self {
+            width: 320.0,
+            height: 160.0,
+            padding: 8.0,
+            background: [0.05, 0.05, 0.08, 0.85],
+            series: Vec::new(),
+            view: GraphView::default(),
+            axes: GraphAxes::default(),
+        }
+    }
+}
+
+/// The entities [`UIManager::spawn_graph`] creates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphElem {
+    /// The framed container: anchor / attach / enable this one.
+    pub frame: hecs::Entity,
+    /// Its `GraphRender` child; `Engine::graph_plot_rect(plot)` is the plot
+    /// rect.
+    pub plot: hecs::Entity,
 }
 
 pub struct UIManager {
@@ -192,6 +231,42 @@ impl UIManager {
         self.elements.insert(name, e);
         self.mark_dirty();
         e
+    }
+
+    /// Create a graph element: a framed plot container (`RectRender`, the
+    /// `background` colour, `width` x `height`) holding the plot child (a
+    /// `GraphRender` `padding` points inside the frame on every side, drawn
+    /// just above it).  Anchor the returned `frame` like any container; the
+    /// series are named engine series (`Engine::create_graph_series` /
+    /// `set_graph_data` / `graph_push`).
+    pub fn spawn_graph(&mut self, world: &mut World, opts: GraphOptions) -> GraphElem {
+        let frame = self.spawn_container(world, opts.width, opts.height, opts.background);
+        let inner = Vec2::new(
+            (opts.width - 2.0 * opts.padding).max(1.0),
+            (opts.height - 2.0 * opts.padding).max(1.0),
+        );
+        let name = self.gen_name("graph");
+        let plot = world.spawn((
+            // Half a layer in front of the frame: the render list sorts by
+            // descending z, so the plot draws after its background.
+            Transform::new(glam::Vec3::new(0.0, 0.0, self.zlayer as f32 - 0.5), glam::Vec3::ONE),
+            UiNode {
+                parent: None,
+                children: Vec::new(),
+                size: inner,
+                anchor: UiAnchor::MidCenter,
+                fixed: false,
+                clip_children: false,
+                scroll_y: 0.0,
+                clip_rect: Vec4::ZERO,
+                kind: UiKind::Container,
+                fill_width: false,
+            },
+            GraphRender { series: opts.series, view: opts.view, axes: opts.axes },
+        ));
+        self.elements.insert(name, plot);
+        self.container_add_child(world, frame, plot, UiAnchor::MidCenter, UiAnchor::MidCenter);
+        GraphElem { frame, plot }
     }
 
     /// Create a flex-like array container (vertical or horizontal).
