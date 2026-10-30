@@ -22,6 +22,7 @@ pub mod editor;
 pub mod hud;
 pub mod inspector;
 pub mod lighting;
+pub mod perf_graph;
 pub mod prefabs;
 pub mod render_order;
 pub mod state;
@@ -401,6 +402,8 @@ fn finish_init_engine(
         }
         // Last, over the whole HUD: closed until `Backquote`.
         inspector::install(e, &state);
+        // Closed until `Shift+KeyG`; spawns nothing before.
+        perf_graph::install(e, &state);
     } else if let Some(nav) = e.entity_by_role(classic_core::RoleKind::NavMesh) {
         // The nav-mesh overlay is an editor view: `init_editor_mode_control`
         // shows it only in nav-edit mode.  Without the editor nothing would

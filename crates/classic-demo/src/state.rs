@@ -80,6 +80,8 @@ pub struct DemoState {
     pub guests: Vec<Rc<RefCell<Box<dyn classic_guest::GuestRuntime>>>>,
     /// The entity inspector (`Backquote`): open flag, selection, tree state.
     pub inspector: crate::inspector::InspectorState,
+    /// The live perf graph (`Shift+KeyG`).
+    pub perf_graph: crate::perf_graph::PerfGraphState,
 }
 
 impl Default for DemoState {
@@ -101,6 +103,7 @@ impl Default for DemoState {
             debug_lights: false,
             guests: Vec::new(),
             inspector: crate::inspector::InspectorState::default(),
+            perf_graph: Default::default(),
         }
     }
 }

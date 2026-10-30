@@ -658,6 +658,45 @@ with `classic_gfx::perf::phase("name")`, a counter with
   find a stall, look for the frame whose `update` phase (the guests)
   spikes: an engine call is cheap, the guest's own work is not.
 
+### Live mode and the perf graph (`Shift+KeyG`)
+
+`perf::start_live(LiveConfig { gpu })` profiles **without a sink** (no
+file, no console) and keeps the last finished frame in memory:
+`perf::last_frame()` → `FrameSample { f, wall, cpu, phases }`, and with
+GPU timing `perf::last_gpu()` → `GpuSample { f, total, phases }` (a few
+frames behind; join on `f`).  `perf::stop_live()` ends it.  Both take
+effect at the **next frame boundary** (`begin_frame` / `end_frame`), so a
+toggle from inside a frame (an update hook) never records half a frame,
+and stopping ends and deletes every timer query.  `perf::live()` says
+whether it records; both getters return `None` when it does not.  Off by
+default and free when off (the hooks still read one flag; the frame
+boundaries one more).  With `CLASSIC_PERF` also on, live mode only adds
+the in-memory copy: the JSON-lines output is byte-for-byte unchanged (a
+unit test pins it), and a sink run without `CLASSIC_PERF_GPU` does not
+start GPU timing for the graph.
+
+In a running game with the dev HUD, `Shift+KeyG` opens the live perf graph
+(`classic-demo/src/perf_graph.rs`), which starts live mode with GPU timing
+and stops it on close:
+
+- Series: `wall` (since the previous frame's start), `cpu`, `gpu` (the GPU
+  total, empty where `EXT_disjoint_timer_query_webgl2` / timer queries are
+  missing, e.g. headless Chromium), and the six heaviest CPU phases.
+  Phases are ranked on a decaying sum (about 100 frames of memory) after 60
+  frames and again every 120: a phase still in the top six keeps its slot
+  and colour, a newcomer takes a freed slot on a fresh ring.
+- 8192-sample rings, a 600-frame followed window; x is frames since the
+  panel opened (rings restart on every open).  The legend shows each
+  series' newest value, refreshed every 10 frames.
+- Wheel zooms about the cursor, drag pans, double-click goes back to
+  following the tail; the wheel over the panel never zooms the camera and
+  clicks on it never reach the world.
+- It is a host pre-update hook, so it keeps advancing under the inspector's
+  simulation pause, and it moves left of the inspector's detail panel while
+  that is open (side by side from 1280 points wide).
+- Spikes are real: a capture's PNG readback lands in `tail` on the
+  captured frames, and boot frames dwarf a running game.
+
 ### Bench sections and `cargo xtask bench`
 
 A bench-aware ROM's guest reads `bench_mode()` (`0` interactive, `1` full,

@@ -102,6 +102,7 @@ crates/
                           model.rs (3D `Model` clip playback + draw prep),
                           ui.rs (UIManager, incl. spawn_graph), golden.rs (traces), env_config.rs,
                           graph.rs (graph series store, view resolution, DrawKind::Graph),
+                          graph_ui.rs (Engine::spawn_graph: tick labels, legend, zoom / pan),
                           vehicle/ (IsoVehicle sim + spawn API)
   classic-rom/            ROM layer: RomArchive (zip/tar.gz/tar.zst), Rom (load/pack), RomManifest,
                           ResourceSet, AssetLoader trait (re-exported by classic-platform)
@@ -110,7 +111,8 @@ crates/
                            (sdk.rs) bridging guest imports to the engine
   classic-demo/           application/prefab layer: init_engine(gl, &Rom) bootstrap, DemoState +
                           EditorState (state.rs), prefabs.rs, lighting.rs, editor.rs, hud.rs,
-                          inspector/ (the Backquote entity inspector), testing.rs, scenes/
+                          inspector/ (the Backquote entity inspector), perf_graph.rs (the Shift+KeyG
+                          live perf graph), testing.rs, scenes/
                           (demo + lunar assemblers)
 apps/
   desktop/                native binary: include_bytes! demo.rom/lunar.rom, Rom::load, winit loop
@@ -399,10 +401,11 @@ In a running game with the dev HUD (`host_features`, not `CLASSIC_NO_UI`):
 | `Backquote` | Entity inspector: pauses the simulation and opens a ROM → assets / entities tree, a detail panel (transforms, components, related assets), click-to-pick in the world and a sprite pose preview (direction / pitch / roll steppers); again to close + resume (`classic-demo/src/inspector/`) |
 | `KeyF` | Footprint polygons + the tile grid |
 | `Shift+KeyL` | Light markers (an X at each light, a Z line down to the terrain) |
+| `Shift+KeyG` | Live perf graph: wall / CPU / GPU frame ms and the six heaviest CPU phases, bottom-right (left of the inspector when both are open); wheel zooms, drag pans, double-click resets; keeps running under the inspector's pause (`classic-demo/src/perf_graph.rs`, `classic_gfx::perf` live mode) |
 | `F9` | Dump `state.json` (`CLASSIC_DUMP_DIR`, a download on the web) |
 | `F10` | Save the world as a packed ROM |
 
-See the `classic-debugging` skill §6.
+See the `classic-debugging` skill §6 (and §11 for the perf graph).
 
 ## CLASSIC_* environment variables
 
@@ -470,4 +473,4 @@ Engine skills (in `.agents/skills/`):
 | `classic-debugging` | CLASSIC_LOG channels, JSON format, runtime toggles, debugging playbook |
 | `classic-guest` | WASM guest runtime, ABI (host imports/guest exports), GuestRuntime trait, sandbox (fuel + memory) |
 | `classic-rom` | ROM crate (archive, manifest, `ResourceSet`, `LoadedRoms` DAG), namespacing + reference rewriting, boot hydration of a ROM |
-| `classic-graph` | GPU graph element: `SeriesBuf` ring + min/max pyramid (`slots(k) = (2·cap) >> k`), seam-padded level VBOs, instanced polyline / envelope shaders, `spawn_graph`, `create_graph_series` / `graph_push` |
+| `classic-graph` | GPU graph element: `SeriesBuf` ring + min/max pyramid (`slots(k) = (2·cap) >> k`), seam-padded level VBOs, instanced polyline / envelope shaders, `spawn_graph`, `create_graph_series` / `graph_push`, `Engine::spawn_graph` chrome (grid, tick labels, legend) + wheel zoom / drag pan, the `Shift+KeyG` perf graph |

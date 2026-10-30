@@ -10,6 +10,31 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Added
 
+- Live perf graph: `Shift+KeyG` in the dev HUD opens a bottom-right
+  panel plotting wall, CPU and (when timer queries exist) GPU frame time
+  plus the six heaviest CPU phases (ranked on a decaying mean, each kept
+  in its slot and colour while it stays in the top six), over an
+  8192-frame ring with a 600-frame followed window.  It keeps running
+  under the inspector's pause and moves left of the inspector's detail
+  panel while that is open.  It is fed by a new `classic_gfx::perf` live
+  mode: `start_live` / `stop_live` take effect at the next frame
+  boundary and profile without a sink, `last_frame` returns a
+  `FrameSample` and `last_gpu` a delayed `GpuSample`.  With
+  `CLASSIC_PERF` also on, its JSON output stays byte-for-byte the same.
+  Nothing is spawned and the profiler stays off until the first press.
+- Graph chrome and interaction.  `Engine::spawn_graph` adds tick labels,
+  a title and a legend (colour swatch, name, last value, refreshed every
+  10 frames) as pooled SDF text.  With `GraphOptions::interactive` it
+  also adds wheel zoom anchored at the cursor, drag pan clamped to the
+  data and double-click reset to `follow_tail` + `auto_y`.  These run in
+  a host pre-update hook, so they work while the simulation is paused.
+  The wheel over the frame is consumed before the camera sees it, and
+  clicks on it never reach the world.  Every graph draws its grid at the
+  nice ticks.  `GraphOptions` gains per-side `margins`, `legend` and
+  `z`, and `GraphSeriesRef` a legend `label`.  A followed tail now grows
+  from the oldest sample until the data fills the window.  The web
+  `cargo xtask capture` script gains `key-down` / `key-up` steps (hold a
+  modifier).
 - Graph rendering: the graph element now draws.  Each series' pyramid
   levels mirror into VBOs that upload whole on first use, then only the
   slots `take_dirty` reports.  Seam pads (a copy of the last slot before
