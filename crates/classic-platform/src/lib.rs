@@ -193,6 +193,45 @@ pub fn to_logical(physical: Vec2, pixel_ratio: f32) -> Vec2 {
     physical / pixel_ratio
 }
 
+/// The web canvas's two ratios.  `dpr` (`window.devicePixelRatio`) is the
+/// browser's device pixels per CSS pixel: it sets the canvas **resolution**
+/// (backing store = CSS size × `dpr`).  `ui_scale` is the engine's physical
+/// pixels per logical point: it sets the **layout** (logical = backing /
+/// `ui_scale` = CSS size × `dpr` / `ui_scale`).  Unpinned they are equal, so
+/// a logical point is a CSS pixel; `?pixel_ratio=` pins only `ui_scale`, so
+/// it enlarges (or shrinks) the UI like native `CLASSIC_PIXEL_RATIO` while
+/// the canvas keeps rendering at the display's real resolution.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WebScale {
+    pub dpr: f32,
+    pub ui_scale: f32,
+}
+
+impl WebScale {
+    /// `dpr` from the browser (sanitised); `pinned` (already sanitised) wins
+    /// for `ui_scale`.
+    pub fn new(dpr: f64, pinned: Option<f32>) -> Self {
+        let dpr = clamp_pixel_ratio(dpr);
+        Self { dpr, ui_scale: pinned.unwrap_or(dpr) }
+    }
+
+    /// The canvas backing store for a `css_w`x`css_h` CSS box (at least 1x1).
+    pub fn backing_size(&self, css_w: f32, css_h: f32) -> (u32, u32) {
+        (to_physical(css_w, self.dpr).max(1), to_physical(css_h, self.dpr).max(1))
+    }
+
+    /// The frame of a `bw`x`bh` backing store: logical = backing / `ui_scale`.
+    pub fn frame_size(&self, bw: u32, bh: u32) -> FrameSize {
+        FrameSize::from_physical(bw, bh, self.ui_scale)
+    }
+
+    /// A CSS-pixel position or delta (`clientX/Y`, `movementX/Y`, a pixel
+    /// wheel delta) as logical points.
+    pub fn css_to_logical(&self, css: Vec2) -> Vec2 {
+        css * (self.dpr / self.ui_scale)
+    }
+}
+
 /// Set `input`'s mouse position from a logical-point position, clamped to the
 /// `w`x`h` logical view, and derive `mouse_axis` (`[-1, 1]`).
 pub fn set_mouse_pos(input: &mut InputState, pos: Vec2, w: f32, h: f32) {
@@ -270,6 +309,48 @@ mod scale_tests {
         set_mouse_pos(&mut input, to_logical(Vec2::new(9000.0, -5.0), 2.0), 1280.0, 720.0);
         assert_eq!(input.mouse_pos, Vec2::new(1280.0, 0.0));
         assert_eq!(input.mouse_axis, Vec2::new(1.0, -1.0));
+    }
+
+    /// The web's two ratios on a 1920x1080 CSS window: `dpr` sets the
+    /// backing store, `ui_scale` the logical layout, and the mouse maps CSS
+    /// to logical so the window's centre is the view's centre at any pair.
+    #[test]
+    fn web_scale_splits_resolution_from_layout() {
+        // dpr, pinned ui scale, backing, logical
+        type Case = (f64, Option<f32>, (u32, u32), (f32, f32));
+        let (css_w, css_h) = (1920.0f32, 1080.0f32);
+        #[rustfmt::skip]
+        let cases: [Case; 7] = [
+            (1.0, None,            (1920, 1080), (1920.0, 1080.0)),
+            (1.0, Some(2.0),       (1920, 1080), (960.0, 540.0)),
+            (1.0, Some(5.0 / 3.0), (1920, 1080), (1152.0, 648.0)),
+            (2.0, None,            (3840, 2160), (1920.0, 1080.0)),
+            (2.0, Some(2.0),       (3840, 2160), (1920.0, 1080.0)),
+            (2.0, Some(1.0),       (3840, 2160), (3840.0, 2160.0)),
+            (1.5, Some(1.5),       (2880, 1620), (1920.0, 1080.0)),
+        ];
+        for (dpr, pinned, backing, (lw, lh)) in cases {
+            let s = WebScale::new(dpr, pinned);
+            assert_eq!(s.ui_scale, pinned.unwrap_or(dpr as f32), "{dpr} {pinned:?}");
+            assert_eq!(s.backing_size(css_w, css_h), backing, "{dpr} {pinned:?}");
+            let f = s.frame_size(backing.0, backing.1);
+            assert_eq!(f.pixel_ratio, s.ui_scale);
+            assert!((f.width - lw).abs() < 1e-2 && (f.height - lh).abs() < 1e-2, "{f:?}");
+            assert_eq!(f.physical(), backing, "drawable round trip {dpr} {pinned:?}");
+            // The CSS centre / corner land on the logical centre / corner.
+            let mid = s.css_to_logical(Vec2::new(css_w, css_h) * 0.5);
+            assert!((mid - Vec2::new(lw, lh) * 0.5).length() < 1e-2, "{mid}");
+            let mut input = InputState::new();
+            set_mouse_pos(&mut input, s.css_to_logical(Vec2::new(css_w, css_h)), f.width, f.height);
+            assert!((input.mouse_axis - Vec2::ONE).length() < 1e-4, "{:?}", input.mouse_axis);
+        }
+        // Unpinned, a logical point is a CSS pixel whatever the dpr.
+        for dpr in [1.0, 1.25, 2.0, 3.0] {
+            let p = Vec2::new(123.0, 45.0);
+            assert_eq!(WebScale::new(dpr, None).css_to_logical(p), p, "{dpr}");
+        }
+        // A bogus dpr is sanitised like any ratio.
+        assert_eq!(WebScale::new(f64::NAN, None), WebScale { dpr: 1.0, ui_scale: 1.0 });
     }
 }
 

@@ -62,11 +62,20 @@ once, at the boundary:
 - **Native** opens the window at `LogicalSize(1280, 720)` and divides
   `CursorMoved` and `PixelDelta` wheel input by the ratio.  On X11, winit
   reads the scale from `Xft.dpi` (or `WINIT_X11_SCALE_FACTOR`).
-- **Web** sets the canvas backing store to CSS size × ratio and pins the
-  CSS size on the element's style.  `clientX/Y` and the pointer-lock
-  `movementX/Y` are CSS pixels, which are already logical; the mouse clamp
-  reads the canvas size live, which fixes the old stale-`cw`/`ch` clamp
-  after a resize.
+- **Web** keeps two ratios (`WebScale`, unit-tested natively).
+  `devicePixelRatio` sets the **resolution**: the canvas backing store is
+  CSS size × dpr, and the CSS size is pinned on the element's style.  The
+  **UI scale** (`?pixel_ratio=`, else the dpr) sets the **layout**: logical
+  = backing / UI scale = CSS × dpr / UI scale, so the override means what
+  native `CLASSIC_PIXEL_RATIO` means (`?pixel_ratio=2` on a dpr-1 screen is
+  a half-size, 2x-enlarged view at the same resolution; `?pixel_ratio=1`
+  on a dpr-2 screen is a 2x-larger view at full resolution).  `clientX/Y`,
+  the pointer-lock `movementX/Y` and the wheel `deltaY` are CSS pixels,
+  mapped × dpr / UI scale (a no-op unpinned).  The mouse clamp reads the
+  canvas size live, so a resize never leaves a stale clamp.  The boot logs
+  `web: devicePixelRatio X, ui scale Y: canvas WxH px, view WxH pt`.
+  Browsers on X11 without `Xft.dpi` report dpr 1 even on 4K (winit reads
+  EDID mm instead); `?pixel_ratio=` is the web's way out there.
 - **Headless:** `HeadlessPlatform::new(w, h)` takes physical pixels, and
   `.with_pixel_ratio(r)` makes frames `w / r` × `h / r` points.
 - The engine side: `Engine::frame_sized(input, size, dt)` =

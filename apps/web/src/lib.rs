@@ -165,7 +165,7 @@ async fn run() -> anyhow::Result<()> {
     // Canvas-first: create the WebGL2 context *before* fetching the ROM, so the
     // GL loading screen can draw while the archive streams in (mirrors the
     // desktop window-first boot).  There is no DOM overlay anymore.
-    // `?pixel_ratio=` pins the display scale; else `devicePixelRatio`.
+    // `?pixel_ratio=` pins the UI scale (the layout); else `devicePixelRatio`.
     let pixel_ratio = classic_engine::env_config::EnvConfig::get().pixel_ratio;
     let platform = match WebPlatform::new("glCanvas", pixel_ratio) {
         Ok(p) => p,

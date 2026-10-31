@@ -528,6 +528,17 @@ See [`VERSIONING.md`](VERSIONING.md) for the release policy and process.
 
 ### Fixed
 
+- `?pixel_ratio=` on the web only raised the canvas resolution and never
+  enlarged the layout, unlike native `CLASSIC_PIXEL_RATIO`: on a display
+  whose browser reports `devicePixelRatio` 1 (X11 without `Xft.dpi`)
+  `?pixel_ratio=2` rendered the same tiny UI, just sharper.  The web now
+  keeps two ratios (`WebScale`): `devicePixelRatio` sizes the backing
+  store (CSS size × dpr) and the UI scale (the pin, else the dpr) the
+  logical view (backing / UI scale), with the cursor, pointer-lock and
+  wheel deltas mapped CSS × dpr / UI scale.  Unpinned nothing changes.
+  The boot logs `web: devicePixelRatio X, ui scale Y` like native's
+  `native: scale factor X -> pixel ratio Y`.
+
 - The visual boot loader could panic the web build with `texture
   'lunar-common::lunar-common_atlas_2' not found` (in
   `draw_shadow_sprite_batches`) on slower machines: the boot spawns the
